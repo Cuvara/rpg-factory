@@ -6,7 +6,8 @@
 # tests/fixtures/assetgen/cases/<purpose>.json),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
-# lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
+# lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
+# review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
 # the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes incl. aspect + min area, orientation, area + min pixels, real 9router sizes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
@@ -387,6 +388,91 @@ expect_lint() { # expect_lint ID STATE TEXT LABEL
   local got; got=$(lint_of "$1")
   case "$got" in "$2 "*"$3"*) ok "lint $4" ;; *) no "lint $4" "$got" ;; esac
 }
+
+echo "-- node registry"
+NS="$ROOT/scripts/assetgen/nodesync.py"; OI="$ROOT/tests/fixtures/assetgen/object_info.json"
+node_names=(ImageScale ImageSharpen ImageBlur ImageInvert ImageCrop PreviewImage SplitImageWithAlpha JoinImageWithAlpha ImageQuantize PrimitiveString)
+node_args=(); for name in "${node_names[@]}"; do node_args+=(--node "$name"); done
+python3 -B "$NS" "$OI" "${node_args[@]}" > "$TMP/nodes.json" 2>"$TMP/err"; rc=$?
+jq -c . "$TMP/nodes.json" > "$TMP/nodes-actual" 2>/dev/null
+jq -c --slurpfile generated "$TMP/nodes.json" '.nodes as $nodes | reduce ($generated[0] | keys_unsorted[]) as $name ({}; .[$name] = $nodes[$name])' "$KN" > "$TMP/nodes-expected" 2>"$TMP/jqerr"
+[ $rc -eq 0 ] && cmp -s "$TMP/nodes-actual" "$TMP/nodes-expected" && ok "nodesync fixture entries match registry including key order" \
+  || no "nodesync fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
+python3 -B "$NS" "$OI" "${node_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "nodesync --check accepts committed entries" || no "nodesync --check rc=$rc" "$(cat "$TMP/err")"
+jq '.nodes.ImageScale.inputs.upscale_method.options[0] = "changed"' "$KN" > "$TMP/known-changed.json"
+python3 -B "$NS" "$OI" "${node_args[@]}" --known "$TMP/known-changed.json" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qx ImageScale "$TMP/o" && ok "nodesync --check detects a changed combo option" || no "nodesync changed option rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+for name in MissingNode Note; do
+  python3 -B "$NS" "$OI" --node "$name" > "$TMP/o" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ok "nodesync rejects $name" || no "nodesync $name rc=$rc" "$(cat "$TMP/err")"
+done
+python3 -B - "$NS" "$OI" > "$TMP/o" 2>&1 <<'EOF'
+import ast, runpy, socket, sys
+path, fixture = sys.argv[1:]
+tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+        names = [alias.name.split('.')[0] for alias in node.names]
+    elif isinstance(node, ast.ImportFrom):
+        names = [(node.module or '').split('.')[0]]
+    else:
+        continue
+    assert not set(names) & {'socket', 'urllib', 'http', 'requests', 'subprocess'}, names
+def forbidden(*args, **kwargs):
+    raise AssertionError('network access attempted')
+socket.socket = forbidden
+sys.argv = [path, fixture, '--node', 'ImageScale', '--check']
+runpy.run_path(path, run_name='__main__')
+EOF
+rc=$?; [ $rc -eq 0 ] && ok "nodesync has no network imports and runs with sockets disabled" || no "nodesync offline rc=$rc" "$(cat "$TMP/o")"
+
+# Keep these templates outside lint-authoring, whose complete contents are counted later.
+lint_la=$LA; LA="$TMP/node-registry-authoring"; mkdir -p "$LA/assetgen/templates"
+graph='{"1":{"class_type":"NineRouterImage","inputs":{"user_prompt":"{{prompt}}","model":"m","size":"auto","quality":"auto","background":"auto"}},
+"2":{"class_type":"SaveImage","inputs":{"images":["10",0],"filename_prefix":["12",0]}},
+"3":{"class_type":"ImageScale","inputs":{"image":["1",0],"upscale_method":"bilinear","width":512,"height":256,"crop":"center"}},
+"4":{"class_type":"ImageSharpen","inputs":{"image":["3",0],"sharpen_radius":2,"sigma":1.5,"alpha":0.8}},
+"5":{"class_type":"ImageBlur","inputs":{"image":["4",0],"blur_radius":3,"sigma":1.2}},
+"6":{"class_type":"ImageInvert","inputs":{"image":["5",0]}},
+"7":{"class_type":"ImageCrop","inputs":{"image":["6",0],"width":128,"height":64,"x":4,"y":8}},
+"8":{"class_type":"SplitImageWithAlpha","inputs":{"image":["7",0]}},
+"9":{"class_type":"JoinImageWithAlpha","inputs":{"image":["8",0],"alpha":["8",1]}},
+"10":{"class_type":"ImageQuantize","inputs":{"image":["9",0],"colors":32,"dither":"none"}},
+"11":{"class_type":"PreviewImage","inputs":{"images":["5",0]}},
+"12":{"class_type":"PrimitiveString","inputs":{"value":"assetgen/test"}}}'
+tmpl registry-chain '' "$graph"
+expect_lint registry-chain PASS "" "core image node chain"
+python3 -B - "$ROOT" "$LA/assetgen/templates/registry-chain.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+root, template = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+import uiworkflow
+with open(template, encoding='utf-8') as f:
+    graph = json.load(f)['workflow']
+with open(os.path.join(root, 'scripts', 'assetgen', 'data', 'known-nodes.json'), encoding='utf-8') as f:
+    known = json.load(f)['nodes']
+ui = uiworkflow.to_ui(graph, known)
+nodes = {n['type']: n for n in ui['nodes']}
+assert len(ui['nodes']) == len(graph)
+assert nodes['ImageScale']['widgets_values'] == ['bilinear', 512, 256, 'center']
+assert nodes['ImageSharpen']['widgets_values'] == [2, 1.5, 0.8]
+assert nodes['ImageBlur']['widgets_values'] == [3, 1.2]
+assert nodes['ImageCrop']['widgets_values'] == [128, 64, 4, 8]
+assert nodes['ImageQuantize']['widgets_values'] == [32, 'none']
+assert len(nodes['JoinImageWithAlpha']['inputs']) == 2
+EOF
+rc=$?; [ $rc -eq 0 ] && ok "UI lays out node chain with numeric widgets in input order" || no "UI node chain rc=$rc" "$(cat "$TMP/o")"
+for name in Note MarkdownNote; do
+  jq --arg name "$name" '.workflow["13"] = {class_type: $name, inputs: {text: "note"}}' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/ui-$name.json"
+  expect_lint "ui-$name" FAIL "UI-only" "$name is UI-only"
+done
+jq '.workflow["3"].inputs.scale_by = 2' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/registry-input.json"
+expect_lint registry-input FAIL "unknown input scale_by" "unknown input on ImageScale"
+jq '.workflow["3"].class_type = "UnknownImageNode"' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/registry-unknown.json"
+expect_lint registry-unknown FAIL "unknown node type UnknownImageNode" "unknown node in image chain"
+LA=$lint_la
+
 expect_lint unknown-node FAIL "unknown node type FluxSampler" "unknown node type"
 expect_lint bad-input FAIL "unknown input seed" "unknown input name"
 expect_lint missing-link FAIL "link to missing node 9" "link to a missing node"

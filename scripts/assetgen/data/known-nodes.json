@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.comfy-known-nodes/1",
- "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json.",
+ "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). The core image node entries (ImageScale through PrimitiveString) are written by nodesync.py from a saved object_info (live ComfyUI 0.45.2; fixture tests/fixtures/assetgen/object_info.json); the 9router and IO entries stay hand-kept. Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json. ui_only nodes (Note, MarkdownNote) exist only on the frontend canvas: lint rejects them in an API workflow.",
  "nodes": {
   "NineRouterImage": {
    "inputs": {
@@ -179,6 +179,295 @@
     "size": [
      320,
      120
+    ]
+   }
+  },
+  "ImageScale": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "upscale_method": {
+     "type": "COMBO",
+     "options": [
+      "nearest-exact",
+      "bilinear",
+      "area",
+      "bicubic",
+      "lanczos"
+     ],
+     "required": true
+    },
+    "width": {
+     "type": "INT",
+     "required": true
+    },
+    "height": {
+     "type": "INT",
+     "required": true
+    },
+    "crop": {
+     "type": "COMBO",
+     "options": [
+      "disabled",
+      "center"
+     ],
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     150
+    ]
+   }
+  },
+  "ImageSharpen": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "sharpen_radius": {
+     "type": "INT",
+     "required": true
+    },
+    "sigma": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "alpha": {
+     "type": "FLOAT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     126
+    ]
+   }
+  },
+  "ImageBlur": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "blur_radius": {
+     "type": "INT",
+     "required": true
+    },
+    "sigma": {
+     "type": "FLOAT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     102
+    ]
+   }
+  },
+  "ImageInvert": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "ImageCrop": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "width": {
+     "type": "INT",
+     "required": true
+    },
+    "height": {
+     "type": "INT",
+     "required": true
+    },
+    "x": {
+     "type": "INT",
+     "required": true
+    },
+    "y": {
+     "type": "INT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     150
+    ]
+   }
+  },
+  "PreviewImage": {
+   "inputs": {
+    "images": {
+     "type": "IMAGE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "output_node": true,
+   "ui": {
+    "size": [
+     320,
+     320
+    ]
+   }
+  },
+  "SplitImageWithAlpha": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE",
+    "MASK"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "JoinImageWithAlpha": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "alpha": {
+     "type": "MASK",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "ImageQuantize": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "colors": {
+     "type": "INT",
+     "required": true
+    },
+    "dither": {
+     "type": "COMBO",
+     "options": [
+      "none",
+      "floyd-steinberg",
+      "bayer-2",
+      "bayer-4",
+      "bayer-8",
+      "bayer-16"
+     ],
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     102
+    ]
+   }
+  },
+  "PrimitiveString": {
+   "inputs": {
+    "value": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "STRING"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "Note": {
+   "inputs": {
+    "text": {
+     "type": "STRING",
+     "required": true,
+     "multiline": true
+    }
+   },
+   "outputs": [],
+   "ui_only": true,
+   "ui": {
+    "size": [
+     400,
+     200
+    ]
+   }
+  },
+  "MarkdownNote": {
+   "inputs": {
+    "text": {
+     "type": "STRING",
+     "required": true,
+     "multiline": true
+    }
+   },
+   "outputs": [],
+   "ui_only": true,
+   "ui": {
+    "size": [
+     400,
+     200
     ]
    }
   }
