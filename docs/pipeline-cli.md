@@ -162,7 +162,9 @@ The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca 
 ## agents
 
 Available agents are each `agents.<a>.bin` of the pipeline settings on PATH, refined by the Orca account list when
-Orca runs; `RPG_FACTORY_AGENTS` (comma list) overrides the detection. `agents plan.json --down <agent> --reason
+Orca runs; `RPG_FACTORY_AGENTS` (comma list) overrides the detection. The Orca account list does not mark Codex
+unavailable when `OPENAI_API_KEY` is set or its `config.toml` (`CODEX_HOME`, else `~/.codex`) selects a
+`model_provider` other than `openai` with a `base_url`. `agents plan.json --down <agent> --reason
 <text>` records a runtime MODEL_UNAVAILABLE (revoked token, 401) for the run; `--up <agent>` clears it. Mark Codex
 down when its session cannot start or never picks up its prompt (a trust prompt for hooks, CLI error, quota, idle
 terminal, a 401), then dispatch the role again.
