@@ -5,7 +5,7 @@
 # for the default template, <purpose>--<template>.json for a variant; extra render params from the optional
 # tests/fixtures/assetgen/cases/<purpose>.json),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
-# workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
+# workflow.json by a stdlib UI->API converter), a run filename_prefix (with optional inline output suffix),
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
 # the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
 # and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy
@@ -104,7 +104,7 @@ AG show image-edit --kind template --json | jq -e '.data.workflow["1"].class_typ
   && ok "show --kind template image-edit" || no "show --kind template"
 
 echo "-- resolve: precedence and per-field sources"
-AG resolve --purpose icon --style pixel-art --authoring "$AUTH" --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --template image-generate --authoring "$AUTH" --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
 r() { jq -r "$1" "$TMP/r.json"; }
 [ $rc -eq 0 ] && [ "$(r .schema)" = rpg-factory.assetgen-spec/1 ] && ok "resolve with the game layer" || no "resolve rc=$rc" "$(cat "$TMP/err")"
 [ "$(r '.sources["purpose.qa.size.mode"]')" = "game:assetgen/purposes/icon.json" ] \
@@ -140,7 +140,7 @@ echo '{"extends": "loop-a", "title": "b"}' > "$BAD/assetgen/styles/loop-b.json"
 AG resolve --purpose icon --style loop-a --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "extends cycle" "$TMP/err" && ok "extends cycle detected" || no "cycle rc=$rc" "$(cat "$TMP/err")"
 echo '{"extends": "icon", "params": {"tint": "red"}}' > "$BAD/assetgen/purposes/icon.json"
-AG resolve --purpose icon --style pixel-art --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --template image-generate --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "param 'tint' that template 'image-generate' does not declare" "$TMP/err" && ok "purpose param not declared by the template: error" || no "undeclared purpose param rc=$rc" "$(cat "$TMP/err")"
 
 echo "-- resolve: purpose constraints beat style hints (data/precedence.json)"
@@ -208,19 +208,28 @@ for p in $CORE_PURPOSES; do
   golden_render "golden-$p-001" "$p" "$p"
   for t in $(case_variants "$p"); do golden_render "golden-$p--$t-001" "$p" "$p--$t" "$t"; done
 done
+# Dedicated legacy renders keep node-shape checks independent of purpose defaults.
+mkrun legacy-shape-icon-001 icon --style stylized-painterly --template image-generate
+AG render --run "$RUNS/legacy-shape-icon-001" >/dev/null
+mkrun legacy-shape-edit-001 image-edit --style stylized-painterly --template image-edit
+AG render --run "$RUNS/legacy-shape-edit-001" --param reference_image=ref.png >/dev/null
+AG graph-lint --run "$RUNS/golden-icon-001" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS ' "$TMP/o" \
+  && [ "$(jq -r '[.[] | select(.class_type == "SaveImage")][0].inputs.filename_prefix' "$RUNS/golden-icon-001/workflow.json")" = assetgen/golden-icon-001-icon ] \
+  && ok "staged icon: graph-lint --run PASS and SaveImage has inline icon suffix" || no "staged icon graph-lint rc=$rc" "$(cat "$TMP/o")"
 AG review-cmd --phase prompt --run "$RUNS/golden-ref-3d-turnaround-001" --json | jq -r .stdin > "$TMP/rp.txt"
 grep -qF "lighting: $(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" "$TMP/rp.txt" \
   && ! grep -qF "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" "$TMP/rp.txt" \
   && ok "prompt review: the reviewer judges against the purpose lighting, not the overridden style lighting" || no "review hints" "$(grep -n Hints "$TMP/rp.txt")"
-w="$RUNS/golden-icon-001/workflow.json"
+w="$RUNS/legacy-shape-icon-001/workflow.json"
 [ "$(jq -r '.["3"].inputs.value' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
   && [ "$(jq -r '.["1"].inputs.background' "$w")" = transparent ] && ok "icon workflow: prompt verbatim (trimmed), link kept, transparent background" || no "icon workflow content"
-[ "$(jq -c '.["2"].inputs.reference_images' "$RUNS/golden-image-edit-001/workflow.json")/$(jq -r '.["1"].inputs.image' "$RUNS/golden-image-edit-001/workflow.json")" = '["1",0]/ref.png' ] \
+[ "$(jq -c '.["2"].inputs.reference_images' "$RUNS/legacy-shape-edit-001/workflow.json")/$(jq -r '.["1"].inputs.image' "$RUNS/legacy-shape-edit-001/workflow.json")" = '["1",0]/ref.png' ] \
   && ok "image-edit: LoadImage -> reference_images" || no "image-edit links"
-AG lint "$w" "$RUNS/golden-image-edit-001/workflow.json" > "$TMP/o" 2>&1 && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflows lint clean" || no "rendered lint" "$(cat "$TMP/o")"
-AG render --run "$RUNS/golden-icon-001" --param size=1536x1024 --param quality=low >/dev/null && [ "$(jq -r '.["1"].inputs.size + " " + .["1"].inputs.quality' "$w")" = "1536x1024 low" ] \
+AG lint "$w" "$RUNS/legacy-shape-edit-001/workflow.json" > "$TMP/o" 2>&1 && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflows lint clean" || no "rendered lint" "$(cat "$TMP/o")"
+AG render --run "$RUNS/legacy-shape-icon-001" --param size=1536x1024 --param quality=low >/dev/null && [ "$(jq -r '.["1"].inputs.size + " " + .["1"].inputs.quality' "$w")" = "1536x1024 low" ] \
   && ok "--param overrides purpose params" || no "--param override"
-d="$RUNS/golden-image-edit-001"; rm -f "$d/workflow.json"
+d="$RUNS/legacy-shape-edit-001"; rm -f "$d/workflow.json"
 out=$(AG render --run "$d" 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "param reference_image is required" <<<"$out" && [ ! -f "$d/workflow.json" ] && ok "missing required param: FAIL, nothing written" || no "missing required rc=$rc" "$out"
 out=$(AG render --run "$d" --param reference_image=r.png --param size=999x999 --param tint=red --param prompt=x --param bare 2>&1); rc=$?
@@ -229,12 +238,12 @@ out=$(AG render --run "$d" --param reference_image=r.png --param size=999x999 --
   && ok "render rejects bad enum, undeclared param, prompt override, malformed --param" || no "render errors rc=$rc" "$out"
 : > "$d/prompt.md"; out=$(AG render --run "$d" --param reference_image=r.png 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "is empty" <<<"$out" && ok "empty prompt file: error" || no "empty prompt rc=$rc" "$out"
-AG render --spec "$RUNS/golden-icon-001/spec.json" --prompt-file "$RUNS/golden-icon-001/prompt.md" --out "$TMP/wf.json" >/dev/null && [ -f "$TMP/wf.json" ] \
+AG render --spec "$RUNS/legacy-shape-icon-001/spec.json" --prompt-file "$RUNS/legacy-shape-icon-001/prompt.md" --out "$TMP/wf.json" >/dev/null && [ -f "$TMP/wf.json" ] \
   && ok "render --spec/--prompt-file/--out" || no "render explicit paths"
 printf 'Test prompt for image-edit: one subject, centered.
 ' > "$d/prompt.md"; AG render --run "$d" --param reference_image=ref.png >/dev/null
 # item 1: the prompt is a visible PrimitiveStringMultiline node linked into NineRouterImage.user_prompt
-for pw in "golden-icon-001 1 3" "golden-image-edit-001 2 4"; do
+for pw in "legacy-shape-icon-001 1 3" "legacy-shape-edit-001 2 4"; do
   set -- $pw; f="$RUNS/$1/workflow.json"
   [ "$(jq -c --arg n "$2" '.[$n].inputs.user_prompt' "$f")" = "[\"$3\",0]" ] \
     && [ "$(jq -r --arg n "$3" '.[$n].class_type + "|" + .[$n]._meta.title' "$f")" = "PrimitiveStringMultiline|Prompt (Claude, Codex review NOT_RUN)" ] \
@@ -259,7 +268,7 @@ print("ok")
 EOF
 grep -qx ok "$TMP/o" && ok "runfiles.workflow_prompts follows the link to the prompt node (inline and other links unchanged)" || no "workflow_prompts" "$(cat "$TMP/o")"
 # the prompt node's title carries the prompt review state of this prompt (PASS, STALE when the prompt changed)
-mkrun title-icon-001 icon --style stylized-painterly; td="$RUNS/title-icon-001"
+mkrun title-icon-001 icon --style stylized-painterly --template image-generate; td="$RUNS/title-icon-001"
 bound "$td" prompt PASS codex > "$td/review-prompt.json"
 AG render --run "$td" >/dev/null && t1=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
 echo "Another prompt." > "$td/prompt.md"; AG render --run "$td" >/dev/null && t2=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
@@ -285,8 +294,8 @@ for c in "SAME_MODEL:claude PASS|Prompt (Claude, review SAME_MODEL:claude WARN)"
   [ "$t|$ul" = "$want|$want" ] && ok "prompt node title for by=${by:-none} $st: $want" || no "prompt node title by=${by:-none}: $t|$ul (want $want)"
 done
 # the image review binding covers the prompt node: another prompt value is another requirements hash
-jq '.["3"].inputs.value = "changed"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/changed-wf.json"
-python3 -B - "$ROOT" "$RUNS/golden-icon-001/spec.json" "$RUNS/golden-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
+jq '.["3"].inputs.value = "changed"' "$RUNS/legacy-shape-icon-001/workflow.json" > "$TMP/changed-wf.json"
+python3 -B - "$ROOT" "$RUNS/legacy-shape-icon-001/spec.json" "$RUNS/legacy-shape-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
 import runfiles
@@ -346,14 +355,14 @@ for p in $CORE_PURPOSES; do
   [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
     && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
 done
-u="$RUNS/golden-image-edit-001/workflow.ui.json"
+u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
 [ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
   && [ "$(jq -c '[.nodes[] | select(.type == "NineRouterImage") | .inputs[] | {name, link: (.link != null), widget: (.widget.name // null)}]' "$u")" = \
        '[{"name":"user_prompt","link":true,"widget":"user_prompt"},{"name":"reference_images","link":true,"widget":null}]' ] \
   && [ "$(jq -r '[.nodes[] | select(.type == "PrimitiveStringMultiline") | .title][0]' "$u")" = "Prompt (Claude, Codex review NOT_RUN)" ] \
   && ok "workflow.ui.json image-edit: LoadImage upload widget, linked prompt widget socket, prompt node title" || no "ui image-edit" "$(jq -c .nodes "$u")"
-[ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/golden-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
-  && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/golden-icon-001/workflow.ui.json")"
+[ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/legacy-shape-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
+  && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/legacy-shape-icon-001/workflow.ui.json")"
 [ -f "$TMP/wf.ui.json" ] && [ "$(jq -r '.extra.assetgen.run_id' "$TMP/wf.ui.json")" = null ] \
   && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
@@ -430,7 +439,7 @@ AG render --run "$pd" >/dev/null 2>"$TMP/err" && AG manifest --run "$pd" >/dev/n
 got="$(jq -r .params.filename_prefix "$pd/spec.json")|$(jq -r '[.[] | select(.class_type == "SaveImage")][0].inputs.filename_prefix' "$pd/workflow.json")"
 got="$got|$(sed -n '/^---json$/,/^---$/p' "$pd/run.md" | sed '1d;$d' | jq -r .spec.params.filename_prefix)"
 AG review-cmd --phase prompt --run "$pd" --json | jq -r .stdin > "$TMP/rp.txt"
-[ "$got" = "$want|$want|$want" ] && grep -q "filename_prefix=$want" "$TMP/rp.txt" && ! grep -q 'assetgen/run\b' "$pd/workflow.json" "$pd/workflow.ui.json" "$pd/run.md" "$TMP/rp.txt" \
+[[ "$got" = "$want|$want|$want" || "$got" = "$want|$want-"*"|$want" ]] && grep -q "filename_prefix=$want" "$TMP/rp.txt" && ! grep -q 'assetgen/run\b' "$pd/workflow.json" "$pd/workflow.ui.json" "$pd/run.md" "$TMP/rp.txt" \
   && [ "$(jq -r .param_sources.filename_prefix "$pd/spec.json")" = "run id prefix-icon-001" ] \
   && ok "filename_prefix $want in spec.json, workflow.json, run.md and the review prompt (never assetgen/run)" || no "filename_prefix: $got" "$(cat "$TMP/err"; grep -n filename_prefix "$TMP/rp.txt")"
 mkdir -p "$RUNS/prefix-copy-001"; cp "$TMP/spec-out.json" "$RUNS/prefix-copy-001/spec.json"; cp "$pd/prompt.md" "$RUNS/prefix-copy-001/"
@@ -568,7 +577,7 @@ got=$(AG lint "$LA/assetgen/purposes/icon.json" --authoring "$LA" 2>&1)
 { grep -q "handoff_domain 'audio' is not a registry domain" <<<"$got" && grep -q "qa.size.mode must be one of" <<<"$got" \
   && grep -q "qa.alpha must be one of" <<<"$got" && grep -q "prompt_rubric must be a non-empty list" <<<"$got"; } \
   && ok "lint purpose: domain, qa modes, rubric (merged game extension)" || no "purpose lint" "$got"
-jq '.["1"].inputs.user_prompt = "{{prompt}}"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/left.json"
+jq '.["1"].inputs.user_prompt = "{{prompt}}"' "$RUNS/legacy-shape-icon-001/workflow.json" > "$TMP/left.json"
 got=$(AG lint "$TMP/left.json" 2>&1); grep -q "unfilled placeholder prompt" <<<"$got" && ok "rendered workflow with a leftover placeholder: FAIL" || no "leftover placeholder lint"
 echo '{"schema": "x"}' > "$TMP/other.json"
 got=$(AG lint "$TMP/other.json" 2>&1); grep -q "not an asset-gen" <<<"$got" && ok "unrelated JSON: FAIL" || no "unrelated JSON lint"
@@ -681,7 +690,8 @@ want_paths=$( { for t in $CORE_TEMPLATES; do echo "core:templates/assetgen/workf
 got_paths=$(jq -r '.results[] | select(.check == "assetgen-graph-style") | .path' "$TMP/o" | LC_ALL=C sort)
 [ -n "$want_paths" ] && [ "$got_paths" = "$want_paths" ] \
   && [ "$(jq -r '[.results[] | select(.check == "assetgen-graph-style" and (.path | test("image-(generate|edit)\\.json$"))) | .state] | unique | join(",")' "$TMP/o")" = WARN ] \
-  && ok "lint: one assetgen-graph-style row per core and game template, WARN for the legacy image-generate/image-edit (and the game extension)" \
+  && [ "$(jq -r '[.results[] | select(.check == "assetgen-graph-style" and (.path | test("workflows/staged-(icon|ui-element)\\.json$"))) | .state] | sort | join(",")' "$TMP/o")" = PASS,PASS ] \
+  && ok "lint: one assetgen-graph-style row per core and game template, staged icon and ui-element PASS, legacy templates WARN" \
   || no "lint graph-style rows" "got: $got_paths
 want: $want_paths
 $(jq -c '.results[] | select(.check == "assetgen-graph-style")' "$TMP/o")"
@@ -784,7 +794,7 @@ python3 -B "$TMP/mk.py" "$ROOT" "$FX" && [ -f "$FX/corrupt.png" ] && ok "fixture
 echo "-- qa"
 qarun() { # qarun NAME PURPOSE PNG...  -> rc in $rc, report in $TMP/q.json
   local name="$1" p="$2"; shift 2
-  mkrun "$name" "$p" --style stylized-painterly || return 1
+  mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" || return 1
   AG render --run "$RUNS/$name" >/dev/null 2>&1
   for f in "$@"; do cp "$FX/$f" "$RUNS/$name/outputs/"; done
   AG qa --run "$RUNS/$name" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
@@ -1165,7 +1175,7 @@ AG embed --run "$TMP/missing/dir-001" >/dev/null 2>"$TMP/err"; rc=$?
 AG qa --help | grep -q "run id <slug>-NNN" && AG resolve --help | grep -q -- "--verbose" && ok "CLI help documents --run RUN-ID and resolve --verbose" || no "CLI help"
 
 echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
-ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly && AG render --run "$ed" >/dev/null
+ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly --template image-generate && AG render --run "$ed" >/dev/null
 python3 -B - "$ROOT" "$FX/icon-ok.png" "$ed/outputs/comfy.png" <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -1251,7 +1261,7 @@ rm -rf "$RUNS/embed-noui-001"
 echo "-- e2e3: edge fringe QA, defringe, composites in the image review"
 # item 1: a prop whose low-alpha edge pixels carry a coloured speckle (barrel-prop-001) fails png-edge-fringe;
 # defringe (refused while qa.json binds the outputs, --force names what is stale) repairs it and QA passes
-fr="$RUNS/fringe-icon-001"; mkrun fringe-icon-001 icon --style stylized-painterly && AG render --run "$fr" >/dev/null
+fr="$RUNS/fringe-icon-001"; mkrun fringe-icon-001 icon --style stylized-painterly --template image-generate && AG render --run "$fr" >/dev/null
 python3 -B - "$ROOT" "$FX/fringe.png" "$fr/outputs/prop.png" <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -1344,7 +1354,7 @@ AG review-cmd --phase image --run "$fr" > /dev/null && AG review-cmd --phase ima
 # final review P3: the documented post-QA fringe repair (SKILL.md step 7) works end to end: embed, qa FAIL, both image
 # reviews bind the outputs, defringe without --force is refused, defringe --force names qa.json and both reviews stale,
 # then embed, qa PASS and both image reviews again bind the repaired outputs
-fx="$RUNS/fringe-repair-001"; mkrun fringe-repair-001 icon --style stylized-painterly && AG render --run "$fx" >/dev/null
+fx="$RUNS/fringe-repair-001"; mkrun fringe-repair-001 icon --style stylized-painterly --template image-generate && AG render --run "$fx" >/dev/null
 cp "$fr/outputs-raw/prop.png" "$fx/outputs/prop.png"; AG embed --run "$fx" > /dev/null
 AG qa --run "$fx" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
 bound "$fx" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fx/review-image.json"
@@ -1378,7 +1388,7 @@ case "$step7" in *'`assetgen.py defringe --run <run> --force [--alpha-floor N]`'
   *) no "SKILL.md step 7 fringe repair" "$step7" ;; esac
 rm -rf "$fx"
 # several outputs: composites per output with alpha (review/composite-<stem>-<bg>.png); an opaque output gets none and defringe skips it
-f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly && AG render --run "$f2" >/dev/null
+f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly --template image-generate && AG render --run "$f2" >/dev/null
 cp "$FX/fringe.png" "$f2/outputs/a.png"; cp "$FX/icon-opaque.png" "$f2/outputs/b.png"; ob=$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)
 AG defringe --run "$f2" > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 0 ] && grep -q "^skipped outputs/b.png: no transparent pixels" "$TMP/o" && grep -q "1 defringed, 1 skipped, 0 FAIL" "$TMP/o" \
@@ -1722,7 +1732,7 @@ echo "-- finalize: defringe (alpha purposes only), embed, qa in one fixed order"
 # finrun NAME PURPOSE PNG [render args...]: a rendered run with the fixture PNG as its only output
 finrun() {
   local name="$1" p="$2" f="$3"; shift 3
-  mkrun "$name" "$p" --style stylized-painterly && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
+  mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 steps() { grep -E '^(defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
@@ -1796,7 +1806,7 @@ ASSETGEN_NO_PIL=1 AG finalize --run "$fn" --json > "$TMP/f.json" 2>"$TMP/err"; r
 # refusals before anything is written: no spec.json, no outputs, no workflow.ui.json, an approved run
 mkdir -p "$RUNS/fin-nospec-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/fin-nospec-001/outputs/prop.png"
 AG finalize --run "$RUNS/fin-nospec-001" > "$TMP/o" 2>&1; rc1=$?
-mkrun fin-noout-001 icon --style stylized-painterly && AG render --run "$RUNS/fin-noout-001" > /dev/null 2>&1
+mkrun fin-noout-001 icon --style stylized-painterly --template image-generate && AG render --run "$RUNS/fin-noout-001" > /dev/null 2>&1
 AG finalize --run "$RUNS/fin-noout-001" > "$TMP/o2" 2>&1; rc2=$?
 mkrun fin-noui-001 icon --style stylized-painterly && cp "$FX/icon-ok.png" "$RUNS/fin-noui-001/outputs/prop.png"
 AG finalize --run "$RUNS/fin-noui-001" > "$TMP/o3" 2>&1; rc3=$?
@@ -1843,7 +1853,7 @@ done
 # a series bud-icon-NNN: 001 failed (no run.md, counted), 002 finished (run.md, not counted), 003 the run (limit 3),
 # 009 a later attempt and xbud-icon-001 another slug (neither counted)
 for n in bud-icon-001 bud-icon-002 bud-icon-009 xbud-icon-001; do mkdir -p "$RUNS/$n"; done; : > "$RUNS/bud-icon-002/run.md"
-bd="$RUNS/bud-icon-003"; mkrun bud-icon-003 icon --style pixel-art --max-outputs 3 || no "budget: mkrun bud-icon-003"
+bd="$RUNS/bud-icon-003"; mkrun bud-icon-003 icon --style pixel-art --template image-generate --max-outputs 3 || no "budget: mkrun bud-icon-003"
 cp "$FX/icon-ok.png" "$bd/outputs/a.png"
 bsnap() { { find "$bd" -type f -exec sha256sum {} +; ls -a "$RUNS"; } | sort; }; bs0=$(bsnap)
 AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
@@ -1874,7 +1884,7 @@ AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
   && ok "budget exceeded: used 4 > allowed 3, remaining 0, exit 1 (text and --json)" || no "budget exceeded rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
 rm -f "$RUNS/bud-icon-002/run.md"  # the empty marker is no gen-run: the quality plugin loop below parses every runs/*/run.md
 # a spec resolved before the spend guard (no budget key) is unlimited, never a failure
-bo="$RUNS/bud-old-001"; mkrun bud-old-001 icon --style pixel-art || no "budget: mkrun bud-old-001"
+bo="$RUNS/bud-old-001"; mkrun bud-old-001 icon --style pixel-art --template image-generate || no "budget: mkrun bud-old-001"
 jq 'del(.budget)' "$bo/spec.json" > "$TMP/spec.tmp" && cp "$TMP/spec.tmp" "$bo/spec.json"; cp "$FX/icon-ok.png" "$bo/outputs/a.png"
 AG budget --run "$bo" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
 AG budget --run "$bo" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
@@ -1897,7 +1907,7 @@ AG budget --run "$RUNS/bud-nospec-001" > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q "spec.json" "$TMP/o" && [ "$(find "$RUNS/bud-nospec-001" -type f | wc -l)" -eq 1 ] \
   && ok "budget on a run without spec.json: exit 1 naming spec.json, nothing written" || no "budget no spec rc=$rc" "$(cat "$TMP/o")"
 # finalize prints the budget line right before its last line, adds .budget to --json and keeps its exit code
-bf="$RUNS/bud-tile-001"; { mkrun bud-tile-001 texture-tileable --style stylized-painterly && AG render --run "$bf" > /dev/null 2>&1 \
+bf="$RUNS/bud-tile-001"; { mkrun bud-tile-001 texture-tileable --style stylized-painterly --template image-generate && AG render --run "$bf" > /dev/null 2>&1 \
   && cp "$FX/tile-ok.png" "$bf/outputs/a.png"; } || no "budget: finalize run bud-tile-001"
 AG finalize --run "$bf" > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: .*1 used.*of 4 allowed" \
@@ -1908,7 +1918,7 @@ AG budget --run "$bf" --json > "$TMP/b.json" 2>>"$TMP/err"
 [ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.exit | tostring)' "$TMP/f.json")" = "PASS 0" ] && [ "$(jq -S .budget "$TMP/f.json")" = "$(jq -S . "$TMP/b.json")" ] \
   && [ "$(jq -r .budget.schema "$TMP/f.json")" = rpg-factory.assetgen-budget/1 ] \
   && ok "finalize --json: key budget is the budget --json object" || no "finalize budget json rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
-be="$RUNS/bud-over-001"; { mkrun bud-over-001 texture-tileable --style stylized-painterly --max-outputs 1 && AG render --run "$be" > /dev/null 2>&1 \
+be="$RUNS/bud-over-001"; { mkrun bud-over-001 texture-tileable --style stylized-painterly --template image-generate --max-outputs 1 && AG render --run "$be" > /dev/null 2>&1 \
   && cp "$FX/tile-ok.png" "$be/outputs/a.png" && cp "$FX/tile-ok.png" "$be/outputs/b.png"; } || no "budget: finalize run bud-over-001"
 AG finalize --run "$be" > "$TMP/o" 2>"$TMP/err"; rc=$?
 AG finalize --run "$be" --json > "$TMP/f.json" 2>>"$TMP/err"; rc2=$?
@@ -1972,7 +1982,7 @@ done
 [ "$(snap)" = "$s0" ] && ok "refused publish calls write nothing" || no "publish wrote into the run dir"
 
 echo "-- manifest (run.md, gen-run)"
-d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art; AG render --run "$d" >/dev/null
+d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art --template image-generate; AG render --run "$d" >/dev/null
 cp "$FX/icon-ok.png" "$d/outputs/iron-sword.png"; AG qa --run "$d" >/dev/null
 bound "$d" prompt PASS codex > "$d/review-prompt.json"
 { echo "Review done."; bound "$d" image FAIL codex '[{"rubric": 2, "severity": "major", "text": "off style"}]'; } > "$d/review-image.json"
@@ -2026,7 +2036,7 @@ AG manifest --run "$RUNS/Bad_Name" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <slug>-NNN" "$TMP/err" && ok "run dir name must be <slug>-NNN" || no "bad run name rc=$rc"
 
 echo "-- quality plugin (scripts/checks/domains/assetgen.py) and artifact-lint on manifest-produced run.md"
-good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly --authoring "$AUTH"
+good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly --template image-generate --authoring "$AUTH"
 AG render --run "$good" >/dev/null && cp "$FX/icon-ok.png" "$good/outputs/qp-icon.png" && AG qa --run "$good" >/dev/null \
   || no "good run: render/qa did not PASS" "$(jq -c .results "$good/qa.json" 2>/dev/null)"
 bound "$good" prompt PASS codex > "$good/review-prompt.json"; bound "$good" image PASS codex > "$good/review-image.json"
@@ -2156,7 +2166,7 @@ variant qp-tsize-001; fmset "$RUNS/qp-tsize-001" 'obj["spec"]["params"]["size"] 
 variant qp-tmodel-001; fmset "$RUNS/qp-tmodel-001" 'obj["spec"]["params"]["model"] = "invented-model"; obj["spec"]["params"]["background"] = "invented-background"'
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # image-edit: the reference image is bound by name and content (references/<name> in the run directory)
-edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --authoring "$AUTH"
+edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --template image-edit --authoring "$AUTH"
 mkdir -p "$edit/references"; cp "$FX/icon-ok.png" "$edit/references/ref-a.png"
 AG render --run "$edit" --param reference_image=ref-a.png >/dev/null && cp "$FX/icon-ok.png" "$edit/outputs/edit.png" && AG qa --run "$edit" >/dev/null   || no "image-edit run: render/qa did not PASS" "$(jq -c .results "$edit/qa.json" 2>/dev/null)"
 bound "$edit" prompt PASS codex > "$edit/review-prompt.json"; bound "$edit" image PASS codex > "$edit/review-image.json"
@@ -2169,7 +2179,7 @@ evariant qp-ebytes-001; cp "$FX/icon-opaque.png" "$RUNS/qp-ebytes-001/references
 evariant qp-enoref-001; rm -f "$RUNS/qp-enoref-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-enoref-001" >/dev/null
 # review tiers (scripts/assetgen/data/review-tiers.json): a light purpose (icon) needs no Claude visual review, a present
 # file is still graded; selected style-lock anchors make any run full. The tier is computed at check time, never recorded.
-light="$RUNS/qp-light-001"; mkrun qp-light-001 icon --style stylized-painterly
+light="$RUNS/qp-light-001"; mkrun qp-light-001 icon --style stylized-painterly --template staged-icon
 AG render --run "$light" >/dev/null && cp "$FX/icon-ok.png" "$light/outputs/light.png" && AG qa --run "$light" >/dev/null \
   || no "light run: render/qa did not PASS" "$(jq -c .results "$light/qa.json" 2>/dev/null)"
 bound "$light" prompt PASS codex > "$light/review-prompt.json"; bound "$light" image PASS codex > "$light/review-image.json"
@@ -2240,6 +2250,9 @@ case_ qp-icon-001 gen-run-workflow-style WARN 'group: node' "legacy-template ren
 [ "$(st AGEN-gs-clean-001 gen-run-workflow-style)" = PASS ] && [ -z "$(why AGEN-gs-clean-001 gen-run-workflow-style)" ] \
   && ok "render of the clean template: gen-run-workflow-style PASS without reasons" \
   || no "clean render workflow-style: $(st AGEN-gs-clean-001 gen-run-workflow-style)" "$(why AGEN-gs-clean-001 gen-run-workflow-style)"
+[ "$(st AGEN-qp-light-001 gen-run-workflow-style)" = PASS ] && [ -z "$(why AGEN-qp-light-001 gen-run-workflow-style)" ] \
+  && ok "staged icon render: gen-run-workflow-style PASS without reasons" \
+  || no "staged icon workflow-style: $(st AGEN-qp-light-001 gen-run-workflow-style)" "$(why AGEN-qp-light-001 gen-run-workflow-style)"
 case_ gs-moved-001 gen-run-workflow-style WARN 'group: node 4 (ImageScale' "workflow.ui.json with a node moved outside every group on a proposed run: WARN naming the node, never FAIL"
 case_ gs-badjson-001 gen-run-workflow-style WARN 'workflow.ui.json is not readable JSON' "unreadable workflow.ui.json: WARN"
 case_ gs-noextra-001 gen-run-workflow-style WARN 'save-suffix: node 6 (SaveImage' "workflow.ui.json without extra.assetgen and an unsuffixed SaveImage: WARN, checked against the run's prefix"
@@ -2724,7 +2737,7 @@ slrun() { # slrun NAME PURPOSE [resolve args...]: resolve into a run of the styl
 lk() { jq -r "$1" "$SR/$2/spec.json"; }
 
 # resolve: project style, family, selection with reasons, relevant rejections
-slrun sl-icon-001 icon || no "resolve icon in the style lock repo" "$(cat "$TMP/err")"
+slrun sl-icon-001 icon --template image-generate || no "resolve icon in the style lock repo" "$(cat "$TMP/err")"
 [ "$(lk '.style.id + "|" + .style_lock.style.style_id + "|" + (.style_lock.style.version | tostring) + "|" + .style_lock.family + "|" + .style_lock.family_source + "|" + .style_lock.project.path + "|" + (.style_lock.override | tostring)' sl-icon-001)" \
   = "rpg-base|rpg-base|2|props|purpose|assetgen/project.json|null" ] && [ "$(lk '.style_lock.style.sha256 == .style.sha256' sl-icon-001)" = true ] \
   && ok "resolve: project style rpg-base v2, purpose family props, project recorded, no override" || no "resolve style_lock" "$(lk .style_lock sl-icon-001)"
@@ -2783,10 +2796,10 @@ slrun sl-chars-001 icon --family characters
   && ok "resolve --family characters: families sub-style rpg-chars (its own anchors: none)" || no "resolve --family" "$(lk .style_lock sl-chars-001)"
 AG resolve --purpose icon --authoring "$SC" --family Props! >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -q "must be a lowercase id" "$TMP/err" && ok "resolve --family: not a lowercase id, usage error" || no "bad --family rc=$rc" "$(cat "$TMP/err")"
-slrun sl-one-001 icon-one && [ "$(lk '[.style_lock.max_references, (.style_lock.references | length)] | join(",")' sl-one-001)" = "1,1" ] \
+slrun sl-one-001 icon-one --template image-generate && [ "$(lk '[.style_lock.max_references, (.style_lock.references | length)] | join(",")' sl-one-001)" = "1,1" ] \
   && [ "$(lk '.style_lock.references[0].anchor_id' sl-one-001)" = b-strong ] && ok "resolve: purpose max_references 1 caps the selection" \
   || no "resolve cap" "$(lk .style_lock sl-one-001)"
-slrun sl-pixel-001 icon --style pixel-art && [ "$(lk '.style.id + "|" + (.style_lock.references | length | tostring) + "|" + (.style_lock.override | tostring)' sl-pixel-001)" = "pixel-art|0|null" ] \
+slrun sl-pixel-001 icon --style pixel-art --template image-generate && [ "$(lk '.style.id + "|" + (.style_lock.references | length | tostring) + "|" + (.style_lock.override | tostring)' sl-pixel-001)" = "pixel-art|0|null" ] \
   && ok "resolve --style in allowed_styles: accepted, no anchors of that style" || no "resolve allowed style" "$(cat "$TMP/err")"
 AG resolve --purpose icon --authoring "$SC" --style anime-cel >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "is not allowed by assetgen/project.json" "$TMP/err" && grep -q "style-override REASON" "$TMP/err" \
@@ -2834,7 +2847,7 @@ d1="$SR/sl-one-001"; AG render --run "$d1" >/dev/null 2>&1
 d0="$SR/sl-pixel-001"; AG render --run "$d0" >/dev/null 2>&1
 [ "$(wiring "$d0/workflow.json")" = none ] && [ "$(jq 'length' "$d0/workflow.json")" = 3 ] && [ ! -d "$d0/references" ] \
   && ok "render 0 anchors: the template graph unchanged, no references/" || no "render wiring 0" "$(jq -c . "$d0/workflow.json")"
-slrun sl-edit-001 image-edit && AG render --run "$SR/sl-edit-001" --param reference_image=ref.png >/dev/null 2>"$TMP/err"
+slrun sl-edit-001 image-edit --template image-edit && AG render --run "$SR/sl-edit-001" --param reference_image=ref.png >/dev/null 2>"$TMP/err"
 de="$SR/sl-edit-001"
 [ "$(wiring "$de/workflow.json")" = "ref.png>anchor-a-canon.png>anchor-d-chars.png>anchor-b-strong.png" ] \
   && [ "$(jq -c '[.["8"].inputs.image1, .["2"].inputs.reference_images]' "$de/workflow.json")" = '[["1",0],["10",0]]' ] \
