@@ -516,6 +516,7 @@ if case in ('codex-header', 'codex-no-auth', 'codex-login', 'codex-env-key', 'co
     if case == 'codex-openai-auth':
         content = 'model_provider = "proxy"\n[model_providers.proxy]\nrequires_openai_auth = true\n'
         assert not probe(content)['available']
+        r._cache.clear()  # A changed login status starts a new CLI invocation.
         assert probe(content, login=True)['available']
     if case == 'codex-profile':
         content = ('profile = "work"\nmodel_provider = "other"\n[profiles.work]\nmodel_provider = "proxy"\n'

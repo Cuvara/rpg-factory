@@ -1,12 +1,13 @@
 """Model routing and best-effort per-run availability for the delivery pipeline."""
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
-import tomllib
 from pathlib import Path
+import codexconfig
 import fstate
 
 with (Path(__file__).resolve().parents[2] / 'docs/schemas/pipeline-plan.schema.json').open(encoding='utf-8') as _schema:
@@ -118,10 +119,7 @@ _cache = {}
 def _codex_provider(login):
     """Return the active authenticated provider's name, without exposing credentials."""
     try:
-        home = os.environ.get('CODEX_HOME')
-        config = Path(home) / 'config.toml' if home else Path.home() / '.codex' / 'config.toml'
-        with config.open('rb') as f:
-            data = tomllib.load(f)
+        data = codexconfig.config()
         profile = data.get('profiles', {}).get(data.get('profile'), {})
         name = profile.get('model_provider', data.get('model_provider'))
         if not isinstance(name, str) or not name:
@@ -142,11 +140,15 @@ def available(pipe, plan):
     path = marks_path(plan) if plan is not None else None
     # content, not mtime: two writes within the timer resolution (Windows) share an mtime
     stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
+    try:
+        # a digest, so the memo never holds the config's header or key values
+        config_digest = hashlib.sha256((Path(codexconfig.home()) / 'config.toml').read_bytes()).digest()
+    except OSError:
+        config_digest = None
     key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'),
            os.environ.get('PATH'), os.environ.get('CODEX_HOME'), os.environ.get('HOME'),
-           os.environ.get('USERPROFILE'), stamp)
-    # Provider files and their named environment variables can change without changing the cache key.
-    if key in _cache and (os.environ.get('RPG_FACTORY_AGENTS') is not None or 'codex' not in pipe['agents']):
+           os.environ.get('USERPROFILE'), stamp, config_digest, frozenset(k for k, v in os.environ.items() if v))
+    if key in _cache:
         return _cache[key]
     override = os.environ.get('RPG_FACTORY_AGENTS')
     chosen = {x.strip() for x in override.split(',')} if override is not None else None
@@ -187,8 +189,9 @@ def available(pipe, plan):
         source = 'orca account' if codex_orca else None
         if not source:
             try:
-                login = subprocess.run([codex_bin, 'login', 'status'], capture_output=True, timeout=5).returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
+                login = subprocess.run([shutil.which(codex_bin), 'login', 'status'], capture_output=True,
+                                       stdin=subprocess.DEVNULL, timeout=5).returncode == 0
+            except (OSError, TypeError, subprocess.TimeoutExpired):
                 login = False
             provider = _codex_provider(login) if not login else None
             source = 'codex login' if login else 'api provider ' + provider if provider else None
