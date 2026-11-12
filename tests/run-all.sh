@@ -6,7 +6,8 @@
 # a passing suite printed (a flaky step it retried) are shown under its PASS line; they are no failure.
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
-#                         [--inline-only] [--only-suites L] [--reuse] [--no-reuse] [--no-wait] [--list-suites]
+#                         [--inline-only] [--only-suites L [--only-cases C]] [--reuse] [--no-reuse] [--no-wait]
+#                         [--list-suites]
 #   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
 #                   same count and exit code. Read-only live-workspace checks (runl, block) run one at a time
 #                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
@@ -21,7 +22,8 @@
 #                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
 #                   like a suite by that script path, else it counts as not affected.
 #                   Suites with a case map receive --case A,B for only the affected cases (shown in results).
-#                   An explicit --only-suites name runs all its cases. Case subsets never publish suite PASS records.
+#                   An explicit --only-suites name runs all its cases unless --only-cases gives it a subset. Case
+#                   subsets never publish suite PASS records (a full-suite PASS record still satisfies one).
 #   --inline-only   run only the inline checks (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest
 #                   and wording greps, resolver and fixture checks): exactly --affected with an empty changed list,
 #                   so every suite and gated script counts as not affected and affected.py is never asked. A targeted
@@ -33,6 +35,12 @@
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
 #                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
 #                   so does a release-only suite (tests/installed-safety.sh) without --release.
+#   --only-cases C  (also --only-cases=C) give the one --only-suites suite the comma-separated case subset C: the suite
+#                   gets --case C as --affected passes it (results show "(cases C)", no suite PASS record). ALL or an
+#                   empty C runs every case (a normal run and record). For CI (scripts/ci-plan.py plans the cases).
+#                   Exits 2 before any check without exactly one --only-suites name, for a suite without a case map
+#                   ('# case-map:' header lines, tests/affected.py case_map), for a case the map does not name, and
+#                   with --release or --inline-only.
 #   --list-suites   print every suite and gated script path the current flags can select (one per line, exactly
 #                   the names --only-suites accepts, in run order; release-only suites only with --release) and
 #                   exit 0; runs no check, takes no lock
@@ -55,11 +63,14 @@ RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stan
 RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-suites omits them, --only-suites rejects them without it
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
 list_only=false; workspace_only=false; inline_only=false; base_given=false; affected_given=false
+only_cases=""; only_cases_given=false
 while [ $# -gt 0 ]; do
   case "$1" in --workspace-only) workspace_only=true ;; -h|--help) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF"; exit 0 ;; --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
     --reuse) reuse=true ;; --no-wait) no_wait=true ;; --no-reuse) suite_reuse=false ;;
     --only-suites) only_suites="${2:-}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; }; shift ;;
     --only-suites=*) only_suites="${1#--only-suites=}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; } ;;
+    --only-cases) only_cases="${2:-}"; only_cases_given=true; [ $# -lt 2 ] || shift ;;
+    --only-cases=*) only_cases="${1#--only-cases=}"; only_cases_given=true ;;
     --list-suites) list_only=true ;;
     --affected) affected=true; affected_given=true ;; --base) base="${2:-}"; base_given=true; shift ;;
     --inline-only) inline_only=true ;;
@@ -72,9 +83,16 @@ fi
 if $inline_only; then   # --inline-only is --affected with an empty changed list: a targeted run of the inline checks only
   conflicts=""
   $affected_given && conflicts+=", --affected"; $base_given && conflicts+=", --base"; [ -z "$only_suites" ] || conflicts+=", --only-suites"
+  $only_cases_given && conflicts+=", --only-cases"
   $release && conflicts+=", --release"; $workspace_only && conflicts+=", --workspace-only"; $list_only && conflicts+=", --list-suites"
   [ -z "$conflicts" ] || { echo "run-all: --inline-only conflicts with ${conflicts#, }" >&2; exit 2; }
   affected=true
+fi
+if $only_cases_given; then   # a case subset for the one --only-suites suite (its case map is checked in runall_prepare)
+  if $release; then echo "run-all: --only-cases conflicts with --release (a release runs every case)" >&2; exit 2; fi
+  [ -n "$only_suites" ] || { echo "run-all: --only-cases needs --only-suites with exactly one suite" >&2; exit 2; }
+  case "$only_suites" in *,*) echo "run-all: --only-cases needs exactly one --only-suites name, got '$only_suites'" >&2; exit 2 ;; esac
+  [ "$only_cases" != ALL ] || only_cases=""   # ALL or empty: every case, no --case argument
 fi
 case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive integer, got '$jobs'" >&2; exit 2 ;; esac
 t_start=$(date +%s)
@@ -402,11 +420,38 @@ CASE_SUITES=(); CASE_LISTS=()
 suite_cases_for() {
   local i; suite_cases=""
   $release && return 0
-  case ",$only_suites," in *",$1,"*) return 0 ;; esac
+  # an explicit --only-suites name runs all its cases, or the --only-cases subset (one name, checked in runall_prepare)
+  case ",$only_suites," in *",$1,"*) suite_cases=$only_cases; return 0 ;; esac
   for i in "${!CASE_SUITES[@]}"; do
     [ "${CASE_SUITES[i]}" = "$1" ] && { suite_cases=${CASE_LISTS[i]}; break; }
   done
   return 0
+}
+# only_cases_check <suite> <cases>: the suite has a case map and it names every case of the comma list (an empty list:
+# every case). The map is read by tests/affected.py's own case_map() (the affected.py next to this script, its ROOT
+# set to the current root), never a second parser; RUNALL_AFFECTED_PY stand-ins have no case map. One line on stderr.
+only_cases_check() {
+  python3 -B - "${RUNALL_SELF%/*}/affected.py" "$1" "$2" <<'PY'
+import importlib.util, os, sys
+path, suite, wanted = sys.argv[1:]
+try:
+    spec = importlib.util.spec_from_file_location("runall_affected", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+except Exception as exc:   # one line, never a traceback: exit 2 like every other misuse
+    print(f"run-all: --only-cases: cannot load the case-map parser {path}: {exc}", file=sys.stderr)
+    sys.exit(2)
+mod.ROOT = os.getcwd()
+mapping = mod.case_map(suite)
+if not mapping:
+    print(f"run-all: --only-cases: suite '{suite}' has no case map (no '# case-map:' header lines)", file=sys.stderr)
+    sys.exit(2)
+unknown = [c for c in wanted.split(",") if c not in mapping] if wanted else []
+if unknown:
+    print(f"run-all: --only-cases: unknown case(s) {', '.join(repr(c) for c in unknown)} in '{suite}'"
+          f" (its case map names: {', '.join(sorted(mapping))})", file=sys.stderr)
+    sys.exit(2)
+PY
 }
 suite_selected() {
   local target=$1
@@ -630,6 +675,7 @@ runall_prepare() {
       echo "run-all: unknown suite '$candidate' (not a suite run-all runs; see --list-suites)" >&2; bad=true
     done
     $bad && return 2
+    if $only_cases_given; then only_cases_check "$only_suites" "$only_cases" || return 2; fi
   fi
   if ! $full_run && { $affected || [ -n "$only_suites" ]; }; then test_slot || return $?; fi
   [ -z "$AFF" ] || $inline_only || affected_select "${suites[@]}"
