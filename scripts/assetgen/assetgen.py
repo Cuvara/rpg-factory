@@ -8,6 +8,7 @@ Usage:
                       [--max-outputs N] [--out FILE] [--verbose] [--json]
   assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
+  assetgen.py graph-lint [PATH...] [--run RUN] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
@@ -29,6 +30,16 @@ directory (resolve_run); when neither exists the error names the tried paths (ex
 resolve prints a short summary (purpose, style and template, params, hints, style lock, references, rejections,
 warnings: a selected anchor of another family than the run's, or the anchors anchor_family_fallback: false left out,
 also recorded as spec.warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
+
+Workflow style guide (scripts/assetgen/graphstyle.py): every API node has a title and sits in exactly one group;
+group titles come from Prompt, References, Generate, Post-process, Preview, Output, left to right in that order, each
+with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt;
+exactly one NineRouterImage; every SaveImage sits in Output with an inline filename suffix (intermediates use
+PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row per template (a legacy template
+without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer or standalone) or a ComfyUI
+frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json); --run RUN adds
+<run>/workflow.ui.json; neither: every core and game template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
+2 for usage (a PATH missing, not JSON or neither kind, a --run without workflow.ui.json).
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
@@ -155,7 +166,7 @@ attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run list
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
 Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
-these), and budget. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
+these), graph-lint and budget. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
 references/anchor-*.png), defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json),
 finalize (all of those), manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
@@ -190,6 +201,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import approval  # noqa: E402
 import budget  # noqa: E402
 import finalize  # noqa: E402
+import graphstyle  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
 import lint  # noqa: E402
@@ -1466,6 +1478,64 @@ def resolve_text(spec, verbose):
     return "\n".join(lines)
 
 
+def validation_report(results, tool, verb, as_json):
+    """Print rpg-factory.validation/1 rows (lint, graph-lint) and return the exit code: 1 when a row FAILs, else 0."""
+    counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL")}
+    emit({"schema": "rpg-factory.validation/1", "tool": tool, "results": results, "summary": counts}, as_json,
+         "\n".join("%s %s%s" % (r["state"], r["path"], (": " + "; ".join(r["reasons"])) if r["reasons"] else "") for r in results)
+         + "\nassetgen %s: %d PASS, %d WARN, %d FAIL" % (verb, counts["PASS"], counts["WARN"], counts["FAIL"]))
+    return 1 if counts["FAIL"] else 0
+
+
+def read_graph_json(path, what):
+    """Parsed JSON of a graph-lint input; exits 2 (usage) when it is missing or not readable JSON."""
+    if not os.path.isfile(path):
+        fail("graph-lint: %s %s is not a file" % (what, path), 2)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as exc:
+        fail("graph-lint: %s %s is not readable JSON (%s)" % (what, path, exc), 2)
+
+
+def graph_lint_rows(paths, run, authoring):
+    """assetgen-graph-style rows of graph-lint: each PATH (a template file or a ComfyUI frontend workflow), the run's
+    workflow.ui.json, or with neither every core and game template. Exits 2 for a PATH that is missing, not JSON or
+    neither kind, and for a --run without workflow.ui.json."""
+    known, rows = lint.known_nodes(), []
+
+    def template(path):
+        data, err = lint.template_data(path, authoring)
+        shown = lint.display(path, authoring)
+        if err is not None:  # a layer template that does not load: no graph to lint
+            return {"path": shown, "check": graphstyle.CHECK, "state": "FAIL", "reasons": ["layout: " + err]}
+        return graphstyle.template_row(data, known, shown) if isinstance(data, dict) else None
+
+    def frontend(path, raw):
+        if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
+            return graphstyle.ui_row(raw, known, lint.display(path, authoring))
+        return None
+
+    for path in paths:
+        raw = read_graph_json(path, "PATH")
+        row = template(path) or frontend(path, raw)
+        if row is None:
+            fail("graph-lint: %s is neither a workflow template nor a ComfyUI frontend workflow (a JSON object with a "
+                 "\"nodes\" list)" % path, 2)
+        rows.append(row)
+    if run:
+        path = os.path.join(run, "workflow.ui.json")
+        row = frontend(path, read_graph_json(path, "--run workflow.ui.json"))
+        if row is None:
+            fail("graph-lint: %s is not a ComfyUI frontend workflow (a JSON object with a \"nodes\" list)" % path, 2)
+        rows.append(row)
+    if not paths and not run:
+        files = layers.layer_files("template", authoring)
+        rows += [row for row in (template(p) for p in list(files["core"].values()) + list(files["game"].values()))
+                 if row is not None]
+    return rows
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="assetgen.py", description="asset-gen engine (see module docstring)", allow_abbrev=False)
     subs = ap.add_subparsers(dest="cmd", required=True)
@@ -1491,6 +1561,7 @@ def main(argv=None):
     c = sp("render"); run_arg(c, False); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
     c.add_argument("--param", action="append", default=[])
     c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sp("graph-lint"); c.add_argument("paths", nargs="*"); run_arg(c, False); c.add_argument("--json", action="store_true")
     c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); run_arg(c)
     c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
     c = sp("embed"); run_arg(c); c.add_argument("--json", action="store_true")
@@ -1586,12 +1657,10 @@ def main(argv=None):
             print("rendered %s (%d nodes) and %s" % (out, len(workflow), ui_path(out)))
             return 0
         if a.cmd == "lint":
-            results = [lint.lint_file(p, authoring) for p in (a.paths or lint.default_paths(authoring))]
-            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL")}
-            emit({"schema": "rpg-factory.validation/1", "tool": "assetgen-lint", "results": results, "summary": counts}, a.json,
-                 "\n".join("%s %s%s" % (r["state"], r["path"], (": " + "; ".join(r["reasons"])) if r["reasons"] else "") for r in results)
-                 + "\nassetgen lint: %(PASS)d PASS, %(WARN)d WARN, %(FAIL)d FAIL" % counts)
-            return 1 if counts["FAIL"] else 0
+            results = [row for p in (a.paths or lint.default_paths(authoring)) for row in lint.lint_rows(p, authoring)]
+            return validation_report(results, "assetgen-lint", "lint", a.json)
+        if a.cmd == "graph-lint":
+            return validation_report(graph_lint_rows(a.paths, a.run, authoring), "assetgen-graph-lint", "graph-lint", a.json)
         if a.cmd == "review-cmd":
             cmd = review_cmd(a.run, a.phase, a.codex, not a.no_write)
             emit(cmd, a.json, cmd["shell"])
