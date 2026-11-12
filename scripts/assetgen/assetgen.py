@@ -79,7 +79,11 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       --param filename_prefix
   workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
                       (uiworkflow.py); optional template ui supplies groups, ui_only Note nodes, node colors and row
-                      hints, never included in workflow.json; written next to workflow.json (render --out X.json: X.ui.json)
+                      hints, never included in workflow.json; written next to workflow.json (render --out X.json: X.ui.json).
+                      With a grouped template ui, the style-lock nodes render adds (LoadImage "Anchor <id> (<strength>)",
+                      ImageBatch "Reference batch N") join the References group, or a new References group with one
+                      Note placed after Prompt (graphstyle.STAGES order) when the template has none
+                      (ui_with_references); a template without a ui block or without groups lays them out as before
   outputs/*.png       comfy-mcp fetch_outputs out_dir; for a purpose with alpha defringe rewrites them (below); embed
                       then adds a `workflow` tEXt chunk (workflow.ui.json, compact JSON) before IEND of each PNG (prompt
                       chunk kept; a PNG whose chunk is the current workflow.ui.json is kept byte for byte, a stale
@@ -185,6 +189,7 @@ is not --out): allow_abbrev=False on every parser.
 """
 import argparse
 import contextlib
+import copy
 import glob
 import hashlib
 import io
@@ -426,6 +431,35 @@ def wire_references(workflow, picks):
                     "_meta": {"title": "Reference batch %d" % i}})
     inputs["reference_images"] = link
     return []
+
+
+REFERENCES = "References"
+REFERENCES_NOTE = ("Style-lock anchors added by render: references/anchor-<id>.png, batched into the image node "
+                   "reference_images.")
+
+
+def ui_with_references(ui, workflow, template_workflow):
+    """The template ui block for to_ui with the nodes render added to the template workflow (wire_references: style-lock
+    anchors and their ImageBatch chain) in the References group: the existing group of that title, else a new one
+    (palette color cyan, one Note) inserted at its graphstyle.STAGES position. A copy; spec and template data are never
+    changed. A ui that is not a dict with a non-empty groups list (legacy: no ui block, no groups) comes back as is."""
+    if not isinstance(ui, dict) or not isinstance(ui.get("groups"), list) or not ui["groups"]:
+        return ui
+    added = sorted((nid for nid in workflow if nid not in (template_workflow or {})), key=lambda n: (len(n), n))
+    if not added:
+        return ui
+    ui = copy.deepcopy(ui)
+    groups = ui["groups"]
+    for group in groups:
+        if isinstance(group, dict) and group.get("title") == REFERENCES:
+            group["nodes"] = list(group.get("nodes") or []) + added
+            return ui
+    rank = graphstyle.STAGES.index(REFERENCES)
+    at = next((i for i, g in enumerate(groups) if isinstance(g, dict) and g.get("title") in graphstyle.STAGES
+               and graphstyle.STAGES.index(g["title"]) > rank), len(groups))
+    groups.insert(at, {"title": REFERENCES, "color": "cyan", "nodes": added})
+    ui["notes"] = list(ui.get("notes") or []) + [{"text": REFERENCES_NOTE, "group": REFERENCES}]
+    return ui
 
 
 def copy_anchors(run_dir, spec):
@@ -1648,9 +1682,10 @@ def main(argv=None):
             ui = None
             if not errors:
                 try:
+                    tmpl = spec["template"]["data"]
                     ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
                                           {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}},
-                                          spec["template"]["data"].get("ui"))
+                                          ui_with_references(tmpl.get("ui"), workflow, tmpl.get("workflow")))
                 except ValueError as exc:
                     errors.append("workflow.ui.json: %s" % exc)
             if errors:
