@@ -21,3 +21,5 @@
 - **QA policy wording.** `factory-pipeline.py` QA specs and the `qa_tiers` description follow the
   affected-only CI: CI runs the affected suites per change, `ci-ok` must be green before merging, and
   `workflow_dispatch` with `full=true` runs every suite.
+- **Merge gate wording.** `skills/delivery/references/delivery.md` calls CI the merge gate (`ci-ok`) in the QA tiers
+  table and bullet, because CI runs only the suites a change affects.

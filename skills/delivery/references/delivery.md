@@ -361,7 +361,7 @@ integration `ci+workspace`). A repo with `tests/run-all.sh` gets the table's com
 | Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>`; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task tier command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a task lead's own QA verdict counts for tier S only | as verify, no session of its own |
 | Tier XS (step 1) | the task tier command, after the cross-model review PASS; no QA session | the run lead: `verdict --phase qa --state PASS --by <lead model> --note 'tier XS: lead ran task suites'` | as verify |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the affected suites in the background while the next task starts |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the affected suites in the background while the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` | the release session | the slowest tier, release only |
 
 - **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide test slots
@@ -371,7 +371,7 @@ integration `ci+workspace`). A repo with `tests/run-all.sh` gets the table's com
 - **Cases.** `--phase verify` (and `--phase qa`)
   prints the case list for the tier command (`ALL` for explicit suites); a slow suite with cases runs only the cases
   the change touches. Frozen suite copies go under a temp dir, never into its folder.
-- **CI is the full gate.** CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
+- **CI is the merge gate.** CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
   `--no-workspace --no-claude`) and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single
   required check. No full local run before a PR; while CI runs, start the next task, then fix a red check before merging. Only a release runs the full local suite.
 - **Tier S.** `dispatch --phase verify` (and `--phase qa`) marks a task tier S when the plan or the task says so or
