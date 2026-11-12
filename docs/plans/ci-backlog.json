@@ -1,0 +1,86 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "ci-backlog",
+  "title": "Backlog ci-matrix-followups: delivery.md headroom, Windows Python note and free-form session notes in dispatch",
+  "topic": "ci-backlog",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "delivery-trim",
+      "repo": "plugin",
+      "kind": "policy",
+      "objective": "Backlog topic ci-matrix-followups item 1: skills/delivery/references/delivery.md is about 200 bytes under its 32 KiB cap (tests/delivery-generic.test.sh 'delivery.md size cap'), so the next policy addition cannot fit. delivery.md and skills/factory-core/references/parallel-work.md are the only copies of the policy (.claude/CLAUDE.md), so do not split it into a new file and do not raise the cap: trim wording to free at least 1500 bytes (UTF-8, LF). Keep every rule, every <!-- policy:... --> block and every phrase pinned by tests/parallel-policy.test.sh, tests/skills-lint.sh and tests/delivery-generic.test.sh (read those suites first to list the pinned phrases); prefer removing repetition (a rule stated twice, a section restating section 10) and long examples that docs/pipeline-cli.md already holds. No change in meaning.",
+      "paths": [
+        "skills/delivery/references/delivery.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/delivery-generic.test.sh",
+        "tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "delivery.md is at least 1500 bytes under 32768 (UTF-8, LF)",
+        "every pinned phrase and policy block is kept; parallel-policy, delivery-generic and skills-lint pass",
+        "the review finds no rule dropped or changed in meaning"
+      ]
+    },
+    {
+      "id": "dispatch-notes",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Backlog topic ci-matrix-followups items 2 and 3, in scripts/factory-pipeline.py. (3) dispatch has no way to carry a free-form session note into the specs, so the run lead pasted notes into each start prompt by hand. Add a repeatable 'dispatch --note TEXT' option and the environment variable RPG_FACTORY_SESSION_NOTE (one note) whose notes are appended as 'Session note: <text>' lines to every spec dispatch writes (lead, implement, verify, review, QA), the same way with_test_env appends the test environment line; the lead spec tells the task lead to pass the same notes on to the sessions it dispatches. (2) On Windows, python3 in Git Bash can be the Microsoft Store alias (a python3 under ...\\Microsoft\\WindowsApps that does not run): when sys.platform is win32 and shutil.which('python3') resolves into a WindowsApps directory, append a spec line telling the session to run Python as the interpreter that runs dispatch (sys.executable, quoted) or to put a python3 shim to it first on PATH; no line on other platforms or when python3 resolves elsewhere. Notes and lines must not contain characters that break the pp_spec helper (it now reads only the prompt line). Tests in tests/pipeline.test.sh: --note twice gives two lines in implement, verify and lead specs; the environment variable; no notes gives unchanged specs; the Windows alias line through a stubbed which/platform (both present and absent). Document the option and the variable in docs/pipeline-cli.md ('dispatch'). Changelog fragment changelog.d/dispatch-notes.md (### Added).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/dispatch-notes.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/delivery-generic.test.sh"
+      ],
+      "acceptance": [
+        "dispatch --note and RPG_FACTORY_SESSION_NOTE reach every spec kind, and the lead spec passes them on",
+        "the Windows Store alias line appears only when python3 resolves into WindowsApps on win32",
+        "specs without notes are unchanged"
+      ]
+    },
+    {
+      "id": "codex-detect",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "agent availability logic with an external config file and an Orca probe; a wrong answer silently drops cross-model review",
+      "objective": "scripts/lib/pipeline_route.py available() marks an agent unavailable ('Orca account unavailable') when `orca account list --json` shows no accounts and systemDefault.hasAuth false. Codex configured with an API provider in ~/.codex/config.toml (model_provider = a [model_providers.<name>] entry with base_url, authenticated by headers or env_key, no `codex login`) works but is reported unavailable, so every review fell back to SAME_MODEL. Keep the Orca probe for agents without other auth, but treat codex as available when its config (CODEX_HOME, else ~/.codex/config.toml) selects a model_provider other than openai that has a base_url, or when OPENAI_API_KEY is set; the 'why' text names the reason (for example 'codex API provider <name> in config.toml'). Parse the TOML with tomllib (Python 3.11+); a missing or unreadable file means no override. Never print header or key values. Tests in tests/pipeline.test.sh with a temporary CODEX_HOME: provider config makes codex available despite a stub orca showing no auth; no config keeps the Orca verdict; OPENAI_API_KEY set makes it available; RPG_FACTORY_AGENTS still overrides everything. Changelog fragment changelog.d/codex-detect.md (### Fixed). Mention the rule in docs/pipeline-cli.md where agent availability is described.",
+      "paths": [
+        "scripts/lib/pipeline_route.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/codex-detect.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "dispatch-notes"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/delivery-generic.test.sh"
+      ],
+      "acceptance": [
+        "codex with an API provider config is available without RPG_FACTORY_AGENTS",
+        "without such config the Orca probe still decides",
+        "no secret value is printed or stored"
+      ]
+    }
+  ]
+}
