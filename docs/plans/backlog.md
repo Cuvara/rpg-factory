@@ -150,7 +150,7 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 
 From plan ci-backlog (`docs/plans/ci-backlog/report.md`):
 
-- `tests/routing.test.sh` defaults the workspace to `/mnt/c/Workspaces/UnityIndie`, so on Git Bash for Windows it
+- `tests/routing.test.sh` defaults the workspace to the WSL form of the workspace path, so on Git Bash for Windows it
   fails unless `RPG_FACTORY_WORKSPACE` is exported (two task QA runs failed on it). Default by platform, or skip with
   a clear message when the workspace markers are missing.
 - The Windows `python3` alias line of `dispatch` does not appear when the run lead itself runs through a shim (the
