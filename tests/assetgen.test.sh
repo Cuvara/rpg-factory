@@ -8,7 +8,9 @@
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes incl. aspect + min area, orientation, area + min pixels, real 9router sizes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
-# prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
+# prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly), review
+# tiers (scripts/assetgen/data/review-tiers.json: a light purpose needs no Claude visual review but a present file is still
+# graded, style-lock anchors force full, no tier recorded in run.md or spec.json; review_tier unit cases and the data file),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
@@ -1780,6 +1782,19 @@ evariant qp-eswap-001; rebase qp-eswap-001 --param reference_image=ref-a.png; cp
 AG render --run "$RUNS/qp-eswap-001" --param reference_image=ref-b.png >/dev/null; AG qa --run "$RUNS/qp-eswap-001" >/dev/null; AG manifest --run "$RUNS/qp-eswap-001" >/dev/null
 evariant qp-ebytes-001; cp "$FX/icon-opaque.png" "$RUNS/qp-ebytes-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-ebytes-001" >/dev/null
 evariant qp-enoref-001; rm -f "$RUNS/qp-enoref-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-enoref-001" >/dev/null
+# review tiers (scripts/assetgen/data/review-tiers.json): a light purpose (icon) needs no Claude visual review, a present
+# file is still graded; selected style-lock anchors make any run full. The tier is computed at check time, never recorded.
+light="$RUNS/qp-light-001"; mkrun qp-light-001 icon --style stylized-painterly
+AG render --run "$light" >/dev/null && cp "$FX/icon-ok.png" "$light/outputs/light.png" && AG qa --run "$light" >/dev/null \
+  || no "light run: render/qa did not PASS" "$(jq -c .results "$light/qa.json" 2>/dev/null)"
+bound "$light" prompt PASS codex > "$light/review-prompt.json"; bound "$light" image PASS codex > "$light/review-image.json"
+AG manifest --run "$light" >/dev/null
+lvariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$light" "$d"; rm -f "$d/run.md"; AG manifest --run "$d" >/dev/null; }
+lvariant qp-lightinv-001; printf 'no verdict here\n' > "$RUNS/qp-lightinv-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-lightinv-001" >/dev/null
+lvariant qp-lightstale-001; printf '{"state": "PASS", "findings": [], "by": "claude"}\n' > "$RUNS/qp-lightstale-001/review-image-claude.json"
+AG manifest --run "$RUNS/qp-lightstale-001" >/dev/null
+lvariant qp-lightanchor-001
+fmset "$RUNS/qp-lightanchor-001" 'lock = obj["spec"].get("style_lock") or {}; lock["references"] = [{"anchor_id": "a-canon", "sha256": "0" * 64}]; obj["spec"]["style_lock"] = lock'
 # wired through the registry (artifact-quality --domain assetgen) on a small authoring repo: artifact-quality runs
 # artifact-trace once per artifact over every artifact, so the case matrix below calls the plugin directly
 QAUTH="$TMP/qauth"; mkdir -p "$QAUTH/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$QAUTH/assetgen/"
@@ -1866,6 +1881,67 @@ case_ qp-claudefail-001 gen-run-claude-review FAIL "Claude's visual review is FA
 case_ qp-claudediff-001 gen-run-claude-review FAIL 'differs from review-image-claude.json (file: FAIL' "review-image-claude.json contradicting run.md: FAIL"
 case_ qp-claudestale-001 gen-run-claude-review WARN 'not bound to the current prompt' "unbound Claude review: WARN"
 case_ qp-claudeby-001 gen-run-claude-review WARN 'is by codex, not claude' "review-image-claude.json by another model: WARN"
+# review tiers: light (icon) without the Claude review PASS; a present file graded as in the full tier; anchors -> full
+[ "$(st AGEN-qp-light-001 gen-run-claude-review)/$(st AGEN-qp-light-001 gen-run-image-review)/$(st AGEN-qp-light-001 gen-run-prompt-review)" = PASS/PASS/PASS ] \
+  && ok "light tier (icon) without review-image-claude.json: Claude review PASS, Codex reviews PASS" \
+  || no "light run: $(st AGEN-qp-light-001 gen-run-claude-review)/$(st AGEN-qp-light-001 gen-run-image-review)/$(st AGEN-qp-light-001 gen-run-prompt-review)" \
+        "$(why AGEN-qp-light-001 gen-run-claude-review; why AGEN-qp-light-001 gen-run-image-review)"
+case_ qp-lightinv-001 gen-run-claude-review WARN 'holds no JSON verdict' "light tier: an invalid review-image-claude.json is still WARN"
+case_ qp-lightstale-001 gen-run-claude-review WARN 'not bound to the current prompt' "light tier: an unbound review-image-claude.json is still WARN"
+case_ qp-lightanchor-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "light purpose with style-lock anchors is full: missing Claude review WARN"
+tierkeys() { jq -r '[paths | .[] | strings | select(test("tier"; "i"))] | unique | join(",")'; }
+fmj() { sed -n '/^---json$/,/^---$/p' "$1/run.md" | sed '1d;$d'; }
+lk="$(fmj "$light" | tierkeys)|$(tierkeys < "$light/spec.json")|$(fmj "$RUNS/qp-noclaude-001" | tierkeys)"
+[ "$lk" = "||" ] && [ "$(fmj "$light" | jq -r .spec.purpose.id)" = icon ] && [ "$(st AGEN-qp-noclaude-001 gen-run-claude-review)" = WARN ] \
+  && ok "no tier is recorded (run.md, spec.json); a full-tier run (sprite-2d) without the Claude review keeps its WARN" \
+  || no "tier fields: $lk, noclaude $(st AGEN-qp-noclaude-001 gen-run-claude-review)"
+python3 -B - "$ROOT" > "$TMP/rt" 2>&1 <<'EOF'
+import importlib.util, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts" / "checks"))
+spec = importlib.util.spec_from_file_location("assetgen_plugin", root / "scripts" / "checks" / "domains" / "assetgen.py")
+plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+def check(cond, label, detail=""):
+    print(("ok " if cond else "no ") + label + ("" if cond else " :: " + str(detail)[:400]))
+def tier(*args):
+    try:
+        return plugin.review_tier(*args)
+    except Exception as exc:  # review_tier never raises
+        return "raised %r" % exc
+def run(pid, **extra):
+    s = {"purpose": {"id": pid}}
+    s.update(extra)
+    return s
+for pid in ("icon", "ui-element", "texture-tileable"):
+    check(tier(run(pid)) == "light", "review_tier: %s is light" % pid, tier(run(pid)))
+for pid in ("sprite-2d", "concept-2d", "no-such-purpose"):
+    check(tier(run(pid)) == "full", "review_tier: %s is full" % pid, tier(run(pid)))
+for label, s in (("no purpose", {}), ("purpose without id", {"purpose": {}}), ("purpose not an object", {"purpose": "icon"}),
+                 ("spec None", None), ("spec a list", [])):
+    check(tier(s) == "full", "review_tier: %s is full" % label, tier(s))
+anchored = run("icon", style_lock={"references": [{"anchor_id": "a", "sha256": "0" * 64}]})
+check(tier(anchored) == "full", "review_tier: icon with a selected style-lock anchor is full", tier(anchored))
+check(tier(run("icon", style_lock={"references": []})) == "light", "review_tier: icon with a style lock but no anchors stays light",
+      tier(run("icon", style_lock={"references": []})))
+for label, table in (("{}", {}), ("purposes a list", {"purposes": []}), ("unknown value", {"purposes": {"icon": "weird"}}),
+                     ("a list", []), ("a string", "light")):
+    check(tier(run("icon"), table) == "full", "review_tier: malformed table (%s) is full" % label, tier(run("icon"), table))
+check(tier(run("sprite-2d"), {"purposes": {"sprite-2d": "light"}}) == "light", "review_tier: an explicit table is used",
+      tier(run("sprite-2d"), {"purposes": {"sprite-2d": "light"}}))
+print("end")
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; end) ;; *) no "review_tier: unexpected output" "$line" ;; esac
+done < "$TMP/rt"
+grep -qx end "$TMP/rt" && ok "review_tier cases ran to the end" || no "review_tier cases stopped early" "$(tail -5 "$TMP/rt")"
+RTD="$ROOT/scripts/assetgen/data/review-tiers.json"
+rt_bad=$(jq -r '.purposes | to_entries[] | select(.value != "light" and .value != "full") | .key' "$RTD" 2>&1)
+rt_missing=$(for p in $(jq -r '.purposes | keys[]' "$RTD" 2>/dev/null); do [ -f "$ROOT/templates/assetgen/purposes/$p.json" ] || printf '%s ' "$p"; done)
+[ "$(jq -r '.schema + " " + .default' "$RTD" 2>/dev/null)" = "rpg-factory.assetgen-review-tiers/1 full" ] && [ -z "$rt_bad$rt_missing" ] \
+  && [ "$(jq -r '[.purposes | to_entries[] | select(.value == "light") | .key] | sort | join(",")' "$RTD")" = "icon,texture-tileable,ui-element" ] \
+  && ok "review-tiers.json: schema id, default full, light = icon, texture-tileable, ui-element, every listed purpose exists" \
+  || no "review-tiers.json: bad values '$rt_bad', unknown purposes '$rt_missing'" "$(cat "$RTD" 2>&1)"
 case_ qp-tool-001 gen-run-provenance FAIL 'provenance.tool must be comfyui' "provenance tool other than comfyui: FAIL"
 case_ qp-ref-001 gen-run-refs FAIL "style 'no-such-style' does not resolve" "unresolvable style ref: FAIL"
 case_ qp-drift-001 gen-run-refs WARN 'changed since the run' "template content changed since the run: WARN (the record keeps what was used)"
