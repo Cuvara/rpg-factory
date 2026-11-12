@@ -118,7 +118,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
-        `tests/run-all.sh --workspace-only`; after the PR opens, CI green is the full-suite gate.
+        `tests/run-all.sh --workspace-only`; after the PR opens, CI runs the affected suites and ci-ok must be
+        green before merging (every suite through workflow_dispatch with full=true).
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
@@ -1672,11 +1673,13 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     key = "integration" if integration else "task"
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
                            task=not integration)
-    policy = ("Integration QA: run the workspace checks before the PR; CI green is the full-suite gate after the PR opens."
+    policy = ("Integration QA: run the workspace checks before the PR; after the PR opens, CI runs the affected suites "
+              "and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
               if integration and ((tiers or {}).get(key) or QA_TIERS[key]) == "ci+workspace" else
               "Integration QA: one full run per batch under the run-all lock; reuse a PASS record of the same clean tree."
               if integration else
-              "Task QA: never a full tests/run-all.sh run; CI is the full-suite gate. "
+              "Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be "
+              "green before merging. "
               "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
     if small:
         policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
