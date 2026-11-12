@@ -315,7 +315,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
-ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
+ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
 MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
@@ -351,7 +351,8 @@ for sole in ('claude', 'codex'):
     binary = bindir / (pipe['agents'][sole]['bin'] + ('.exe' if os.name == 'nt' else ''))
     binary.write_text('fixture')
     binary.chmod(0o755)
-    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD'}, clear=True):
+    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD',
+                                'CODEX_HOME': tmp + '/empty-codex-home'}, clear=True):
         avail = r.available(pipe, plan)
         assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
 if case == 'marks-and-empty':
@@ -372,15 +373,60 @@ for label, payload, down in (
     if case != 'orca-' + label:
         continue
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
-                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state',
+                                'CODEX_HOME': tmp + '/empty-codex-home'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
          patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)):
         avail = r.available(pipe, {'id': 'account-' + label})
         assert avail['claude']['available']
         assert avail['codex']['available'] != down
+codex_cases = ('codex-provider', 'codex-no-config', 'codex-openai-provider', 'codex-no-base-url',
+               'codex-invalid-toml', 'codex-api-key', 'codex-override')
+if case in codex_cases:
+    codex_home = pathlib.Path(tmp) / case / 'codex-home'
+    codex_home.mkdir(parents=True, exist_ok=True)
+    provider_config = ('model_provider = "router"\n[model_providers.router]\n'
+                       'base_url = "http://127.0.0.1:1/v1"\nenv_key = "ROUTER_KEY"\n'
+                       '[model_providers.router.http_headers]\nAuthorization = "secret-header-fixture"\n')
+    configs = {
+        'codex-provider': provider_config,
+        'codex-override': provider_config,
+        'codex-openai-provider': 'model_provider = "openai"\n[model_providers.openai]\nbase_url = "http://127.0.0.1:1/v1"\n',
+        'codex-no-base-url': 'model_provider = "router"\n[model_providers.router]\nenv_key = "ROUTER_KEY"\n',
+        'codex-invalid-toml': 'model_provider = [\n',
+    }
+    if case in configs:
+        (codex_home / 'config.toml').write_text(configs[case], encoding='utf-8')
+    env = {'ORCA_WORKTREE_ID': 'fixture', 'PATH': case, 'CODEX_HOME': str(codex_home),
+           'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}
+    if case == 'codex-api-key':
+        env['OPENAI_API_KEY'] = 'secret-api-key-fixture'
+    if case == 'codex-override':
+        env['RPG_FACTORY_AGENTS'] = 'claude'
+    payload = json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}})
+    with patch.dict(os.environ, env, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)) as probe:
+        avail = r.available(pipe, {'id': 'account-' + case})
+        assert avail['claude']['available'], avail
+        if case == 'codex-provider':
+            assert avail['codex'] == {'available': True, 'why': 'codex API provider router in config.toml'}, avail
+        elif case == 'codex-api-key':
+            assert avail['codex'] == {'available': True, 'why': 'OPENAI_API_KEY set'}, avail
+        elif case == 'codex-override':
+            assert avail['codex'] == {'available': False, 'why': 'RPG_FACTORY_AGENTS override'}, avail
+        else:
+            assert avail['codex'] == {'available': False, 'why': 'Orca account unavailable'}, avail
+        if case == 'codex-override':
+            probe.assert_not_called()
+        else:
+            probe.assert_called_once()
+        assert all(secret not in repr(avail) for secret in
+                   ('secret-header-fixture', 'ROUTER_KEY', 'secret-api-key-fixture')), avail
 if case == 'orca-offline':
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
-                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state',
+                                'CODEX_HOME': tmp + '/empty-codex-home'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
          patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
         assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
