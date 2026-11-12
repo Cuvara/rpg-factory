@@ -1928,6 +1928,36 @@ for phase in 'implement' 'verify --sha abc1234' 'qa --sha abc1234'; do
   RPG_FACTORY_WORKSPACE= refute_spec "$phase spec: an empty RPG_FACTORY_WORKSPACE adds no test environment line" "Test environment: set RPG_FACTORY_WORKSPACE" dispatch "$TOOL" --task t --phase $phase --runner orca
 done
 expect_spec "worktree repo implement spec: the test environment line" "$TEST_ENV" dispatch "$OK" --task gw --phase implement --runner orca
+# Session notes reach each kind of session; the lead also forwards them in its dispatch definition.
+unset RPG_FACTORY_SESSION_NOTE
+for phase in 'implement' 'verify --sha abc1234' 'lead --report-to run:x'; do
+  RPG_FACTORY_SESSION_NOTE= expect_spec "$phase spec: first session note" '^Session note: one$' dispatch "$TOOL" --task t --phase $phase --runner orca --note one --note 'two  words'
+  RPG_FACTORY_SESSION_NOTE= expect_spec "$phase spec: normalized second session note" '^Session note: two words$' dispatch "$TOOL" --task t --phase $phase --runner orca --note one --note 'two  words'
+  RPG_FACTORY_SESSION_NOTE= refute_spec "$phase spec: no session note when empty" 'Session note:' dispatch "$TOOL" --task t --phase $phase --runner orca
+  RPG_FACTORY_SESSION_NOTE= refute_spec "$phase spec: no session note forwarding rule when empty" '^9\. Session notes:' dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+refute_spec "implement spec: an unset session note adds no note" 'Session note:' dispatch "$TOOL" --task t --phase implement --runner orca
+for phase in 'review --sha abc1234' 'qa --sha abc1234'; do
+  RPG_FACTORY_SESSION_NOTE='env note' expect_spec "$phase spec: environment session note" '^Session note: env note$' dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note one --note 'two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE= expect "dispatch: empty session note is rejected" 2 - dispatch "$TOOL" --task t --phase implement --runner orca --note ''
+if python3 - "$ROOT" <<'PY'
+import importlib.util, shlex, sys
+spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+alias = r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
+exe = r'C:\Py\python.exe'
+which = lambda n: alias
+line = m.python_alias_line('win32', which, exe)
+assert line.startswith('Python: python3 here is the Microsoft Store alias') and alias in line and shlex.quote(exe) in line
+assert m.python_alias_line('linux', which, exe) == ''
+assert m.python_alias_line('win32', lambda n: r'C:\Py\python3.exe', exe) == ''
+assert m.python_alias_line('win32', lambda n: None, exe) == ''
+PY
+then pass=$((pass + 1)); echo "PASS  python3 Store alias detection uses platform and resolved path"
+else fail=$((fail + 1)); echo "FAIL  python3 Store alias detection uses platform and resolved path"; fi
 # pp_spec splits only the prompt line: a stderr line with an unbalanced ' and " cannot break it
 printf 'stub spec: quotes survive\n' > "$TMP/pp-stub-spec.md"
 cat > "$TMP/pp-stub.py" <<'PPSTUB'
