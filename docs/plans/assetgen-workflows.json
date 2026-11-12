@@ -124,7 +124,7 @@
       "id": "tpl-icon-ui",
       "repo": "plugin",
       "kind": "code",
-      "objective": "Add the staged templates staged-icon and staged-ui-element and switch the icon and ui-element purposes to them. Follow the stage blueprint: groups left to right Prompt, References (only when the purpose takes a reference), Generate, Post-process, Preview, Output; every node titled and in exactly one group with a Note per group; the reviewed prompt wired straight from PrimitiveStringMultiline into NineRouterImage.user_prompt; exactly one NineRouterImage; SaveImage only for the real deliverable with an inline filename suffix, intermediates as PreviewImage; no static LoadImage file name; no URL, IP or credential-shaped key anywhere including Note text; only API nodes plus core image nodes registered in known-nodes.json. The old image-generate and image-edit templates stay unchanged. Keep a golden for the legacy template render of icon (golden/icon--image-generate.json) as the proof it is unchanged. Changelog fragment changelog.d/tpl-icon-ui.md.",
+      "objective": "Add the staged templates staged-icon and staged-ui-element and switch the icon and ui-element purposes to them. Follow the stage blueprint: groups left to right Prompt, References (only when the purpose takes a reference), Generate, Post-process, Preview, Output; every node titled and in exactly one group with a Note per group; the reviewed prompt wired straight from PrimitiveStringMultiline into NineRouterImage.user_prompt; exactly one NineRouterImage; SaveImage only for the real deliverable with an inline filename suffix, intermediates as PreviewImage; no static LoadImage file name; no URL, IP or credential-shaped key anywhere including Note text; only API nodes plus core image nodes registered in known-nodes.json. The old image-generate and image-edit templates stay unchanged. Keep a golden for the legacy template render of icon (golden/icon--image-generate.json) as the proof it is unchanged. Changelog fragment changelog.d/tpl-icon-ui.md. Also own tests/assetgen.test.sh for one purpose: pin every assertion that depends on a purpose's default template to an explicit --template (image-generate for the icon cases such as the 3-node workflow.ui.json layout check and qp-icon-001, image-edit for the golden-image-edit-001 cases, and any other legacy-shape assertion you find), and let the filename_prefix check accept the staged inline suffix, so the other three tpl tasks never need to edit this file.",
       "paths": [
         "templates/assetgen/workflows/staged-icon.json",
         "templates/assetgen/workflows/staged-ui-element.json",
@@ -135,7 +135,8 @@
         "tests/fixtures/assetgen/golden/icon--image-generate.json",
         "tests/fixtures/assetgen/cases/icon.json",
         "tests/fixtures/assetgen/cases/ui-element.json",
-        "changelog.d/tpl-icon-ui.md"
+        "changelog.d/tpl-icon-ui.md",
+        "tests/assetgen.test.sh"
       ],
       "exclusions": [],
       "deps": [
@@ -148,7 +149,8 @@
         "every new template passes assetgen.py lint and graph-lint with 0 FAIL",
         "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
         "each purpose's default_template points to its staged template and its qa and params still lint clean",
-        "no file outside the task's paths changes"
+        "no file outside the task's paths changes",
+        "tests/assetgen.test.sh passes with the legacy templates pinned and no other tpl task needs to edit it"
       ]
     },
     {
@@ -170,7 +172,8 @@
       ],
       "exclusions": [],
       "deps": [
-        "graph-style-lint"
+        "graph-style-lint",
+        "tpl-icon-ui"
       ],
       "checks": [
         "tests/assetgen.test.sh"
@@ -201,7 +204,8 @@
       ],
       "exclusions": [],
       "deps": [
-        "graph-style-lint"
+        "graph-style-lint",
+        "tpl-icon-ui"
       ],
       "checks": [
         "tests/assetgen.test.sh"
@@ -230,7 +234,8 @@
       ],
       "exclusions": [],
       "deps": [
-        "graph-style-lint"
+        "graph-style-lint",
+        "tpl-icon-ui"
       ],
       "checks": [
         "tests/assetgen.test.sh"
