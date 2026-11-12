@@ -36,6 +36,27 @@
       ]
     },
     {
+      "id": "comfy-setup-compat",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "The verify of finalize-verb found two real failures of the compat suite at the base commit, both in scripts/comfy-desktop-setup.py (committed in 44fb359): 'utf-8 stdio missing' and 'subprocess without encoding' (line ~219). Fix them the way the other scripts of this repo do (reconfigure stdout and stderr to utf-8 at start, pass an explicit encoding to every subprocess call that reads text), without changing the script's behaviour, rows or exit codes. Run the suites with RPG_FACTORY_WORKSPACE=C:/Workspaces/UnityIndie set and a working python3 on PATH (in Git Bash python3 may be the Microsoft Store stub; use a PATH shim to the real interpreter).",
+      "paths": [
+        "scripts/comfy-desktop-setup.py",
+        "changelog.d/comfy-setup-compat.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/compat.test.sh",
+        "tests/comfy-desktop-setup.test.sh"
+      ],
+      "acceptance": [
+        "tests/compat.test.sh passes with no failure naming scripts/comfy-desktop-setup.py",
+        "tests/comfy-desktop-setup.test.sh still passes with the same 26 assertions",
+        "no file outside the task's paths changes"
+      ]
+    },
+    {
       "id": "finalize-verb",
       "repo": "plugin",
       "kind": "code",

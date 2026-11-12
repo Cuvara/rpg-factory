@@ -113,7 +113,7 @@
       "id": "affected-preflight",
       "repo": "plugin",
       "kind": "code",
-      "objective": "Make a wide test selection visible before it costs an hour. dispatch --phase verify|qa prints 'selected N of M suites' (from affected.py, the count affected_case_lines already derives) and warns above a threshold (default 40) with the suggestion to narrow the paths or the checks. tests/run-all.sh writes per-suite durations to $STATE/run-all/timings.json (one line per suite) with no effect on pass or fail or on suite reuse, so a later step can estimate minutes. No new exit code.",
+      "objective": "Make a wide test selection visible before it costs an hour. dispatch --phase verify|qa prints 'selected N of M suites' (from affected.py, the count affected_case_lines already derives) and warns above a threshold (default 40) with the suggestion to narrow the paths or the checks. tests/run-all.sh writes per-suite durations to $STATE/run-all/timings.json (one line per suite) with no effect on pass or fail or on suite reuse, so a later step can estimate minutes. No new exit code. Also make run-all fail loudly when python3 cannot run: on this machine python3 in Git Bash is the Microsoft Store stub, tests/run-all.sh then silently falls back to 'no base, running everything' (seen in the finalize-verb verify: every suite ran), so it must print the reason and exit 2 for --affected instead of widening the run. A full run (no --affected) is unaffected.",
       "paths": [
         "scripts/factory-pipeline.py",
         "tests/run-all.sh",
@@ -130,7 +130,8 @@
       "acceptance": [
         "dispatch prints the selected and total suite counts and the warning above the threshold",
         "run-all writes timings.json lines and its pass, fail and reuse behaviour is unchanged",
-        "no test depends on wall time"
+        "no test depends on wall time",
+        "--affected with a python3 that cannot run exits 2 with the reason and runs no suite"
       ]
     },
     {
