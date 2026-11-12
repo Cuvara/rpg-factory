@@ -127,7 +127,7 @@
       "id": "v2-core-docs",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Update the skills and docs for finalize, tiers and the spend guard. In skills/asset-gen/SKILL.md steps 6-7 replace the defringe, embed, qa chain by finalize, describe the light tier and run budget before each run_workflow; keep the file at most 160 lines by compressing. Mirror the idioms in skills/comfyui/SKILL.md, the domain doc and scripts/README.md, and update evals/asset-gen-icon/criteria.md if it names the old chain. Also add the backlog item to docs/plans/backlog.md: an optional n parameter on the NineRouterImage node if docs/plans/assetgen-batch/probe.md shows gateway support, listing what it would touch (node, known-nodes.json, uiworkflow widget order, both templates, goldens, tests/comfy-desktop-setup.test.sh).",
+      "objective": "Update the skills and docs for finalize, tiers and the spend guard. In skills/asset-gen/SKILL.md steps 6-7 replace the defringe, embed, qa chain by finalize, describe the light tier and run budget before each run_workflow; keep the file at most 160 lines by compressing. Mirror the idioms in skills/comfyui/SKILL.md, the domain doc and scripts/README.md, and update evals/asset-gen-icon/criteria.md if it names the old chain. Also reword the conclusion of docs/plans/assetgen-batch/probe.md so it is unambiguous: the gateway ignores n greater than 1 (observed once, model cx/gpt-5.6-sol-image), so the optional node n parameter is dropped and is not added to the backlog; batch variants are separate calls. State in skills/comfyui and the domain doc that image QA reads the real returned size (the probe saw 1254x1254 for a 1024x1024 request).",
       "paths": [
         "skills/asset-gen/SKILL.md",
         "skills/comfyui/SKILL.md",
@@ -135,7 +135,7 @@
         "scripts/README.md",
         "evals/asset-gen-icon/criteria.md",
         "changelog.d/assetgen-v2-core-docs.md",
-        "docs/plans/backlog.md"
+        "docs/plans/assetgen-batch/probe.md"
       ],
       "exclusions": [],
       "deps": [
@@ -153,7 +153,8 @@
       "acceptance": [
         "asset-gen SKILL.md is at most 160 lines and names finalize, the light tier and the budget check",
         "skills-lint passes and python3 -B scripts/checks/skill-citations.py reports no MOVED or broken citation",
-        "no instruction lets an agent skip embed before qa or approve a run"
+        "no instruction lets an agent skip embed before qa or approve a run",
+        "probe.md states the node n decision in one sentence without an alternative reading"
       ]
     }
   ]

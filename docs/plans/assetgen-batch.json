@@ -3,7 +3,7 @@
   "id": "assetgen-batch",
   "title": "asset-gen batch: several outputs per run, discard, pixel grid, sheet mode",
   "topic": "feat/assetgen/batch",
-  "goal": "Let one run produce and select among several images without regenerating the whole run, and add deterministic pixel-art and sheet post-processing. Batch uses repeated run_workflow into one run; a node n parameter is a later option decided by the gateway probe done in assetgen-v2-core (probe.md).",
+  "goal": "Let one run produce and select among several images without regenerating the whole run, and add deterministic pixel-art and sheet post-processing. Batch uses repeated run_workflow into one run; the gateway probe in assetgen-v2-core (probe.md) showed the gateway ignores n greater than 1, so batch is always repeated calls and no node n parameter is planned.",
   "tier": "M",
   "deliver": "pr",
   "repos": {
