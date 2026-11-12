@@ -8,7 +8,8 @@
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
 # the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
-# and the frontend form; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy templates WARN; the gen-run
+# and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy
+# templates WARN; a style-locked render of a grouped template lays its anchors into References; the gen-run
 # quality check gen-run-workflow-style: WARN, never FAIL, no row without workflow.ui.json),
 # review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
 # the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
@@ -2842,6 +2843,38 @@ de="$SR/sl-edit-001"
 AG render --spec "$d/spec.json" --prompt-file "$d/prompt.md" --out "$TMP/sl-wf.json" >/dev/null 2>&1
 [ "$(wiring "$TMP/sl-wf.json")" = "anchor-b-strong.png>anchor-a-canon.png>anchor-c-supp.png" ] && [ -f "$TMP/sl-wf.ui.json" ] \
   && ok "render --spec wires the same anchors (no copy outside a run)" || no "render --spec wiring" "$(jq -c . "$TMP/sl-wf.json")"
+# a grouped (graph style) template: render lays the style-lock nodes into its References group; workflow.json is the
+# same API graph (the ui block never leaks into it) and graph-lint --run PASSES with no exemption for anchors
+mkdir -p "$SG/templates" && cp "$ROOT/tests/fixtures/assetgen/graph-style/clean.json" "$SG/templates/graph-clean.json"
+dg="$SR/sl-gs-001"
+slrun sl-gs-001 icon --template graph-clean && AG render --run "$dg" --param reference_image=ref.png > "$TMP/o" 2>&1; rc=$?
+AG graph-lint --run "$dg" > "$TMP/o2" 2>&1; rc2=$?
+AG render --spec "$dg/spec.json" --prompt-file "$dg/prompt.md" --param reference_image=ref.png --out "$TMP/sl-gs.json" >/dev/null 2>&1
+out=$(python3 -B "$TMP/ui2api.py" "$KN" "$dg/workflow.ui.json" "$dg/workflow.json" 2>&1)
+refs=$(python3 -B - "$dg/workflow.ui.json" "$dg/workflow.json" "$ROOT/tests/fixtures/assetgen/graph-style/clean.json" <<'EOF'
+import json, sys
+ui, wf, tmpl = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:4])
+added = sorted((n for n in wf if n not in tmpl["workflow"]), key=int)
+box = {g["title"]: g["bounding"] for g in ui["groups"]}
+def inside(n, b):
+    x, y = n["pos"]; w, h = n["size"]
+    return x >= b[0] and y - 30 >= b[1] and x + w <= b[0] + b[2] and y + h <= b[1] + b[3]
+nodes = {str(n["id"]): n for n in ui["nodes"]}
+homes = {nid: [t for t, b in box.items() if inside(nodes[nid], b)] for nid in ["2"] + added}
+print(" ".join([t for t, _ in sorted(box.items(), key=lambda kv: kv[1][0])])
+      + " | " + ",".join(sorted({wf[n]["class_type"] for n in added})) + " " + str(len(added))
+      + " | " + ("References" if all(h == ["References"] for h in homes.values()) else repr(homes)))
+EOF
+)
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q '^PASS .*sl-gs-001/workflow.ui.json$' "$TMP/o2" && [ "$out" = ok ] \
+  && [ "$(wiring "$dg/workflow.json")" = "ref.png>anchor-b-strong.png>anchor-a-canon.png>anchor-c-supp.png" ] \
+  && [ "$refs" = "Prompt References Generate Post-process Output | ImageBatch,LoadImage 6 | References" ] \
+  && [ "$(jq -S . "$dg/workflow.json")" = "$(jq -S . "$TMP/sl-gs.json")" ] \
+  && [ "$(jq -r '[.[] | select(.class_type == "Note" or .class_type == "MarkdownNote")] | length' "$dg/workflow.json")" = 0 ] \
+  && [ "$(jq length "$dg/workflow.json")" = 12 ] \
+  && ok "render of a grouped template with 3 anchors: anchor LoadImage/ImageBatch nodes in its References group, workflow.json unchanged API graph, graph-lint --run PASS" \
+  || no "graph style render with anchors rc=$rc/$rc2 ui2api=$out refs=$refs" "$(cat "$TMP/o" "$TMP/o2")"
+rm -rf "$dg" "$SG/templates/graph-clean.json"; rmdir "$SG/templates" 2>/dev/null || true
 cp -R "$d" "$SR/sl-changed-001"; dc="$SR/sl-changed-001"; rm -rf "$dc/references" "$dc/workflow.json"
 jq '.params.filename_prefix = "assetgen/sl-changed-001"' "$dc/spec.json" > "$TMP/s" && mv "$TMP/s" "$dc/spec.json"
 printf 'x' >> "$SG/styles/rpg-base/anchors/a-canon.png"
