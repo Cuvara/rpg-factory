@@ -245,12 +245,15 @@ pp() {
   python3 -B "$P" "$@" > "$TMP/pp.out" 2>&1; RC=$?; OUT=$(<"$TMP/pp.out")  # no subshell: a fork costs most on Windows
   MEMO_KEY="$key"; MEMO_OUT="$OUT"; MEMO_RC="$RC"; MEMO_SPEC=; MEMO_SRC=
 }
-# pp_spec <args...>: pp, then SPEC and SRC: the persisted Orca spec the one-line prompt names (and the read's exit code)
+# pp_spec <args...>: pp, then SPEC and SRC: the persisted Orca spec the one-line prompt names (and the read's exit code).
+# Only the last line that carries the prompt (`--prompt ` or `--spec ` with `Read your task spec at`) is split: OUT also
+# holds stderr, and a quote character in a stderr line must not break the parse.
 pp_spec() {
   pp "$@"
   if [ -z "$MEMO_SRC" ] || [ "$REUSE" = check ]; then
     MEMO_SPEC=$(python3 -c 'import pathlib,shlex,sys
-args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"
+lines=[l for l in sys.argv[1].splitlines() if ("--prompt " in l or "--spec " in l) and "Read your task spec at " in l]
+args=shlex.split(lines[-1]); flag="--prompt" if "--prompt" in args else "--spec"
 prompt=args[args.index(flag)+1]
 assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
 print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$OUT" 2>&1); MEMO_SRC=$?
@@ -958,6 +961,8 @@ assert 'QA tier command:\ntests/run-all.sh --workspace-only' in m.qa_body('x', l
 assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'})
 assert 'CI runs the affected suites and ci-ok must be green before merging' in m.qa_body('x', lone, integration=True, runall=listed)
+assert ('Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be green '
+        'before merging') in m.qa_body('x', lone, base='main', runall=listed)
 handoff = io.StringIO()
 with contextlib.redirect_stdout(handoff):
     m.emit_lead_handoff(reg, 'claude', 'prompt', {'new': True, 'repo': 'path:' + str(repo),
@@ -1154,10 +1159,14 @@ def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
 verify = dispatch('verify', first)
 assert '# agent: claude' in verify and verify.index('Review the whole diff') < verify.index('QA tier command:')
+TASK_QA = ('Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be green '
+           'before merging')
+assert TASK_QA in verify, verify
 assert 'blocking finding' in verify and 'run no tests' in verify
 implementation = cli('dispatch', str(pf), '--task', 'a', '--phase', 'implement', '--runner', 'print')
 assert 'Run no test suites; only a syntax check' in implementation and 'bash tests/pipeline.test.sh' not in implementation
 out = dispatch('qa', first)
+assert TASK_QA in out, out
 assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
 assert 'tier command already passes these cases' not in out, out
 affected = work / 'task' / 'tests' / 'affected.py'
@@ -1905,6 +1914,31 @@ refute_spec "non-plugin verify does not name plugin checklist" 'plugin-review\.m
 mkdir -p "$T/.claude-plugin"; printf '{}\n' > "$T/.claude-plugin/plugin.json"
 expect_spec "plugin manifest review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$TOOL" --task t --phase review --sha abc1234 --runner orca
 rm "$T/.claude-plugin/plugin.json"; rmdir "$T/.claude-plugin"
+# a checkout with tests/run-all.sh (no --list-suites: no suite list, no bash run) gets the tier command and the CI clause
+mkdir -p "$T/tests"; echo 'exit 0' > "$T/tests/run-all.sh"
+TASK_QA='Task QA: never a full tests/run-all\.sh run; CI runs the affected suites per change and ci-ok must be green before merging'
+expect_spec "run-all repo verify spec: the task QA CI clause" "$TASK_QA" dispatch "$PLUGIN" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "run-all repo task QA spec: the task QA CI clause" "$TASK_QA" dispatch "$PLUGIN" --task t --phase qa --sha abc1234 --runner orca
+rm "$T/tests/run-all.sh"; rmdir "$T/tests"
+# the run lead's RPG_FACTORY_WORKSPACE reaches the implement, verify and QA specs (a worker may not inherit it);
+# unset or empty, no such line
+TEST_ENV="^Test environment: set RPG_FACTORY_WORKSPACE=[^ ]*ws'? for every test run \(the run lead's environment sets it; a worker session may not inherit it\)\.$"
+for phase in 'implement' 'verify --sha abc1234' 'qa --sha abc1234'; do
+  expect_spec "$phase spec: the run lead's RPG_FACTORY_WORKSPACE for every test run" "$TEST_ENV" dispatch "$TOOL" --task t --phase $phase --runner orca
+  RPG_FACTORY_WORKSPACE= refute_spec "$phase spec: an empty RPG_FACTORY_WORKSPACE adds no test environment line" "Test environment: set RPG_FACTORY_WORKSPACE" dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+expect_spec "worktree repo implement spec: the test environment line" "$TEST_ENV" dispatch "$OK" --task gw --phase implement --runner orca
+# pp_spec splits only the prompt line: a stderr line with an unbalanced ' and " cannot break it
+printf 'stub spec: quotes survive\n' > "$TMP/pp-stub-spec.md"
+cat > "$TMP/pp-stub.py" <<'PPSTUB'
+import shlex, sys
+print("factory-pipeline: the implementer's model said \"hi", file=sys.stderr, flush=True)
+print("orca orchestration worker-start --agent claude --prompt "
+      + shlex.quote("Read your task spec at " + sys.argv[2] + " and follow it."), flush=True)
+PPSTUB
+P_SAVED="$P"; P="$TMP/pp-stub.py"
+expect_spec "pp_spec: a stderr line with quote characters does not break the spec read" "^stub spec: quotes survive$" pp-stub-quote "$TMP/pp-stub-spec.md"
+P="$P_SAVED"
 expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
 refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
 # known_failing: the lead, QA and verify specs name the checks and the FAIL_AT_BASE rule; a plan without it adds nothing
@@ -2312,6 +2346,7 @@ expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this 
 expect_spec "known_failing: the integration QA spec lists the checks" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA: spec is complete" "$SPEC_RULE" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA spec: the run lead's RPG_FACTORY_WORKSPACE for every test run" "^Test environment: set RPG_FACTORY_WORKSPACE=[^ ]*ws'? for every test run \(the run lead's environment sets it; a worker session may not inherit it\)\.$" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task integration:client --phase qa --sha abc1234
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
@@ -3840,8 +3875,14 @@ mkdir -p "$GM/docs/plans/gm"; cp "$GP" "$GM/docs/plans/gm.json"; echo r > "$GM/d
 gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): gm plan and report"; gmqa
 expect "gate-merge: the plan file and its report.md are not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 refute "gate-merge: no stray line for docs/plans" "changes outside every task's owned paths" gate "$GP" --no-run-checks
-# a plan file inside the repo under another name: its own path and its sibling directory's report.md
+# the run lead's follow-ups in docs/plans/backlog.md (delivery.md section 8) are never stray either
+echo b > "$GM/docs/plans/backlog.md"; gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): backlog follow-ups"; gmqa
+expect "gate-merge: the run lead's docs/plans/backlog.md is not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans/backlog.md" "changes outside every task's owned paths" gate "$GP" --no-run-checks
+# a plan file inside the repo under another name: its own path, its sibling directory's report.md and the backlog.md
+# next to it
 mkdir -p "$GM/runlead/other"; cp "$GP" "$GM/runlead/other.json"; echo r > "$GM/runlead/other/report.md"
+echo b > "$GM/runlead/backlog.md"
 gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): in-repo plan"; gmqa
 GP2="$GM/runlead/other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
