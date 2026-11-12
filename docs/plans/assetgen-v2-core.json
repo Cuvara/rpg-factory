@@ -14,6 +14,28 @@
   },
   "tasks": [
     {
+      "id": "affected-leaf-fix",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Verify runs are very slow because any edit under scripts/assetgen/*.py makes tests/affected.py select all 72 suites. Cause: reaches() (tests/affected.py ~290-314) returns None (unsure) for the leaf tests/fixtures/assetgen/style_selftest.py and imaging_selftest.py, which tests/assetgen.test.sh runs by a computed name (lines ~2715-2717) that nothing mentions, and needed() (~442) then selects every suite. Make the answer precise in a generic way: a path that a suite's EXTRA patterns cover (here tests/fixtures/assetgen/* for tests/assetgen.test.sh) counts as mentioned by that suite, so reaches() no longer returns None for it. Do not drop the mention-based expansion and do not change tests/assetgen.test.sh. A leaf that no suite names or covers must still be unsure.",
+      "paths": [
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "changelog.d/affected-leaf-fix.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "affected.py for scripts/assetgen/assetgen.py and scripts/assetgen/finalize.py selects a short named list, every suite that mentions scripts/assetgen included (assetgen and commands among them), and not all suites",
+        "a new case in tests/affected.test.sh proves that and proves a truly unreachable leaf is still unsure",
+        "every existing selection case in tests/affected.test.sh passes unchanged",
+        "no file outside the task's paths changes; CI stays the full gate"
+      ]
+    },
+    {
       "id": "finalize-verb",
       "repo": "plugin",
       "kind": "code",
@@ -85,7 +107,8 @@
         "docs/schemas/kinds/gen-run.schema.json"
       ],
       "deps": [
-        "finalize-verb"
+        "finalize-verb",
+        "affected-leaf-fix"
       ],
       "checks": [
         "tests/assetgen.test.sh"
