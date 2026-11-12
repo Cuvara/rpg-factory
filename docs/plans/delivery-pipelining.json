@@ -162,6 +162,34 @@
       ],
       "grade": "light",
       "grade_reason": "policy and skill prose; behaviour is tested in the earlier tasks"
+    },
+    {
+      "id": "codex-auth-detect",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Rule from the user: when the pipeline picks the model of a task, Codex counts as available only after checking both its login and its API configuration, not only Orca's account list. Today pipeline_route.available() marks codex unavailable when `orca account list` shows hasAuth false, although this machine runs Codex through an API provider in ~/.codex/config.toml (model_provider with an Authorization http header) while `codex login status` says 'Not logged in'; the whole asset-gen run fell back to SAME_MODEL reviews because of it. New rule: codex is available when its bin is on PATH and any one of (a) Orca's account list has auth for it, (b) `codex login status` exits 0, (c) the active model_provider of the Codex config (top-level or the default profile) carries authentication: an http_headers Authorization entry, or an env_key whose variable is set, or requires_openai_auth with (b). Read the config with tomllib, never print, log or store a header or key value, only the source name. agents prints which source made it available (orca account, codex login, api provider <name>) or why not (e.g. 'no Orca account, codex login missing, no authenticated api provider'). A runtime MODEL_UNAVAILABLE mark and RPG_FACTORY_AGENTS still win. Keep the 5 s timeouts. Update the agents section of docs/pipeline-cli.md and the availability sentence of delivery.md section 10 ('Agents are detected on PATH and Orca's account list') to the new rule. Tests use a fake codex on PATH and a temp HOME / CODEX_HOME config; no network.",
+      "paths": [
+        "scripts/lib/pipeline_route.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "skills/delivery/references/delivery.md",
+        "changelog.d/codex-auth-detect.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "policy-and-skill"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "an Orca account without auth plus an api provider with an Authorization header makes codex available, naming the source",
+        "no Orca auth, codex login failing and no authenticated provider keep codex unavailable with all three reasons",
+        "codex login status exit 0 alone makes codex available",
+        "no header, key or token value appears in any output, record or test log",
+        "RPG_FACTORY_AGENTS and a runtime --down mark still take precedence; delivery.md and pipeline-cli.md state the rule"
+      ]
     }
   ]
 }
