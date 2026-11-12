@@ -315,7 +315,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
-ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
+ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
 MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
@@ -351,7 +351,10 @@ for sole in ('claude', 'codex'):
     binary = bindir / (pipe['agents'][sole]['bin'] + ('.exe' if os.name == 'nt' else ''))
     binary.write_text('fixture')
     binary.chmod(0o755)
-    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD'}, clear=True):
+    configdir = pathlib.Path(tmp) / ('config-' + sole)
+    configdir.mkdir(exist_ok=True)
+    (configdir / 'config.toml').write_text('model_provider = "fixture"\n[model_providers.fixture.http_headers]\nAuthorization = "fixture"\n')
+    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD', 'CODEX_HOME': str(configdir)}, clear=True):
         avail = r.available(pipe, plan)
         assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
 if case == 'marks-and-empty':
@@ -367,23 +370,27 @@ for label, payload, down in (
     ('no-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}}), True),
     ('system-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': True}}}}), False),
     ('account-auth', json.dumps({'result': {'codex': {'accounts': [{}], 'systemDefault': {'hasAuth': False}}}}), False),
-    ('malformed', '{"result":null}', False),
+    ('malformed', '{"result":null}', True),
 ):
     if case != 'orca-' + label:
         continue
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
+                                'CODEX_HOME': tmp + '/missing-account-config',
                                 'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
-         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)):
+         patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+             args, 0 if args[0] == 'orca' else 1, payload if args[0] == 'orca' else '')):
         avail = r.available(pipe, {'id': 'account-' + label})
         assert avail['claude']['available']
         assert avail['codex']['available'] != down
 if case == 'orca-offline':
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
+                                'CODEX_HOME': tmp + '/missing-account-config',
                                 'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
          patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
-        assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
+        avail = r.available(pipe, {'id': 'account-offline'})
+        assert avail['claude']['available'] and not avail['codex']['available']
 spec = importlib.util.spec_from_file_location('routing_pipeline', root + '/scripts/factory-pipeline.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -464,6 +471,87 @@ plan['repos']['plugin']['base'] = 'main'
 planfile = pathlib.Path(tmp) / ('routing-command-plan-' + case + '.json')
 plan['tasks'][0].pop('implementer', None)
 planfile.write_text(json.dumps(plan))
+if case in ('codex-header', 'codex-no-auth', 'codex-login', 'codex-env-key', 'codex-openai-auth',
+            'codex-profile', 'codex-malformed', 'codex-secrets', 'codex-precedence'):
+    fixture = pathlib.Path(tmp) / ('auth-' + case)
+    bindir, home, codexhome = fixture / 'bin', fixture / 'home', fixture / 'codex'
+    for directory in (bindir, home, codexhome):
+        directory.mkdir(parents=True, exist_ok=True)
+    suffix = '.cmd' if os.name == 'nt' else ''
+    for binary, body in (('codex', 'exit /b 1\n' if os.name == 'nt' else '#!/bin/sh\nexit 1\n'),
+                         ('orca', '@echo {"result":{"codex":{"accounts":[],"systemDefault":{"hasAuth":false}}}}\n'
+                          if os.name == 'nt' else '#!/bin/sh\necho \'{"result":{"codex":{"accounts":[],"systemDefault":{"hasAuth":false}}}}\'\n')):
+        executable = bindir / (binary + suffix)
+        executable.write_text(body)
+        executable.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith('ORCA_') and k != 'RPG_FACTORY_AGENTS'}
+    env.update(PATH=str(bindir), PATHEXT='.CMD;.EXE', HOME=str(home), USERPROFILE=str(home),
+               CODEX_HOME=str(codexhome), ORCA_WORKTREE_ID='fixture', RPG_FACTORY_STATE_DIR=str(fixture / 'state'))
+    config = codexhome / 'config.toml'
+    secret = 'SENTINEL_PRIVATE_VALUE_8ab7'
+    header = 'model_provider = "proxy"\n[model_providers.proxy.http_headers]\nauthorization = "' + secret + '"\n'
+    no_auth = json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}})
+    def probe(content, login=False, extra=None):
+        config.write_text(content)
+        with patch.dict(os.environ, dict(env, **(extra or {})), clear=True), \
+             patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+                 args, 0 if args[0] == 'orca' or login else 1, no_auth if args[0] == 'orca' else '')):
+            return r.available(pipe, {'id': 'auth-' + case})['codex']
+    if case == 'codex-header':
+        result = probe(header)
+        assert result['available'] and 'api provider proxy' in result['why']
+    if case == 'codex-no-auth':
+        result = probe('')
+        assert not result['available'] and all(reason in result['why'] for reason in
+            ('no Orca account', 'codex login missing', 'no authenticated api provider'))
+    if case == 'codex-login':
+        result = probe('', login=True)
+        assert result['available'] and 'codex login' in result['why']
+    if case == 'codex-env-key':
+        content = 'model_provider = "proxy"\n[model_providers.proxy]\nenv_key = "FIXTURE_API_KEY"\n'
+        assert not probe(content)['available']
+        result = probe(content, extra={'FIXTURE_API_KEY': secret})
+        assert result['available'] and 'api provider proxy' in result['why'] and secret not in str(result)
+        assert not probe(content, extra={'FIXTURE_API_KEY': ''})['available']
+    if case == 'codex-openai-auth':
+        content = 'model_provider = "proxy"\n[model_providers.proxy]\nrequires_openai_auth = true\n'
+        assert not probe(content)['available']
+        assert probe(content, login=True)['available']
+    if case == 'codex-profile':
+        content = ('profile = "work"\nmodel_provider = "other"\n[profiles.work]\nmodel_provider = "proxy"\n'
+                   '[model_providers.proxy.http_headers]\nAuthorization = "fixture"\n')
+        assert 'api provider proxy' in probe(content)['why']
+        # CODEX_HOME absent uses HOME/.codex.
+        (home / '.codex').mkdir(exist_ok=True)
+        (home / '.codex/config.toml').write_text(content)
+        fallback_env = dict(env)
+        fallback_env.pop('CODEX_HOME')
+        with patch.dict(os.environ, fallback_env, clear=True), \
+             patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+                 args, 0 if args[0] == 'orca' else 1, no_auth if args[0] == 'orca' else '')):
+            assert 'api provider proxy' in r.available(pipe, {'id': 'home-fallback'})['codex']['why']
+    if case == 'codex-malformed':
+        assert not probe('invalid = [')['available']
+    if case == 'codex-secrets':
+        assert secret not in str(probe(header))
+        key_config = 'model_provider = "proxy"\n[model_providers.proxy]\nenv_key = "FIXTURE_API_KEY"\n'
+        for content in (header, key_config):
+            config.write_text(content)
+            for flags in ([], ['--json']):
+                result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py',
+                                         'agents', str(planfile)] + flags, capture_output=True, text=True,
+                                        env=dict(env, FIXTURE_API_KEY=secret))
+                assert result.returncode == 0 and secret not in result.stdout + result.stderr
+                assert 'api provider proxy' in result.stdout
+        assert all(secret not in p.read_text(errors='replace') for p in (fixture / 'state').rglob('*') if p.is_file())
+    if case == 'codex-precedence':
+        config.write_text(header)
+        with patch.dict(os.environ, dict(env, RPG_FACTORY_AGENTS='claude'), clear=True):
+            assert not r.available(pipe, {'id': 'override'})['codex']['available']
+        result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py',
+                                 'agents', str(planfile), '--down', 'codex', '--json'],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0 and 'MODEL_UNAVAILABLE' in result.stdout and secret not in result.stdout + result.stderr
 if case == 'followup-preview':
     state = tmp + '/preview-state'
     env = dict(os.environ, RPG_FACTORY_AGENTS='claude,codex', RPG_FACTORY_STATE_DIR=state)

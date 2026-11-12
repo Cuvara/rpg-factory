@@ -5,6 +5,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 import fstate
 
@@ -114,13 +115,38 @@ def mark(plan, agent, reason=None):
 _cache = {}
 
 
+def _codex_provider(login):
+    """Return the active authenticated provider's name, without exposing credentials."""
+    try:
+        home = os.environ.get('CODEX_HOME')
+        config = Path(home) / 'config.toml' if home else Path.home() / '.codex' / 'config.toml'
+        with config.open('rb') as f:
+            data = tomllib.load(f)
+        profile = data.get('profiles', {}).get(data.get('profile'), {})
+        name = profile.get('model_provider', data.get('model_provider'))
+        if not isinstance(name, str) or not name:
+            return None
+        provider = data.get('model_providers', {}).get(name, {})
+        headers = provider.get('http_headers', {})
+        header = isinstance(headers, dict) and any(k.lower() == 'authorization' for k in headers)
+        env_key = provider.get('env_key')
+        if header or isinstance(env_key, str) and bool(os.environ.get(env_key)) or provider.get('requires_openai_auth') is True and login:
+            return name
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
 def available(pipe, plan):
     """plan None (the planner): no per-run marks."""
     path = marks_path(plan) if plan is not None else None
     # content, not mtime: two writes within the timer resolution (Windows) share an mtime
     stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
-    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'), os.environ.get('PATH'), stamp)
-    if key in _cache:
+    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'),
+           os.environ.get('PATH'), os.environ.get('CODEX_HOME'), os.environ.get('HOME'),
+           os.environ.get('USERPROFILE'), stamp)
+    # Provider files and their named environment variables can change without changing the cache key.
+    if key in _cache and (os.environ.get('RPG_FACTORY_AGENTS') is not None or 'codex' not in pipe['agents']):
         return _cache[key]
     override = os.environ.get('RPG_FACTORY_AGENTS')
     chosen = {x.strip() for x in override.split(',')} if override is not None else None
@@ -133,7 +159,10 @@ def available(pipe, plan):
         yes = agent in chosen if chosen is not None else bool(shutil.which(cfg['bin']))
         out[agent] = {'available': yes, 'why': 'RPG_FACTORY_AGENTS override' if chosen is not None else
                       (cfg['bin'] + (' on PATH' if yes else ' missing from PATH'))}
+    codex_orca = False
+    orca_reason = 'Orca not running'
     if chosen is None and any(k.startswith('ORCA_') for k in os.environ) and shutil.which('orca'):
+        orca_reason = 'no Orca account'
         try:
             p = subprocess.run(['orca', 'account', 'list', '--json'], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=5)
@@ -141,12 +170,30 @@ def available(pipe, plan):
             accounts = data.get('result', {})
             for agent in candidates:
                 row = accounts.get(agent)
+                if agent == 'codex':
+                    codex_orca = (isinstance(row, dict) and
+                                  (bool(row.get('accounts')) or
+                                   isinstance(row.get('systemDefault'), dict) and
+                                   row['systemDefault'].get('hasAuth') is True))
+                    continue
                 if (isinstance(row, dict) and row.get('accounts') == []
                         and isinstance(row.get('systemDefault'), dict)
                         and row['systemDefault'].get('hasAuth') is False):
                     out[agent] = {'available': False, 'why': 'Orca account unavailable'}
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             pass
+    if chosen is None and out.get('codex', {}).get('available'):
+        codex_bin = pipe['agents']['codex']['bin']
+        source = 'orca account' if codex_orca else None
+        if not source:
+            try:
+                login = subprocess.run([codex_bin, 'login', 'status'], capture_output=True, timeout=5).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                login = False
+            provider = _codex_provider(login) if not login else None
+            source = 'codex login' if login else 'api provider ' + provider if provider else None
+        out['codex'] = {'available': bool(source), 'why': codex_bin + ' on PATH; ' +
+                        (source or orca_reason + ', codex login missing, no authenticated api provider')}
     for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
         if agent in out:
             out[agent] = {'available': False, 'why': 'MODEL_UNAVAILABLE' + (': ' + reason if reason else '')}
