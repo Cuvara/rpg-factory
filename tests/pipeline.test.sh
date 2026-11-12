@@ -786,7 +786,18 @@ if case.startswith('stack-'):
         plan['tier'] = 'XS'; save()
         assert m.stackable(plan, reg, info, tb) is None
         assert m.start_base(plan, info, tb, reg) == m.start_base(plan, info, tb) == plan['topic']
-        assert_unstacked_lead()
+        # a two-task plan is no tier XS plan: the lead dispatch of the dependent is refused (invalid plan, exit 1),
+        # nothing printed or stacked
+        with no_orca():
+            r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'orca', rc=1)
+        assert not r.stdout and 'plan is invalid' in r.stderr and 'tier XS' in r.stderr, (r.stdout, r.stderr)
+        assert 'worktree add' not in r.stdout + r.stderr and 'stacks on' not in r.stdout + r.stderr, (r.stdout, r.stderr)
+        assert m.stack_record(plan, 'b') is None, m.stack_record(plan, 'b')
+        # a valid tier XS plan (one prose task): the XS lead steps, unchanged
+        plan['tasks'] = [{'id': 'x', 'repo': 'fixture', 'kind': 'docs', 'objective': 'note',
+                          'paths': ['notes.md'], 'acceptance': ['ok']}]
+        save()
+        assert_unstacked_lead('x')
         print(case + ' assertions passed')
         sys.exit(0)
     if case in ('stack-two-deps', 'stack-one-integrated'):
