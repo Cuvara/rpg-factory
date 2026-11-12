@@ -1,0 +1,183 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Staged turnaround sheet (Prompt -> NineRouterImage -> sharpen, preview -> SaveImage)",
+ "description": "Orthographic front/side/back reference sheets for 3D modelling with staged groups for ref-3d-turnaround and ref-3d-character. Credentials are read by the node at run time, never stored here.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file)."
+  },
+  "model": {
+   "type": "string",
+   "default": "cx/gpt-5.6-sol-image",
+   "description": "Image model id served through the NineRouterImage node."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536"
+   ],
+   "default": "1024x1024",
+   "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "auto",
+   "description": "Image quality."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "auto",
+   "description": "Background mode."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  }
+ },
+ "output_node": "5",
+ "workflow": {
+  "1": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
+   }
+  },
+  "2": {
+   "class_type": "NineRouterImage",
+   "inputs": {
+    "user_prompt": [
+     "1",
+     0
+    ],
+    "model": "{{model}}",
+    "size": "{{size}}",
+    "quality": "{{quality}}",
+    "background": "{{background}}"
+   },
+   "_meta": {
+    "title": "Generate turnaround sheet"
+   }
+  },
+  "3": {
+   "class_type": "ImageSharpen",
+   "inputs": {
+    "image": [
+     "2",
+     0
+    ],
+    "sharpen_radius": 1,
+    "sigma": 1.0,
+    "alpha": 0.5
+   },
+   "_meta": {
+    "title": "Sharpen view edges"
+   }
+  },
+  "4": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview raw sheet"
+   }
+  },
+  "5": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "3",
+     0
+    ],
+    "filename_prefix": "{{filename_prefix}}-turnaround"
+   },
+   "_meta": {
+    "title": "Save turnaround sheet"
+   }
+  }
+ },
+ "ui": {
+  "groups": [
+   {
+    "title": "Prompt",
+    "color": "pale_blue",
+    "nodes": [
+     "1"
+    ]
+   },
+   {
+    "title": "Generate",
+    "color": "green",
+    "nodes": [
+     "2"
+    ]
+   },
+   {
+    "title": "Post-process",
+    "color": "yellow",
+    "nodes": [
+     "3"
+    ]
+   },
+   {
+    "title": "Preview",
+    "color": "cyan",
+    "nodes": [
+     "4"
+    ]
+   },
+   {
+    "title": "Output",
+    "color": "purple",
+    "nodes": [
+     "5"
+    ]
+   }
+  ],
+  "notes": [
+   {
+    "text": "The reviewed prompt; render fills it from prompt.md. Edit prompt.md and re-review, never this node.",
+    "group": "Prompt"
+   },
+   {
+    "text": "The one image node. Its user_prompt is linked from the prompt node; style-lock anchors join reference_images at render.",
+    "group": "Generate"
+   },
+   {
+    "text": "A mild sharpen keeps silhouette and view edges crisp for tracing in the modelling tool.",
+    "group": "Post-process"
+   },
+   {
+    "text": "The raw sheet before the sharpen, to compare views, scale and baselines.",
+    "group": "Preview"
+   },
+   {
+    "text": "The only saved file: the run prefix plus the -turnaround suffix.",
+    "group": "Output"
+   }
+  ]
+ }
+}
