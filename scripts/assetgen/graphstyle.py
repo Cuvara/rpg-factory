@@ -6,7 +6,8 @@ The workflow style guide in short (rule ids in brackets):
   [vocabulary]     group titles come from STAGES: Prompt, References, Generate, Post-process, Preview, Output.
   [order]          groups run left to right in STAGES order, no title twice (any subsequence of STAGES).
   [note]           every group holds at least one Note or MarkdownNote that says what the stage does.
-  [prompt]         NineRouterImage.user_prompt is linked directly from a PrimitiveStringMultiline (the reviewed prompt).
+  [prompt]         NineRouterImage.user_prompt is linked directly from a PrimitiveStringMultiline (the reviewed prompt);
+                   in a template that node's value is the reviewed prompt placeholder {{prompt}} (no other text).
   [one-image-node] the graph has exactly one NineRouterImage.
   [save-suffix]    every SaveImage.filename_prefix carries an inline suffix after the run prefix
                    ("{{filename_prefix}}-icon"; in a run's workflow.ui.json "assetgen/<run-id>-icon").
@@ -17,12 +18,17 @@ The workflow style guide in short (rule ids in brackets):
 
 Two forms are checked:
   template_violations(data, known) -> ["<rule>: <message>", ...] for a parsed (merged) template; groups and notes come
-      from its ui block, the left-to-right order from uiworkflow.to_ui's layout.
+      from its ui block, the left-to-right order from uiworkflow.to_ui's layout. The prompt source's value must be
+      the {{prompt}} placeholder: literal text or another placeholder ({{model}}) is a prompt violation naming the
+      source and the NineRouterImage node.
   ui_violations(ui_workflow, known, prefix=None) -> the same for a ComfyUI frontend workflow (a run's workflow.ui.json);
       group membership is geometric (the node's rect, title bar included, inside the group's bounding). Style-lock
       reference nodes render adds (LoadImage anchor-<id>.png and the ImageBatch chain they feed) are exempt from the
-      title and group rules; load-image is not checked (render fills it); save-suffix needs a prefix (the argument,
-      else assetgen/<extra.assetgen.run_id>) and is skipped without one.
+      title and group rules; load-image is not checked (render fills it). The prompt source's value is the filled
+      prompt and is not checked here: gen-run-provenance compares workflow.json prompts with prompt.md. save-suffix
+      compares against the run prefix: the argument (callers pass the trusted assetgen/<run-id> of the run context:
+      graph-lint --run, the gen-run-workflow-style check), else assetgen/<extra.assetgen.run_id>; with neither, each
+      SaveImage is a save-suffix violation saying the run prefix is unknown (never a silent skip).
   template_row / ui_row wrap them as one validation row {"path", "check": CHECK, "state", "reasons"}. A legacy
       template (no ui block, or a ui without groups) is WARN, never FAIL.
 Messages name a node as `node <id> (<class_type> "<title>")` and a group as `group "<title>"`. Nothing here reads
@@ -40,6 +46,8 @@ NODE_TITLE = 30
 IMAGE_NODE, PROMPT_NODE = "NineRouterImage", "PrimitiveStringMultiline"
 RUN_PREFIX = "assetgen/"
 PREFIX_PARAM = "{{filename_prefix}}"
+PROMPT_PARAM = "{{prompt}}"
+REVIEWED_PROMPT = re.compile(r"\{\{\s*prompt\s*\}\}")
 ANY_PLACEHOLDER = re.compile(r"\{\{[^{}]*\}\}")
 ONE_PLACEHOLDER = re.compile(r"\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
 ANCHOR_IMAGE = re.compile(r"^anchor-[A-Za-z0-9_.-]+\.png$")
@@ -176,6 +184,15 @@ def template_violations(data, known):
                "notes": sum(1 for n in ui_notes if n["group"] == g["title"])} for g in ui_groups]
     out = _check(nodes, groups, set())
     for nid in sorted(nodes, key=_sort_key):
+        link = nodes[nid]["inputs"].get("user_prompt") if nodes[nid]["type"] == IMAGE_NODE else None
+        if not (_is_link(link) and link[0] in nodes and nodes[link[0]]["type"] == PROMPT_NODE):
+            continue  # a missing, literal or wrongly sourced user_prompt is already a prompt violation of _check
+        value = nodes[link[0]]["inputs"].get("value")
+        if not (isinstance(value, str) and REVIEWED_PROMPT.fullmatch(value)):
+            out.append("prompt: %s user_prompt is linked from %s whose value %s is not the reviewed prompt placeholder "
+                       "%s; render fills it from prompt.md" % (_name(nodes, nid), _name(nodes, link[0]), _show(value),
+                                                              PROMPT_PARAM))
+    for nid in sorted(nodes, key=_sort_key):
         if nodes[nid]["type"] != "SaveImage":
             continue
         value = nodes[nid]["inputs"].get("filename_prefix")
@@ -309,14 +326,16 @@ def ui_violations(ui_workflow, known, prefix=None):
         run_id = meta.get("run_id") if isinstance(meta, dict) else None
         if isinstance(run_id, str) and run_id:
             prefix = RUN_PREFIX + run_id
-    if prefix is not None:
-        for nid in sorted(nodes, key=_sort_key):
-            if nodes[nid]["type"] != "SaveImage":
-                continue
-            value = nodes[nid]["inputs"].get("filename_prefix")
-            if not (isinstance(value, str) and value.startswith(prefix) and len(value) > len(prefix)):
-                out.append('save-suffix: %s filename_prefix %s is not "%s" plus an inline suffix (e.g. "%s-icon")'
-                           % (_name(nodes, nid), _show(value), prefix, prefix))
+    for nid in sorted(nodes, key=_sort_key):
+        if nodes[nid]["type"] != "SaveImage":
+            continue
+        value = nodes[nid]["inputs"].get("filename_prefix")
+        if prefix is None:
+            out.append("save-suffix: %s filename_prefix %s cannot be checked: the run prefix is unknown (no "
+                       "extra.assetgen.run_id; pass the run)" % (_name(nodes, nid), _show(value)))
+        elif not (isinstance(value, str) and value.startswith(prefix) and len(value) > len(prefix)):
+            out.append('save-suffix: %s filename_prefix %s is not "%s" plus an inline suffix (e.g. "%s-icon")'
+                       % (_name(nodes, nid), _show(value), prefix, prefix))
     out += _save_output(nodes)
     return out
 
