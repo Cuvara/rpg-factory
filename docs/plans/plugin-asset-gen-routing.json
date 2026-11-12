@@ -1,0 +1,37 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "plugin-asset-gen-routing",
+  "title": "asset-gen loads comfyui in every mode (dogfood asset-gen fix)",
+  "topic": "plugin-asset-gen-routing",
+  "tier": "XS",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "asset-gen-comfyui",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "The dogfood scenario asset-gen failed with 'expected comfyui not invoked' on v1.7.0, v1.8.0 and 1.9.1: skills/asset-gen/SKILL.md tells the session to invoke rpg-factory:comfyui only in step 1 of its workflow, so a plan or analyze task answers without it. Add the instruction to the Prerequisite block (same line: the skill is at its 160-line cap), in every mode. Changelog fragment changelog.d/asset-gen-comfyui.md.",
+      "paths": [
+        "skills/asset-gen/SKILL.md",
+        "changelog.d/asset-gen-comfyui.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "skills-lint passes (SKILL.md at most 160 lines)",
+        "dogfood asset-gen passes (5 of 5 runs on the fixed tree)"
+      ],
+      "implementer": "claude",
+      "reviewer": "codex"
+    }
+  ]
+}
