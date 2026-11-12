@@ -7,6 +7,9 @@
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
+# the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
+# and the frontend form; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy templates WARN; the gen-run
+# quality check gen-run-workflow-style: WARN, never FAIL, no row without workflow.ui.json),
 # review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
 # the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
@@ -555,7 +558,7 @@ AG lint "$LA/assetgen/templates/unsupported-model.json" --authoring "$LA" >/dev/
 AG lint "$LA/assetgen/templates/unknown-node.json" --authoring "$LA" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a FAIL exits 1" || no "fail exit code"
 echo '{"extends": "icon", "handoff_domain": "audio", "qa": {"size": {"mode": "huge"}, "alpha": "maybe"}, "prompt_rubric": []}' > "$LA/assetgen/purposes/icon.json"
 AG lint --authoring "$LA" --json > "$TMP/o" 2>&1
-lst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/o"; }
+lst() { jq -r --arg p "$1" '[.results[] | select(.path == $p and .check == "assetgen-lint") | .state] | join(",")' "$TMP/o"; }
 [ "$(lst core:templates/assetgen/purposes/icon.json)/$(lst game:assetgen/purposes/icon.json)" = "PASS/FAIL" ] \
   && [ "$(lst core:templates/assetgen/workflows/image-generate.json)" = PASS ] \
   && ok "lint blames the game file holding the bad values, not the unchanged core file it extends" \
@@ -624,11 +627,83 @@ expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAI
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
 # Full lint PASS count: every core data file plus the two game-layer files that pass (purposes/icon.json,
-# templates/image-generate.json).
-AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "$((n_core + 2)) PASS, 3 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
+# templates/image-generate.json). Each template also gets one assetgen-graph-style row: PASS for a template with ui
+# groups, WARN for a legacy one (no ui groups); the game image-generate extension has its core template's ui block.
+has_groups() { jq -e '(.ui.groups // []) | length > 0' "$1" >/dev/null 2>&1; }
+gs_pass=0; gs_warn=0
+for f in $(for t in $CORE_TEMPLATES; do echo "$CORE/workflows/$t.json"; done) "$CORE/workflows/image-generate.json"; do
+  if has_groups "$f"; then gs_pass=$((gs_pass + 1)); else gs_warn=$((gs_warn + 1)); fi
+done
+AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "$((n_core + 2 + gs_pass)) PASS, $((3 + gs_warn)) WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no usable structured style fields (palette.colors, tone, canvas, outline.edge_darkness): .*no style-\* QA row can grade" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no usable structured style fields" "$TMP/o" \
   && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without usable structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
+
+echo "-- graph style lint: graph-lint verb and assetgen-graph-style lint rows (graphstyle.py)"
+# every rule with a passing and a failing case, template and UI form: tests/fixtures/assetgen/graphstyle_selftest.py
+python3 -B "$ROOT/tests/fixtures/assetgen/graphstyle_selftest.py" > "$TMP/cs" 2>&1; rc=$?
+n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
+[ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "graphstyle self-test: $n_ok cases passed" || no "graphstyle self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
+GS="$ROOT/tests/fixtures/assetgen/graph-style"
+AG graph-lint "$GS/clean.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS .*tests/fixtures/assetgen/graph-style/clean.json$' "$TMP/o" && grep -qx 'assetgen graph-lint: 1 PASS, 0 WARN, 0 FAIL' "$TMP/o" \
+  && ok "graph-lint: the clean fixture template PASSES, exit 0" || no "graph-lint clean rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint "$GS/clean.json" --json > "$TMP/o" 2>&1
+[ "$(jq -r '.schema + " " + .tool + " " + ([.results[].check] | unique | join(",")) + " " + (.summary | "\(.PASS)/\(.WARN)/\(.FAIL)")' "$TMP/o" 2>&1)" \
+  = "rpg-factory.validation/1 assetgen-graph-lint assetgen-graph-style 1/0/0" ] && ok "graph-lint --json: rpg-factory.validation/1, tool assetgen-graph-lint, one assetgen-graph-style row" \
+  || no "graph-lint --json" "$(cat "$TMP/o")"
+jq 'del(.workflow["4"]._meta)' "$GS/clean.json" > "$TMP/gs-untitled.json"
+jq '.workflow["3"].inputs.user_prompt = "{{prompt}}"' "$GS/clean.json" > "$TMP/gs-literal.json"
+AG graph-lint "$GS/clean.json" "$TMP/gs-untitled.json" "$TMP/gs-literal.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q '^FAIL .*gs-untitled.json: title: node 4 (ImageScale' "$TMP/o" && grep -q '^FAIL .*gs-literal.json: prompt: node 3 (NineRouterImage' "$TMP/o" \
+  && grep -qx 'assetgen graph-lint: 1 PASS, 0 WARN, 2 FAIL' "$TMP/o" && ok "graph-lint: a violating template FAILS naming the node (rule id first), exit 1" \
+  || no "graph-lint violation rc=$rc" "$(cat "$TMP/o")"
+printf 'not json\n' > "$TMP/gs-notjson.json"; echo '{"schema": "x"}' > "$TMP/gs-other.json"; mkdir -p "$TMP/gs-noui-run"
+for u in "missing path|$TMP/gs-no-such.json" "non-JSON file|$TMP/gs-notjson.json" "JSON neither template nor frontend workflow|$TMP/gs-other.json" \
+         "API-format workflow.json (not a frontend workflow)|$RUNS/golden-icon-001/workflow.json" "unknown flag|$GS/clean.json --bogus" \
+         "--run without workflow.ui.json|--run $TMP/gs-noui-run"; do
+  # shellcheck disable=SC2086 # the case's arguments are split on purpose (no path holds a space)
+  AG graph-lint ${u#*|} > "$TMP/o" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ! grep -q '^assetgen graph-lint:' "$TMP/o" && ok "graph-lint usage error exits 2: ${u%%|*}" || no "graph-lint usage ${u%%|*} rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+done
+AG graph-lint --json > "$TMP/gl.json" 2>"$TMP/err"; rc=$?
+gst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/gl.json"; }
+gs_rows=$(for t in $CORE_TEMPLATES; do printf '%s=%s ' "$t" "$(gst "core:templates/assetgen/workflows/$t.json")"; done)
+gs_want=$(for t in $CORE_TEMPLATES; do if has_groups "$CORE/workflows/$t.json"; then printf '%s=PASS ' "$t"; else printf '%s=WARN ' "$t"; fi; done)
+[ $rc -eq 0 ] && [ "$gs_rows" = "$gs_want" ] && [ "$(gst core:templates/assetgen/workflows/image-generate.json)/$(gst core:templates/assetgen/workflows/image-edit.json)" = WARN/WARN ] \
+  && jq -e '.summary.FAIL == 0 and ([.results[] | select(.path | test("workflows/image-(generate|edit)\\.json$")) | .reasons[0] | startswith("legacy template without a ui block")] | length == 2 and all)' "$TMP/gl.json" >/dev/null \
+  && ok "graph-lint without a path: one row per core template; legacy image-generate and image-edit WARN (never FAIL), exit 0" \
+  || no "graph-lint core templates rc=$rc: $gs_rows (want $gs_want)" "$(cat "$TMP/err"; jq -c '.results[] | select(.state != "PASS")' "$TMP/gl.json")"
+AG lint --authoring "$AUTH" --json > "$TMP/o" 2>&1
+want_paths=$( { for t in $CORE_TEMPLATES; do echo "core:templates/assetgen/workflows/$t.json"; done
+  for f in "$GL"/templates/*.json; do echo "game:assetgen/templates/$(basename "$f")"; done; } | LC_ALL=C sort)
+got_paths=$(jq -r '.results[] | select(.check == "assetgen-graph-style") | .path' "$TMP/o" | LC_ALL=C sort)
+[ -n "$want_paths" ] && [ "$got_paths" = "$want_paths" ] \
+  && [ "$(jq -r '[.results[] | select(.check == "assetgen-graph-style" and (.path | test("image-(generate|edit)\\.json$"))) | .state] | unique | join(",")' "$TMP/o")" = WARN ] \
+  && ok "lint: one assetgen-graph-style row per core and game template, WARN for the legacy image-generate/image-edit (and the game extension)" \
+  || no "lint graph-style rows" "got: $got_paths
+want: $want_paths
+$(jq -c '.results[] | select(.check == "assetgen-graph-style")' "$TMP/o")"
+[ "$(jq -r '[.results[] | select(.path | test("purposes/|styles/")) | .check] | unique | join(",")' "$TMP/o")" = assetgen-lint ] \
+  && ok "lint: purposes and styles get no assetgen-graph-style row" || no "graph-style rows on non-templates" "$(jq -c '.results[] | select(.check == "assetgen-graph-style")' "$TMP/o")"
+# a clean template in the game layer: lint and graph-lint PASS it; a run rendered from it passes graph-lint --run
+cp "$GS/clean.json" "$GL/templates/graph-clean.json"
+AG lint "$GL/templates/graph-clean.json" --authoring "$AUTH" --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '[.results[] | .check + "=" + .state] | join(" ")' "$TMP/o")" = "assetgen-lint=PASS assetgen-graph-style=PASS" ] \
+  && ok "lint of the clean game template: assetgen-lint PASS, then assetgen-graph-style PASS" || no "lint game clean template rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint "$GL/templates/graph-clean.json" --authoring "$AUTH" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qx 'PASS game:assetgen/templates/graph-clean.json' "$TMP/o" && ok "graph-lint of the clean game layer template: PASS" || no "graph-lint game template rc=$rc" "$(cat "$TMP/o")"
+mkrun gs-clean-001 icon --style stylized-painterly --authoring "$AUTH" --template graph-clean; gsd="$RUNS/gs-clean-001"
+AG render --run "$gsd" --param reference_image=ref.png > "$TMP/o" 2>&1; rc=$?
+AG graph-lint --run "$gsd" --authoring "$AUTH" > "$TMP/o2" 2>&1; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q '^PASS .*gs-clean-001/workflow.ui.json$' "$TMP/o2" \
+  && [ "$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix] | join(",")' "$gsd/workflow.json")" = assetgen/gs-clean-001-final ] \
+  && ok "graph-lint --run on a run rendered from the clean template: PASS (filename_prefix assetgen/<run-id>-final), exit 0" \
+  || no "graph-lint --run rc=$rc/$rc2" "$(cat "$TMP/o" "$TMP/o2")"
+jq -c '(.nodes[] | select(.id == 4) | .pos) = [5000, 5000]' "$gsd/workflow.ui.json" > "$TMP/gs-moved.ui.json"
+AG graph-lint "$TMP/gs-moved.ui.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q '^FAIL .*gs-moved.ui.json: .*group: node 4 (ImageScale' "$TMP/o" \
+  && ok "graph-lint on a frontend workflow with a node outside every group: FAIL naming the node, exit 1" || no "graph-lint moved node rc=$rc" "$(cat "$TMP/o")"
 
 echo "-- fixture PNGs"
 FX="$TMP/png"; mkdir -p "$FX"
@@ -2090,6 +2165,16 @@ lvariant qp-lightstale-001; printf '{"state": "PASS", "findings": [], "by": "cla
 AG manifest --run "$RUNS/qp-lightstale-001" >/dev/null
 lvariant qp-lightanchor-001
 fmset "$RUNS/qp-lightanchor-001" 'lock = obj["spec"].get("style_lock") or {}; lock["references"] = [{"anchor_id": "a-canon", "sha256": "0" * 64}]; obj["spec"]["style_lock"] = lock'
+# gen-run-workflow-style (the quality plugin check workflow-style): only for a run whose directory holds workflow.ui.json;
+# WARN, never FAIL in this first phase (also on a proposed run), for a legacy-template render (qp-icon-001,
+# image-generate), a violating or unreadable workflow.ui.json; PASS for a render of the clean template (gs-clean-001)
+gsd="$RUNS/gs-clean-001"; cp "$FX/icon-ok.png" "$gsd/outputs/gs.png"; AG manifest --run "$gsd" >/dev/null
+gsvariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$gsd" "$d"; rm -f "$d/run.md"; }
+gsvariant gs-moved-001; jq -c '(.nodes[] | select(.id == 4) | .pos) = [5000, 5000]' "$gsd/workflow.ui.json" > "$RUNS/gs-moved-001/workflow.ui.json"
+AG manifest --run "$RUNS/gs-moved-001" >/dev/null
+gsvariant gs-badjson-001; printf 'not json\n' > "$RUNS/gs-badjson-001/workflow.ui.json"; AG manifest --run "$RUNS/gs-badjson-001" >/dev/null
+variant qp-uitwin-001                                   # the same run twice: one keeps workflow.ui.json, one has none
+variant qp-noui-001; rm -f "$RUNS/qp-noui-001/workflow.ui.json"; AG manifest --run "$RUNS/qp-noui-001" >/dev/null
 # wired through the registry (artifact-quality --domain assetgen) on a small authoring repo: artifact-quality runs
 # artifact-trace once per artifact over every artifact, so the case matrix below calls the plugin directly
 QAUTH="$TMP/qauth"; mkdir -p "$QAUTH/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$QAUTH/assetgen/"
@@ -2104,6 +2189,9 @@ want=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=PA
   || no "good run rc=$rc: $got" "$(cat "$TMP/err"; jq -c '.results[] | select(.artifact == "AGEN-qp-icon-001" and .state != "PASS")' "$TMP/aq.json")"
 [ "$(st AGEN-qp-fallback-001 gen-run-prompt-review)" = WARN ] && ok "artifact-quality: a SAME_MODEL fallback review is WARN and does not fail the check (rc 0)" \
   || no "fallback through artifact-quality: $(st AGEN-qp-fallback-001 gen-run-prompt-review)"
+[ $rc -eq 0 ] && [ "$(st AGEN-qp-icon-001 gen-run-workflow-style)" = WARN ] \
+  && ok "artifact-quality: a legacy-template render's workflow.ui.json is a gen-run-workflow-style WARN and does not fail the check (rc 0)" \
+  || no "workflow-style through artifact-quality rc=$rc: $(st AGEN-qp-icon-001 gen-run-workflow-style)" "$(why AGEN-qp-icon-001 gen-run-workflow-style)"
 python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2>"$TMP/err" <<'EOF'
 import importlib.util, json, re, sys
 from pathlib import Path
@@ -2126,6 +2214,22 @@ case_() { # case_ RUN CHECK STATE REASON-SUBSTRING LABEL
   if [ "$(st "AGEN-$1" "$2")" = "$3" ] && why "AGEN-$1" "$2" | grep -qF -- "$4"; then ok "$5"
   else no "$5: $1 $2 = $(st "AGEN-$1" "$2")" "$(why "AGEN-$1" "$2")"; fi
 }
+gs_status() { sed -n '/^---json$/,/^---$/p' "$RUNS/$1/run.md" | sed '1d;$d' | jq -r .status; }
+[ "$(gs_status qp-icon-001)/$(gs_status gs-clean-001)/$(gs_status gs-moved-001)" = proposed/proposed/proposed ] \
+  && ok "workflow-style runs are proposed (missing work FAILS there; workflow-style still never does)" \
+  || no "workflow-style run status: $(gs_status qp-icon-001)/$(gs_status gs-clean-001)/$(gs_status gs-moved-001)"
+case_ qp-icon-001 gen-run-workflow-style WARN 'group: node' "legacy-template render (image-generate, no ui groups) on a proposed run: gen-run-workflow-style WARN naming the ungrouped nodes, never FAIL"
+[ "$(st AGEN-gs-clean-001 gen-run-workflow-style)" = PASS ] && [ -z "$(why AGEN-gs-clean-001 gen-run-workflow-style)" ] \
+  && ok "render of the clean template: gen-run-workflow-style PASS without reasons" \
+  || no "clean render workflow-style: $(st AGEN-gs-clean-001 gen-run-workflow-style)" "$(why AGEN-gs-clean-001 gen-run-workflow-style)"
+case_ gs-moved-001 gen-run-workflow-style WARN 'group: node 4 (ImageScale' "workflow.ui.json with a node moved outside every group on a proposed run: WARN naming the node, never FAIL"
+case_ gs-badjson-001 gen-run-workflow-style WARN 'workflow.ui.json is not readable JSON' "unreadable workflow.ui.json: WARN"
+checks_of() { jq -r --arg a "AGEN-$1" '[.results[] | select(.artifact == $a) | .check + "=" + .state] | join(" ")' "$TMP/aq.json"; }
+twin=$(checks_of qp-uitwin-001); noui=$(checks_of qp-noui-001)
+[ "$(st AGEN-qp-uitwin-001 gen-run-workflow-style)" = WARN ] && [ -z "$(st AGEN-qp-noui-001 gen-run-workflow-style)" ] \
+  && [ -n "$noui" ] && [ "$noui" = "${twin/ gen-run-workflow-style=WARN/}" ] \
+  && ok "a run without workflow.ui.json gets no gen-run-workflow-style row; its other rows equal its twin's with the file" \
+  || no "no workflow.ui.json: twin [$twin] noui [$noui]"
 case_ qp-same-001 gen-run-prompt-review FAIL 'SAME_MODEL:claude-sonnet' "unmarked review by the author's model family: FAIL, names the explicit marker"
 case_ qp-fallback-001 gen-run-prompt-review WARN 'same-model fallback' "explicit SAME_MODEL:<model> fallback: WARN, never PASS"
 case_ qp-badmark-001 gen-run-prompt-review FAIL 'is not the prompt author' "SAME_MODEL marker on another model's review: FAIL"
