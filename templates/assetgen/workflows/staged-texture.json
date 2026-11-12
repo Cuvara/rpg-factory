@@ -24,7 +24,7 @@
       {"title": "Prompt", "color": "pale_blue", "nodes": ["1"]},
       {"title": "Generate", "color": "green", "nodes": ["2"]},
       {"title": "Post-process", "color": "yellow", "nodes": ["3"]},
-      {"title": "Preview", "color": "cyan", "nodes": ["4"]},
+      {"title": "Preview", "color": "blue", "nodes": ["4"]},
       {"title": "Output", "color": "purple", "nodes": ["5"]}
     ],
     "notes": [
