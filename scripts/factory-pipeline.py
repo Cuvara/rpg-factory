@@ -166,6 +166,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         first line capped at 200 characters, the full body). The lead runs it before its Orca `status` message, so the
         run lead's `status` shows completion even when the message never arrives. Exit 2 on an unknown task, a bad
         --sha or an empty body.
+  sync <plan.json> --task ID [--send]
+        after task ID moved (its task branch tip, else its review PASS), per stacked dependent whose HEAD lacks that SHA:
+        prints the `git merge` it needs and records <dependent>__sync.json, which status shows until the dependent's
+        HEAD contains the SHA (a message is only a nudge). --send also runs `orca orchestration send --type status` to
+        the dependent's lead (task orca_run, else its Orca worktree). Exit 0, 1 when a send failed, 2 usage.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -1308,6 +1313,36 @@ def stack_record(plan, task_id):
     return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
 
 
+def sync_file(plan, task_id):
+    """The sync record of a stacked dependent: <task>__sync.json beside its verdicts, written by `sync` when its
+    dependency moved past the dependent's HEAD. It is the durable signal (an Orca message is only a nudge); status
+    shows it until the dependent's HEAD contains the SHA."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__sync.json")
+
+
+def sync_record(plan, task_id):
+    """{plan, task, dep, ref, sha, command, to, sent, at} of a dependent told to merge its dependency, or None."""
+    rec = fstate.read_json(sync_file(plan, task_id))
+    return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
+
+
+def stacked_dependents(plan, reg, dep_id):
+    """The plan tasks stacked on dep_id, in plan order: their stack record names it, same repo key, not tier XS, a
+    worktree repo with a checkout, and their task branch exists."""
+    dep = find_task(plan, dep_id)
+    out = []
+    for t in plan.get("tasks", []):
+        rec = stack_record(plan, t.get("id"))
+        if not rec or rec.get("dep") != dep_id or t.get("repo") != dep.get("repo") or pr.xs_plan(plan, t):
+            continue
+        info = repo_info(plan, reg, t["repo"])
+        if not info["worktrees"] or not info["path"]:
+            continue
+        if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, t)}")[0]:
+            out.append(t)
+    return out
+
+
 def plan_has_task(plan, task_id):
     return any(t.get("id") == task_id for t in plan.get("tasks", []))
 
@@ -1701,6 +1736,14 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
              f"{orca_cmd.CHILD_RULE.split(';')[0]}." if info["worktrees"] else
              "placement is always shared here (no worktree).")
+    # a stacked task (fresh: spec.stacked_on; resumed: its stack record) merges its moved dependency at subtask
+    # boundaries; every worktree-repo lead tells its own stacked dependents after each candidate
+    stacked = (spec.get("stacked_on") or stack_record(plan, task["id"])) if info["worktrees"] else None
+    sync_in = (f" Stacked on {stacked.get('dep')}: at each subtask boundary run `<pipeline> status <plan>`; when it shows "
+               f"`sync: {stacked.get('dep')} moved to <sha>`, run `git merge {stacked.get('branch')}` (never rebase), "
+               "resolve conflicts inside your owned paths, then continue." if stacked else "")
+    sync_out = (f" After each new candidate (a fix included), run `<pipeline> sync <plan> --task {task['id']} --send`: it "
+                "tells stacked dependents to merge it (no-op without them)." if info["worktrees"] else "")
     rules = [
         f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
@@ -1715,12 +1758,12 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "scope (exit 2).",
         f"3. Per subtask ONE fresh session in {where}: `{d} --phase implement --subplan <subplan.json> --subtask <id> "
         "--runner orca`. placement shared (default): it edits only its paths and does NOT commit (one shared index); "
-        f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}",
+        f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}{sync_in}",
         f"4. Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
         f"--runner orca` ({reviewer} for {impl}). Keep HEAD at the candidate. Record both results with "
         "`verdict --phase verify` (a FAIL names `--failed-at review`: no test ran, the next verify keeps the original "
         "tests; or `--failed-at qa [--failed-suites ...]`). On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
-        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA.",
+        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA." + sync_out,
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
@@ -3284,6 +3327,23 @@ def orca_worktree_paths():
     return {norm_wt(w["path"]) for w in rows if isinstance(w, dict) and w.get("path")}
 
 
+def orca_worktree_ids():
+    """{normalised path: Orca worktree id} from the read-only `orca worktree list --json`; None when orca cannot say
+    (not on PATH, failing: no opinion, never an error)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True,
+                           timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["worktrees"] if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {norm_wt(w["path"]): str(w["id"]) for w in rows if isinstance(w, dict) and w.get("path") and w.get("id")}
+
+
 def orca_terminals(path):
     """(handle, title) of the live Orca terminals bound to the worktree at `path` (read-only `orca terminal list`);
     [] when orca cannot say (no opinion)."""
@@ -4144,6 +4204,13 @@ def status(plan, reg, orca_run=None):
         if row["phase"] in ("implementing", "candidate", "reviewed") and row["sha"]:
             before = row["next"]
             stack_notes(plan, reg, info, t, row)  # stacked on D@X; D moved past HEAD: merge it as next
+            if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
+                # the durable `sync` record; read-only here: the note goes once HEAD contains the SHA (file kept)
+                syn = sync_record(plan, t["id"])
+                if syn and plan_has_task(plan, syn.get("dep")) and not is_ancestor(info["path"], syn["sha"], row["sha"]):
+                    row["notes"].append(f"sync: {syn['dep']} moved to {syn['sha'][:10]} ({syn.get('at')}): at the next "
+                                        f"subtask boundary run {syn.get('command')} (never rebase), resolve conflicts "
+                                        "inside the owned paths, then continue")
             if row["phase"] == "candidate" and not pr.xs_plan(plan, t):
                 g = stack_gate(plan, reg, info, t, row["sha"])
                 if g:  # verify would exit 2: merge the dependency's PASS first, or wait for it
@@ -4288,6 +4355,109 @@ def cmd_report(a, reg):
     return 0
 
 
+def send_orca(argv):
+    """Run one `orca orchestration send` argv: (ok, one-line why). Never raises."""
+    exe = shutil.which("orca")
+    if not exe:
+        return False, "orca is not on PATH"
+    try:
+        r = subprocess.run([exe] + list(argv[1:]), capture_output=True, text=True, timeout=60, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        why = str(e)
+    else:
+        try:
+            data = json.loads(r.stdout or "")
+        except ValueError:
+            data = None
+        if r.returncode == 0 and data is not None and not (isinstance(data, dict) and data.get("ok") is False):
+            return True, ""
+        if r.returncode != 0:
+            why = f"exit {r.returncode}: " + ((r.stderr or "").strip() or (r.stdout or "").strip() or "no output")
+        elif data is None:
+            why = "stdout is not JSON: " + ((r.stdout or "").strip() or "empty")
+        else:
+            err = data.get("error")
+            why = "ok false: " + (json.dumps(err) if err is not None else (r.stdout or "").strip())
+    return False, " ".join(why.split())[:200]
+
+
+def cmd_sync(a, reg):
+    """Tell each stacked dependent of a task that its dependency moved: print the merge command, record
+    <dependent>__sync.json (status shows it until the dependent's HEAD contains the SHA) and with --send nudge its lead
+    through Orca. Exit 0, 1 when a send failed, 2 usage."""
+    plan = read_plan(a.plan, reg)
+    plan["_path"] = a.plan
+    if a.task.startswith("integration:"):
+        die("sync is per plan task: --task <id>")
+    dep = find_task(plan, a.task)
+    did = dep["id"]
+    info = repo_info(plan, reg, dep["repo"])
+    path = info["path"]
+    dbranch = task_branch(plan, info, dep)
+    sha = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{dbranch}")[0] if path else None
+    ref = dbranch
+    if not sha:
+        rv = verdict_of(plan, reg, did, "review")[0]
+        if rv and rv.get("state") == "PASS":
+            ref = sha = rv["sha"]
+    if not sha:
+        print(f"sync: {did} has no task branch and no review PASS: nothing to sync")
+        return 0
+    print(f"sync: {did} at {sha[:10]} ({ref})")
+    deps = stacked_dependents(plan, reg, did)
+    if not deps:
+        print(f"sync: no stacked dependent of {did}")
+        return 0
+    rc, ids = 0, False  # ids: the Orca worktree ids, read once and only when a dependent has no orca_run
+    for t in deps:
+        tid = t["id"]
+        tinfo = repo_info(plan, reg, t["repo"])
+        tpath = tinfo["path"]
+        tbranch = task_branch(plan, tinfo, t)
+        head = git(tpath, "rev-parse", "--verify", "--quiet", f"refs/heads/{tbranch}")[0] or ""
+        wt = worktree_for(tpath, tbranch)[0]
+        if is_ancestor(tpath, sha, head):
+            print(f"{tid}: up to date (HEAD {head[:10]} contains {did}@{sha[:10]})")
+            if os.path.exists(sync_file(plan, tid)):
+                try:
+                    os.remove(sync_file(plan, tid))
+                except OSError as e:
+                    print(f"factory-pipeline: could not remove {sync_file(plan, tid)}: {e.strerror or e}", file=sys.stderr)
+            continue
+        cmd = orca_cmd.quote(["git", "-C", wt, "merge", ref] if wt else ["git", "merge", ref])
+        run = t.get("orca_run").strip() if isinstance(t.get("orca_run"), str) else ""
+        run = run[len("run:"):].strip() if run.startswith("run:") else run
+        to = f"run:{run}" if run else None
+        if not to and wt:
+            if ids is False:
+                ids = orca_worktree_ids()
+            if ids and ids.get(norm_wt(wt)):
+                to = f"@worktree:{ids[norm_wt(wt)]}"
+        subject = f"sync: {did} moved to {sha[:10]}"
+        print(f"{tid}: {did} moved to {sha[:10]}, not in HEAD {head[:10]}: {cmd}")
+        argv = orca_cmd.send_message(to, subject, cmd) if to else None
+        if argv:
+            print(f"  send: {orca_cmd.quote(argv)}")
+        else:
+            print(f"  no Orca address for {tid} (no task orca_run, no Orca worktree record): pass the command to its lead")
+        sent = False
+        if a.send and argv:
+            if shutil.which("orca") is None:
+                print("  not sent: orca is not on PATH")
+            else:
+                sent, why = send_orca(argv)
+                if sent:
+                    print(f"  sent to {to}")
+                else:
+                    print(f"  send FAILED ({to}): {why}")
+                    rc = 1
+        # the durable signal, with or without --send: a message is only a nudge
+        fstate.write_json(sync_file(plan, tid), {"plan": plan.get("id"), "task": tid, "dep": did, "ref": ref, "sha": sha,
+                                                 "command": cmd, "to": to, "sent": sent, "at": now_utc()}, indent=2)
+    return rc
+
+
 def cmd_agents(a, reg):
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -4381,6 +4551,10 @@ def main():
     body = rp.add_mutually_exclusive_group(required=True)
     body.add_argument("--body")
     body.add_argument("--body-file")
+    sy = sub.add_parser("sync", parents=[common])
+    sy.add_argument("plan")
+    sy.add_argument("--task", required=True)
+    sy.add_argument("--send", action="store_true")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
@@ -4407,7 +4581,7 @@ def main():
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
     return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
             "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
-            "report": cmd_report}[a.cmd](a, reg)
+            "report": cmd_report, "sync": cmd_sync}[a.cmd](a, reg)
 
 
 if __name__ == "__main__":
