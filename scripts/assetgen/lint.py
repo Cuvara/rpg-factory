@@ -1,8 +1,9 @@
 """Offline lint of asset-gen data and rendered workflows.
 
-Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types, input
-names, required inputs, link targets and types, combo values against data/known-nodes.json (a snapshot; the live
-check is comfy-mcp validate_workflow), extends targets, and that no file carries a URL, host address or credential.
+Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types (a ui_only
+node such as Note is never part of workflow), input names, required inputs, link targets and types, combo values
+against data/known-nodes.json (a snapshot; the live check is comfy-mcp validate_workflow), extends targets, and that
+no file carries a URL, host address or credential.
 Purpose constraints are checked against data/precedence.json. A core file is linted as core data only (no game
 layer merged in), so a bad game value is reported on the game file that holds it.
 Style lock (stylelock.py): style version, status and structured fields, purpose default_family/dimensions/
@@ -74,6 +75,9 @@ def check_graph(graph, params=None):
         ctype, spec = node["class_type"], nodes.get(node["class_type"])
         if spec is None:
             errs.append("node %s: unknown node type %s (not in data/known-nodes.json; live check: comfy-mcp validate_workflow)" % (nid, ctype))
+            continue
+        if spec.get("ui_only"):
+            errs.append("node %s: %s is a UI-only node (frontend canvas only, no API form); it cannot be part of workflow" % (nid, ctype))
             continue
         for name, decl in spec["inputs"].items():
             if decl.get("required") and name not in node["inputs"]:
