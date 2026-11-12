@@ -1,0 +1,38 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Staged seamless texture",
+  "description": "Seamless square texture through the 9router image node, resized to the tile size, staged for the ComfyUI frontend.",
+  "params": {
+    "prompt": {"type": "string", "required": true, "description": "Final reviewed prompt (filled from --prompt-file)."},
+    "model": {"type": "string", "default": "cx/gpt-5.6-sol-image", "description": "Image model id served through the NineRouterImage node."},
+    "size": {"type": "enum", "options": ["auto", "1024x1024", "1536x1024", "1024x1536"], "default": "1024x1024", "description": "Requested size; the gateway may return another size (QA checks per purpose)."},
+    "quality": {"type": "enum", "options": ["auto", "low", "medium", "high"], "default": "high", "description": "Image quality."},
+    "background": {"type": "enum", "options": ["auto", "opaque", "transparent"], "default": "opaque", "description": "Background mode."},
+    "filename_prefix": {"type": "string", "default": "assetgen/run", "description": "SaveImage filename prefix in the ComfyUI output folder."},
+    "tile_size": {"type": "int", "default": 1024, "description": "Side in pixels of the square texture the resize writes."}
+  },
+  "output_node": "5",
+  "workflow": {
+    "1": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "{{prompt}}"}, "_meta": {"title": "Prompt (Claude, Codex review <state>)"}},
+    "2": {"class_type": "NineRouterImage", "inputs": {"user_prompt": ["1", 0], "model": "{{model}}", "size": "{{size}}", "quality": "{{quality}}", "background": "{{background}}"}, "_meta": {"title": "Generate texture"}},
+    "3": {"class_type": "ImageScale", "inputs": {"image": ["2", 0], "upscale_method": "lanczos", "width": "{{tile_size}}", "height": "{{tile_size}}", "crop": "disabled"}, "_meta": {"title": "Resize to the square tile size"}},
+    "4": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}, "_meta": {"title": "Preview raw generation"}},
+    "5": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}-albedo", "images": ["3", 0]}, "_meta": {"title": "Save tileable texture"}}
+  },
+  "ui": {
+    "groups": [
+      {"title": "Prompt", "color": "pale_blue", "nodes": ["1"]},
+      {"title": "Generate", "color": "green", "nodes": ["2"]},
+      {"title": "Post-process", "color": "yellow", "nodes": ["3"]},
+      {"title": "Preview", "color": "cyan", "nodes": ["4"]},
+      {"title": "Output", "color": "purple", "nodes": ["5"]}
+    ],
+    "notes": [
+      {"text": "The reviewed prompt; render fills it from prompt.md.", "group": "Prompt"},
+      {"text": "The one image node; its user_prompt is linked from the prompt node.", "group": "Generate"},
+      {"text": "Stretch the returned image to the square tile size, never crop, so the seamless repeat stays intact.", "group": "Post-process"},
+      {"text": "The raw image as the service returned it, to compare with the resized one.", "group": "Preview"},
+      {"text": "The only saved file: the square albedo texture with the -albedo suffix.", "group": "Output"}
+    ]
+  }
+}
