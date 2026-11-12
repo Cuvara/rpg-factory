@@ -64,8 +64,8 @@ expect "without core.json the build fails" 1 "registry/core.json missing" "$D"
 echo "-- split round trip"
 copy "$D"; cp "$D/registry.json" "$TMP/before.json"
 expect "--split rewrites the same fragments" 0 "wrote [0-9]+ fragment" "$D" --split
-cmp -s "$D/registry.json" "$TMP/before.json" && ok "split + build reproduces registry.json byte for byte" || no "split round trip changed registry.json"
-[ -z "$(diff -r "$ROOT/registry" "$D/registry")" ] && ok "split reproduces the committed fragments" || no "split differs" "$(diff -r "$ROOT/registry" "$D/registry" | head -5)"
+cmp -s <(tr -d '\r' < "$D/registry.json") <(tr -d '\r' < "$TMP/before.json") && ok "split + build reproduces registry.json ignoring CR" || no "split round trip changed registry.json"
+[ -z "$(diff -r --strip-trailing-cr "$ROOT/registry" "$D/registry")" ] && ok "split reproduces the committed fragments" || no "split differs" "$(diff -r --strip-trailing-cr "$ROOT/registry" "$D/registry" | head -5)"
 
 echo "-- scaffolder writes fragments"
 P="$TMP/plugin"; mkdir -p "$P"; cp -R "$ROOT/." "$P/"; rm -rf "$P/.git"

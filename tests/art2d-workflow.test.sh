@@ -209,7 +209,7 @@ present = provider.inspect_provider(ProviderContext({'name': 'game-art-mcp', 'mo
 expect('available provider records nonbinding concept draft provenance', present['state'] == 'HUMAN_REQUIRED' and present['artifact']['kind'] == 'concept-2d' and present['artifact']['status'] == 'draft' and present['artifact']['provenance']['tool'] == 'game-art-mcp' and present['artifact']['spec']['prompt'] == 'red fox icon' and bool(present['artifact']['spec']['generated_on']) and 'binding' not in present['artifact'])
 generated = temp / 'authoring' / 'art2d' / 'generated.artifact.json'
 generated.write_text(json.dumps(present['artifact']), encoding='utf-8')
-validation = subprocess.run(['python3', '-B', str(root / 'scripts/checks/artifact-lint.py'), str(temp / 'authoring'), '--registry', str(root / 'registry.json')], capture_output=True, text=True)
+validation = subprocess.run([sys.executable, '-B', str(root / 'scripts/checks/artifact-lint.py'), str(temp / 'authoring'), '--registry', str(root / 'registry.json')], capture_output=True, text=True)
 expect('provider concept provenance draft validates against the artifact schemas', validation.returncode == 0)
 
 # CORE3 adds registered repo roots to Context; retain the legacy registry root fallback for merge safety.
