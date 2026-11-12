@@ -90,6 +90,17 @@ want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
+# an asset-gen engine module reaches fixtures run under a computed name (tests/fixtures/assetgen/*_selftest.py): the
+# suite's EXTRA patterns cover them, so the answer is a short named list, not every suite (finalize.py may not exist yet)
+printf '%s\n' scripts/assetgen/assetgen.py scripts/assetgen/finalize.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
+# oracle: the suites whose text names a changed file, the directory itself or its glob; a suite that names only another
+# file under it (scripts/assetgen/data/known-nodes.json in tests/comfy-desktop-setup.test.sh) is rightly not selected
+mention=$(cd "$ROOT" && grep -lE 'scripts/assetgen(/(assetgen|finalize)[.]py|/?[*]|/?[.]?([^A-Za-z0-9_./*-]|$))' "${suites[@]}" 2>/dev/null | sort)
+if grep -qx tests/assetgen.test.sh <<<"$got" && grep -qx tests/commands.test.sh <<<"$got" && [ -z "$(comm -13 <(echo "$got") <(echo "$mention"))" ] \
+   && [ "$(wc -l <<<"$got")" -lt "${#suites[@]}" ] && ! grep -qx tests/changelog.test.sh <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  a scripts/assetgen change selects the suites that mention it (assetgen, commands), not every suite"
+else fail=$((fail + 1)); echo "FAIL  a scripts/assetgen change selects a short named list: got [$(tr '\n' ' ' <<<"$got")] of ${#suites[@]}"; fi
 out=$(python3 -B - "$A" <<'PY'
 import ast, importlib.util, sys
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -146,6 +157,9 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          "scripts/rel-entry.py": "import rpkg\n", "tests/rel.test.sh": "python scripts/rel-entry.py\n",
          # lib -> module nothing imports or names (loaded by a computed path): unsure
          "scripts/lib/hidden.py": "X = 1\n", "scripts/plugins/dyn.py": "import hidden\n",
+         # leaf under tests/<dir>/ that nothing names and no EXTRA covers: unsure; one a suite's EXTRA covers is named by it
+         "scripts/lib/stuff.py": "X = 1\n", "tests/zzdir/leaf_selftest.py": "import stuff\n",
+         "scripts/lib/stuff2.py": "X = 1\n", "tests/fixtures/assetgen/covered_selftest.py": "import stuff2\n",
          # data a script reads next to it without naming the path; an unrelated data file in another tool's tree
          "scripts/ui/plan.py": "import json\n", "scripts/ui/data/intents.json": "{}\n", "tests/ui.test.sh": "python scripts/ui/plan.py\n",
          "scripts/other/tool2.py": "x = 1\n", "scripts/other/data/x.json": "{}\n",
@@ -202,6 +216,13 @@ check("bare file name in a message is not an edge", not m.needed(["scripts/lib/v
 check("relative import reaches package importer", m.needed(["scripts/lib/rpkg/part.py"], "tests/rel.test.sh"))
 check("relative import skips unrelated suite", not m.needed(["scripts/lib/rpkg/part.py"], "tests/other.test.sh"))
 check("library reaching an unnamed module stays global", m.needed(["scripts/lib/hidden.py"], "tests/other.test.sh"))
+check("a leaf nothing names and no EXTRA covers stays unsure", m.reaches("scripts/lib/stuff.py") is None
+      and m.needed(["scripts/lib/stuff.py"], "tests/other.test.sh"))
+check("a leaf a suite's EXTRA patterns cover is named by that suite: no longer unsure",
+      m.reaches("scripts/lib/stuff2.py") is not None and "tests/fixtures/assetgen/covered_selftest.py" in m.reaches("scripts/lib/stuff2.py")
+      and not m.needed(["scripts/lib/stuff2.py"], "tests/other.test.sh"))
+check("only a tests/ suite's EXTRA covers a leaf (the '*' of english-only.py does not)",
+      m.extra_covered("tests/fixtures/assetgen/x.py") and not m.extra_covered("tests/zzdir/leaf_selftest.py"))
 reset(); tool_before = h("tests/tool.test.sh")
 (root / "scripts/lib/deep.py").write_text("X = 2\n")
 check("hash changes on a library reached through a helper", tool_before != h("tests/tool.test.sh"))
