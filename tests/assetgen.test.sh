@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # asset-gen engine (scripts/assetgen/): list/show/resolve with core + game layers (override, extends, per-field
-# source, param precedence, purpose constraints over style hints), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
+# source, param precedence, purpose constraints over style hints), strict render of every core purpose (templates/assetgen/purposes/*.json) against golden workflows (tests/fixtures/assetgen/golden/<purpose>.json
+# for the default template, <purpose>--<template>.json for a variant; extra render params from the optional
+# tests/fixtures/assetgen/cases/<purpose>.json),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
 # lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
@@ -66,12 +68,22 @@ cat > "$GL/templates/image-generate.json" <<'EOF'
 EOF
 git init -q -b main "$AUTH" && git -C "$AUTH" add -A && git -C "$AUTH" "${G[@]}" commit -qm "game layer"
 
+# core ids come from the core data files, so a new purpose, style or template needs no edit here
+CORE="$ROOT/templates/assetgen"
+core_ids() { local f; for f in "$CORE/$1"/*.json; do [ -f "$f" ] && basename "$f" .json; done | LC_ALL=C sort; }
+CORE_PURPOSES=$(core_ids purposes); CORE_STYLES=$(core_ids styles); CORE_TEMPLATES=$(core_ids workflows)
+n_p=$(wc -w <<<"$CORE_PURPOSES"); n_s=$(wc -w <<<"$CORE_STYLES"); n_t=$(wc -w <<<"$CORE_TEMPLATES"); n_core=$((n_p + n_s + n_t))
+
 echo "-- list / show"
 AG list --json > "$TMP/l.json" 2>"$TMP/err"; rc=$?
 n=$(jq '[.entries[] | select(.layer == "core")] | length' "$TMP/l.json")
-[ $rc -eq 0 ] && [ "$n" = 15 ] && ok "core list: 7 purposes + 6 styles + 2 templates" || no "core list rc=$rc n=$n" "$(cat "$TMP/err")"
-ids=$(jq -r '[.entries[] | select(.kind != "template") | .kind + ":" + .id] | sort | join(" ")' "$TMP/l.json")
-[ "$ids" = "purpose:concept-2d purpose:icon purpose:image-edit purpose:ref-3d-turnaround purpose:sprite-2d purpose:texture-tileable purpose:ui-element style:anime-cel style:flat-ui style:low-poly style:pixel-art style:realistic-pbr style:stylized-painterly" ]   && ok "every core purpose and style id is listed" || no "ids: $ids"
+[ $rc -eq 0 ] && [ "$n" = "$n_core" ] && ok "core list: $n_p purposes + $n_s styles + $n_t templates" || no "core list rc=$rc n=$n (want $n_core)" "$(cat "$TMP/err")"
+listed=$(jq -r '.entries[] | select(.layer == "core") | .kind + ":" + .id' "$TMP/l.json")
+missing=$(for k in purpose style template; do
+  case $k in purpose) ids_=$CORE_PURPOSES ;; style) ids_=$CORE_STYLES ;; template) ids_=$CORE_TEMPLATES ;; esac
+  for i in $ids_; do grep -qxF "$k:$i" <<<"$listed" || printf '%s ' "$k:$i"; done
+done)
+[ $rc -eq 0 ] && [ -n "$CORE_PURPOSES" ] && [ -n "$CORE_STYLES" ] && [ -z "$missing" ] && ok "every core purpose, style and template id is listed" || no "not listed as core: $missing"
 AG list --authoring "$AUTH" --json > "$TMP/l.json"
 lay() { jq -r --arg k "$1" --arg i "$2" '.entries[] | select(.kind == $k and .id == $i) | .layer' "$TMP/l.json"; }
 [ "$(lay purpose icon)/$(lay style pixel-art)/$(lay style rpg-dark)/$(lay template image-generate)/$(lay purpose sprite-2d)" = \
@@ -163,16 +175,32 @@ mkrun() { # mkrun NAME PURPOSE [resolve args...]
   printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
 }
 mkdir -p "$GOLD"
-for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit; do
-  mkrun "golden-$p-001" "$p" --style stylized-painterly || { no "resolve $p"; continue; }
-  extra=(); [ "$p" = image-edit ] && extra=(--param reference_image=ref.png)
-  out=$(AG render --run "$RUNS/golden-$p-001" "${extra[@]}" 2>&1); rc=$?
-  wf="$RUNS/golden-$p-001/workflow.json"
-  if $update_golden && [ $rc -eq 0 ]; then cp "$wf" "$GOLD/$p.json"; fi
-  if [ $rc -eq 0 ] && [ -f "$GOLD/$p.json" ] && [ "$(jq -S . "$wf")" = "$(jq -S . "$GOLD/$p.json")" ] && ! grep -q '{{' "$wf"; then
-    ok "render $p = golden (no placeholder left)"
-  else no "render $p rc=$rc" "$out
-$(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$p.json" 2>/dev/null))"; fi
+# cases file (optional): tests/fixtures/assetgen/cases/<purpose>.json, see its README.md
+CASES="$ROOT/tests/fixtures/assetgen/cases"
+# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant TEMPLATE)
+case_params() {
+  local f="$CASES/$1.json"; [ -f "$f" ] || return 0
+  jq -r --arg t "${2:-}" '(if $t == "" then .render_params else .variants[$t].render_params end) // {}
+    | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$f"
+}
+case_variants() { local f="$CASES/$1.json"; [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f" | LC_ALL=C sort; return 0; }
+# golden_render RUN-NAME PURPOSE GOLDEN-NAME [TEMPLATE]: render the run and compare it with golden/<GOLDEN-NAME>.json
+golden_render() {
+  local run="$1" p="$2" g="$3" t="${4:-}" out rc wf args=() targs=()
+  [ -n "$t" ] && targs=(--template "$t")
+  mkrun "$run" "$p" --style stylized-painterly "${targs[@]}" || { no "resolve $g"; return 0; }
+  mapfile -t args < <(case_params "$p" "$t")
+  out=$(AG render --run "$RUNS/$run" "${args[@]}" 2>&1); rc=$?
+  wf="$RUNS/$run/workflow.json"
+  if $update_golden && [ $rc -eq 0 ]; then cp "$wf" "$GOLD/$g.json"; fi
+  if [ $rc -eq 0 ] && [ -f "$GOLD/$g.json" ] && [ "$(jq -S . "$wf")" = "$(jq -S . "$GOLD/$g.json")" ] && ! grep -q '{{' "$wf"; then
+    ok "render $g = golden (no placeholder left)"
+  else no "render $g rc=$rc" "$out
+$(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$g.json" 2>/dev/null))"; fi
+}
+for p in $CORE_PURPOSES; do
+  golden_render "golden-$p-001" "$p" "$p"
+  for t in $(case_variants "$p"); do golden_render "golden-$p--$t-001" "$p" "$p--$t" "$t"; done
 done
 AG review-cmd --phase prompt --run "$RUNS/golden-ref-3d-turnaround-001" --json | jq -r .stdin > "$TMP/rp.txt"
 grep -qF "lighting: $(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" "$TMP/rp.txt" \
@@ -207,7 +235,7 @@ for pw in "golden-icon-001 1 3" "golden-image-edit-001 2 4"; do
     && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
     && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
 done
-for t in image-generate image-edit; do
+for t in $CORE_TEMPLATES; do
   jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
     && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
 done
@@ -303,9 +331,9 @@ assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent
 print("ok")
 EOF
 KN="$ROOT/scripts/assetgen/data/known-nodes.json"
-for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit; do
-  d="$RUNS/golden-$p-001"; [ "$p" = icon ] && AG render --run "$d" >/dev/null
-  [ "$p" = image-edit ] && AG render --run "$d" --param reference_image=ref.png >/dev/null
+for p in $CORE_PURPOSES; do
+  # re-render with the cases params only: earlier tests re-rendered some runs with other params
+  d="$RUNS/golden-$p-001"; mapfile -t args < <(case_params "$p"); AG render --run "$d" "${args[@]}" >/dev/null
   out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
   [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
     && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
@@ -2307,12 +2335,14 @@ old_ref = {"style_id": "rpg-base", "version": 1, "sha256": "1" * 64}
 check([p["anchor_id"] for p in stylelock.select_references(valid, old_ref, "props", dims, 3)] == ["v-old"], "an older style version selects only its own anchors")
 check(stylelock.max_references({"max_references": 3}, {"max_references": 2}) == 2 and stylelock.max_references({}, {}) == 3
       and stylelock.max_references({"max_references": 1}, None) == 1, "max_references: the smaller of purpose and template, default 3")
-core_p = {p: layers.load("purpose", p)["data"] for p in ("icon", "sprite-2d", "concept-2d", "ui-element", "texture-tileable", "ref-3d-turnaround", "image-edit")}
+CORE = os.path.join(sys.argv[1], "templates", "assetgen")
+core_ids = lambda kind: sorted(f[:-5] for f in os.listdir(os.path.join(CORE, kind)) if f.endswith(".json"))
+core_p = {p: layers.load("purpose", p)["data"] for p in core_ids("purposes")}
 check(all(isinstance(d.get("dimensions"), list) and d.get("max_references") == 3 for d in core_p.values())
       and core_p["icon"]["default_family"] == "props" and core_p["sprite-2d"]["default_family"] == "characters"
       and "default_family" not in core_p["image-edit"], "core purposes declare dimensions, max_references and default_family (none for image-edit)")
 check(all(layers.load("style", s)["data"].get("version") == 1 and layers.load("style", s)["data"].get("status") == "active"
-          for s in ("anime-cel", "flat-ui", "low-poly", "pixel-art", "realistic-pbr", "stylized-painterly")), "core styles are version 1, active")
+          for s in core_ids("styles")), "core styles are version 1, active")
 
 # rejections: relevance by style, family and version
 def rej(rid, **kw):
