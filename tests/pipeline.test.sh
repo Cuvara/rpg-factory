@@ -880,6 +880,18 @@ if case.startswith('stack-'):
             if case == 'stack-sync-merge':
                 assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == []
                 assert not stale, g
+                # c (after b) edits a's file: the net diff since a2 is no longer empty, so only the sync-merge
+                # credit keeps the clean sync merge in topic-b (before c's start, b does not own shared.txt) off a
+                plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                                      'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['b']})
+                save()
+                git('switch', 'topic'); git('switch', '--no-track', '-c', 'topic-c')
+                c = commit('c')
+                verdict('c', 'review', c)
+                head = integrate('topic-c')
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == []
+                g = blockers()
+                assert not any(x.startswith('a: review is STALE') for x in g), g
             else:
                 assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == ['shared.txt']
                 assert stale and 'shared.txt' in stale[0], g
