@@ -81,6 +81,31 @@
         "without such config the Orca probe still decides",
         "no secret value is printed or stored"
       ]
+    },
+    {
+      "id": "note-equals",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one rendering fix and its test case",
+      "objective": "Integration QA of plan ci-backlog FAILED (report: the per-machine pipeline state, reports/integration-qa-e868b4e.md): the lead spec of factory-pipeline.py dispatch renders each session note into <dispatch> as ` --note <quoted>`, so a valid note that starts with a hyphen (for example -x or --foo) becomes an argument argparse rejects. Render every forwarded note as `--note=<quoted>` (shlex-quoted as one token) wherever dispatch prints a note for a later command, and accept such notes on input. Tests in tests/pipeline.test.sh: a note starting with '-' and one starting with '--' survive lead -> implement forwarding (run the forwarded <dispatch> line and see the note in the implement spec); unset RPG_FACTORY_SESSION_NOTE beside the suite's other environment exports so a caller's note cannot leak in. Update changelog.d/dispatch-notes.md if its wording shows the old form.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/dispatch-notes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "dispatch-notes",
+        "codex-detect"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "a forwarded note starting with - or -- reaches the implement spec unchanged",
+        "the suite is isolated from a caller's RPG_FACTORY_SESSION_NOTE"
+      ]
     }
   ]
 }

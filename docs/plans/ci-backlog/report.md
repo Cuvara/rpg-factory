@@ -1,6 +1,6 @@
 # Run report: ci-backlog
 
-Tier M plan, three tasks, on branch `ci-backlog` (base `main` `c1c0902`, the merge of plan ci-followups, PR #107).
+Tier M plan, four tasks, on branch `ci-backlog` (base `main` `c1c0902`, the merge of plan ci-followups, PR #107).
 It closes backlog topic `ci-matrix-followups` and the Codex availability item of `plugin-flow-5-followups`.
 
 ## Summary
@@ -9,7 +9,7 @@ It closes backlog topic `ci-matrix-followups` and the Codex availability item of
   policy block and pinned phrase kept (task `delivery-trim`).
 - `factory-pipeline.py dispatch --note TEXT` (repeatable) and `RPG_FACTORY_SESSION_NOTE` append `Session note:` lines
   to every spec it writes; the lead spec passes them on. On Windows, when `python3` resolves to the Microsoft Store
-  alias, specs tell the session to run the interpreter that runs `dispatch` (task `dispatch-notes`).
+  alias, specs tell the session to run the interpreter that runs `dispatch` (task `dispatch-notes`; notes are forwarded as one `--note=<value>` token, task `note-equals`).
 - `scripts/lib/pipeline_route.py` treats Codex as available when its `config.toml` selects a non-OpenAI
   `model_provider` with a `base_url`, or when `OPENAI_API_KEY` is set, even if Orca shows no Codex login. Before
   this, a Codex CLI on an API provider counted as unavailable and every review fell back to SAME_MODEL (task
@@ -24,6 +24,8 @@ Mode: implement
 | delivery-trim | claude-opus-5-5 high | codex gpt-6.1-sol high: review PASS, QA FAIL (routing.test.sh, workspace variable unset); rerun with the workspace: PASS | b548a01 | 530 checks: 321 passed, 0 failed, 209 skipped |
 | dispatch-notes | codex gpt-6.1-terra high | claude-opus-5-5 high: review FAIL (a new helper shadowed `session_lines`: TypeError on every spec dispatch), then PASS on the fix | 3e11eba | 530 checks: 318 passed, 0 failed, 212 skipped |
 | codex-detect | codex gpt-6.1-terra high | claude-opus-5-5 high: PASS | df9c6e3 | 530 checks: 311 passed, 0 failed, 219 skipped |
+| note-equals | claude-opus-5-5 high | codex gpt-6.1-sol high: PASS | 85c96a1 | 531 checks: 315 passed, 0 failed, 216 skipped |
+| integration | - | QA codex gpt-6.1-terra high at e868b4e: FAIL (a forwarded note starting with `-` became an invalid dispatch argument), fixed by note-equals | - | workspace QA 24/24 |
 
 Codex was enabled with `RPG_FACTORY_AGENTS=claude,codex` while `codex-detect` was in progress; from then on every
 review is cross-model. After `codex-detect` the pipeline routes Codex on this machine without the override.

@@ -156,10 +156,6 @@ From plan ci-backlog (`docs/plans/ci-backlog/report.md`):
 - The Windows `python3` alias line of `dispatch` does not appear when the run lead itself runs through a shim (the
   shim hides the alias), so the run lead still adds a `--note` for it. Detect the alias by probing the WindowsApps
   path, not only `shutil.which`.
-- `dispatch` renders a lead's `--note` as ` --note <quoted>`; a one-word note starting with `-` is then rejected by
-  argparse. Render `--note=<quoted>`.
-- `tests/pipeline.test.sh` unsets `RPG_FACTORY_SESSION_NOTE` only before the new cases; unset it beside the other
-  environment exports so a caller's note cannot leak into the whole suite.
 - `scripts/lib/pipeline_route.py` repeats the `CODEX_HOME` resolution and TOML load of `scripts/lib/codexconfig.py`;
   reuse it.
 
