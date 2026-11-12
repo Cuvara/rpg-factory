@@ -666,6 +666,32 @@ out=$(AFF_CALLS="$TMP/aff-calls" CASES_FAIL=1 cache_plan --no-reuse --affected);
 calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
 [ "$rc" = 0 ] && [[ "$calls" == 'cases select '* ]] && [ "$log" = 'b ' ] \
   && good "--affected falls back to per-suite select when the cases call fails" || no "--affected cases fallback: '$calls' log '$log'" "$out"
+# --inline-only: --affected with an empty changed list. No suite and no gated script runs (each counts as not
+# affected, affected.py is never asked), the inline checks still print, and it is a targeted run (no full-run record).
+for j in 1 3; do
+  reset_cache; : > "$TMP/aff-calls"
+  out=$(AFF_CALLS="$TMP/aff-calls" NO_BASE=1 SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh WITH_LIVE=1 WITH_WS=1 cache_plan --no-reuse -j "$j" --inline-only); rc=$?
+  calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(cat "$RUN_LOG")
+  [ "$rc" = 0 ] && [ -z "$log" ] && [ -z "$calls" ] && grep -q '^inline-only mode' <<<"$out" && ! grep -q 'no base' <<<"$out" \
+    && grep -q '^PASS  block cheap' <<<"$out" && grep -qx 'counts 1 0 7' <<<"$out" && ! grep -q '^PASS  a\b' <<<"$out" \
+    && [ ! -f "$TMP/state/run-all/$tree.json" ] && [ ! -d "$TMP/state/locks/run-all-full" ] && [ -z "$(ls -A "$SL")" ] \
+    && good "--inline-only runs no suite, counts every suite and gated script as not affected, prints inline checks (-j $j)" \
+    || no "--inline-only (-j $j): rc $rc log '$log' calls '$calls'" "$out"
+done
+conflicts_ok=true
+for a in '--affected' '--base main' '--only-suites tests/a.sh' '--only-suites=tests/a.sh' '--release' '--workspace-only' '--list-suites' '--base main --affected'; do
+  for order in 'before' 'after'; do
+    # shellcheck disable=SC2086
+    if [ "$order" = before ]; then out=$(cache_plan --inline-only $a 2>&1); rc=$?; else out=$(cache_plan $a --inline-only 2>&1); rc=$?; fi
+    [ "$rc" = 2 ] && grep -q 'run-all: --inline-only conflicts with ' <<<"$out" && ! grep -q '^PASS' <<<"$out" || { conflicts_ok=false; no "--inline-only $a ($order) exits 2 (rc $rc)" "$out"; }
+  done
+done
+$conflicts_ok && good '--inline-only conflicts with --affected, --base, --only-suites, --release, --workspace-only and --list-suites (exit 2, either order)'
+mkdir -p "$SL/1"; printf '%s\n' "$$" > "$SL/1/pid"; printf 'another checkout\n' > "$SL/1/checkout"
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --inline-only --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (1 in use:' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good '--inline-only takes a test slot (busy slot: exit 3 with --no-wait) and no full-run lock' || no '--inline-only test slot' "$out"
+rm -rf "$SL/1"
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh

@@ -1,0 +1,22 @@
+# Suites that also run on windows-2025 in CI (one suite path per line; '#' comments and blank lines are ignored).
+# Every suite runs on ubuntu-24.04; list a suite here only when its result depends on the OS. A line must be a suite
+# `tests/run-all.sh --list-suites --no-workspace --no-claude` prints (scripts/ci-plan.py exits 2 otherwise).
+
+# Hook guards: command parsing, path handling and quoting differ between Git Bash and Linux
+tests/git-guard.test.sh
+tests/file-guard.test.sh
+tests/git-env-isolation.test.sh
+
+# Check runner and worktrees: temp dirs, copies of a repo, path forms (C:/ versus /c/) and the shared .git/config
+tests/run-checks.test.sh
+tests/worktree.test.sh
+tests/worktree-target.test.sh
+
+# Shell and path portability layer, and hook latency (process start cost differs on Windows)
+tests/compat.test.sh
+tests/hook-perf.test.sh
+
+# Scaffolding copies, install detection and the per-session state dir: path forms and file modes differ on Windows
+tests/new-skill.test.sh
+tests/install-status.test.sh
+tests/session-state.test.sh
