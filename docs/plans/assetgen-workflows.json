@@ -9,7 +9,7 @@
   "repos": {
     "plugin": {
       "path": "../..",
-      "base": "feat/delivery/pipelining"
+      "base": "feat/assetgen/v2-core"
     }
   },
   "tasks": [
