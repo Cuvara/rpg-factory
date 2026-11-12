@@ -40,12 +40,11 @@ Request body:
 
 ## Conclusion
 
-- The gateway ignores `n` greater than 1 for this model: `n=2` returned one image. A node-level `n` input would buy
-  nothing, so the optional node-`n` item stays out of the backlog (or is closed as not worth it). `backlog.md` is not
-  edited here.
-- Batch variants must be separate calls (separate seeds or prompts).
-- The returned size can differ from the requested one (1254x1254 for a 1024x1024 request), so downstream image QA
-  must read the real size from the file, not trust the requested one.
+- Decision: the gateway ignored `n` greater than 1 (observed once, model `cx/gpt-5.6-sol-image`: `n=2` returned one
+  image), so the optional node `n` parameter is dropped and is not added to the backlog.
+- Batch variants are separate calls (separate seeds or prompts).
+- Image QA reads the real returned size from the file, never the requested one (the probe returned 1254x1254 for a
+  1024x1024 request).
 
 ## Limitations
 
