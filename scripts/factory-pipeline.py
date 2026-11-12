@@ -1532,6 +1532,48 @@ def with_test_env(prompt):
     return prompt + ("" if prompt.endswith("\n") else "\n") + line + ("\n" if prompt.endswith("\n") else "")
 
 
+def session_notes(a):
+    """Normalize and deduplicate dispatch notes in their original order."""
+    notes = []
+    for raw in a.note:
+        note = " ".join(raw.split())
+        if not note:
+            die("--note needs a TEXT")
+        if note not in notes:
+            notes.append(note)
+    env_note = " ".join(os.environ.get("RPG_FACTORY_SESSION_NOTE", "").split())
+    if env_note and env_note not in notes:
+        notes.append(env_note)
+    return notes
+
+
+def python_alias_line(platform=None, which=None, exe=None):
+    """Describe the Windows Store python3 alias when it is on PATH."""
+    platform = sys.platform if platform is None else platform
+    which = shutil.which if which is None else which
+    exe = sys.executable if exe is None else exe
+    path = which("python3") if platform == "win32" else None
+    if not path or not any(part.lower() == "windowsapps" for part in re.split(r"[/\\]", path)[:-1]):
+        return ""
+    return (f"Python: python3 here is the Microsoft Store alias ({path}), which does not run: run Python as "
+            f"{shlex.quote(exe)} (the interpreter that runs dispatch) or put a python3 shim to it first on PATH.")
+
+
+def session_lines(a):
+    """Return the lines to append to a dispatch spec."""
+    lines = [f"Session note: {note}" for note in session_notes(a)]
+    alias = python_alias_line()
+    return lines + ([alias] if alias else [])
+
+
+def with_session_lines(a, prompt):
+    """Append session lines, preserving the prompt's trailing newline."""
+    lines = session_lines(a)
+    if not lines:
+        return prompt
+    return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
+
+
 def base_health_hint(info, spec):
     """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
     git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
@@ -1547,18 +1589,19 @@ def base_health_hint(info, spec):
     return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
+    note_args = "".join(f" --note {orca_cmd.quote([note])}" for note in (notes or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
              f"{orca_cmd.CHILD_RULE.split(';')[0]}." if info["worktrees"] else
              "placement is always shared here (no worktree).")
     rules = [
-        f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}`.",
+        f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}{note_args}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
         "below is its worker (Orca allows no nested workers). Outside an Orca session: --runner agent; inside Orca with "
         "the runtime unreachable: --runner agent --orca-unavailable REASON.",
@@ -1590,6 +1633,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
          "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
+        "9. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch." if notes else None,
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
@@ -1782,6 +1826,7 @@ SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/deliver
 
 
 def cmd_dispatch(a, reg):
+    session_notes(a)  # reject empty --note even when no spec is written
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -1843,7 +1888,7 @@ def cmd_dispatch(a, reg):
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
-        prompt = with_test_env(prompt)
+        prompt = with_session_lines(a, with_test_env(prompt))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1917,7 +1962,8 @@ def cmd_dispatch(a, reg):
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
-                             subagent_rule(a, reg, "lead", lead))
+                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
+        prompt = with_session_lines(a, prompt)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
@@ -1998,7 +2044,7 @@ def cmd_dispatch(a, reg):
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt = with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks)
+        prompt = with_session_lines(a, with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks))
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -2045,7 +2091,7 @@ def cmd_dispatch(a, reg):
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
-        prompt = with_test_env(prompt)
+        prompt = with_session_lines(a, with_test_env(prompt))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
@@ -2091,6 +2137,7 @@ def cmd_dispatch(a, reg):
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
+    prompt = with_session_lines(a, prompt)
     started = emit(a, reg, agent, prompt, place, title, plan, role=review_role(grade))
     full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     sha = full if rc == 0 and full else a.sha
@@ -4104,6 +4151,7 @@ def main():
             d.add_argument("--placement", choices=PLACEMENTS)
             d.add_argument("--subplan")
             d.add_argument("--subtask")
+            d.add_argument("--note", action="append", default=[], metavar="TEXT")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
