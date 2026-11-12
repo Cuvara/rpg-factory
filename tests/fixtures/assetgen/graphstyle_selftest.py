@@ -3,8 +3,9 @@
 The clean fixture tests/fixtures/assetgen/graph-style/clean.json passes every rule; for each rule a mutated copy fails
 with a violation that starts with the rule id and names the node (`node <id> (<class_type>`) or the group
 (`group "<title>"`). The UI form is the clean template laid out by uiworkflow.to_ui as render writes workflow.ui.json
-(placeholders filled, filename_prefix assetgen/<run_id>-final, extra.assetgen.run_id), then mutated. No file is
-written, no network. Prints 'ok N - <name>' or 'not ok N - <name>' per case and exits 1 when any case fails.
+(placeholders filled, filename_prefix assetgen/<run_id>-final, extra.assetgen.run_id), then mutated. Style-lock
+anchor nodes obey the title and group rules like every node; the render cases add them with assetgen.wire_references
+and lay them out through assetgen.ui_with_references (References group). No file is written, no network. Prints 'ok N - <name>' or 'not ok N - <name>' per case and exits 1 when any case fails.
 """
 import copy
 import glob
@@ -470,31 +471,124 @@ def _():
     no_rule(graphstyle.ui_violations(ui, KNOWN), "load-image")
 
 
-def anchored_graph(image_name):
-    """The rendered clean graph plus what render's wire_references adds for one style-lock anchor: a LoadImage of
-    anchor-<id>.png and an ImageBatch feeding NineRouterImage.reference_images (no group, here also no title)."""
+def anchored_graph(image_name, titled=False):
+    """The rendered clean graph plus style-lock reference nodes like render's wire_references adds: a LoadImage of
+    image_name and two ImageBatch nodes feeding NineRouterImage.reference_images; titled or not, in no group."""
     graph = render_graph(template())
     graph["7"] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
     graph["8"] = {"class_type": "ImageBatch", "inputs": {"image1": ["2", 0], "image2": ["7", 0]}}
     graph["9"] = {"class_type": "ImageBatch", "inputs": {"image1": ["8", 0], "image2": ["7", 0]}}
+    if titled:
+        for nid, title in (("7", "Anchor a-canon (strong)"), ("8", "Reference batch 1"), ("9", "Reference batch 2")):
+            graph[nid]["_meta"] = {"title": title}
     graph["3"]["inputs"]["reference_images"] = ["9", 0]
     return graph
 
 
-@case("UI: render-added anchor LoadImage/ImageBatch nodes are exempt from the title and group rules")
+ANCHOR_NODES = ((7, "LoadImage"), (8, "ImageBatch"), (9, "ImageBatch"))
+
+
+def with_references(data, ids):
+    """The template with ids added to its References group (as render's ui_with_references does)."""
+    data = copy.deepcopy(data)
+    group = next(g for g in data["ui"]["groups"] if g["title"] == "References")
+    group["nodes"] = group["nodes"] + list(ids)
+    return data
+
+
+@case("UI: no exemption by file name: ungrouped, untitled anchor-<id>.png LoadImage/ImageBatch nodes FAIL title and group, naming each")
 def _():
     ui = ui_form(graph=anchored_graph("anchor-a-canon.png"))
-    assert not any(inside(node(ui, n), g) for n in (7, 8, 9) for g in ui["groups"]), "anchor nodes laid out in a group"
+    assert not any(inside(node(ui, n), g) for n, _ in ANCHOR_NODES for g in ui["groups"]), "anchor nodes laid out in a group"
+    violations = graphstyle.ui_violations(ui, KNOWN)
+    for nid, ctype in ANCHOR_NODES:
+        rule(violations, "group", "node %d (%s" % (nid, ctype))
+        rule(violations, "title", "node %d (%s" % (nid, ctype))
+
+
+@case("UI: titled anchor nodes outside every group FAIL group only, naming each")
+def _():
+    violations = graphstyle.ui_violations(ui_form(graph=anchored_graph("anchor-a-canon.png", titled=True)), KNOWN)
+    for nid, ctype in ANCHOR_NODES:
+        rule(violations, "group", "node %d (%s" % (nid, ctype))
+    no_rule(violations, "title")
+
+
+@case("UI: an untitled anchor-named LoadImage inside the References group FAILS title, naming it")
+def _():
+    graph = anchored_graph("anchor-a-canon.png", titled=True)
+    del graph["7"]["_meta"]
+    ui = ui_form(with_references(template(), ["7", "8", "9"]), graph=graph)
+    assert all(inside(node(ui, n), group(ui, "References")) for n, _ in ANCHOR_NODES)
+    violations = graphstyle.ui_violations(ui, KNOWN)
+    hits = rule(violations, "title", "node 7 (LoadImage")
+    assert len(hits) == 1, hits
+    no_rule(violations, "group")
+
+
+@case("UI: titled anchor nodes inside the References group PASS")
+def _():
+    ui = ui_form(with_references(template(), ["7", "8", "9"]), graph=anchored_graph("anchor-a-canon.png", titled=True))
+    assert all(inside(node(ui, n), group(ui, "References")) for n, _ in ANCHOR_NODES)
     assert graphstyle.ui_violations(ui, KNOWN) == []
 
 
-@case("UI: the same nodes without an anchor-<id>.png image are not exempt (title and group FAIL, naming them)")
+def rendered_anchors(data):
+    """(graph, ui block) as render builds them: the filled template plus wire_references' anchor nodes, and the
+    template ui through assetgen.ui_with_references."""
+    import assetgen
+    graph = render_graph(data)
+    assert assetgen.wire_references(graph, [{"anchor_id": "a-canon", "strength": "strong"},
+                                            {"anchor_id": "b-pose", "strength": "medium"}]) == []
+    return graph, assetgen.ui_with_references(data.get("ui"), graph, data["workflow"])
+
+
+@case("render ui_with_references: anchor nodes join the template's References group (copy, template unchanged) and PASS")
 def _():
-    ui = ui_form(graph=anchored_graph("other.png"))
-    violations = graphstyle.ui_violations(ui, KNOWN)
-    for nid, ctype in ((7, "LoadImage"), (8, "ImageBatch"), (9, "ImageBatch")):
-        rule(violations, "group", "node %d (%s" % (nid, ctype))
-        rule(violations, "title", "node %d (%s" % (nid, ctype))
+    data = template()
+    before = copy.deepcopy(data)
+    graph, ui_block = rendered_anchors(data)
+    assert data == before, "ui_with_references changed the template data"
+    added = sorted(set(graph) - set(data["workflow"]), key=int)
+    assert added == ["7", "8", "9", "10"], added
+    assert group({"groups": ui_block["groups"]}, "References")["nodes"] == ["2"] + added, ui_block["groups"]
+    assert ui_block["notes"] == data["ui"]["notes"], "an existing References group gets no extra Note"
+    ui = uiworkflow.to_ui(graph, KNOWN, {"assetgen": {"run_id": RUN_ID}}, ui_block)
+    assert all(inside(node(ui, int(n)), group(ui, "References")) for n in added)
+    assert graphstyle.ui_violations(ui, KNOWN) == []
+
+
+@case("render ui_with_references: without a References group a new one (with a Note) goes after Prompt and PASSES")
+def _():
+    def no_refs(d):
+        d["workflow"]["3"]["inputs"].pop("reference_images")
+        del d["workflow"]["2"]
+        del d["params"]["reference_image"]
+        d["ui"]["groups"] = [g for g in d["ui"]["groups"] if g["title"] != "References"]
+        d["ui"]["notes"] = [n for n in d["ui"]["notes"] if n["group"] != "References"]
+    data = template(no_refs)
+    assert graphstyle.template_violations(data, KNOWN) == []
+    graph, ui_block = rendered_anchors(data)
+    titles = [g["title"] for g in ui_block["groups"]]
+    assert titles == ["Prompt", "References", "Generate", "Post-process", "Output"], titles
+    refs = group({"groups": ui_block["groups"]}, "References")
+    assert refs["nodes"] == sorted(set(graph) - set(data["workflow"]), key=int) and refs["color"] in uiworkflow.PALETTE, refs
+    assert [n for n in ui_block["notes"] if n["group"] == "References"], ui_block["notes"]
+    assert [g["title"] for g in data["ui"]["groups"]] == ["Prompt", "Generate", "Post-process", "Output"]
+    ui = uiworkflow.to_ui(graph, KNOWN, {"assetgen": {"run_id": RUN_ID}}, ui_block)
+    assert graphstyle.ui_violations(ui, KNOWN) == []
+
+
+@case("render ui_with_references: a legacy ui (none, or no groups) and a graph without added nodes come back as is")
+def _():
+    import assetgen
+    graph = render_graph(template())
+    wf = template()["workflow"]
+    assert assetgen.ui_with_references(None, graph, wf) is None
+    legacy = {"notes": []}
+    assert assetgen.ui_with_references(legacy, dict(graph, **{"99": {}}), wf) is legacy
+    ui_block = template()["ui"]
+    assert assetgen.ui_with_references(ui_block, graph, wf) is ui_block
 
 
 @case("UI: a MarkdownNote counts as a group's note")

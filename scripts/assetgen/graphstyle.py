@@ -22,13 +22,14 @@ Two forms are checked:
       the {{prompt}} placeholder: literal text or another placeholder ({{model}}) is a prompt violation naming the
       source and the NineRouterImage node.
   ui_violations(ui_workflow, known, prefix=None) -> the same for a ComfyUI frontend workflow (a run's workflow.ui.json);
-      group membership is geometric (the node's rect, title bar included, inside the group's bounding). Style-lock
-      reference nodes render adds (LoadImage anchor-<id>.png and the ImageBatch chain they feed) are exempt from the
-      title and group rules; load-image is not checked (render fills it). The prompt source's value is the filled
-      prompt and is not checked here: gen-run-provenance compares workflow.json prompts with prompt.md. save-suffix
-      compares against the run prefix: the argument (callers pass the trusted assetgen/<run-id> of the run context:
-      graph-lint --run, the gen-run-workflow-style check), else assetgen/<extra.assetgen.run_id>; with neither, each
-      SaveImage is a save-suffix violation saying the run prefix is unknown (never a silent skip).
+      group membership is geometric (the node's rect, title bar included, inside the group's bounding). Every API
+      node obeys the title and group rules, the style-lock reference nodes render adds too (render titles them and
+      lays them into a References group); there is no exemption by file name. load-image is not checked (render
+      fills it). The prompt source's value is the filled prompt and is not checked here: gen-run-provenance compares
+      workflow.json prompts with prompt.md. save-suffix compares against the run prefix: the argument (callers pass
+      the trusted assetgen/<run-id> of the run context: graph-lint --run, the gen-run-workflow-style check), else
+      assetgen/<extra.assetgen.run_id>; with neither, each SaveImage is a save-suffix violation saying the run prefix
+      is unknown (never a silent skip).
   template_row / ui_row wrap them as one validation row {"path", "check": CHECK, "state", "reasons"}. A legacy
       template (no ui block, or a ui without groups) is WARN, never FAIL.
 Messages name a node as `node <id> (<class_type> "<title>")` and a group as `group "<title>"`. Nothing here reads
@@ -50,7 +51,6 @@ PROMPT_PARAM = "{{prompt}}"
 REVIEWED_PROMPT = re.compile(r"\{\{\s*prompt\s*\}\}")
 ANY_PLACEHOLDER = re.compile(r"\{\{[^{}]*\}\}")
 ONE_PLACEHOLDER = re.compile(r"\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
-ANCHOR_IMAGE = re.compile(r"^anchor-[A-Za-z0-9_.-]+\.png$")
 LEGACY = "legacy template without a ui block: the graph style is not enforced (see the staged templates)"
 
 
@@ -75,23 +75,19 @@ def _group(title):
     return 'group "%s"' % title
 
 
-def _check(nodes, groups, exempt):
+def _check(nodes, groups):
     """Shared rules over the normalized form.
     nodes: {id: {"type", "title", "inputs", "groups": [group titles] or None (no rect: cannot judge)}} (API nodes)
-    groups: [{"title", "x", "notes": int}]; exempt: ids exempt from the title and group rules."""
+    groups: [{"title", "x", "notes": int}]."""
     out = []
     ids = sorted(nodes, key=_sort_key)
     for nid in ids:
         node = nodes[nid]
-        if nid in exempt:
-            continue
         if not node["title"].strip():
             out.append("title: %s has no title" % _name(nodes, nid))
         elif node["title"] == node["type"]:
             out.append("title: %s has its class name as title; name what it does" % _name(nodes, nid))
     for nid in ids:
-        if nid in exempt:
-            continue
         member = nodes[nid]["groups"]
         if member is None:
             continue
@@ -182,7 +178,7 @@ def template_violations(data, known):
     xs = {g["title"]: g["bounding"][0] for g in laid["groups"]}
     groups = [{"title": g["title"], "x": xs.get(g["title"], 0),
                "notes": sum(1 for n in ui_notes if n["group"] == g["title"])} for g in ui_groups]
-    out = _check(nodes, groups, set())
+    out = _check(nodes, groups)
     for nid in sorted(nodes, key=_sort_key):
         link = nodes[nid]["inputs"].get("user_prompt") if nodes[nid]["type"] == IMAGE_NODE else None
         if not (_is_link(link) and link[0] in nodes and nodes[link[0]]["type"] == PROMPT_NODE):
@@ -308,18 +304,7 @@ def ui_violations(ui_workflow, known, prefix=None):
             inputs[socket["name"]] = [src, slot]
         member = None if rect is None else [b["title"] for b in boxes if _inside(rect, b["box"])]
         nodes[nid] = {"type": ntype, "title": title, "inputs": inputs, "groups": member}
-    exempt = {nid for nid, n in nodes.items()
-              if n["type"] == "LoadImage" and isinstance(n["inputs"].get("image"), str)
-              and ANCHOR_IMAGE.match(n["inputs"]["image"])}
-    grew = True
-    while grew:
-        grew = False
-        for nid, n in nodes.items():
-            if nid not in exempt and n["type"] == "ImageBatch" and any(
-                    _is_link(v) and v[0] in exempt for v in n["inputs"].values()):
-                exempt.add(nid)
-                grew = True
-    out += _check(nodes, boxes, exempt)
+    out += _check(nodes, boxes)
     if prefix is None:
         extra = ui_workflow.get("extra")
         meta = extra.get("assetgen") if isinstance(extra, dict) else None
