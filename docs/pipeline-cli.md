@@ -42,6 +42,10 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 
 ## dispatch
 
+- `--note TEXT` is repeatable; `RPG_FACTORY_SESSION_NOTE` supplies one additional note. Dispatch appends each as a
+  `Session note: <text>` line to every spec kind, collapsing whitespace and dropping duplicates. The lead's
+  `<dispatch>` carries them on to its sessions. On win32, when `python3` resolves into WindowsApps, the spec also
+  explains how to use the dispatch interpreter or a `python3` shim instead of the Microsoft Store alias.
 - `dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca` prints the task-lead
   handoff. A new task worktree: `git worktree add --no-track -b <branch> <path> <base>` (beside the checkout that has
   the plan `topic` checked out, else beside the repo checkout), the `orca worktree set` lineage line of delivery.md
