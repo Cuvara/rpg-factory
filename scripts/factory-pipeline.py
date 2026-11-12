@@ -1555,11 +1555,11 @@ def python_alias_line(platform=None, which=None, exe=None):
     path = which("python3") if platform == "win32" else None
     if not path or not any(part.lower() == "windowsapps" for part in re.split(r"[/\\]", path)[:-1]):
         return ""
-    return (f"Python: python3 here is the Microsoft Store alias ({path}), which does not run: run Python as "
+    return (f"Python: python3 here is likely the Microsoft Store alias ({path}), which may not run: run Python as "
             f"{shlex.quote(exe)} (the interpreter that runs dispatch) or put a python3 shim to it first on PATH.")
 
 
-def session_lines(a):
+def spec_session_lines(a):
     """Return the lines to append to a dispatch spec."""
     lines = [f"Session note: {note}" for note in session_notes(a)]
     alias = python_alias_line()
@@ -1568,7 +1568,7 @@ def session_lines(a):
 
 def with_session_lines(a, prompt):
     """Append session lines, preserving the prompt's trailing newline."""
-    lines = session_lines(a)
+    lines = spec_session_lines(a)
     if not lines:
         return prompt
     return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")

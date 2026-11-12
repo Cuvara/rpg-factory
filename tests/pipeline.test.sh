@@ -1941,9 +1941,10 @@ for phase in 'review --sha abc1234' 'qa --sha abc1234'; do
   RPG_FACTORY_SESSION_NOTE='env note' expect_spec "$phase spec: environment session note" '^Session note: env note$' dispatch "$TOOL" --task t --phase $phase --runner orca
 done
 RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note one --note 'two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE='env note' expect_spec "lead spec: dispatch forwards environment note" "<dispatch>.* --note one --note 'env note'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one
 RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
 RPG_FACTORY_SESSION_NOTE= expect "dispatch: empty session note is rejected" 2 - dispatch "$TOOL" --task t --phase implement --runner orca --note ''
-if python3 - "$ROOT" <<'PY'
+if python3 -B - "$ROOT" <<'PY'
 import importlib.util, shlex, sys
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -1951,7 +1952,7 @@ alias = r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
 exe = r'C:\Py\python.exe'
 which = lambda n: alias
 line = m.python_alias_line('win32', which, exe)
-assert line.startswith('Python: python3 here is the Microsoft Store alias') and alias in line and shlex.quote(exe) in line
+assert line.startswith('Python: python3 here is likely the Microsoft Store alias') and alias in line and shlex.quote(exe) in line
 assert m.python_alias_line('linux', which, exe) == ''
 assert m.python_alias_line('win32', lambda n: r'C:\Py\python3.exe', exe) == ''
 assert m.python_alias_line('win32', lambda n: None, exe) == ''
