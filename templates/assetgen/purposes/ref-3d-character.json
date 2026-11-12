@@ -1,0 +1,78 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "3D character reference sheet",
+ "description": "Orthographic character model sheet (front, side and back in an A-pose or T-pose) with readable face and hands, for 3D character modelling.",
+ "handoff_domain": "art3d",
+ "default_template": "staged-turnaround",
+ "default_family": "characters",
+ "dimensions": [
+  "shape",
+  "palette",
+  "line"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1536x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Ask for a character model sheet: front, side and back views of one character side by side on one compact landscape sheet (about 3:2, the requested size).",
+   "One neutral A-pose or T-pose, identical in every view; arms held clear of the body so the silhouette and the hands read.",
+   "Give the face and hands enough pixels to model from: a readable face in the front view, open hands with distinct fingers.",
+   "Same scale and aligned baselines in every view; each view fills most of the sheet height, never a long thin strip of small figures.",
+   "Neutral lighting: flat, even light on a plain light neutral background, no cast shadows, no perspective."
+  ],
+  "must_include": [
+   "character model sheet",
+   "front side back",
+   "A-pose or T-pose",
+   "orthographic",
+   "neutral lighting"
+  ],
+  "avoid": [
+   "perspective",
+   "dramatic lighting",
+   "action pose",
+   "hands hidden or cropped",
+   "cropped views",
+   "text labels",
+   "long thin strip of small views"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt fixes orthographic views, one A-pose or T-pose and scale consistency.",
+  "The prompt asks for a readable face and clearly separated fingers."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "Front, side and back views are present and consistent in proportions, costume and pose.",
+  "Views share scale and baseline; no perspective distortion.",
+  "The face and both hands are visible and detailed enough to model from (distinct fingers)."
+ ],
+ "constraints": {
+  "lighting": "Flat, even neutral lighting with no cast shadows, rim light or dramatic key light.",
+  "background": "Plain light neutral background."
+ },
+ "qa": {
+  "size": {
+   "mode": "orientation",
+   "orientation": "landscape",
+   "allow_swap": false,
+   "min_side": 512,
+   "min_pixels": 1000000
+  },
+  "alpha": "any",
+  "not_blank": {
+   "min_stddev": 4.0
+  }
+ }
+}
