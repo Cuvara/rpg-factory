@@ -133,12 +133,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   report NOT_RUN or fail with `jq: command not found` until a PATH shim was used. Make `doctor` name both.
 - The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
   `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
-- Codex availability: `scripts/lib/pipeline_route.py` marks Codex unavailable when `orca account list` shows no Codex
-  account and no system auth (`hasAuth: false`), but a Codex CLI that runs on an API key is fine. Detect the key
-  (`OPENAI_API_KEY` in the environment) or fall back to a probe before marking it down; until then
-  `RPG_FACTORY_AGENTS=claude,codex` overrides the detection. Seen on the second machine: every review was
-  `SAME_MODEL` until the override, and the Codex cross-model reviews then found three real P2 defects in
-  `lead-report` that the Claude reviews had missed.
 - `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
   checks-lows, after ci-coverage) then shows nine foreign files as scope findings (a false FAIL). Use the task's
   recorded base or the integration base it merged.
@@ -152,19 +146,24 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
-### ci-matrix-followups
+### ci-backlog-followups
 
-Open follow-ups from plan ci-matrix (`docs/plans/ci-matrix/report.md`, section "Follow-ups"); plan ci-followups
-covered the rest:
+From plan ci-backlog (`docs/plans/ci-backlog/report.md`):
 
-- `skills/delivery/references/delivery.md` is near its 32 KiB cap (`tests/delivery-generic.test.sh`); the next policy
-  addition needs a split or a trim.
-- Windows workers: `python3` in Git Bash is the Microsoft Store stub, and the run lead still adds a `python3` shim
-  note to each worker prompt by hand.
-- `factory-pipeline.py dispatch` has no option to carry a free-form session note (the `python3` shim, "Codex
-  unavailable") into the worker specs, so the run lead adds it to each start prompt by hand.
+- `tests/routing.test.sh` defaults the workspace to the WSL form of the workspace path, so on Git Bash for Windows it
+  fails unless `RPG_FACTORY_WORKSPACE` is exported (two task QA runs failed on it). Default by platform, or skip with
+  a clear message when the workspace markers are missing.
+- The Windows `python3` alias line of `dispatch` does not appear when the run lead itself runs through a shim (the
+  shim hides the alias), so the run lead still adds a `--note` for it. Detect the alias by probing the WindowsApps
+  path, not only `shutil.which`.
+- `scripts/lib/pipeline_route.py` repeats the `CODEX_HOME` resolution and TOML load of `scripts/lib/codexconfig.py`;
+  reuse it.
 
 ## Covered
+
+- **ci-matrix-followups** and the Codex availability item of plugin-flow-5-followups: shipped in plans ci-followups
+  (`changelog.d/ci-cases.md`, `changelog.d/pipeline-followups.md`, `changelog.d/orca-wait-stall.md`) and ci-backlog
+  (`changelog.d/dispatch-notes.md`, `changelog.d/codex-detect.md`, delivery.md trimmed to 1582 bytes under its cap).
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,
   per-candidate verdict records): shipped in plan plugin-flow (`changelog.d/child-worktrees.md`).

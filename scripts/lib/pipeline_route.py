@@ -114,15 +114,50 @@ def mark(plan, agent, reason=None):
 _cache = {}
 
 
+def _codex_config_path():
+    home = os.environ.get('CODEX_HOME')
+    return (Path(home) if home else Path.home() / '.codex') / 'config.toml'
+
+
+def _codex_auth():
+    if os.environ.get('OPENAI_API_KEY'):
+        return 'OPENAI_API_KEY set'
+    try:
+        import tomllib
+    except ImportError:
+        return None
+    try:
+        with _codex_config_path().open('rb') as config:
+            data = tomllib.load(config)
+        provider = data.get('model_provider')
+        providers = data.get('model_providers')
+        if isinstance(provider, str) and provider != 'openai' and isinstance(providers, dict):
+            details = providers.get(provider)
+            if isinstance(details, dict) and isinstance(details.get('base_url'), str) and details['base_url']:
+                return 'codex API provider ' + provider + ' in config.toml'
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, TypeError, AttributeError):
+        pass
+    return None
+
+
 def available(pipe, plan):
     """plan None (the planner): no per-run marks."""
     path = marks_path(plan) if plan is not None else None
     # content, not mtime: two writes within the timer resolution (Windows) share an mtime
     stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
-    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'), os.environ.get('PATH'), stamp)
+    override = os.environ.get('RPG_FACTORY_AGENTS')
+    config_stamp = None
+    if override is None:
+        try:
+            stat = _codex_config_path().stat()
+            config_stamp = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            pass
+    key = (id(pipe), plan.get('id') if plan is not None else None, override, os.environ.get('PATH'), stamp,
+           os.environ.get('CODEX_HOME') if override is None else None,
+           bool(os.environ.get('OPENAI_API_KEY')) if override is None else None, config_stamp)
     if key in _cache:
         return _cache[key]
-    override = os.environ.get('RPG_FACTORY_AGENTS')
     chosen = {x.strip() for x in override.split(',')} if override is not None else None
     out = {}
     candidates = pipe.get('available_agents', list(pipe['agents']))
@@ -144,7 +179,9 @@ def available(pipe, plan):
                 if (isinstance(row, dict) and row.get('accounts') == []
                         and isinstance(row.get('systemDefault'), dict)
                         and row['systemDefault'].get('hasAuth') is False):
-                    out[agent] = {'available': False, 'why': 'Orca account unavailable'}
+                    reason = _codex_auth() if agent == 'codex' and out[agent]['available'] else None
+                    out[agent] = ({'available': True, 'why': reason} if reason else
+                                  {'available': False, 'why': 'Orca account unavailable'})
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             pass
     for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
