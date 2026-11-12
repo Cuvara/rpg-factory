@@ -152,6 +152,26 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
+### ci-matrix-followups
+
+From plan `ci-matrix` (`docs/plans/ci-matrix/report.md`):
+
+- The CI suite job runs every case of a selected suite: `tests/run-all.sh --only-suites` has no case subset, so the
+  cases `scripts/ci-plan.py` plans are only shown. Add a run-all option for an only-suites case subset and pass it
+  from `.github/workflows/tests.yml`.
+- `workflow_dispatch` with `full=false` has no base, so it plans every suite like `full=true`; give it a base input or
+  drop the option.
+- `tests/pipeline.test.sh` asserts only the integration QA clause of the new CI wording, not the task QA clause.
+- `skills/delivery/references/delivery.md` has about 200 bytes left under its 32 KiB cap; the next policy addition
+  needs a split or a trim.
+- Worker sessions on Windows need `RPG_FACTORY_WORKSPACE` set and a real `python3` (the Store alias fails): two tier
+  runs of this plan failed on that alone. The dispatch specs could carry the workspace from the run lead's
+  environment.
+- A stderr line of `dispatch` must not contain quote characters while the `pp_spec` test helper shlex-splits the
+  combined output; make the helper robust or the rule general.
+- `scripts/orca-wait.sh --stall-ms 0` reports an immediate stall instead of disabling the check (seen by the
+  ci-plan task lead).
+
 ## Covered
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,
