@@ -9,8 +9,29 @@ Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standal
 The QA tiers table of `skills/delivery/references/delivery.md` (section 10, "QA tiers"; registry `pipeline.qa_tiers`)
 names the command of each tier. In short: a task runs `tests/run-all.sh --affected --base <base> -j 2` or its own
 suites with `--only-suites`; integration QA before a PR runs `tests/run-all.sh --workspace-only`; CI
-(`.github/workflows/tests.yml`, `--no-workspace --no-claude`) is the full-suite gate; `tests/run-all.sh --release` and
-`tests/dogfood.sh --installed` run only for a release. The rules behind those commands follow.
+runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite, `--no-workspace --no-claude`)
+and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single required check
+(`.github/workflows/tests.yml`, section "CI" below); `tests/run-all.sh --release` and `tests/dogfood.sh --installed`
+run only for a release. The rules behind those commands follow.
+
+## CI
+
+`.github/workflows/tests.yml` plans first, then runs:
+
+- The `plan` job runs `scripts/ci-plan.py`, which calls `tests/affected.py cases` once and emits one matrix job per
+  `{suite, os}`.
+- Anything unsure plans every suite: a CI plumbing change (`.github/workflows/**`, `.github/actions/**`,
+  `tests/run-all.sh`, `tests/affected.py`, `scripts/ci-plan.py`, `tests/ci-windows-suites.txt`), no or an unusable
+  base, or a `schedule` event. `workflow_dispatch` with `full=false` has no base, so it also plans every suite;
+  `full=true` (the default) plans every suite on purpose.
+- Every suite runs on ubuntu-24.04, and also on windows-2025 when `tests/ci-windows-suites.txt` lists it (one suite
+  path per line, `#` comments). A line that is not a runnable suite makes `ci-plan.py` exit 2.
+- The inline checks run on both OSes through `tests/run-all.sh --inline-only`, even when no suite is selected.
+- A suite job runs every case of its suite: run-all has no case subset for `--only-suites` (a follow-up), so the
+  planned cases only show in the job summary.
+- `ci-ok` is the single required check, and branch protection must require only it. It fails on any failed or
+  cancelled job and passes when no suite is affected. The old `run-all (no workspace, <os>)` checks no longer exist.
+- `tests/ci-plan.test.sh` tests the plan.
 
 ## One full run per machine: the run-all lock
 
