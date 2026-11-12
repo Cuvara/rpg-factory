@@ -33,12 +33,14 @@ also recorded as spec.warnings); --verbose adds the source of every param, hint 
 
 Workflow style guide (scripts/assetgen/graphstyle.py): every API node has a title and sits in exactly one group;
 group titles come from Prompt, References, Generate, Post-process, Preview, Output, left to right in that order, each
-with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt;
-exactly one NineRouterImage; every SaveImage sits in Output with an inline filename suffix (intermediates use
-PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row per template (a legacy template
-without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer or standalone) or a ComfyUI
-frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json); --run RUN adds
-<run>/workflow.ui.json; neither: every core and game template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
+with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt (in a
+template that node holds {{prompt}}); exactly one NineRouterImage; every SaveImage sits in Output with an inline
+filename suffix (intermediates use PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row
+per template (a legacy template without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer
+or standalone) or a ComfyUI frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json);
+--run RUN adds <run>/workflow.ui.json with SaveImage suffixes checked against assetgen/<run directory name> (a frontend
+PATH uses its extra.assetgen.run_id; without one each SaveImage FAILs as unchecked); neither: every core and game
+template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
 2 for usage (a PATH missing, not JSON or neither kind, a --run without workflow.ui.json).
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
@@ -1501,7 +1503,8 @@ def read_graph_json(path, what):
 def graph_lint_rows(paths, run, authoring):
     """assetgen-graph-style rows of graph-lint: each PATH (a template file or a ComfyUI frontend workflow), the run's
     workflow.ui.json, or with neither every core and game template. Exits 2 for a PATH that is missing, not JSON or
-    neither kind, and for a --run without workflow.ui.json."""
+    neither kind, and for a --run without workflow.ui.json. The --run row checks SaveImage suffixes against the run's
+    own prefix (runfiles.run_filename_prefix of the run directory name), not the file's extra.assetgen.run_id."""
     known, rows = lint.known_nodes(), []
 
     def template(path):
@@ -1511,9 +1514,9 @@ def graph_lint_rows(paths, run, authoring):
             return {"path": shown, "check": graphstyle.CHECK, "state": "FAIL", "reasons": ["layout: " + err]}
         return graphstyle.template_row(data, known, shown) if isinstance(data, dict) else None
 
-    def frontend(path, raw):
+    def frontend(path, raw, prefix=None):
         if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
-            return graphstyle.ui_row(raw, known, lint.display(path, authoring))
+            return graphstyle.ui_row(raw, known, lint.display(path, authoring), prefix)
         return None
 
     for path in paths:
@@ -1525,7 +1528,8 @@ def graph_lint_rows(paths, run, authoring):
         rows.append(row)
     if run:
         path = os.path.join(run, "workflow.ui.json")
-        row = frontend(path, read_graph_json(path, "--run workflow.ui.json"))
+        prefix = runfiles.run_filename_prefix(os.path.basename(os.path.normpath(run)))
+        row = frontend(path, read_graph_json(path, "--run workflow.ui.json"), prefix)
         if row is None:
             fail("graph-lint: %s is not a ComfyUI frontend workflow (a JSON object with a \"nodes\" list)" % path, 2)
         rows.append(row)

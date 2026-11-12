@@ -61,7 +61,7 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
   gen-run-workflow-style
                        the quality plugin check workflow-style: the run's workflow.ui.json against the workflow style
                        guide (scripts/assetgen/graphstyle.py ui_violations, node types from
-                       scripts/assetgen/data/known-nodes.json). A first phase: every violation and an unreadable file
+                       scripts/assetgen/data/known-nodes.json, SaveImage suffixes against assetgen/<run_id>). A first phase: every violation and an unreadable file
                        are WARN, never FAIL, whatever the run status; no violation is PASS. A run directory without
                        workflow.ui.json gets no row.
 
@@ -464,13 +464,14 @@ def check(artifact, ctx):
     style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade)
     ui_file = resolve("workflow.ui.json")
     if ui_file is not None and ui_file.is_file():
-        grade("gen-run-workflow-style", [], warns=workflow_style_warnings(ui_file))
+        grade("gen-run-workflow-style", [], warns=workflow_style_warnings(ui_file, run_id or ui_file.parent.name))
     return results
 
 
-def workflow_style_warnings(ui_file):
+def workflow_style_warnings(ui_file, run_id):
     """The quality plugin check workflow-style: graphstyle.ui_violations of the run's workflow.ui.json, each a WARN
-    (never FAIL in this first phase, whatever the run status)."""
+    (never FAIL in this first phase, whatever the run status). SaveImage suffixes are checked against the prefix of
+    the run's run_id (assetgen/<run_id>), not the file's own extra.assetgen.run_id."""
     try:
         ui = json.loads(ui_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -480,7 +481,8 @@ def workflow_style_warnings(ui_file):
     except (OSError, ValueError, KeyError, TypeError):
         return ["scripts/assetgen/data/known-nodes.json is not readable; the workflow style is not checked"]
     try:
-        return list(engine("graphstyle").ui_violations(ui, known))
+        style = engine("graphstyle")
+        return list(style.ui_violations(ui, known, style.RUN_PREFIX + run_id))
     except Exception as exc:  # a quality check never crashes the run: a graphstyle bug is a WARN naming it
         return ["the workflow style check failed (%s: %s)" % (type(exc).__name__, exc)]
 
