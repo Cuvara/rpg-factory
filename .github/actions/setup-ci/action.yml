@@ -1,0 +1,42 @@
+# Shared runner setup for every job in .github/workflows/tests.yml. The calling job first runs its own
+# 'LF checkout' step (`git config --global core.autocrlf false`) and actions/checkout, because a composite action
+# cannot be used before the repository is checked out and the autocrlf setting must precede the checkout.
+name: setup-ci
+description: python3 on PATH, long temp path (Windows), git identity and defaults, tool versions
+
+runs:
+  using: composite
+  steps:
+    # A real python3.exe, not a bash shim: native Python subprocess calls (hooks, checks) must be able to run it.
+    - name: python3 on PATH (Windows runners ship python only)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        if ! command -v python3 >/dev/null 2>&1; then
+          dir=$(dirname "$(command -v python)")
+          cp "$dir/python.exe" "$dir/python3.exe"
+        fi
+        python3 -c "import sys; print(sys.executable)"
+
+    # The runner's default TEMP is an 8.3 short path (C:\Users\RUNNER~1\...), which git and Python expand
+    # differently. Use the long-named runner temp directory instead.
+    - name: Long temp path (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        t=$(cygpath -m "$RUNNER_TEMP")
+        { echo "TMPDIR=$t"; echo "TMP=$t"; echo "TEMP=$t"; } >> "$GITHUB_ENV"
+
+    - name: Git identity and defaults for test fixtures
+      shell: bash
+      run: |
+        git config --global user.email ci@example.invalid
+        git config --global user.name ci
+        git config --global init.defaultBranch main
+
+    - name: Tool versions
+      shell: bash
+      run: |
+        python3 --version
+        jq --version
+        git --version
