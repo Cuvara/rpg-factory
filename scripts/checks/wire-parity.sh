@@ -53,7 +53,7 @@ rc=0
 server_sha=$(tr -d '\r' < "$server_cs" | sha256sum | cut -c1-12)
 netcode_sha=$(tr -d '\r' < "$netcode_cs" | sha256sum | cut -c1-12)
 if cmp -s <(tr -d '\r' < "$server_cs") <(tr -d '\r' < "$netcode_cs"); then
-  echo "OK: Wire.cs identical ignoring CR ($(tr -d '\r' < "$server_cs" | wc -c) bytes, sha256 $server_sha)"
+  echo "OK: Wire.cs byte-identical ignoring CR ($(tr -d '\r' < "$server_cs" | wc -c) bytes, sha256 $server_sha)"
 else
   echo "FAIL: Netcode Wire.cs differs from server GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs (server sha256 $server_sha, netcode sha256 $netcode_sha)"
   echo "      fix: copy the server file over the Netcode file (no edits); Netcode CI job 'wire' enforces this"

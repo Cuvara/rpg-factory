@@ -24,11 +24,11 @@ git -C "$net" worktree add -qb candidate "$tmp/net candidate"
 printf 'wire-worktree\n' > "$tmp/net candidate/Runtime/Protocol/Generated/Wire.cs"
 candidate_wire() { ! bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$tmp/net candidate" --workspace "$tmp/ws" >"$tmp/parity.log" 2>&1 && grep -q 'FAIL: Netcode Wire.cs differs' "$tmp/parity.log" && grep -q "$(git -C "$tmp/net candidate" rev-parse HEAD)" "$tmp/parity.log"; }
 case_run 'explicit candidate mismatch reports tree SHA' candidate_wire
-main_wire() { bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$net" --workspace "$tmp/ws" >"$tmp/main.log" && grep -q '^OK: Wire.cs' "$tmp/main.log"; }
+main_wire() { bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$net" --workspace "$tmp/ws" >"$tmp/main.log" && grep -q '^OK: Wire.cs byte-identical' "$tmp/main.log"; }
 case_run 'main Netcode tree passes' main_wire
 git -C "$net" worktree add -qb crlf "$tmp/net crlf"
 printf 'wire-main\r\n' > "$tmp/net crlf/Runtime/Protocol/Generated/Wire.cs"
-crlf_wire() { bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$tmp/net crlf" >"$tmp/crlf.log" 2>&1 && grep -q '^OK: Wire.cs' "$tmp/crlf.log"; }
+crlf_wire() { bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$tmp/net crlf" >"$tmp/crlf.log" 2>&1 && grep -q '^OK: Wire.cs byte-identical' "$tmp/crlf.log"; }
 case_run 'matching CRLF Netcode tree passes' crlf_wire
 printf 'wire-different\r\n' > "$tmp/net crlf/Runtime/Protocol/Generated/Wire.cs"
 crlf_mismatch() { ! bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$tmp/net crlf" >"$tmp/crlf-mismatch.log" 2>&1 && grep -q '^FAIL: Netcode Wire.cs differs' "$tmp/crlf-mismatch.log"; }
