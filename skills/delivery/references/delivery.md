@@ -38,6 +38,8 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
    or prose-only: section 10 "QA tiers"); a FAIL goes to a fresh fix session, then one fresh re-verify session;
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
 6. records the verify verdict (`verdict --phase verify`) and its report (`factory-pipeline.py report`), then sends the status message to the run lead (section 3).
+A stacked task lead implements at once and verifies only when `status` clears it (section 4, "Stacked dependents");
+every task lead in a worktree repo runs `sync --send` after each new candidate.
 It never pushes, merges, tags or removes its worktree.
 
 <!-- policy:task-lead-claude -->
@@ -133,6 +135,28 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged: remove a child
   only after its branch is merged.
 
+### Stacked dependents
+
+<!-- policy:stacked-dispatch -->
+A dependent task with exactly one in-flight dependency starts from that dependency's tip as a sibling <topic>-<id> worktree, implements in parallel, never verifies before the dependency's review PASS SHA is in its HEAD, merges (never rebases) the dependency branch when told, and is integrated after the dependency.
+
+- **When it stacks.** Its one dependency in the same repo is a candidate or reviewed, every other dependency
+  integrated; `status` notes `stackable on <dep>@<sha>`. Two in-flight dependencies, a pending one, tier XS and
+  no-worktree repos never stack.
+- **Stack record.** `dispatch --phase lead` records the dependency SHA (never a branch name), outside the task
+  fingerprint, so verdicts stay valid.
+- **Sibling, not child.** The worktree sits beside the integration checkout with the integration checkout (else the
+  main checkout) as Orca parent; never a child of the dependency's worktree (no `<dep branch>--*`).
+- **Own delta.** Review, verify and QA use the newest dependency SHA in its HEAD as `--affected --base`.
+- **Verify waits.** Verify, review and QA dispatch exit 2, and `verdict` refuses a PASS, until the dependency's review
+  PASS SHA is in the candidate.
+- **Sync.** After each new candidate (a fix included) the dependency's task lead runs
+  `factory-pipeline.py sync <plan> --task <id> --send`: it records `<dependent>__sync.json` and sends an Orca status
+  message. The message is only a nudge; the durable record shows in `status`.
+- **Merge, never rebase.** At each subtask boundary, when `status` shows `sync:` or `<dep> now at <sha> not in HEAD`,
+  the dependent's lead runs `git merge <dep branch>`, resolving conflicts only inside its owned paths.
+- Forms and notes: `docs/pipeline-cli.md`, "dispatch", "sync", "gate" and "status and cleanup".
+
 ## 5. Orca (preferred coordinator when available)
 
 - Detect: `orca status --json`; usable when `result.runtime.reachable` is `true`. Before the first dispatch load
@@ -143,6 +167,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
   (`orca orchestration run-create`), starts its sessions as workers, and reports with
   `orca orchestration send --to run:<run lead run id> --type status`.
 - The Orca commands this policy relies on: `docs/pipeline-cli.md`, "Orca commands".
+- The sync message (section 4, "Stacked dependents") is `--type status` to the dependent lead's Run
+  (`run:<task orca_run>`, else `@worktree:<id>`).
 - **Orca message traps:**
   - Only a dispatched Orca worker can send `--type escalation` or `worker_done` (else "No active Dispatch belongs to
     this message sender"): a task lead reports with `--type status` (asks with `--type question`).
@@ -193,6 +219,10 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - [ ] Diff reviewed by the lead; required checks and QA passed; no open blocking finding.
 - [ ] No baseline or user files touched; shared-package impact named; file ownership clear.
 - [ ] Integrate in dependency order with `git merge --no-ff` (section 10 step 5), then run the checks on the result.
+      A stacked dependent is merged after its dependency (both `git merge --no-ff`), `git branch -d` only after its
+      merge; the gate blocks the other order and a dependent whose review PASS lacks the dependency's PASS SHA. A
+      clean merge of the dependency into the dependent is a sync merge and keeps the dependency's review valid
+      (conflict resolutions do not).
 - [ ] On a conflict or regression: stop that contribution, diagnose it and dispatch a scoped fix. Never discard
       work or resolve a conflict by blindly taking one side.
 
@@ -329,7 +359,8 @@ One verify session reviews the whole task diff: a prose subtask written by the v
    `dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca` (the section 5
    handoff). The task lead writes `subplan.json` until `subplan validate` prints OK, records each subtask's
    `placement` (section 4, "Child worktrees"), dispatches each with `--phase implement --subtask <sid>`, reviews each
-   diff and commits it with explicit paths, or merges and removes a child.
+   diff and commits it with explicit paths, or merges and removes a child. For a stackable task
+   `dispatch --phase lead` prints the stacked handoff (section 4, "Stacked dependents").
 4. **Verify (cross-model review, then QA, one session).** Each model's code is reviewed by the other
    (`review_pairing`): on the stable candidate the task lead runs `dispatch ... --phase verify --sha <sha>` once
    (section 6) and records `verdict --phase verify`; a FAIL gets a scoped fix in a fresh session and one fresh
@@ -338,7 +369,8 @@ One verify session reviews the whole task diff: a prose subtask written by the v
    `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
    merges and removes the child. Without the paired model a fresh same-model session verifies, carrying
    `SAME_MODEL (fallback: <model> unavailable)`, which the dispatch records for the SHA and the gate accepts (other
-   forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then the report (section 3).
+   forms: `docs/pipeline-cli.md`, "Fallback reviews"). A stacked verify waits for the dependency's review PASS
+   (section 4). Then the report (section 3).
 5. **Integrate** (section 7) in wave order into the `topic` branch with `git merge --no-ff <task branch>`; a
    fast-forward or squash leaves earlier reviews STALE (`docs/pipeline-cli.md`, "gate").
 6. **QA.** Once per repo on the integration HEAD, in its checkout
@@ -372,6 +404,9 @@ integration `ci+workspace`). A repo with `tests/run-all.sh` gets the table's com
   and, when all are busy, waits instead of slowing every suite 2-4x (`--no-wait` exits 3); a dead
   holder's slot is taken over. A full run keeps its own lock (section 4). The slot belongs to the run, not the
   session: stop a QA worker's test run before abandoning it.
+- **Pre-flight.** `dispatch --phase verify|qa` prints `selected N of M suites` and warns above `--suite-warn`
+  (default 40): narrow the task paths or checks before the run. `tests/run-all.sh --affected` exits 2 when python3
+  cannot run instead of widening to every suite. A stacked task's base is its own delta (section 4).
 - **Cases.** `dispatch --phase implement` says implementers run no suites. `--phase verify` (and `--phase qa`)
   prints the case list for the tier command (`ALL` for explicit suites); a slow suite with cases runs only the cases
   the change touches. Frozen copies of a suite go under a temp dir, never into its folder.
