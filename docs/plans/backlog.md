@@ -152,6 +152,18 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
+### ci-matrix-followups
+
+Open follow-ups from plan ci-matrix (`docs/plans/ci-matrix/report.md`, section "Follow-ups"); plan ci-followups
+covered the rest:
+
+- `skills/delivery/references/delivery.md` is near its 32 KiB cap (`tests/delivery-generic.test.sh`); the next policy
+  addition needs a split or a trim.
+- Windows workers: `python3` in Git Bash is the Microsoft Store stub, and the run lead still adds a `python3` shim
+  note to each worker prompt by hand.
+- `factory-pipeline.py dispatch` has no option to carry a free-form session note (the `python3` shim, "Codex
+  unavailable") into the worker specs, so the run lead adds it to each start prompt by hand.
+
 ## Covered
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,

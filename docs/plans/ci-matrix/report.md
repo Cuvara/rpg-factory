@@ -65,22 +65,27 @@ Every review is SAME_MODEL: Codex was not available on this machine, so Claude s
 
 ## Follow-ups (backlog topic `ci-matrix-followups`)
 
-The gate counts `docs/plans/backlog.md` as outside every task's owned paths, so this topic is listed here and goes to
-the backlog in the next plan that owns it.
+Plan ci-followups covered most of these items; what stays open is in `docs/plans/backlog.md` topic
+`ci-matrix-followups`.
 
-- The CI suite job runs every case of a selected suite: `tests/run-all.sh --only-suites` has no case subset, so the
-  cases `scripts/ci-plan.py` plans are only shown. Add a run-all option for an only-suites case subset and pass it
-  from `.github/workflows/tests.yml`.
-- `workflow_dispatch` with `full=false` has no base, so it plans every suite like `full=true`; give it a base input or
-  drop the option.
-- `tests/pipeline.test.sh` asserts only the integration QA clause of the new CI wording, not the task QA clause.
-- `skills/delivery/references/delivery.md` has about 200 bytes left under its 32 KiB cap; the next policy addition
-  needs a split or a trim.
+- Covered by plan ci-followups (task ci-cases, `changelog.d/ci-cases.md`): the CI suite job ran every case of a
+  selected suite (`tests/run-all.sh --only-suites` had no case subset, so the cases `scripts/ci-plan.py` planned were
+  only shown). A suite job now passes the planned cases to `tests/run-all.sh --only-cases`.
+- Covered by plan ci-followups (task ci-cases, `changelog.d/ci-cases.md`): `workflow_dispatch` with `full=false` had
+  no base, so it planned every suite like `full=true`. It now takes a `base` input.
+- Covered by plan ci-followups (task pipeline-followups, `changelog.d/pipeline-followups.md`): `tests/pipeline.test.sh`
+  asserted only the integration QA clause of the new CI wording, not the task QA clause.
+- Open: `skills/delivery/references/delivery.md` has about 200 bytes left under its 32 KiB cap; the next policy
+  addition needs a split or a trim.
 - Worker sessions on Windows need `RPG_FACTORY_WORKSPACE` set and a real `python3` (the Store alias fails): two tier
-  runs of this plan failed on that alone. The dispatch specs could carry the workspace from the run lead's
-  environment.
-- A stderr line of `dispatch` must not contain quote characters while the `pp_spec` test helper shlex-splits the
-  combined output; make the helper robust or the rule general.
-- `scripts/orca-wait.sh --stall-ms 0` reports an immediate stall instead of disabling the check.
-- Delivery policy says follow-ups go to the backlog in the integration commit, but the gate treats a run lead's
-  `docs/plans/backlog.md` edit as stray: allow it in the gate like the plan's `report.md`, or change the policy.
+  runs of this plan failed on that alone. Covered by plan ci-followups (task pipeline-followups,
+  `changelog.d/pipeline-followups.md`) for the workspace: the dispatch specs carry `RPG_FACTORY_WORKSPACE` from the
+  run lead's environment. Open: the `python3` shim is still added to each worker prompt by hand.
+- Covered by plan ci-followups (task pipeline-followups, `changelog.d/pipeline-followups.md`): a stderr line of
+  `dispatch` could not contain quote characters while the `pp_spec` test helper shlex-split the combined output; the
+  helper now reads the prompt line only.
+- Covered by plan ci-followups (task orca-wait-stall, `changelog.d/orca-wait-stall.md`):
+  `scripts/orca-wait.sh --stall-ms 0` reported an immediate stall instead of disabling the check.
+- Covered by plan ci-followups (task pipeline-followups, `changelog.d/pipeline-followups.md`): delivery policy says
+  follow-ups go to the backlog in the integration commit, but the gate treated a run lead's `docs/plans/backlog.md`
+  edit as stray; the gate now allows it like the plan's `report.md`.
