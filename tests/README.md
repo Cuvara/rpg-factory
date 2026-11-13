@@ -4,6 +4,8 @@ Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standal
 `RPG_FACTORY_STATE_DIR`; `tests/run-all.sh` runs them all and prints the usage header with `-h`. Fixtures live in
 `tests/fixtures/`. Full command list and flags: `scripts/README.md` "Commands".
 
+- `tests/workspace-default.test.sh` checks the shell and Python workspace defaults across stubbed platforms.
+
 ## QA tiers and run-all flags
 
 The QA tiers table of `skills/delivery/references/delivery.md` (section 10, "QA tiers"; registry `pipeline.qa_tiers`)
