@@ -1,0 +1,376 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "assetgen-hybrid",
+  "title": "asset-gen hybrid: ChatGPT image API plus local SDXL (IPAdapter, ControlNet) with hardware profiles for an RTX 5060 8 GB machine",
+  "topic": "feat/assetgen/hybrid",
+  "goal": "Add a local-model branch next to the API branch so Claude builds higher-quality, style-consistent workflows: API for the high-quality base, local SDXL with IPAdapter and ControlNet for consistency, upscale and cut-out, all bound by hardware profiles (target RTX 5060 8 GB, 32 GB RAM), provenance of models and seeds, and the graph style guide. The local branch ships UNTESTED on the target hardware; the user tests it on the RTX 5060 machine after the merge.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "feat/assetgen/workflows"
+    }
+  },
+  "tasks": [
+    {
+      "id": "hardware-profile",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Turn the hardware requirement into data the machine can check. Add scripts/assetgen/data/hardware.json with profiles api-only, local-4gb (SD1.5 class, no SDXL) and local-8gb (RTX 5060 8 GB, 32 GB RAM: SDXL pruned fp16 or fp8 at 1024 px batch 1, one SDXL ControlNet at a time, IPAdapter, tiled VAE, 4x upscaler, BiRefNet or rembg cut-out; no Flux fp16, Flux GGUF only as an optional later step, no 3D mesh generation) with min vram_gb, min ram_gb, min free disk and the torch requirement (CUDA 12.8 or newer build so Blackwell sm_120 kernels exist). Extend scripts/comfy-desktop-setup.py --check (read-only) with rows gpu (name and VRAM from nvidia-smi, absent is NOT_AVAILABLE), torch (the instance env's torch version and CUDA build, sm_120 support) and profile (the best profile the machine meets, printed, never applied). It must never download models or install packs; models and packs are listed as missing for the user to approve. Cover it with fake nvidia-smi and fake instance env fixtures in tests/comfy-desktop-setup.test.sh (a 4 GB card, a 5060 8 GB, no GPU). UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "scripts/assetgen/data/hardware.json",
+        "scripts/comfy-desktop-setup.py",
+        "tests/comfy-desktop-setup.test.sh",
+        "tests/fixtures/comfy-desktop-setup/",
+        "changelog.d/assetgen-hardware-profile.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/comfy-desktop-setup.test.sh"
+      ],
+      "acceptance": [
+        "--check prints gpu, torch and profile rows and writes nothing",
+        "a 4 GB card resolves to local-4gb, a 5060 8 GB with a CUDA 12.8 torch to local-8gb, no GPU or a torch without sm_120 to api-only with the reason",
+        "the check never prints a credential and never downloads or installs anything",
+        "existing comfy-desktop-setup assertions are unchanged and pass"
+      ]
+    },
+    {
+      "id": "local-node-registry",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Register the local-model nodes and the requires block. Using the offline nodesync helper from assetgen-workflows, add known-nodes.json entries for CheckpointLoaderSimple, CLIPTextEncode, CLIPTextEncodeSDXL, EmptyLatentImage, VAEEncode, VAEDecode, VAEDecodeTiled, KSampler, LoraLoader, ControlNetLoader, ControlNetApplyAdvanced, UpscaleModelLoader, ImageUpscaleWithModel and the pack nodes IPAdapterUnifiedLoader, IPAdapterAdvanced (ComfyUI_IPAdapter_plus), a ControlNet preprocessor (comfyui_controlnet_aux) and a cut-out node (BiRefNet or rembg), marking pack nodes with their pack id. Template schema gets an optional requires block {profile, peak_vram_gb, ram_gb, packs[], models[{kind, name, size_gb}]} validated by lint against scripts/assetgen/data/hardware.json; lint refuses a URL or key in it and a template whose declared peak_vram_gb exceeds its profile. Source links for models live in the docs, never in templates or scripts. Use a saved object_info from a machine that has the packs; if none exists the signatures come from the pack documentation and the changelog says so. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "scripts/assetgen/data/known-nodes.json",
+        "scripts/assetgen/lint.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-local-node-registry.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "hardware-profile"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "lint accepts a template with local nodes and a complete requires block and rejects a missing profile, an unknown pack node, a URL or a peak_vram_gb above the profile",
+        "existing API-only templates and goldens are unchanged",
+        "an unknown node or input is still a lint error"
+      ]
+    },
+    {
+      "id": "provenance-local",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Make a local or hybrid graph provable. runfiles.generation_inputs binds the whole graph when the workflow has any generation node (NineRouterImage or KSampler), not only NineRouterImage. runfiles.workflow_prompts also reads CLIPTextEncode and CLIPTextEncodeSDXL text inputs linked to a PrimitiveString or PrimitiveStringMultiline, so the sent-prompt equals recorded-prompt check covers the local stage. Record in the run (spec.trace or a sibling record) the model names, LoRA names and strengths, seed, sampler, scheduler, steps, cfg, denoise and the requires block hash; model sha256 comes from a hash cache written by comfy-desktop-setup when available, otherwise the record says unverified. A fixed seed is a rendered param, not a random widget. Update the gen-run schema and the quality plugin check accordingly; runs without local nodes are unchanged. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "scripts/assetgen/runfiles.py",
+        "scripts/assetgen/assetgen.py",
+        "docs/schemas/kinds/gen-run.schema.json",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-provenance-local.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "local-node-registry"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a hybrid fixture graph binds its full graph into the image-review requirements hash",
+        "a CLIPTextEncode that does not carry the recorded prompt is reported like a NineRouterImage prompt mismatch",
+        "the run record lists models, LoRAs, seed, sampler settings and marks unverified hashes",
+        "runs recorded before this change keep their hashes and results"
+      ]
+    },
+    {
+      "id": "anchor-target",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Generalise anchor wiring. A template may declare anchor_target: the node and input that receives the selected anchors (NineRouterImage.reference_images through the existing ImageBatch chain, or IPAdapterAdvanced.image through the same chain). wire_references keeps its current behaviour for templates without anchor_target (exactly one NineRouterImage). requested_size reads the size of the declared primary generation node, not the first NineRouterImage in dict order. render --run stays deterministic and writes both workflow.json and workflow.ui.json. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "scripts/assetgen/assetgen.py",
+        "scripts/assetgen/runfiles.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-anchor-target.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "provenance-local"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a fixture hybrid template sends the anchors to IPAdapterAdvanced and an API-only template still sends them to NineRouterImage",
+        "an anchor_target that names a missing node or input is a render error",
+        "existing style-lock tests and goldens pass unchanged"
+      ]
+    },
+    {
+      "id": "profile-routing",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Pick the template by machine profile. A data file scripts/assetgen/data/template-profiles.json maps (purpose, profile) to a template; resolve --profile api-only|local-4gb|local-8gb|auto chooses it ('auto' reads the profile comfy-desktop-setup recorded, else api-only). A template whose requires profile is above the chosen profile is refused with the reason (a 4 GB machine can never be handed a local-8gb template). --template still overrides. Purpose files are not changed (no hash churn). Add the profile and chosen template to the run's spec. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "scripts/assetgen/data/template-profiles.json",
+        "scripts/assetgen/assetgen.py",
+        "scripts/assetgen/layers.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-profile-routing.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "anchor-target"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "resolve --profile local-8gb on icon picks the hybrid template, --profile api-only picks the staged API template",
+        "resolve --profile local-4gb with a local-8gb template is refused with the VRAM reason",
+        "without --profile the result is identical to today's",
+        "no purpose file changes"
+      ]
+    },
+    {
+      "id": "graph-lint-profile",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Extend graph-lint for hybrid graphs: vocabulary gains Refine (local) and Models between Generate and Post-process; per profile the declared requires.peak_vram_gb must fit, no two checkpoints loaded at once without a declared offload, at most one ControlNet applied in a path, batch size 1, tiled VAE for images above 1024 px, no Flux fp16 model name under local-8gb. A hybrid template must keep the reviewed prompt a single node feeding every text input. Violations name the node and the profile. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "scripts/assetgen/graphstyle.py",
+        "scripts/assetgen/lint.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-graph-lint-profile.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "profile-routing"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "each new rule has a passing and failing fixture whose message names node and profile",
+        "API-only staged templates keep their result",
+        "graph-lint exits 0, 1, 2 as before"
+      ]
+    },
+    {
+      "id": "tpl-hybrid-icon-ui",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Hybrid rule: the API stage (NineRouterImage, ChatGPT image through 9router) makes the high-quality base; the local SDXL stage gives consistency (IPAdapter from the approved anchors, at most one ControlNet at a time, total ControlNet strength under 1.0), upscale and cut-out. Stay inside the local-8gb profile: batch 1, 1024 px maximum, tiled VAE decode, one checkpoint loaded at a time, declared requires block (profile, peak_vram_gb at most 7.0, packs, models by name with size, no URL). The reviewed prompt is one PrimitiveStringMultiline that feeds NineRouterImage.user_prompt and the local CLIPTextEncode text, so every sent prompt equals the recorded one. Follow the staged graph style guide with the extra groups Refine (local) and Models. Sampler values are documented starting points to be tuned in the live task, not claims. Core and game layer templates carry no static LoadImage name, no URL and no credential. Add hybrid-icon-ui for the icon and ui-element purposes: API base, local refine with IPAdapter anchors, cut-out, tiled upscale, previews, one SaveImage. Changelog fragment changelog.d/tpl-hybrid-icon-ui.md. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "templates/assetgen/workflows/hybrid-icon-ui.json",
+        "tests/fixtures/assetgen/golden/icon--hybrid-icon-ui.json",
+        "tests/fixtures/assetgen/golden/ui-element--hybrid-icon-ui.json",
+        "tests/fixtures/assetgen/cases/icon--hybrid-icon-ui.json",
+        "tests/fixtures/assetgen/cases/ui-element--hybrid-icon-ui.json",
+        "changelog.d/tpl-hybrid-icon-ui.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-lint-profile"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "the template passes assetgen.py lint and graph-lint under profile local-8gb with 0 FAIL, and its requires block is complete",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "an anchor reaches the IPAdapter input through the template's anchor_target and the render is deterministic",
+        "no file outside the task's paths changes",
+        "the template description starts with 'UNTESTED on RTX 5060:' and the changelog fragment says the local branch is untested on target hardware"
+      ]
+    },
+    {
+      "id": "tpl-hybrid-character",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Hybrid rule: the API stage (NineRouterImage, ChatGPT image through 9router) makes the high-quality base; the local SDXL stage gives consistency (IPAdapter from the approved anchors, at most one ControlNet at a time, total ControlNet strength under 1.0), upscale and cut-out. Stay inside the local-8gb profile: batch 1, 1024 px maximum, tiled VAE decode, one checkpoint loaded at a time, declared requires block (profile, peak_vram_gb at most 7.0, packs, models by name with size, no URL). The reviewed prompt is one PrimitiveStringMultiline that feeds NineRouterImage.user_prompt and the local CLIPTextEncode text, so every sent prompt equals the recorded one. Follow the staged graph style guide with the extra groups Refine (local) and Models. Sampler values are documented starting points to be tuned in the live task, not claims. Core and game layer templates carry no static LoadImage name, no URL and no credential. Add hybrid-character for ref-3d-character, ref-3d-turnaround and sprite-2d: API base sheet or pose, local refine with IPAdapter from the approved character anchor and one ControlNet (pose or depth), cut-out, upscale, previews, one SaveImage. Changelog fragment changelog.d/tpl-hybrid-character.md. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "templates/assetgen/workflows/hybrid-character.json",
+        "tests/fixtures/assetgen/golden/ref-3d-character--hybrid-character.json",
+        "tests/fixtures/assetgen/golden/ref-3d-turnaround--hybrid-character.json",
+        "tests/fixtures/assetgen/golden/sprite-2d--hybrid-character.json",
+        "tests/fixtures/assetgen/cases/ref-3d-character--hybrid-character.json",
+        "tests/fixtures/assetgen/cases/ref-3d-turnaround--hybrid-character.json",
+        "tests/fixtures/assetgen/cases/sprite-2d--hybrid-character.json",
+        "changelog.d/tpl-hybrid-character.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-lint-profile"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "the template passes assetgen.py lint and graph-lint under profile local-8gb with 0 FAIL, and its requires block is complete",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "an anchor reaches the IPAdapter input through the template's anchor_target and the render is deterministic",
+        "no file outside the task's paths changes",
+        "the template description starts with 'UNTESTED on RTX 5060:' and the changelog fragment says the local branch is untested on target hardware"
+      ]
+    },
+    {
+      "id": "tpl-hybrid-environment",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Hybrid rule: the API stage (NineRouterImage, ChatGPT image through 9router) makes the high-quality base; the local SDXL stage gives consistency (IPAdapter from the approved anchors, at most one ControlNet at a time, total ControlNet strength under 1.0), upscale and cut-out. Stay inside the local-8gb profile: batch 1, 1024 px maximum, tiled VAE decode, one checkpoint loaded at a time, declared requires block (profile, peak_vram_gb at most 7.0, packs, models by name with size, no URL). The reviewed prompt is one PrimitiveStringMultiline that feeds NineRouterImage.user_prompt and the local CLIPTextEncode text, so every sent prompt equals the recorded one. Follow the staged graph style guide with the extra groups Refine (local) and Models. Sampler values are documented starting points to be tuned in the live task, not claims. Core and game layer templates carry no static LoadImage name, no URL and no credential. Add hybrid-environment for scene-2d, texture-tileable and concept-2d: API base, local refine with IPAdapter style anchors and one ControlNet (depth or canny), tiled upscale, previews, one SaveImage; no cut-out. Changelog fragment changelog.d/tpl-hybrid-environment.md. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "templates/assetgen/workflows/hybrid-environment.json",
+        "tests/fixtures/assetgen/golden/scene-2d--hybrid-environment.json",
+        "tests/fixtures/assetgen/golden/texture-tileable--hybrid-environment.json",
+        "tests/fixtures/assetgen/golden/concept-2d--hybrid-environment.json",
+        "tests/fixtures/assetgen/cases/scene-2d--hybrid-environment.json",
+        "tests/fixtures/assetgen/cases/texture-tileable--hybrid-environment.json",
+        "tests/fixtures/assetgen/cases/concept-2d--hybrid-environment.json",
+        "changelog.d/tpl-hybrid-environment.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-lint-profile"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "the template passes assetgen.py lint and graph-lint under profile local-8gb with 0 FAIL, and its requires block is complete",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "an anchor reaches the IPAdapter input through the template's anchor_target and the render is deterministic",
+        "no file outside the task's paths changes",
+        "the template description starts with 'UNTESTED on RTX 5060:' and the changelog fragment says the local branch is untested on target hardware"
+      ]
+    },
+    {
+      "id": "tpl-local-variation",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Hybrid rule: the API stage (NineRouterImage, ChatGPT image through 9router) makes the high-quality base; the local SDXL stage gives consistency (IPAdapter from the approved anchors, at most one ControlNet at a time, total ControlNet strength under 1.0), upscale and cut-out. Stay inside the local-8gb profile: batch 1, 1024 px maximum, tiled VAE decode, one checkpoint loaded at a time, declared requires block (profile, peak_vram_gb at most 7.0, packs, models by name with size, no URL). The reviewed prompt is one PrimitiveStringMultiline that feeds NineRouterImage.user_prompt and the local CLIPTextEncode text, so every sent prompt equals the recorded one. Follow the staged graph style guide with the extra groups Refine (local) and Models. Sampler values are documented starting points to be tuned in the live task, not claims. Core and game layer templates carry no static LoadImage name, no URL and no credential. Add local-variation for prop-2d and image-edit: no API call, an approved base image comes through the References group (reference_image param), the local stage makes seeded low-denoise variations with IPAdapter anchors, previews, one SaveImage; fixed seed and sampler are rendered params so a variation is reproducible and costs no credit. Changelog fragment changelog.d/tpl-local-variation.md. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "templates/assetgen/workflows/local-variation.json",
+        "tests/fixtures/assetgen/golden/prop-2d--local-variation.json",
+        "tests/fixtures/assetgen/golden/image-edit--local-variation.json",
+        "tests/fixtures/assetgen/cases/prop-2d--local-variation.json",
+        "tests/fixtures/assetgen/cases/image-edit--local-variation.json",
+        "changelog.d/tpl-local-variation.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-lint-profile"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "the template passes assetgen.py lint and graph-lint under profile local-8gb with 0 FAIL, and its requires block is complete",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "an anchor reaches the IPAdapter input through the template's anchor_target and the render is deterministic",
+        "no file outside the task's paths changes",
+        "the template description starts with 'UNTESTED on RTX 5060:' and the changelog fragment says the local branch is untested on target hardware"
+      ]
+    },
+    {
+      "id": "mcp-hybrid-rules",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Rules for an agent building or running hybrid workflows through comfy-mcp. In skills/comfyui (references/workflow-style.md and SKILL.md): run comfy-desktop-setup --check and read the gpu, torch and profile rows first; resolve with --profile; never run a local template on a lower profile; render, lint, graph-lint and live validate_workflow before run_workflow; start from a core or game-layer template, never a free-form graph; never install packs or download models without the user's yes; report the profile, the models and seed in the run. skills/asset-gen/SKILL.md names the rule within its 160-line cap. Cite code by anchor symbol and docs by section. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "skills/comfyui/SKILL.md",
+        "skills/comfyui/references/workflow-style.md",
+        "skills/asset-gen/SKILL.md",
+        "skills/comfy-desktop-setup/SKILL.md",
+        "changelog.d/assetgen-mcp-hybrid-rules.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "tpl-hybrid-icon-ui",
+        "tpl-hybrid-character",
+        "tpl-hybrid-environment",
+        "tpl-local-variation"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "SKILL.md files stay within their line caps and skills-lint and skill-citations pass",
+        "no instruction allows installing a pack or downloading a model without the user's approval",
+        "the supersession of 'no local models' is stated where the old sentence stood",
+        "the local and hybrid branch is described as untested on the RTX 5060 machine and no measured result is claimed"
+      ],
+      "grade": "light",
+      "grade_reason": "skill and reference prose; behaviour is tested in earlier tasks"
+    },
+    {
+      "id": "hardware-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Write docs/hardware.md and update docs/architecture/domains/assetgen.md and scripts/README.md. Requirements for the RTX 5060 8 GB / 32 GB RAM machine: NVIDIA driver with CUDA 12.8 or newer support, ComfyUI env torch built for CUDA 12.8 or newer (Blackwell sm_120) checked through torch.version.cuda, about 60 GB free SSD, the model list by name with size and where to get it (links allowed in docs only), what runs (SDXL 1024 px batch 1, one SDXL ControlNet, IPAdapter, tiled VAE, 4x upscaler, cut-out), what does not (Flux fp16, two checkpoints at once, 3D mesh generation) and the profiles. Mark every figure that is an estimate as unverified until the user ran docs/plans/assetgen-hybrid/e2e-local.md on that machine. Note that the development machine shows a GTX 1650 4 GB, which resolves to local-4gb. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "paths": [
+        "docs/hardware.md",
+        "docs/architecture/domains/assetgen.md",
+        "scripts/README.md",
+        "changelog.d/assetgen-hardware-docs.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "tpl-hybrid-icon-ui",
+        "tpl-hybrid-character",
+        "tpl-hybrid-environment",
+        "tpl-local-variation"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "every figure is marked verified or unverified with its source or measurement",
+        "the doc states what the 8 GB profile cannot do",
+        "english-only, changelog and skills-lint checks pass",
+        "the local and hybrid branch is described as untested on the RTX 5060 machine and no measured result is claimed"
+      ],
+      "grade": "light",
+      "grade_reason": "documentation only"
+    },
+    {
+      "id": "hybrid-test-runbook",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Write the test runbook the user will run on the machine with the RTX 5060 8 GB after the merge; nothing is generated or measured here. docs/plans/assetgen-hybrid/e2e-local.md holds: the prerequisite check (comfy-desktop-setup --check must show profile local-8gb and a torch with CUDA 12.8 or newer), the exact commands per hybrid template (resolve --profile local-8gb, render, graph-lint, validate_workflow, run, fetch, finalize, qa), what to record (peak VRAM, seconds per image, first failure, a fixed-seed repeat, whether the style anchors visibly steer the result, a screenshot of the graph), a results table with every cell set to NOT_RUN, and what to do on failure (which row of docs/hardware.md to correct). The credit cost is one API image per hybrid template and none for local-variation. Print no credential. Status of the whole local branch in this file: UNTESTED.",
+      "paths": [
+        "docs/plans/assetgen-hybrid/e2e-local.md",
+        "changelog.d/assetgen-hybrid-runbook.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "mcp-hybrid-rules",
+        "hardware-docs"
+      ],
+      "checks": [
+        "python3 -B scripts/changelog.py check",
+        "env -u TMPDIR tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "every result cell in the runbook is NOT_RUN and the status line says UNTESTED",
+        "each command is complete and names the profile; none prints or asks for a credential",
+        "no measured number or pass claim appears anywhere in the file"
+      ],
+      "grade": "light",
+      "grade_reason": "a runbook document; the user runs the test later"
+    }
+  ]
+}

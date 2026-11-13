@@ -1,0 +1,258 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "assetgen-style",
+  "title": "asset-gen style tooling per project: init, derive, bump, report and the asset-style skill",
+  "topic": "feat/assetgen/style",
+  "goal": "Give each game project a guided way to create, structure, version and tune its art style, instead of hand-run style-lock steps. Core styles stay untouched; structure lives in the project's own game style.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "feat/assetgen/hybrid"
+    }
+  },
+  "tasks": [
+    {
+      "id": "style-init",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add assetgen.py style init --id <id> --extends <core style> [--family <family>=<style id>] --authoring <A>. It writes a draft game style (extends the core style, version 1, status draft) and a valid assetgen/project.json skeleton. The logic lives in a new scripts/assetgen/style_cmd.py with a thin hookup in assetgen.py. It never overwrites an existing file and never edits core data.",
+      "paths": [
+        "scripts/assetgen/style_cmd.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-style-init.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "style init creates the draft style and project.json; lint passes with 0 FAIL and the expected WARN for missing structured fields",
+        "an existing style or project.json is never overwritten (exit 1 with a message)",
+        "no file under templates/assetgen/ changes"
+      ]
+    },
+    {
+      "id": "style-derive",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add assetgen.py style derive --authoring <A> --style <id> [--family F] [--apply]. From the valid active anchors it deterministically proposes structured fields: palette colours (with text), tone tolerance and canvas aspect per family. Output is a proposal; --apply merges it only into a style whose status is draft and never into an active style. Fix the mismatch where stylelock.style_errors rejects a canvas entry that has only min_side while consistency.canvas_config accepts it. Logic in a new scripts/assetgen/style_derive.py.",
+      "paths": [
+        "scripts/assetgen/style_derive.py",
+        "scripts/assetgen/stylelock.py",
+        "scripts/assetgen/consistency.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-style-derive.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/"
+      ],
+      "deps": [
+        "style-init"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "same anchors give byte-identical proposals (no clock, no randomness)",
+        "--apply refuses an active style and a style without anchors",
+        "after --apply on a draft style with anchors the style-palette, style-tone and style-canvas QA rows are available instead of NOT_AVAILABLE",
+        "a canvas entry with only min_side is accepted by lint"
+      ]
+    },
+    {
+      "id": "style-bump",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add assetgen.py style bump --authoring <A> --id <style>: create version N+1 as a draft copy, update nothing that is active, and list the anchors, runs and rejections that need re-approval for the new version. Where the previous anchors can be re-proposed under the new version they are written only as proposed and never activated. Run the quality plugin on the result: if it rejects carried anchors, limit the verb to listing and say so.",
+      "paths": [
+        "scripts/assetgen/style_cmd.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-style-bump.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-derive"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "style bump never edits an active version in place and never sets an anchor to active",
+        "the report names every anchor, run and rejection that needs re-approval",
+        "the artifact-quality check for the assetgen domain shows no new FAIL on the bumped authoring fixture"
+      ]
+    },
+    {
+      "id": "style-report",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add the read-only assetgen.py style report --authoring <A> [--style S] [--json]: per style and family, the palette and tone spread over the approved runs, the WARN and FAIL rate of each style-* QA row, rejections by reason, and suggested thresholds (max_distance, tolerance) with the data behind each. Deterministic and read-only; add it to the read-only verbs of /rpg-factory:assetgen. Logic in a new scripts/assetgen/style_report.py.",
+      "paths": [
+        "scripts/assetgen/style_report.py",
+        "scripts/assetgen/assetgen.py",
+        "scripts/factory-cmd.py",
+        "tests/assetgen.test.sh",
+        "tests/commands.test.sh",
+        "changelog.d/assetgen-style-report.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-bump"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/commands.test.sh"
+      ],
+      "acceptance": [
+        "style report writes nothing and exits 0",
+        "suggested thresholds are only printed with their supporting numbers, never applied",
+        "/rpg-factory:assetgen accepts style report as a read-only verb and still refuses the write verbs"
+      ]
+    },
+    {
+      "id": "style-skill-scaffold",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Scaffold the new tech skill: python3 -B scripts/new-skill.py --name asset-style --kind tech --repos authoring --domain assetgen --used-by asset-gen --summary <one line>. It writes skills/asset-style/SKILL.md and the registry fragment and rebuilds registry.json. Then update every touchpoint scripts/skill-touchpoints.py names: skills/factory-core/SKILL.md, skills/factory-core/references/skill-contract.md layering diagram, README.md diagram and tech table, docs/architecture/overview.md tech-skill count, and name rpg-factory:asset-style in skills/asset-gen/SKILL.md. Replace every SCAFFOLD marker with real, minimal but valid content (the current style-lock facts, citing docs by section), because verify runs skills-lint on the candidate and a marker fails it. The content task expands it later. Registry changes are a global input of tests/affected.py: expect every suite in verify.",
+      "paths": [
+        "skills/asset-style/SKILL.md",
+        "skills/asset-gen/SKILL.md",
+        "skills/factory-core/SKILL.md",
+        "skills/factory-core/references/skill-contract.md",
+        "registry/domains/assetgen.json",
+        "registry.json",
+        "README.md",
+        "docs/architecture/overview.md",
+        "changelog.d/asset-style-skill.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "python3 -B scripts/build-registry.py --check",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "asset-style is registered as a tech skill with used_by asset-gen and paths assetgen/; it is not in the module skills list and is never a lead",
+        "registry.json equals the build of the fragments (build-registry --check)",
+        "README, factory-core, skill-contract and overview name the skill and their counts match the registry",
+        "asset-gen/SKILL.md names rpg-factory:asset-style and stays at most 160 lines",
+        "no SCAFFOLD marker remains and skills-lint passes on the candidate"
+      ]
+    },
+    {
+      "id": "style-skill-content",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Write the content of the asset-style skill and move the style-lock reference into it. Workflow: art-bible-first bootstrap (camera, palette, lighting, proportions, material rules, negative prompts), 6-12 reference images from a rights-clean set, exploration runs, a person picks, anchors and rejections, then style init, derive, bump and report. The description must make asset-gen load it for a style-only request, since tech skills are never routed on their own. Remove style-lock.md from asset-gen, point to asset-style, and free lines in asset-gen/SKILL.md. Cite code by anchor symbol and docs by section.",
+      "paths": [
+        "skills/asset-style/",
+        "skills/asset-gen/SKILL.md",
+        "skills/asset-gen/references/style-lock.md",
+        "changelog.d/asset-style-content.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-report",
+        "style-skill-scaffold"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "no SCAFFOLD marker remains; SKILL.md is at most 160 lines with at most 3 references",
+        "skill-citations passes for the skill (python3 -B scripts/checks/skill-citations.py --skill asset-style)",
+        "agents are never told to activate an anchor or approve a run; those stay human gates",
+        "asset-gen/SKILL.md no longer links the moved reference and stays at most 160 lines"
+      ]
+    },
+    {
+      "id": "style-skill-scenarios",
+      "repo": "plugin",
+      "kind": "test",
+      "objective": "Add the routing scenario for asset-style in tests/routing.test.sh (the lead and tech expectations next to the existing asset-gen scenario), a dogfood scenario with PROMPT and EXPECT in tests/dogfood.sh that includes asset-style, and the eval grader evals/asset-gen-icon/graders/asset-style-fired.md in the same format as comfyui-fired.md.",
+      "paths": [
+        "tests/routing.test.sh",
+        "tests/dogfood.sh",
+        "evals/asset-gen-icon/graders/asset-style-fired.md",
+        "changelog.d/asset-style-scenarios.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-skill-content"
+      ],
+      "checks": [
+        "tests/routing.test.sh",
+        "python3 -B scripts/skill-touchpoints.py asset-style"
+      ],
+      "acceptance": [
+        "routing.test.sh covers asset-style as a tech skill under asset-gen and passes",
+        "skill-touchpoints.py asset-style prints OK",
+        "the grader file matches the pattern of the existing -fired graders"
+      ]
+    },
+    {
+      "id": "external-anchor",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Human-gated and removable: allow an anchor from existing art (art bible, hand-made image) that has no gen-run. promote-anchor gets --external <png> --origin <text> --rights-note <text> and writes a proposed anchor with an external-source record (image sha256, origin, rights note, attested_by) instead of source_run. Only a person activates it and the person is the attester; an agent-attested or unattested external anchor fails the gen-run-style check. Update the anchor schema, stylelock.run_ref_errors and the quality plugin rule that requires an approved source gen-run. Anchors from gen-runs keep working exactly as before.",
+      "paths": [
+        "scripts/assetgen/stylelock.py",
+        "scripts/assetgen/assetgen.py",
+        "scripts/checks/domains/assetgen.py",
+        "docs/schemas/assetgen-anchor.schema.json",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-external-anchor.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-skill-scenarios"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "an external anchor is written as proposed with approved_by null and never as active",
+        "an active external anchor attested by claude, codex, gpt* or SAME_MODEL:* fails gen-run-style",
+        "gen-run anchors, selection and drift behave as before (existing tests unchanged)",
+        "the record carries no file path outside the authoring repo and no credential"
+      ]
+    },
+    {
+      "id": "style-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Document the style tooling: the domain doc Style lock and Bootstrap sections, scripts/README.md command list. Add a backlog item to docs/plans/backlog.md: bump the six core styles to structured v2 after a project has real derived values, with the reason that it changes every core style hash and drifts old runs.",
+      "paths": [
+        "docs/architecture/domains/assetgen.md",
+        "docs/plans/backlog.md",
+        "scripts/README.md",
+        "changelog.d/assetgen-style-docs.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "external-anchor"
+      ],
+      "grade": "light",
+      "grade_reason": "documentation only; the behaviour is tested in the earlier tasks",
+      "checks": [
+        "python3 -B scripts/changelog.py check",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "the domain doc names style init, derive, bump, report and the external anchor with its human gate",
+        "backlog.md carries the core-style bump item with its reason",
+        "no machine-specific absolute path appears under docs/plans/"
+      ]
+    }
+  ]
+}
