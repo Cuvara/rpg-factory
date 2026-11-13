@@ -10,8 +10,9 @@
 # the local node registry (UNTESTED on RTX 5060: the 13 core SDXL nodes from the saved object_info, the 4 pack nodes
 # from object_info-packs.json, known-nodes packs and local_model_nodes against data/hardware.json) and the template
 # requires block (profile, peak_vram_gb, ram_gb, packs, models: accepted complete, refused without a profile, with an
-# undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, or missing next to
-# local nodes; hardware.json missing or malformed is one FAIL reason, no traceback),
+# undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, missing next to
+# local nodes, or naming a profile without a GPU (api-only) next to a local or pack node; hardware.json missing or
+# malformed, a non-bool requires.gpu included, is one FAIL reason, no traceback),
 # the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
 # and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy
 # templates WARN; a style-locked render of a grouped template lays its anchors into References; the gen-run
@@ -705,6 +706,29 @@ lv local-extra-kinds '.requires.models += [{"kind": "loras", "name": "style.safe
 expect_clean local-extra-kinds "requires.models: kinds loras and vae are accepted"
 jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/api-requires.json"
 expect_clean api-requires "requires on an API-only template: profile api-only, packs and models left out, PASS"
+# a local or pack node needs a profile with a GPU (hardware.json requires.gpu true): api-only excludes any local model
+# and stays valid for an API-only graph. local-core has core local nodes only, no pack node.
+tmpl local-core '' '{"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"sd15-checkpoint.safetensors"}},
+"2":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":"assetgen/local-core"}},
+"3":{"class_type":"CLIPTextEncode","inputs":{"text":"{{prompt}}","clip":["1",1]}},
+"4":{"class_type":"CLIPTextEncode","inputs":{"text":"blurry","clip":["1",1]}},
+"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512,"batch_size":1}},
+"6":{"class_type":"KSampler","inputs":{"model":["1",0],"seed":1,"steps":20,"cfg":7.0,"sampler_name":"euler","scheduler":"karras","positive":["3",0],"negative":["4",0],"latent_image":["5",0],"denoise":1.0}},
+"7":{"class_type":"VAEDecode","inputs":{"samples":["6",0],"vae":["1",2]}}}'
+lc() { local id=$1; shift; jq "$@" "$LA/assetgen/templates/local-core.json" > "$LA/assetgen/templates/$id.json"; }  # lc ID JQ-ARGS: a variant of local-core
+hw_gpu=$(jq -r '[.profiles[] | select(.requires.gpu == true) | .id] | join(", ")' "$HW")
+NO_GPU="runs a local model, but profile api-only has no GPU (hardware.json requires.gpu false); declare a local profile ($hw_gpu)"
+lc local-core-api '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}'
+got=$(lint_of local-core-api)
+case "$got" in "FAIL "*"node 1 (CheckpointLoaderSimple) $NO_GPU"*) : ;; *) false ;; esac \
+  && grep -qF "node 6 (KSampler) $NO_GPU" <<<"$got" && ! grep -qF "node 2 (SaveImage)" <<<"$got" && ! grep -qE "requires\.(profile|peak_vram_gb|ram_gb|packs|models)" <<<"$got" \
+  && ok "lint requires: core local nodes on profile api-only FAIL, every local node says the profile has no GPU and lists the local profiles" \
+  || no "lint requires: core local nodes on profile api-only" "$got"
+lc local-core-4gb --argjson r "$(jq -c '.profiles[] | select(.id == "local-4gb") | .requires | {profile: "local-4gb", peak_vram_gb: .min_vram_gb, ram_gb: .min_ram_gb}' "$HW")" '.requires = $r'
+expect_clean local-core-4gb "requires: the same core local nodes on profile local-4gb with fitting numbers PASS"
+tmpl api-plain '' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
+jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/api-plain.json" > "$LA/assetgen/templates/api-plain-requires.json"
+expect_clean api-plain-requires "requires: NineRouterImage + SaveImage on profile api-only (no local or pack node) PASS"
 lv local-no-profile 'del(.requires.profile)'
 expect_lint local-no-profile FAIL "requires.profile missing" "requires without profile"
 lv local-bad-profile '.requires.profile = "local-80gb"'
@@ -713,6 +737,7 @@ lv local-pack-undeclared '.requires.packs -= ["comfyui_controlnet_aux"]'
 expect_lint local-pack-undeclared FAIL "node 7 uses CannyEdgePreprocessor from pack comfyui_controlnet_aux, not declared in requires.packs" "pack node whose pack is missing from requires.packs"
 lv local-pack-foreign '.requires.profile = "api-only" | .requires.peak_vram_gb = 0 | .requires.ram_gb = 0'
 expect_lint local-pack-foreign FAIL "requires.packs: 'comfyui_ipadapter_plus' is not a pack of profile api-only (it has no packs)" "requires.packs: a pack id that is not of the profile"
+expect_lint local-pack-foreign FAIL "node 15 (InspyrenetRembg) $NO_GPU" "requires: a pack node on profile api-only says the profile has no GPU"
 lv local-pack-twice '.requires.packs += ["comfyui_controlnet_aux"]'
 expect_lint local-pack-twice FAIL "requires.packs lists 'comfyui_controlnet_aux' more than once" "requires.packs: a pack listed twice"
 lv local-pack-unused 'del(.workflow["15"]) | .workflow["16"].inputs.images = ["14", 0]'
@@ -767,13 +792,14 @@ $got2"
 # hardware.json missing or malformed: one FAIL reason on a template with requires, never a traceback; a template
 # without requires and without local nodes does not read it
 printf 'not json\n' > "$TMP/hw-notjson.json"; echo '{"schema": "rpg-factory.assetgen-hardware/1", "profiles": [{"id": "local-8gb"}]}' > "$TMP/hw-shape.json"
+jq '.profiles[0].requires.gpu = "no"' "$HW" > "$TMP/hw-gpu.json"  # requires.gpu must be a bool
 python3 -B - "$ROOT" "$LA" "$TMP" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
 root, authoring, tmp = sys.argv[1:]
 sys.path.insert(0, os.path.join(root, "scripts", "assetgen"))
 import lint
 template = lambda name: os.path.join(authoring, "assetgen", "templates", name + ".json")
-for name in ("hw-none.json", "hw-notjson.json", "hw-shape.json"):
+for name in ("hw-none.json", "hw-notjson.json", "hw-shape.json", "hw-gpu.json"):
     lint.HARDWARE = os.path.join(tmp, name)
     row = lint.lint_file(template("local-full"), authoring)
     assert row["state"] == "FAIL" and len(row["reasons"]) == 1, (name, row)
@@ -782,7 +808,7 @@ for name in ("hw-none.json", "hw-notjson.json", "hw-shape.json"):
     assert row["state"] == "PASS" and not row["reasons"], (name, row)
 print("ok")
 EOF
-grep -qx ok "$TMP/o" && ok "lint requires: hardware.json missing, not JSON or malformed is one FAIL reason, no traceback; a template without requires is unaffected" \
+grep -qx ok "$TMP/o" && ok "lint requires: hardware.json missing, not JSON, malformed or with a non-bool requires.gpu is one FAIL reason, no traceback; a template without requires is unaffected" \
   || no "lint requires with a bad hardware.json" "$(cat "$TMP/o")"
 LA=$lint_la
 
