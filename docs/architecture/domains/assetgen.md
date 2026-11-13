@@ -91,7 +91,7 @@ The core effect purposes (handoff domain `vfx`, default family `vfx`, template `
 They add these QA rules to the purpose `qa` block (`scripts/assetgen/qa.py`):
 
 - `qa.flipbook_grid` (`png-flipbook-grid`): `columns` and `rows` of the declared grid. The check needs dark gutters between the cells and no blank cell.
-- `qa.black_background` (`png-black-background`): the border luminance is below `max_luminance`. The optional `edges` list (`top`, `bottom`, `left`, `right`) limits the check to those borders, so a trail grades only its top and bottom edges.
+- `qa.black_background` (`png-black-background`): the mean border luminance of each graded edge is at most `max_luminance`; every edge is graded on its own, so one bright edge fails the check. The optional `edges` list (`top`, `bottom`, `left`, `right`) limits the check to those borders, so a trail grades only its top and bottom edges.
 - `qa.tileable.axis` (`png-tileable`): `x`, `y` or `both` (default `both`, the behaviour before the option). `vfx-trail` sets `x`, so only the left and right edges must match.
 
 Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes, so a transform after generation would break the binding, and the image service ignores the requested size, so a power-of-two output cannot be requested. Those transforms belong to the consuming package's import tool. Each effect purpose says so in `constraints.processing`.

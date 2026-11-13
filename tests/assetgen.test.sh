@@ -545,6 +545,7 @@ def glow(bg):
     return f
 save("glow-ok.png", 512, 512, glow(0), alpha=False)  # a centred glow on pure black
 save("glow-grey.png", 512, 512, glow(90), alpha=False)  # the same glow on a grey background
+save("glow-edge.png", 512, 512, lambda x, y: (60, 60, 60, 255) if x >= 497 else glow(0)(x, y), alpha=False)  # a 15 px bright right edge: pooled border mean under 16
 def streak(x, y):  # a horizontal streak that repeats every half width (wraps left-right) and fades to black before the top and bottom
     v = math.exp(-(abs(y - 256) / 60.0) ** 2) * (0.65 + 0.35 * math.cos(2 * math.pi * 2 * x / 768))
     return (int(255 * v), int(160 * v), int(60 * v), 255)
@@ -768,11 +769,15 @@ qarun qa-flip-plain-001 vfx-flipbook glow-ok.png
   && ok "vfx-flipbook: one glow across the sheet is not a grid (most cells blank)" || no "flipbook plain rc=$rc" "$(rsn png-flipbook-grid)"
 qarun qa-black-ok-001 vfx-sprite glow-ok.png
 [ $rc -eq 0 ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] && [ "$(st png-black-background)/$(st png-alpha)/$(st png-not-blank)" = "PASS/PASS/PASS" ] \
-  && rsn png-black-background | grep -qF "border luminance mean 0.0 (max 16.0) over a 15 px band: top 0.0, bottom 0.0, left 0.0, right 0.0" \
+  && rsn png-black-background | grep -qF "border luminance mean per edge (max 16.0) over a 15 px band: top 0.0, bottom 0.0, left 0.0, right 0.0" \
+  && ! rsn png-black-background | grep -q "over the limit" \
   && ok "vfx-sprite: a centred glow on black passes png-black-background (mean per edge named)" || no "black ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-black-grey-001 vfx-sprite glow-grey.png
-[ $rc -eq 1 ] && [ "$(st png-black-background)" = FAIL ] && rsn png-black-background | grep -qF "border luminance mean 90.0 (max 16.0)" \
+[ $rc -eq 1 ] && [ "$(st png-black-background)" = FAIL ] && rsn png-black-background | grep -qF "top 90.0, bottom 90.0, left 90.0, right 90.0; edges over the limit: top, bottom, left, right" \
   && ok "vfx-sprite: a grey border fails png-black-background" || no "black grey rc=$rc" "$(rsn png-black-background)"
+qarun qa-black-edge-001 vfx-sprite glow-edge.png
+[ $rc -eq 1 ] && [ "$(st png-black-background)" = FAIL ] && rsn png-black-background | grep -qF "right 60.0; edges over the limit: right" \
+  && ok "vfx-sprite: one bright right edge fails png-black-background although the pooled border mean is under 16" || no "black edge rc=$rc" "$(rsn png-black-background)"
 qarun qa-black-icon-001 vfx-sprite icon-ok.png
 [ $rc -eq 1 ] && [ "$(st png-alpha)" = FAIL ] && ok "vfx-sprite: a transparent image fails alpha forbidden (opaque background)" || no "vfx-sprite alpha rc=$rc $(st png-alpha)"
 qarun qa-trail-ok-001 vfx-trail trail-ok.png

@@ -29,9 +29,11 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       every internal cell boundary. PASS when the mean luminance of the gutter pixels is at most
                       max_gutter_luminance and every cell interior (gutter excluded) has a luminance stddev of at least
                       min_cell_stddev; the detail names a bright gutter and the blank cells as (column,row), 1-based.
-  png-black-background  qa.black_background {max_luminance 16, border 0.03, edges all four}: the mean luminance of the
-                      border band (border x the short side, at least 1 px, on each listed edge) must be at most
-                      max_luminance; the detail gives the mean per edge. A pure-black opaque background.
+  png-black-background  qa.black_background {max_luminance 16, border 0.03, edges all four}: each listed edge is graded
+                      on its own: the mean luminance of its border band (border x the short side, at least 1 px) must
+                      be at most max_luminance, so one bright edge fails even when the pooled mean is low. The detail
+                      gives the mean per edge and, on FAIL, names the edges over the limit. A pure-black opaque
+                      background.
   png-not-blank       qa.not_blank: luminance stddev >= min_stddev (0..255) and, with alpha, the share of
                       pixels with alpha > 8 >= min_coverage
   png-edge-fringe     only for qa.alpha required: imaging.edge_fringe (soft edge pixels, alpha 1-31 next to the
@@ -273,14 +275,17 @@ def check_black_background(img, cfg):
                "bottom": [(x, y) for y in range(max(0, h - band), h) for x in xs],
                "left": [(x, y) for x in range(min(band, w)) for y in ys],
                "right": [(x, y) for x in range(max(0, w - band), w) for y in ys]}
-    total, count, parts = 0.0, 0, []
+    parts, over = [], []
     for edge in edges:
         lum = [luminance(img.pixel(x, y)) for x, y in sampled[edge]]
-        total, count = total + sum(lum), count + len(lum)
-        parts.append("%s %.1f" % (edge, sum(lum) / len(lum) if lum else 0.0))
-    mean = total / count if count else 0.0
-    return ("PASS" if mean <= max_lum else "FAIL"), ["border luminance mean %.1f (max %.1f) over a %d px band: %s"
-                                                     % (mean, max_lum, band, ", ".join(parts))]
+        mean = sum(lum) / len(lum) if lum else 0.0
+        parts.append("%s %.1f" % (edge, mean))
+        if mean > max_lum:
+            over.append(edge)
+    detail = "border luminance mean per edge (max %.1f) over a %d px band: %s" % (max_lum, band, ", ".join(parts))
+    if over:
+        detail += "; edges over the limit: %s" % ", ".join(over)
+    return ("FAIL" if over else "PASS"), [detail]
 
 
 def check_not_blank(img, cfg):
