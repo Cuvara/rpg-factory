@@ -48,24 +48,29 @@ Neither PASS nor NOT_RUN is true: the run ran and its QA failed. Step by step:
 
 ## Steps
 
+Placeholders: `<state dir>` is the Factory state dir (`scripts/lib/fstate.py`); `<A>` is the authoring scratch dir
+and `<run>` the run dir (Setup); `assetgen.py` is `python3 -B scripts/assetgen/assetgen.py` run from the plugin
+checkout; `$COMFY_URL` holds the local ComfyUI base address (the one comfy-mcp `server_info` reports as `url`).
+comfy-mcp rows give the tool name and every argument passed; arguments not listed were left at their defaults.
+
 | Step | Command or tool | Result |
 | --- | --- | --- |
-| 1 | comfy-mcp `server_info`; `nodes` action `get` name `NineRouterImage` | ComfyUI running v0.45.2, comfy-cli 1.26.0; node present (Setup) |
+| 1 | comfy-mcp `server_info` (no arguments); `nodes` `action="get"`, `name="NineRouterImage"` | ComfyUI running v0.45.2, comfy-cli 1.26.0; node present (Setup) |
 | 2 | `python3 -B scripts/assetgen/assetgen.py resolve --purpose icon --style stylized-painterly --authoring <A> --out <run>/spec.json` | exit 0; params as in Setup with `quality=high`; warning "no assetgen/project.json: the style is not locked by a project"; references none |
 | 3 | `<run>/prompt.md` | one iron sword item icon, diagonal, centered, transparent background, bold shapes readable at 64 px, style prefix, suffix and avoid list, no text |
 | 4a | `assetgen.py render --run <run> --param quality=low` | exit 0, 5 nodes, `workflow.json` and `workflow.ui.json` |
-| 4b | `assetgen.py review-cmd --phase prompt --run <run>`, printed `codex exec --sandbox read-only ... -o <run>/review-prompt.json` run as printed | exit 0 / exit 0; `review-prompt.json` state PASS, by codex, no findings (bound to the `quality=low` params) |
+| 4b | `assetgen.py review-cmd --phase prompt --run <run>`, then the printed command run as printed (Reviewer command) | exit 0 / exit 0; `review-prompt.json` state PASS, by codex, no findings (bound to the `quality=low` params) |
 | 5 | `assetgen.py render --run <run> --param quality=low` (again, after the review) | exit 0; prompt node title "Prompt (Claude, Codex review PASS)" |
 | 6 | `assetgen.py graph-lint templates/assetgen/workflows/staged-icon.json`; `assetgen.py graph-lint --run <run>` | exit 0, 1 PASS 0 WARN 0 FAIL; exit 0, 1 PASS 0 WARN 0 FAIL |
-| 7 | comfy-mcp `validate_workflow` `<run>/workflow.json` | `valid: true`, 0 errors, 0 warnings, `partner_nodes` empty, `spends_credits: false` |
+| 7 | comfy-mcp `validate_workflow` `workflow_path="<run>/workflow.json"` | `valid: true`, 0 errors, 0 warnings, `partner_nodes` empty, `spends_credits: false` |
 | 8 | comfy-mcp `upload_file` `paths=[<state dir>/pipeline/assetgen-workflows/live-e2e/upload-probe/e2e-icon-002-upload-probe.png]`, `overwrite=false` | fixture only, after the run: no error, 1 upload, stored as `e2e-icon-002-upload-probe.png` (type input, subfolder empty); not consumed by the workflow (Upload probe). The run itself had no `<run>/references/` (no anchors, no edit reference) |
 | 9 | `assetgen.py budget --run <run>` | exit 0, "1 used (0 outputs + 1 failed attempt) of 4 allowed, 3 remaining" |
-| 10a | comfy-mcp `run_workflow` `<run>/workflow.json`, `wait=False` (no `confirm_spend`) | `queued`, one prompt id (Gateway proof) |
-| 10b | comfy-mcp `job` action `wait`, timeout 300 | `completed`, error none; outputs by node: 2 (output folder), 5 (temp folder) |
-| 10c | comfy-mcp `fetch_outputs` prompt id, `out_dir` `<run>/outputs` | 2 files: `937cc86a_000.png` (1445917 bytes), `937cc86a_001.png` (11172 bytes) |
+| 10a | comfy-mcp `run_workflow` `workflow_path="<run>/workflow.json"`, `wait=false` (`confirm_spend` not set: false) | `queued`, one prompt id (Gateway proof) |
+| 10b | comfy-mcp `job` `action="wait"`, `prompt_id="937cc86a-b67c-4a32-ad68-2652a5ef3425"`, `timeout_seconds=300` | `completed`, error none; outputs by node: 2 (output folder), 5 (temp folder) |
+| 10c | comfy-mcp `fetch_outputs` `prompt_id="937cc86a-b67c-4a32-ad68-2652a5ef3425"`, `out_dir="<run>/outputs"` | 2 files: `937cc86a_000.png` (1445917 bytes), `937cc86a_001.png` (11172 bytes) |
 | 11 | `assetgen.py finalize --run <run>` | exit 1, "FAIL at qa": defringe 2 defringed, embed 2 embedded, qa FAIL (10 PASS, 2 FAIL, 8 NOT_AVAILABLE) |
 | 12 | `assetgen.py publish --run <run> --comfy-url "$COMFY_URL"` | exit 0 PASS, `workflows/assetgen/e2e-icon-002.json` (Workflows sidebar > assetgen) |
-| 13 | headless Chrome over the DevTools protocol (claude-in-chrome extension not connected) | screenshot saved (Graph layout) |
+| 13 | `COMFY_URL="$COMFY_URL" node <state dir>/pipeline/assetgen-workflows/live-e2e/capture-graph.mjs --out <state dir>/pipeline/assetgen-workflows/live-e2e/graph-e2e-icon-002.png` (headless Chrome over the DevTools protocol; the claude-in-chrome extension was not connected) | exit 0; 10 nodes and 5 groups loaded, right-hand panel hidden, `Comfy.Canvas.FitView`; PNG 2600x1100 (Graph layout) |
 
 QA rows per output (`qa.json`):
 
@@ -78,6 +83,22 @@ QA rows per output (`qa.json`):
 | png-not-blank | PASS, stddev 56.36, coverage 17.0% | PASS, stddev 53.88, coverage 26.8% |
 | png-edge-fringe | PASS, 0 of 4781 soft edge pixels off-colour | PASS, 0 of 53 |
 | style-palette, -tone, -edges, -canvas | NOT_AVAILABLE (no structured style data, no style lock) | NOT_AVAILABLE |
+
+## Reviewer command
+
+`assetgen.py review-cmd --phase prompt --run <run>` printed the reviewer command; it was saved verbatim to
+`<state dir>/pipeline/assetgen-workflows/live-e2e/review-cmd-002.sh` (3394 bytes; read for this record: no
+credential, URL, host or key in it) and run as printed:
+
+```bash
+codex exec --sandbox read-only -C <run> -o <run>/review-prompt.json - <<'ASSETGEN_REVIEW'
+<the prompt printed by review-cmd, saved in review-cmd-002.sh>
+ASSETGEN_REVIEW
+```
+
+In the saved file `<run>` is the absolute run dir. The heredoc carries the rubric, the purpose and style
+requirements, the requested params, the prompt under review and the binding fields `prompt_sha256` `d69448cb2009...`
+and `requirements_sha256` `68019e87ab12...`; codex read it from stdin (`-`) and wrote its JSON answer to `-o`.
 
 ## PreviewImage outputs
 
@@ -116,8 +137,37 @@ own, after the run, with a harmless credential-free fixture outside the run dir.
 
 ## Graph layout
 
-Screenshot: `<state dir>/pipeline/assetgen-workflows/live-e2e/graph-e2e-icon-002.png` (2600x1100, ComfyUI frontend,
-workflow `e2e-icon-002`, zoom fit to the graph).
+Screenshot: `<state dir>/pipeline/assetgen-workflows/live-e2e/graph-e2e-icon-002.png` (re-captured with the saved
+script below; 2600x1100, 166278 bytes, sha256 prefix `c7ec7e59c3a95f9b`; ComfyUI frontend, tab `e2e-icon-002`, view
+fitted to the graph, 74% zoom). It replaces the first capture of this run, which the Workflow Overview panel cut off
+at the right edge.
+
+Capture script: `<state dir>/pipeline/assetgen-workflows/live-e2e/capture-graph.mjs` (Node 22+, built-in `fetch` and
+`WebSocket`, no npm packages, no credential; sha256 prefix `4de173fced8dd022`). Command:
+
+```bash
+COMFY_URL="$COMFY_URL" node "<state dir>/pipeline/assetgen-workflows/live-e2e/capture-graph.mjs" \
+  --out "<state dir>/pipeline/assetgen-workflows/live-e2e/graph-e2e-icon-002.png"
+# defaults: --workflow workflows/assetgen/e2e-icon-002.json --width 2600 --height 1100 --port 9333
+#           --chrome "C:/Program Files/Google/Chrome/Application/chrome.exe"
+```
+
+The script starts Chrome itself, with a fresh temporary profile that it deletes afterwards:
+
+```bash
+chrome.exe --headless=new --remote-debugging-port=9333 --user-data-dir=<new temp dir> --no-first-run \
+  --no-default-browser-check --disable-extensions --hide-scrollbars --window-size=2600,1100 about:blank
+```
+
+Then, over the DevTools protocol: viewport 2600x1100 at scale 1; navigate to `$COMFY_URL/`; wait for `window.app`;
+in the page, `GET api/userdata/workflows%2Fassetgen%2Fe2e-icon-002.json` (read only) and
+`app.loadGraphData(<that JSON>, true, true, "e2e-icon-002")` (an unsaved tab; nothing written back); close the left
+sidebar tab if one is open and hide the right-hand panel column (the Workflow Overview panel) in the DOM; run the
+`Comfy.Canvas.FitView` command; `Page.captureScreenshot` to `--out`. The run printed: 10 nodes and 5 groups in the
+file and on the canvas, right-hand panel hidden, `Comfy.Canvas.FitView`. Afterwards the userdata listing of
+`workflows/assetgen` still held only `e2e-icon-001.json` and `e2e-icon-002.json`.
+
+Comparison with the reference look (the re-capture confirms the earlier verdicts; only the Capture item changed):
 
 - One group per stage (Prompt, Generate, Post-process, Preview, Output; no References, correctly, without anchors):
   matches.
@@ -127,10 +177,11 @@ workflow `e2e-icon-002`, zoom fit to the graph).
   "Save icon"): matches.
 - Left-to-right flow: matches.
 - No overlapping nodes or groups: matches (groups are separated by an even gap).
-- Link routing: differs - the Generate -> Save link runs along the same row through Post-process and Preview, so Save
-  looks fed by the 64 px preview (seen in the earlier attempt too).
-- Capture: the frontend's Workflow Overview side panel covers the right edge of the Output group; the Save node title,
-  its `images` and `filename_prefix` inputs and its Note are visible.
+- Link routing: differs - the Generate -> Save link (link 2 in the published file: node 1 output 0 to node 2) runs
+  along the same row through Post-process and Preview and meets the `images` output that this frontend draws on
+  "Preview at 64 px", so Save looks fed by the 64 px preview (seen in the earlier attempt too).
+- Capture: the whole graph is visible, including the Output group, "Save icon" with `filename_prefix`
+  `assetgen/e2e-icon-002-icon` and its Note.
 
 ## Findings
 
@@ -144,8 +195,9 @@ workflow `e2e-icon-002`, zoom fit to the graph).
 4. Step 11: the image's subject runs nearly corner to corner of the landscape canvas with the tip close to the top
    right edge; the rubric item "centered with even margin" would likely FAIL in an image review.
 5. Step 13: in the headless frontend the workflow store's `openWorkflow` returned without swapping the canvas; the
-   capture fell back to `loadGraphData` of the same published userdata file (an unsaved tab, nothing written:
-   the userdata listing still holds only `e2e-icon-001.json` and `e2e-icon-002.json`).
+   first capture fell back to `loadGraphData` of the same published userdata file (an unsaved tab, nothing written:
+   the userdata listing still holds only `e2e-icon-001.json` and `e2e-icon-002.json`). The saved capture script
+   uses `loadGraphData` directly.
 
 ## Limitations
 
