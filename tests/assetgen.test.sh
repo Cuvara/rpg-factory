@@ -2744,11 +2744,28 @@ def local():
     literal=copy.deepcopy(spec); literal['template']['data']['workflow']['9']['inputs']['seed']=123
     return (a['models'][0]['name']=='sdxl.safetensors' and not a['models'][0]['verified'] and a['loras'][0]['strength_model']==0.8 and a['loras'][0]['strength_clip']==0.7 and a['samplers'][0] == {'node':'9','class_type':'KSampler','seed':123,'seed_param':'seed','sampler_name':'dpmpp_2m','scheduler':'karras','steps':20,'cfg':5.5,'denoise':0.45} and a['requires_sha256']==r._canonical_sha256(t['requires']) and all(x['verified'] for x in b['models']+b['loras']) and r.local_generation(golden,spec) is None and r.local_generation(wf,literal)['samplers'][0]['seed_param'] is None)
 check('local record shape, cache, requires and seed provenance', local)
+def linked_seed():
+    wf = copy.deepcopy(t['workflow']); linked_spec = copy.deepcopy(spec)
+    wf['9']['inputs']['seed'] = ['12', 0]; wf['12'] = {'inputs': {'value': 123}}
+    linked_spec['template']['data']['workflow']['9']['inputs']['seed'] = ['12', 0]
+    linked_spec['template']['data']['workflow']['12'] = {'inputs': {'value': '{{seed}}'}}
+    sampler = r.local_generation(wf, linked_spec)['samplers'][0]
+    return sampler['seed'] == 123 and sampler['seed_param'] == 'seed'
+check('linked rendered seed records its value and parameter', linked_seed)
+def local_model():
+    import assetgen, tempfile
+    with tempfile.TemporaryDirectory() as run_dir:
+        with open(os.path.join(run_dir, 'workflow.json'), 'w', encoding='utf-8') as f:
+            json.dump({'10': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'second.safetensors'}},
+                       '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'first.safetensors'}},
+                       '9': {'class_type': 'KSampler', 'inputs': {}}}, f)
+        return assetgen.workflow_model(run_dir, {'params': {'model': 'fallback'}}) == 'first.safetensors'
+check('local-only workflow provenance uses the first checkpoint', local_model)
 EOF
 while IFS= read -r line; do
   case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "local unit unexpected output" "$line" ;; esac
 done < "$TMP/local-unit"
-[ "$(grep -c '^ok ' "$TMP/local-unit")" -eq 3 ] || no "local unit cases stopped early" "$(cat "$TMP/local-unit")"
+[ "$(grep -c '^ok ' "$TMP/local-unit")" -eq 5 ] || no "local unit cases stopped early" "$(cat "$TMP/local-unit")"
 
 localrun="$RUNS/local-hybrid-001"
 mkrun local-hybrid-001 sprite-2d --style stylized-painterly --template hybrid-provenance --authoring "$AUTH"
@@ -2779,7 +2796,7 @@ python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2> "$TMP/err" <<'EOF'
 import importlib.util, json, re, sys
 from pathlib import Path
 root, auth = Path(sys.argv[1]), Path(sys.argv[2]).resolve()
-sys.path.insert(0, str(root / 'scripts/checks'))
+sys.path.insert(0, str(root / 'scripts' / 'checks'))
 from domains._api import Context
 s = importlib.util.spec_from_file_location('assetgen_plugin', root / 'scripts/checks/domains/assetgen.py')
 p = importlib.util.module_from_spec(s); s.loader.exec_module(p)

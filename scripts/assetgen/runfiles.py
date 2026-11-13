@@ -274,7 +274,7 @@ def local_record_key(row):
 
 
 def local_generation(workflow, spec, hashes=None):
-    """Record local loaders and sampling settings; no local nodes means no record."""
+    """Record local loaders and sampling settings, resolving linked seed values; no local nodes means no record."""
     if not isinstance(workflow, dict):
         return None
     nodes = [(str(nid), node) for nid, node in workflow.items()
@@ -318,7 +318,13 @@ def local_generation(workflow, spec, hashes=None):
         cls = node["class_type"]
         inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
         if cls == "KSampler":
-            row = {"node": nid, "class_type": cls, "seed": inputs.get("seed"), "seed_param": seed_param(nid)}
+            seed = inputs.get("seed")
+            if isinstance(seed, list) and len(seed) == 2 and isinstance(seed[0], str):
+                source = workflow.get(seed[0])
+                source_inputs = source.get("inputs") if isinstance(source, dict) else None
+                if isinstance(source_inputs, dict) and "value" in source_inputs:
+                    seed = source_inputs["value"]
+            row = {"node": nid, "class_type": cls, "seed": seed, "seed_param": seed_param(nid)}
             row.update({key: inputs.get(key) for key in ("sampler_name", "scheduler", "steps", "cfg", "denoise")})
             result["samplers"].append(row)
         elif cls == "LoraLoader":
