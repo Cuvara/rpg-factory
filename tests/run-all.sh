@@ -6,7 +6,8 @@
 # a passing suite printed (a flaky step it retried) are shown under its PASS line; they are no failure.
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
-#                         [--only-suites L] [--reuse] [--no-reuse] [--no-wait] [--list-suites]
+#                         [--inline-only] [--only-suites L [--only-cases C]] [--reuse] [--no-reuse] [--no-wait]
+#                         [--list-suites]
 #   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
 #                   same count and exit code. Read-only live-workspace checks (runl, block) run one at a time
 #                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
@@ -21,16 +22,28 @@
 #                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
 #                   like a suite by that script path, else it counts as not affected.
 #                   Suites with a case map receive --case A,B for only the affected cases (shown in results).
-#                   An explicit --only-suites name runs all its cases. Case subsets never publish suite PASS records.
+#                   An explicit --only-suites name runs all its cases unless --only-cases gives it a subset. Case
+#                   subsets never publish suite PASS records (a full-suite PASS record still satisfies one).
 #                   Selection needs python3: when it cannot run (not on PATH, or the Microsoft Store stub that Git Bash
 #                   finds on Windows), --affected prints the reason and exits 2 before any suite, lock or slot instead
 #                   of widening to every suite. A full run never probes python3.
+#   --inline-only   run only the inline checks (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest
+#                   and wording greps, resolver and fixture checks): exactly --affected with an empty changed list,
+#                   so every suite and gated script counts as not affected and affected.py is never asked. A targeted
+#                   run (no full-run lock or record, takes a test slot). For a PR that selects no suite (scripts/ci-plan.py).
+#                   Conflicts (exit 2) with --affected, --base, --only-suites, --release, --workspace-only, --list-suites.
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when the full-run lock or every targeted test slot is busy
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
 #                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
 #                   so does a release-only suite (tests/installed-safety.sh) without --release.
+#   --only-cases C  (also --only-cases=C) give the one --only-suites suite the comma-separated case subset C: the suite
+#                   gets --case C as --affected passes it (results show "(cases C)", no suite PASS record). ALL or an
+#                   empty C runs every case (a normal run and record). For CI (scripts/ci-plan.py plans the cases).
+#                   Exits 2 before any check without exactly one --only-suites name, for a suite without a case map
+#                   ('# case-map:' header lines, tests/affected.py case_map), for a case the map does not name, and
+#                   with --release or --inline-only.
 #   --list-suites   print every suite and gated script path the current flags can select (one per line, exactly
 #                   the names --only-suites accepts, in run order; release-only suites only with --release) and
 #                   exit 0; runs no check, takes no lock
@@ -40,7 +53,7 @@
 #   --workspace-only run only checks requiring the live workspace or Claude; conflicts with --no-workspace and --release
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
-#   Targeted runs (--affected / --only-suites) share RPG_FACTORY_TEST_SLOTS machine-wide slots (default 2;
+#   Targeted runs (--affected / --only-suites / --inline-only) share RPG_FACTORY_TEST_SLOTS machine-wide slots (default 2;
 #                   0 disables the cap), under the persistent state directory's locks/run-all-slots/<n>.
 #                   Busy slots queue with a wait message; dead holders are reclaimed. Full runs keep their own lock.
 #   Timings: every suite that ran (not a reused PASS record, a syntax line, or a block and the run lines inside it)
@@ -52,6 +65,7 @@
 #                   10 s, then the write is skipped; a lock older than 60 s or held by a dead pid is taken over).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -59,24 +73,45 @@ cd "$ROOT" || exit 1
 RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stand-in plans set RUNALL_SUITES_FROM)
 RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-suites omits them, --only-suites rejects them without it
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
-list_only=false; workspace_only=false
+list_only=false; workspace_only=false; inline_only=false; base_given=false; affected_given=false
+only_cases=""; only_cases_given=false
 while [ $# -gt 0 ]; do
   case "$1" in --workspace-only) workspace_only=true ;; -h|--help) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF"; exit 0 ;; --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
     --reuse) reuse=true ;; --no-wait) no_wait=true ;; --no-reuse) suite_reuse=false ;;
     --only-suites) only_suites="${2:-}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; }; shift ;;
     --only-suites=*) only_suites="${1#--only-suites=}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; } ;;
+    --only-cases) only_cases="${2:-}"; only_cases_given=true; [ $# -lt 2 ] || shift ;;
+    --only-cases=*) only_cases="${1#--only-cases=}"; only_cases_given=true ;;
     --list-suites) list_only=true ;;
-    --affected) affected=true ;; --base) base="${2:-}"; shift ;;
+    --affected) affected=true; affected_given=true ;; --base) base="${2:-}"; base_given=true; shift ;;
+    --inline-only) inline_only=true ;;
     -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; *) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF" >&2; exit 2 ;; esac
   shift
 done
 if $workspace_only && { ! $use_ws || $release; }; then
   echo "run-all: --workspace-only conflicts with --no-workspace and --release" >&2; exit 2
 fi
+if $inline_only; then   # --inline-only is --affected with an empty changed list: a targeted run of the inline checks only
+  conflicts=""
+  $affected_given && conflicts+=", --affected"; $base_given && conflicts+=", --base"; [ -z "$only_suites" ] || conflicts+=", --only-suites"
+  $only_cases_given && conflicts+=", --only-cases"
+  $release && conflicts+=", --release"; $workspace_only && conflicts+=", --workspace-only"; $list_only && conflicts+=", --list-suites"
+  [ -z "$conflicts" ] || { echo "run-all: --inline-only conflicts with ${conflicts#, }" >&2; exit 2; }
+  affected=true
+fi
+if $only_cases_given; then   # a case subset for the one --only-suites suite (its case map is checked in runall_prepare)
+  if $release; then echo "run-all: --only-cases conflicts with --release (a release runs every case)" >&2; exit 2; fi
+  [ -n "$only_suites" ] || { echo "run-all: --only-cases needs --only-suites with exactly one suite" >&2; exit 2; }
+  case "$only_suites" in *,*) echo "run-all: --only-cases needs exactly one --only-suites name, got '$only_suites'" >&2; exit 2 ;; esac
+  [ "$only_cases" != ALL ] || only_cases=""   # ALL or empty: every case, no --case argument
+fi
 case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive integer, got '$jobs'" >&2; exit 2 ;; esac
 t_start=$(date +%s)
 AFF=""
-if $affected && ! $release; then
+if $inline_only; then
+  AFF=$(mktemp_win)/changed.txt; : > "$AFF"
+  echo "inline-only mode: inline checks only, no suite and no gated script runs"
+elif $affected && ! $release; then
   # Without a working python3 affected.py cannot select, and the fallback below would widen the run to every suite:
   # fail loudly instead (Git Bash on Windows may find the Microsoft Store stub, which prints a hint and exits 9009).
   py_why=""
@@ -422,16 +457,44 @@ CASE_SUITES=(); CASE_LISTS=()
 suite_cases_for() {
   local i; suite_cases=""
   $release && return 0
-  case ",$only_suites," in *",$1,"*) return 0 ;; esac
+  # an explicit --only-suites name runs all its cases, or the --only-cases subset (one name, checked in runall_prepare)
+  case ",$only_suites," in *",$1,"*) suite_cases=$only_cases; return 0 ;; esac
   for i in "${!CASE_SUITES[@]}"; do
     [ "${CASE_SUITES[i]}" = "$1" ] && { suite_cases=${CASE_LISTS[i]}; break; }
   done
   return 0
 }
+# only_cases_check <suite> <cases>: the suite has a case map and it names every case of the comma list (an empty list:
+# every case). The map is read by tests/affected.py's own case_map() (the affected.py next to this script, its ROOT
+# set to the current root), never a second parser; RUNALL_AFFECTED_PY stand-ins have no case map. One line on stderr.
+only_cases_check() {
+  python3 -B - "${RUNALL_SELF%/*}/affected.py" "$1" "$2" <<'PY'
+import importlib.util, os, sys
+path, suite, wanted = sys.argv[1:]
+try:
+    spec = importlib.util.spec_from_file_location("runall_affected", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+except Exception as exc:   # one line, never a traceback: exit 2 like every other misuse
+    print(f"run-all: --only-cases: cannot load the case-map parser {path}: {exc}", file=sys.stderr)
+    sys.exit(2)
+mod.ROOT = os.getcwd()
+mapping = mod.case_map(suite)
+if not mapping:
+    print(f"run-all: --only-cases: suite '{suite}' has no case map (no '# case-map:' header lines)", file=sys.stderr)
+    sys.exit(2)
+unknown = [c for c in wanted.split(",") if c not in mapping] if wanted else []
+if unknown:
+    print(f"run-all: --only-cases: unknown case(s) {', '.join(repr(c) for c in unknown)} in '{suite}'"
+          f" (its case map names: {', '.join(sorted(mapping))})", file=sys.stderr)
+    sys.exit(2)
+PY
+}
 suite_selected() {
   local target=$1
   $release && return 0
   case ",$only_suites," in *",$target,"*) return 0 ;; esac
+  $inline_only && return 1   # an empty changed list: nothing is affected, affected.py is never asked
   if [ -n "$AFF" ]; then
     case "$AFF_ASKED" in *$'\n'"$target"$'\n'*)
       case "$AFF_PICKED" in *$'\n'"$target"$'\n'*) return 0 ;; esac; return 1 ;; esac
@@ -649,9 +712,10 @@ runall_prepare() {
       echo "run-all: unknown suite '$candidate' (not a suite run-all runs; see --list-suites)" >&2; bad=true
     done
     $bad && return 2
+    if $only_cases_given; then only_cases_check "$only_suites" "$only_cases" || return 2; fi
   fi
   if ! $full_run && { $affected || [ -n "$only_suites" ]; }; then test_slot || return $?; fi
-  [ -z "$AFF" ] || affected_select "${suites[@]}"
+  [ -z "$AFF" ] || $inline_only || affected_select "${suites[@]}"
   if $suite_reuse && ! $release; then
     hash_output=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" hashes "${suites[@]}" 2>/dev/null) || hash_output=""
     while read -r suite hash; do
@@ -988,6 +1052,7 @@ run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests
 run "delivery pipeline (tier, plan, dispatch, verdicts, gate)" env -u TMPDIR tests/pipeline.test.sh
 run "generic delivery (pipeline on a plain repo, no registry)" env -u TMPDIR tests/delivery-generic.test.sh
 run "run-all --affected suite selection" tests/affected.test.sh
+run "CI matrix plan (scripts/ci-plan.py: affected suites, fail-safe full, Windows list)" env -u TMPDIR tests/ci-plan.test.sh
 run "run-all -j scheduler (order, counts, concurrency cap, live lane, run1 alone)" tests/run-all-parallel.test.sh
 run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
 run "registry fragments (registry/ -> registry.json build, placement, merge)" tests/registry-fragments.test.sh
@@ -1016,6 +1081,7 @@ run "Comfy Desktop setup script and the vendored 9router node (fake Desktop dir,
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+run "workspace default by platform (shell + Python helper, stubbed uname)" env -u TMPDIR tests/workspace-default.test.sh
 # plan paths (task checks-lows): skipped while the suite is absent; the run line stays visible to list_suites
 if [ -f tests/plan-paths.test.sh ]; then run "plan paths (portable plan path validation)" env -u TMPDIR tests/plan-paths.test.sh; fi
 fi
@@ -1142,12 +1208,13 @@ fi
 # ---- Factory check scripts against the live workspace (read-only)
 live_checks() {
   local wsr cl pin_files out hout ph r p rc
+  wsr="$(rpgf_default_workspace)"
   run "sgl-determinism on Shared.GameLogic" python3 -B scripts/checks/sgl-determinism.py \
-    "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
+    "$wsr/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
   # pin-status reads the client's working tree. When the user has uncommitted pin files (the local file:
   # toggle is a human gate and their state), a live FAIL says nothing about this plugin: then verify the
   # committed HEAD through a read-only export and report SKIP with the reason - never PASS.
-  wsr="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"; cl="$wsr/IndieRPGMMOAdventure"
+  cl="$wsr/IndieRPGMMOAdventure"
   pin_files=(Packages/manifest.json Packages/packages-lock.json "Assets/Samples/Netcode/DOTS Sample/.sample-source")
   if ! gated scripts/checks/pin-status.py; then :
   elif out=$(python3 -B scripts/checks/pin-status.py 2>&1); then ok "pin-status (client pins vs upstream tags)"
@@ -1172,7 +1239,7 @@ live_checks() {
   fi
   for p in Netcode UnityDots UIToolkit; do
     gated scripts/checks/package-ready.py || continue
-    out=$(python3 -B scripts/checks/package-ready.py "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/$p" 2>&1); rc=$?
+    out=$(python3 -B scripts/checks/package-ready.py "$wsr/$p" 2>&1); rc=$?
     { [ $rc -eq 0 ] && grep -q "READY to tag" <<<"$out"; } || { [ $rc -eq 1 ] && grep -q "NOT READY" <<<"$out"; } \
       && ok "package-ready $p -> $(grep -m1 -oE 'NOT READY|READY to tag v[0-9.]+' <<<"$out")" || bad "package-ready $p" "$out"
   done

@@ -132,7 +132,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
-        `tests/run-all.sh --workspace-only`; after the PR opens, CI green is the full-suite gate.
+        `tests/run-all.sh --workspace-only`; after the PR opens, CI runs the affected suites and ci-ok must be
+        green before merging (every suite through workflow_dispatch with full=true).
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
@@ -156,8 +157,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
         a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
-        paths (the plan file and its report.md belong to the run lead and are never stray), verdicts match the
-        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
+        paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
+        and are never stray), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
+        was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
@@ -1652,7 +1654,8 @@ def cmd_planner(a, reg):
               + rubric_lines(a.policy, "   ") + "\n"
               f"3. Write plan.json ({SCHEMA}, docs/schemas/pipeline-plan.schema.json) and run\n"
               f"   `python3 -B ${{CLAUDE_PLUGIN_ROOT}}/scripts/factory-pipeline.py{' --registry none' if reg.get('_defaults') else ''} validate plan.json` until it prints OK.\n"
-              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.")
+              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
+              + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
     emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
     return 0
@@ -1769,6 +1772,79 @@ def known_failing_text(plan):
               "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
 
 
+def test_env_line():
+    """The implement, verify and QA specs' test environment line when the run lead's environment sets
+    RPG_FACTORY_WORKSPACE (a worker session may not inherit it); '' when it is unset or empty."""
+    ws = os.environ.get("RPG_FACTORY_WORKSPACE")
+    return (f"Test environment: set RPG_FACTORY_WORKSPACE={shlex.quote(ws)} for every test run (the run lead's "
+            "environment sets it; a worker session may not inherit it).") if ws else ""
+
+
+def with_test_env(prompt):
+    """`prompt` with test_env_line() appended on its own line; unchanged when the line is empty."""
+    line = test_env_line()
+    if not line:
+        return prompt
+    return prompt + ("" if prompt.endswith("\n") else "\n") + line + ("\n" if prompt.endswith("\n") else "")
+
+
+def session_notes(a):
+    """Normalize and deduplicate dispatch notes in their original order."""
+    notes = []
+    for raw in a.note:
+        note = " ".join(raw.split())
+        if not note:
+            die("--note needs a TEXT")
+        if note not in notes:
+            notes.append(note)
+    env_note = " ".join(os.environ.get("RPG_FACTORY_SESSION_NOTE", "").split())
+    if env_note and env_note not in notes:
+        notes.append(env_note)
+    return notes
+
+
+def python_alias_line(platform=None, which=None, exe=None, probe=None):
+    """Describe the Windows Store python3 alias on PATH or in WindowsApps."""
+    platform = sys.platform if platform is None else platform
+    if platform != "win32":
+        return ""
+    which = shutil.which if which is None else which
+    exe = sys.executable if exe is None else exe
+    path = which("python3")
+    if not path or not any(part.lower() == "windowsapps" for part in re.split(r"[/\\]", path)[:-1]):
+        if probe is None:
+            local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+            probe = os.path.join(local, "Microsoft", "WindowsApps", "python3.exe")
+        if not os.path.isfile(probe):
+            return ""
+        path = probe
+    return (f"Python: python3 here is likely the Microsoft Store alias ({path}), which may not run: run Python as "
+            f"{shlex.quote(exe)} (the interpreter that runs dispatch) or put a python3 shim to it first on PATH.")
+
+
+def language_line(reg):
+    """The Language line of every spec: everything written is English; only the run lead's report to the owner uses the
+    report language (registry or pipeline-defaults workspace.report_language; absent: the user's own language)."""
+    ws = (reg or {}).get("workspace")
+    lang = ws.get("report_language") if isinstance(ws, dict) else None
+    lang = lang.strip() if isinstance(lang, str) and lang.strip() else "the user's language"
+    return ("Language: write everything in English (files, plans, briefs, messages, commits, PR text). Reports between "
+            f"sessions are English; only the run lead reports to the owner in {lang}.")
+
+
+def spec_session_lines(a, reg=None):
+    """Return the lines to append to a dispatch spec."""
+    lines = [language_line(reg)] + [f"Session note: {note}" for note in session_notes(a)]
+    alias = python_alias_line()
+    return lines + ([alias] if alias else [])
+
+
+def with_session_lines(a, prompt, reg=None):
+    """Append session lines, preserving the prompt's trailing newline."""
+    lines = spec_session_lines(a, reg)
+    return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
+
+
 def base_health_hint(info, spec):
     """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
     git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
@@ -1784,11 +1860,13 @@ def base_health_hint(info, spec):
     return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
+    # one token --note=<value>: a note starting with "-" would be read as an option after a bare --note
+    note_args = "".join(f" {orca_cmd.quote([f'--note={note}'])}" for note in (notes or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
@@ -1815,7 +1893,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     sync_out = (f" After each new candidate (a fix included), run `<pipeline> sync <plan> --task {task['id']} --send`: it "
                 "tells stacked dependents to merge it (no-op without them)." if info["worktrees"] else "")
     rules = [
-        f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}`.",
+        f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}{note_args}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
         "below is its worker (Orca allows no nested workers). Outside an Orca session: --runner agent; inside Orca with "
         "the runtime unreachable: --runner agent --orca-unavailable REASON.",
@@ -1847,6 +1925,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
          "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
+        "9. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch." if notes else None,
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
@@ -1976,11 +2055,13 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     key = "integration" if integration else "task"
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
                            task=not integration)
-    policy = ("Integration QA: run the workspace checks before the PR; CI green is the full-suite gate after the PR opens."
+    policy = ("Integration QA: run the workspace checks before the PR; after the PR opens, CI runs the affected suites "
+              "and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
               if integration and ((tiers or {}).get(key) or QA_TIERS[key]) == "ci+workspace" else
               "Integration QA: one full run per batch under the run-all lock; reuse a PASS record of the same clean tree."
               if integration else
-              "Task QA: never a full tests/run-all.sh run; CI is the full-suite gate. "
+              "Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be "
+              "green before merging. "
               "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
     if small:
         policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
@@ -2066,6 +2147,7 @@ SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/deliver
 
 
 def cmd_dispatch(a, reg):
+    session_notes(a)  # reject empty --note even when no spec is written
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -2127,6 +2209,7 @@ def cmd_dispatch(a, reg):
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -2199,13 +2282,19 @@ def cmd_dispatch(a, reg):
                 if parent:
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
+                else:
+                    print(f"factory-pipeline: Orca parent: no checkout has the topic branch {plan['topic']} checked "
+                          f"out, so the Orca parent of the new task worktree falls back to the main checkout "
+                          f"{info['path']}; set plan.topic to your own integration branch (or check "
+                          f"{plan['topic']} out) before dispatching", file=sys.stderr)
                 if stk:  # a sibling of the dependency's worktree, never its child
                     place["reason"] = (f"stacked on {stk['dep']}@{stk['sha'][:10]}: a sibling beside "
                                        f"{parent or main_checkout(info['path'])}")
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
-                             subagent_rule(a, reg, "lead", lead))
+                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
+        prompt = with_session_lines(a, prompt, reg)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
@@ -2308,7 +2397,7 @@ def cmd_dispatch(a, reg):
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt += "\n" + SPEC_COMPLETE + "\n" + checks
+        prompt = with_session_lines(a, with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks), reg)
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -2357,6 +2446,7 @@ def cmd_dispatch(a, reg):
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
@@ -2400,9 +2490,11 @@ def cmd_dispatch(a, reg):
                              failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
                              tiers=pipe.get("qa_tiers")) + "\n" + cases
                    + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_test_env(prompt)
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
+    prompt = with_session_lines(a, prompt, reg)
     started = emit(a, reg, agent, prompt, place, title, plan, role=review_role(grade))
     full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     sha = full if rc == 0 and full else a.sha
@@ -3060,8 +3152,9 @@ def worktree_for(path, branch):
 
 
 def run_lead_files(plan, repo_path):
-    """Repo-relative files the run lead owns on the integration branch: the plan file and its report (its own path when
-    it sits inside the repo, else docs/plans/<id>.json); never task work and never stray."""
+    """Repo-relative files the run lead owns on the integration branch: the plan file (its own path when it sits inside
+    the repo, else docs/plans/<id>.json), its report and the backlog.md beside it (follow-ups); never task work and
+    never stray."""
     names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
     own = plan.get("_path")
     if own and repo_path:
@@ -3071,8 +3164,25 @@ def run_lead_files(plan, repo_path):
             rel = ".."
         if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
             names.add(rel)
-    names |= {os.path.splitext(n)[0] + "/report.md" for n in names}
+    names |= ({os.path.splitext(n)[0] + "/report.md" for n in names}
+              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names})
     return {norm_path(n) for n in names}
+
+
+def qa_covers_head(plan, info, qa_sha, head):
+    """QA covers later commits only when their entire diff consists of run lead files."""
+    if not qa_sha or not head:
+        return False
+    if qa_sha == head:
+        return True
+    _, rc = git(info["path"], "merge-base", "--is-ancestor", qa_sha, head)
+    if rc != 0:
+        return False
+    changed, rc = git(info["path"], "diff", "--name-only", "--no-renames", qa_sha, head)
+    if rc != 0 or changed is None:
+        return False
+    lead_files = run_lead_files(plan, info["path"])
+    return all(norm_path(path) in lead_files for path in changed.splitlines())
 
 
 def xs_diff_above(plan, reg, pipe, task, info, sha):
@@ -3107,6 +3217,19 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: integration branch {plan['topic']} does not exist")
             continue
         heads[key] = head
+        entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
+        if rc != 0 or entries is None:
+            blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
+        lead_files = run_lead_files(plan, info["path"])
+        for path in sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files):
+            content, rc = git(info["path"], "show", f"{head}:{path}")
+            if rc != 0 or content is None:
+                blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
+            else:
+                hit = plan_paths.machine_path_hit(content)
+                if hit:
+                    blockers.append(f"{key}: run lead file {path} has machine-specific path text `{hit}`: "
+                                    "write it portable (repo-relative path, ${RPG_FACTORY_WORKSPACE} or ../..)")
         home, extra = worktree_for(info["path"], plan["topic"])
         if not info["worktrees"]:
             mine = [t["path"] for t in extra if str(t.get("branch", "")).startswith(plan["topic"])]
@@ -3163,8 +3286,10 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             pass
         elif qa.get("state") != "PASS":
             blockers.append(f"{key}: QA {qa.get('state')} at {qa.get('sha', '')[:10]}")
-        elif head != qa.get("sha"):
+        elif not qa_covers_head(plan, info, qa.get("sha"), head):
             blockers.append(f"{key}: QA is STALE (ran on {qa.get('sha', '')[:10]}, integration HEAD is {head[:10]})")
+        elif head != qa.get("sha"):
+            notes.append(f"{key}: QA at {qa['sha'][:10]} covers HEAD {head[:10]}: only run lead files changed since")
     by_id = {t.get("id"): t for t in plan.get("tasks", [])}
     chains = {}  # repo key -> the integration head's first-parent chain, oldest first
 
@@ -4068,7 +4193,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     # Keep the lead's QA visible above, but current integration QA also proves
     # completion in repos where the gate does not require per-task QA.
     if (not per_task_qa and integration_qa and integration_qa.get("state") == "PASS"
-            and integration_qa["sha"] == topic_head):
+            and qa_covers_head(plan, info, integration_qa.get("sha"), topic_head)):
         qa = integration_qa
     if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
         row["phase"] = "qa"
@@ -4101,16 +4226,16 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
     xs_task = next((t for t in tasks if t["repo"] == key and pr.xs_plan(plan, t)), None)
     if xs_task and not (fstate.read_json(verdict_file(plan, f"integration:{key}", "qa")) or {}).get("sha"):
         xq, _ = verdict_of(plan, reg, xs_task["id"], "qa")
-        if xq and xq.get("state") == "PASS" and xq["sha"] == topic_head:
+        if xq and xq.get("state") == "PASS" and qa_covers_head(plan, info, xq.get("sha"), topic_head):
             return first
         row = rows[xs_task["id"]]
         row["phase"] = "integrated"
-        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} is not at the integration HEAD "
+        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} does not cover the integration HEAD "
                             f"{(topic_head or '?')[:10]}: the gate needs it there")
         xs_qa_next(reg, plan, xs_task, info, row, topic_head, me, pf)
         return first
     iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
-    if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
+    if iq and iq.get("state") == "PASS" and qa_covers_head(plan, info, iq.get("sha"), topic_head):
         return first
     if iq and iq.get("state") != "PASS":
         why = f"integration QA {iq.get('state')} at {iq['sha'][:10]}"
@@ -4635,6 +4760,7 @@ def main():
             d.add_argument("--subplan")
             d.add_argument("--subtask")
             d.add_argument("--suite-warn", type=suite_warn_arg, default=SUITE_WARN, metavar="N")
+            d.add_argument("--note", action="append", default=[], metavar="TEXT")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)

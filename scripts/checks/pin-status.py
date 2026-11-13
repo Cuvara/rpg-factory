@@ -22,6 +22,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+from workspace import default_workspace
+
 # upstream repo name (from the git URL) -> workspace dir, tag prefix, package.json path in that repo
 UPSTREAMS = {
     "Netcode": ("Netcode", "v", "package.json"),
@@ -53,7 +56,7 @@ def parse_pin(spec):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workspace", default=os.environ.get("RPG_FACTORY_WORKSPACE", "/mnt/c/Workspaces/UnityIndie"))
+    ap.add_argument("--workspace", default=default_workspace())
     ap.add_argument("--remote", action="store_true", help="also confirm tags with git ls-remote (network)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()

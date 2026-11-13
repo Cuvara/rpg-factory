@@ -210,6 +210,8 @@ fi
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
+# a caller's session note must not leak into any dispatch (the session-note cases set it on purpose)
+unset RPG_FACTORY_SESSION_NOTE
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
 # (the Orca-first cases below set them on purpose)
 for v in $(compgen -e | grep '^ORCA_'); do unset "$v"; done
@@ -248,17 +250,24 @@ pp() {
   python3 -B "$P" "$@" > "$TMP/pp.out" 2>&1; RC=$?; OUT=$(<"$TMP/pp.out")  # no subshell: a fork costs most on Windows
   MEMO_KEY="$key"; MEMO_OUT="$OUT"; MEMO_RC="$RC"; MEMO_SPEC=; MEMO_SRC=
 }
-# pp_spec <args...>: pp, then SPEC and SRC: the persisted Orca spec the one-line prompt names (and the read's exit code)
+# pp_spec <args...>: pp, then SPEC and SRC: the persisted Orca spec the one-line prompt names (and the read's exit code).
+# Only the last line that carries the prompt (`--prompt ` or `--spec ` with `Read your task spec at`) is split: OUT also
+# holds stderr, and a quote character in a stderr line must not break the parse.
 pp_spec() {
   pp "$@"
   if [ -z "$MEMO_SRC" ] || [ "$REUSE" = check ]; then
-    MEMO_SPEC=$(python3 -c 'import pathlib,shlex,sys
-args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"
-prompt=args[args.index(flag)+1]
-assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
-print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$OUT" 2>&1); MEMO_SRC=$?
+    MEMO_SPEC=$(read_spec "$OUT"); MEMO_SRC=$?
   fi
   SPEC="$MEMO_SPEC"; SRC="$MEMO_SRC"
+}
+# read_spec <output>: the persisted spec named by the output's last one-line prompt (stdout and stderr, exit code)
+read_spec() {
+  python3 -c 'import pathlib,shlex,sys
+lines=[l for l in sys.argv[1].splitlines() if ("--prompt " in l or "--spec " in l) and "Read your task spec at " in l]
+args=shlex.split(lines[-1]); flag="--prompt" if "--prompt" in args else "--spec"
+prompt=args[args.index(flag)+1]
+assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
+print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$1" 2>&1
 }
 # has_ere <text> <ere>: grep -qE on the text without a process (bash regex per line; a fork costs most on Windows).
 # PIPELINE_TEST_MATCH=check also runs grep and fails on any difference between the two.
@@ -315,7 +324,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
-ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
+ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
 MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
@@ -383,6 +392,54 @@ for label, payload, down in (
         avail = r.available(pipe, {'id': 'account-' + label})
         assert avail['claude']['available']
         assert avail['codex']['available'] != down
+codex_cases = ('codex-provider', 'codex-no-config', 'codex-openai-provider', 'codex-no-base-url',
+               'codex-invalid-toml', 'codex-non-utf8', 'codex-api-key', 'codex-override')
+if case in codex_cases:
+    codex_home = pathlib.Path(tmp) / case / 'codex-home'
+    codex_home.mkdir(parents=True, exist_ok=True)
+    provider_config = ('model_provider = "router"\n[model_providers.router]\n'
+                       'base_url = "http://127.0.0.1:1/v1"\nenv_key = "ROUTER_KEY"\n'
+                       '[model_providers.router.http_headers]\nAuthorization = "secret-header-fixture"\n')
+    configs = {
+        'codex-provider': provider_config,
+        'codex-override': provider_config,
+        'codex-openai-provider': 'model_provider = "openai"\n[model_providers.openai]\nbase_url = "http://127.0.0.1:1/v1"\n',
+        'codex-no-base-url': 'model_provider = "router"\n[model_providers.router]\nenv_key = "ROUTER_KEY"\n',
+        'codex-invalid-toml': 'model_provider = [\n',
+    }
+    if case in configs:
+        (codex_home / 'config.toml').write_text(configs[case], encoding='utf-8')
+    if case == 'codex-non-utf8':
+        (codex_home / 'config.toml').write_bytes(b'\xff')
+    env = {'ORCA_WORKTREE_ID': 'fixture', 'PATH': case, 'CODEX_HOME': str(codex_home),
+           'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}
+    if case == 'codex-api-key':
+        env['OPENAI_API_KEY'] = 'secret-api-key-fixture'
+    if case == 'codex-override':
+        env['RPG_FACTORY_AGENTS'] = 'claude'
+    payload = json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}})
+    with patch.dict(os.environ, env, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+             args, 0 if args[0] == 'orca' else 1, payload if args[0] == 'orca' else '')) as probe:
+        # the codex login probe fails: only the API configuration can make codex available
+        avail = r.available(pipe, {'id': 'account-' + case})
+        assert avail['claude']['available'], avail
+        if case == 'codex-provider':
+            assert avail['codex'] == {'available': True, 'why': 'codex on PATH; api provider router in config.toml'}, avail
+        elif case == 'codex-api-key':
+            assert avail['codex'] == {'available': True, 'why': 'codex on PATH; OPENAI_API_KEY set'}, avail
+        elif case == 'codex-override':
+            assert avail['codex'] == {'available': False, 'why': 'RPG_FACTORY_AGENTS override'}, avail
+        else:
+            assert not avail['codex']['available'] and 'codex login missing' in avail['codex']['why'], avail
+        orca_calls = [c for c in probe.call_args_list if c.args and c.args[0][0] == 'orca']
+        if case == 'codex-override':
+            probe.assert_not_called()
+        else:
+            assert len(orca_calls) == 1, probe.call_args_list
+        assert all(secret not in repr(avail) for secret in
+                   ('secret-header-fixture', 'ROUTER_KEY', 'secret-api-key-fixture')), avail
 if case == 'orca-offline':
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
                                 'CODEX_HOME': tmp + '/missing-account-config',
@@ -1628,7 +1685,9 @@ assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites 
 assert 'QA tier command:\ntests/run-all.sh --workspace-only' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'})
-assert 'CI green is the full-suite gate after the PR opens' in m.qa_body('x', lone, integration=True, runall=listed)
+assert 'CI runs the affected suites and ci-ok must be green before merging' in m.qa_body('x', lone, integration=True, runall=listed)
+assert ('Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be green '
+        'before merging') in m.qa_body('x', lone, base='main', runall=listed)
 handoff = io.StringIO()
 with contextlib.redirect_stdout(handoff):
     m.emit_lead_handoff(reg, 'claude', 'prompt', {'new': True, 'repo': 'path:' + str(repo),
@@ -1825,10 +1884,14 @@ def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
 verify = dispatch('verify', first)
 assert '# agent: claude' in verify and verify.index('Review the whole diff') < verify.index('QA tier command:')
+TASK_QA = ('Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be green '
+           'before merging')
+assert TASK_QA in verify, verify
 assert 'blocking finding' in verify and 'run no tests' in verify
 implementation = cli('dispatch', str(pf), '--task', 'a', '--phase', 'implement', '--runner', 'print')
 assert 'Run no test suites; only a syntax check' in implementation and 'bash tests/pipeline.test.sh' not in implementation
 out = dispatch('qa', first)
+assert TASK_QA in out, out
 assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
 assert 'tier command already passes these cases' not in out, out
 # selection pre-flight (stderr only, advisory): verify and qa print `selected N of M suites` (N: the Affected cases
@@ -2617,6 +2680,14 @@ for phase in 'implement' 'implement --placement child' 'review --sha abc1234' 'v
     pass=$((pass + 1)); echo "PASS  $phase: no other delivery reference"
   else fail=$((fail + 1)); echo "FAIL  $phase: another delivery reference or missing spec"; fi
 done
+# the language policy: every spec kind carries the Language line (registry workspace.report_language, else the user's language)
+LANG_RULE="^Language: write everything in English \(files, plans, briefs, messages, commits, PR text\)\. Reports between sessions are English; only the run lead reports to the owner in [A-Za-z' ]+\.$"
+for phase in 'lead --report-to run:x' 'implement' 'implement --placement child' 'review --sha abc1234' 'verify --sha abc1234' 'qa --sha abc1234'; do
+  expect_spec "$phase: spec carries the Language line" "$LANG_RULE" dispatch "$OK" --task gw --phase $phase --runner orca
+done
+expect "planner: the prompt carries the Language line" 0 "$LANG_RULE" planner --request "add a thing"
+expect "the registry report language is named in the Language line" 0 "to the owner in Vietnamese\.$" planner --request "add a thing"
+expect "registry none: no report language means the user's language" 0 "to the owner in the user's language\.$" --registry none planner --request "add a thing"
 refute_spec "non-plugin review does not name plugin checklist" 'plugin-review\.md' dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
 expect_spec "non-plugin review retains routed checklist" "the routed lead skill's review checklist" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
 PLUGIN=$(plan plugin-prompt "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
@@ -2626,6 +2697,99 @@ refute_spec "non-plugin verify does not name plugin checklist" 'plugin-review\.m
 mkdir -p "$T/.claude-plugin"; printf '{}\n' > "$T/.claude-plugin/plugin.json"
 expect_spec "plugin manifest review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$TOOL" --task t --phase review --sha abc1234 --runner orca
 rm "$T/.claude-plugin/plugin.json"; rmdir "$T/.claude-plugin"
+# a checkout with tests/run-all.sh (no --list-suites: no suite list, no bash run) gets the tier command and the CI clause
+mkdir -p "$T/tests"; echo 'exit 0' > "$T/tests/run-all.sh"
+TASK_QA='Task QA: never a full tests/run-all\.sh run; CI runs the affected suites per change and ci-ok must be green before merging'
+expect_spec "run-all repo verify spec: the task QA CI clause" "$TASK_QA" dispatch "$PLUGIN" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "run-all repo task QA spec: the task QA CI clause" "$TASK_QA" dispatch "$PLUGIN" --task t --phase qa --sha abc1234 --runner orca
+rm "$T/tests/run-all.sh"; rmdir "$T/tests"
+# the run lead's RPG_FACTORY_WORKSPACE reaches the implement, verify and QA specs (a worker may not inherit it);
+# unset or empty, no such line
+TEST_ENV="^Test environment: set RPG_FACTORY_WORKSPACE=[^ ]*ws'? for every test run \(the run lead's environment sets it; a worker session may not inherit it\)\.$"
+for phase in 'implement' 'verify --sha abc1234' 'qa --sha abc1234'; do
+  expect_spec "$phase spec: the run lead's RPG_FACTORY_WORKSPACE for every test run" "$TEST_ENV" dispatch "$TOOL" --task t --phase $phase --runner orca
+  RPG_FACTORY_WORKSPACE= refute_spec "$phase spec: an empty RPG_FACTORY_WORKSPACE adds no test environment line" "Test environment: set RPG_FACTORY_WORKSPACE" dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+expect_spec "worktree repo implement spec: the test environment line" "$TEST_ENV" dispatch "$OK" --task gw --phase implement --runner orca
+# Session notes reach each kind of session; the lead also forwards them in its dispatch definition.
+for phase in 'implement' 'verify --sha abc1234' 'lead --report-to run:x'; do
+  RPG_FACTORY_SESSION_NOTE= expect_spec "$phase spec: first session note" '^Session note: one$' dispatch "$TOOL" --task t --phase $phase --runner orca --note one --note 'two  words'
+  RPG_FACTORY_SESSION_NOTE= expect_spec "$phase spec: normalized second session note" '^Session note: two words$' dispatch "$TOOL" --task t --phase $phase --runner orca --note one --note 'two  words'
+  RPG_FACTORY_SESSION_NOTE= refute_spec "$phase spec: no session note when empty" 'Session note:' dispatch "$TOOL" --task t --phase $phase --runner orca
+  RPG_FACTORY_SESSION_NOTE= refute_spec "$phase spec: no session note forwarding rule when empty" '^9\. Session notes:' dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+refute_spec "implement spec: an unset session note adds no note" 'Session note:' dispatch "$TOOL" --task t --phase implement --runner orca
+for phase in 'review --sha abc1234' 'qa --sha abc1234'; do
+  RPG_FACTORY_SESSION_NOTE='env note' expect_spec "$phase spec: environment session note" '^Session note: env note$' dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note=one '--note=two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE='env note' expect_spec "lead spec: dispatch forwards environment note" "<dispatch>.* --note=one '--note=env note'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE= expect "dispatch: empty session note is rejected" 2 - dispatch "$TOOL" --task t --phase implement --runner orca --note ''
+# note_forward <name> <lead's RPG_FACTORY_SESSION_NOTE> <note>... -- <lead dispatch args...>: the lead spec's <dispatch>
+# definition, its <pipeline> and <plan> placeholders replaced from the same line, runs as an implement dispatch with an
+# empty caller note; it must exit 0 and the implement spec must carry each note unchanged (a note may start with - or --)
+note_forward() {
+  local name="$1" envnote="$2" notes=() n line cmd= out rc spec src found
+  local re='<pipeline> = `([^`]*)`; <plan> = `([^`]*)`; <dispatch> = `([^`]*)`\.'
+  shift 2
+  while [ "$1" != -- ]; do notes+=("$1"); shift; done; shift
+  RPG_FACTORY_SESSION_NOTE="$envnote" pp_spec "$@"
+  while IFS= read -r line; do
+    line=${line%"$CR"}
+    if [[ $line =~ $re ]]; then
+      cmd=${BASH_REMATCH[3]}; cmd=${cmd//<pipeline>/"${BASH_REMATCH[1]}"}; cmd=${cmd//<plan>/"${BASH_REMATCH[2]}"}; break
+    fi
+  done <<<"$SPEC"
+  if [ "$RC" != 0 ] || [ -z "$cmd" ]; then
+    fail=$((fail + 1)); echo "FAIL  $name: no <dispatch> definition in the lead spec (rc=$RC)"; head -20 <<<"$SPEC"; return
+  fi
+  out=$(RPG_FACTORY_SESSION_NOTE= bash -c "$cmd --phase implement --runner orca" 2>&1); rc=$?
+  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  $name: the forwarded <dispatch> runs"
+  else fail=$((fail + 1)); echo "FAIL  $name: the forwarded <dispatch> exits $rc: $cmd"; sed 's/^/      /' <<<"$out" | head -20; return; fi
+  spec=$(read_spec "$out"); src=$?
+  for n in "${notes[@]}"; do
+    found=1
+    while IFS= read -r line; do [ "${line%"$CR"}" = "Session note: $n" ] && { found=0; break; }; done <<<"$spec"
+    if [ "$src" = 0 ] && [ "$found" = 0 ]; then pass=$((pass + 1)); echo "PASS  $name: the implement spec has 'Session note: $n'"
+    else fail=$((fail + 1)); echo "FAIL  $name: no 'Session note: $n' in the implement spec (spec rc=$src)"; head -20 <<<"$spec"; fi
+  done
+}
+note_forward "lead -> implement: notes starting with - and --" '' -x --foo -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note=-x --note=--foo
+note_forward "lead -> implement: an environment note starting with -" -e -e -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, pathlib, shlex, sys, tempfile
+spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+alias = r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
+exe = r'C:\Py\python.exe'
+which = lambda n: alias
+line = m.python_alias_line('win32', which, exe)
+assert line.startswith('Python: python3 here is likely the Microsoft Store alias') and alias in line and shlex.quote(exe) in line
+assert m.python_alias_line('linux', which, exe) == ''
+with tempfile.TemporaryDirectory(dir=sys.argv[2]) as tmp:
+    probe = pathlib.Path(tmp) / 'python3.exe'
+    shim = lambda n: r'C:\Py\python3.exe'
+    assert m.python_alias_line('win32', shim, exe, probe) == ''
+    assert m.python_alias_line('win32', lambda n: None, exe, probe) == ''
+    probe.touch()
+    line = m.python_alias_line('win32', shim, exe, probe)
+    assert str(probe) in line and line.startswith('Python: python3 here is likely the Microsoft Store alias')
+    assert m.python_alias_line('linux', shim, exe, probe) == ''
+PY
+then pass=$((pass + 1)); echo "PASS  python3 Store alias detection uses platform, resolved path and probe"
+else fail=$((fail + 1)); echo "FAIL  python3 Store alias detection uses platform, resolved path and probe"; fi
+# pp_spec splits only the prompt line: a stderr line with an unbalanced ' and " cannot break it
+printf 'stub spec: quotes survive\n' > "$TMP/pp-stub-spec.md"
+cat > "$TMP/pp-stub.py" <<'PPSTUB'
+import shlex, sys
+print("factory-pipeline: the implementer's model said \"hi", file=sys.stderr, flush=True)
+print("orca orchestration worker-start --agent claude --prompt "
+      + shlex.quote("Read your task spec at " + sys.argv[2] + " and follow it."), flush=True)
+PPSTUB
+P_SAVED="$P"; P="$TMP/pp-stub.py"
+expect_spec "pp_spec: a stderr line with quote characters does not break the spec read" "^stub spec: quotes survive$" pp-stub-quote "$TMP/pp-stub-spec.md"
+P="$P_SAVED"
 expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
 refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
 # known_failing: the lead, QA and verify specs name the checks and the FAIL_AT_BASE rule; a plan without it adds nothing
@@ -3011,6 +3175,13 @@ git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/d
 expect "new task worktree without an integration checkout: git no-track" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
+# topic checked out nowhere: the Orca parent falls back to the main checkout, loudly (stderr only; stdout is unchanged)
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
+err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+if grep -q "^factory-pipeline: Orca parent: no checkout has the topic branch feat/core/demo checked out, .*falls back to the main checkout .*rpg-mmo-server; set plan.topic to your own integration branch" <<<"$err" \
+   && ! grep -q "Orca parent:" <<<"$out" && grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  topic not checked out: stderr hint names the main-checkout fallback, stdout has none and the parent is the main checkout"
+else fail=$((fail + 1)); echo "FAIL  topic not checked out: Orca parent hint"; head -5 <<<"$err"; fi
 expect "lead --placement child without integration checkout uses git" 0 "worktree add --no-track -b feat/core/demo-gw" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 # integration QA joins the checkout of plan.topic; without one it is an error and no worktree is created
 before=$(git -C "$S" worktree list --porcelain); out=$(python3 -B "$P" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca 2>&1); rc=$?
@@ -3024,13 +3195,20 @@ expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "Y
 expect "integration QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner agent
 expect_spec "known_failing: the integration QA spec lists the checks" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA: spec carries the Language line" "$LANG_RULE" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA: spec is complete" "$SPEC_RULE" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA spec: the run lead's RPG_FACTORY_WORKSPACE for every test run" "^Test environment: set RPG_FACTORY_WORKSPACE=[^ ]*ws'? for every test run \(the run lead's environment sets it; a worker session may not inherit it\)\.$" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task integration:client --phase qa --sha abc1234
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
+err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+if ! grep -q "Orca parent:" <<<"$err" && grep -Eq -- "--parent-worktree '?path:[^' ]*demo-int'? " <<<"$out" && ! grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  topic checked out: no Orca parent hint and the parent is the integration checkout"
+else fail=$((fail + 1)); echo "FAIL  topic checked out: Orca parent hint"; head -5 <<<"$err"; fi
 refute "lead prints no orca worktree create beside the integration checkout (any placement)" "orca worktree create" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "no-worktree repo (Unity project): no worktree add and no orca worktree set" "worktree add|worktree set" dispatch "$OK" --task c1 --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement child" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement child --runner orca
@@ -4215,6 +4393,14 @@ assert not errors, errors
 PY
 then pass=$((pass + 1)); echo "PASS  status --json matches docs/schemas/pipeline-status.schema.json"
 else fail=$((fail + 1)); echo "FAIL  status --json schema"; head -c 800 "$TMP/status.json"; fi
+# A failed task QA remains visible, but current integration QA proves completion even after a report-only commit.
+sv --task b --phase qa --sha "$SI" --by codex --state FAIL
+mkdir -p "$TMP/st-int/docs/plans/st"; echo report > "$TMP/st-int/docs/plans/st/report.md"
+gi "$TMP/st-int" add docs/plans/st/report.md; gi "$TMP/st-int" commit -qm "docs: update run report"
+SI=$(git -C "$S" rev-parse feat/core/st)
+st_phase "integration QA covers a report-only commit despite task QA FAIL" b qa
+refute "report-only commit leaves integration QA current in status" "integration QA.*STALE" status "$ST"
+rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/b__qa.json"
 sed -i 's/"objective":"o","paths":\["sa\/"\]/"objective":"changed","paths":["sa\/"]/' "$ST"
 st_phase "a changed task in the plan: its review is no longer counted; review the integration HEAD" a candidate "--task a --phase verify --sha $SI"
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
@@ -4548,16 +4734,51 @@ expect "gate-merge: a real later change to an owned path makes the review STALE"
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: a new review clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 # the run lead's plan file and report.md are never stray; any other unowned file still is
-mkdir -p "$GM/docs/plans/gm"; cp "$GP" "$GM/docs/plans/gm.json"; echo r > "$GM/docs/plans/gm/report.md"
+mkdir -p "$GM/docs/plans/gm"
+python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]="../.."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/docs/plans/gm.json"
+echo r > "$GM/docs/plans/gm/report.md"
 gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): gm plan and report"; gmqa
 expect "gate-merge: the plan file and its report.md are not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 refute "gate-merge: no stray line for docs/plans" "changes outside every task's owned paths" gate "$GP" --no-run-checks
-# a plan file inside the repo under another name: its own path and its sibling directory's report.md
-mkdir -p "$GM/runlead/other"; cp "$GP" "$GM/runlead/other.json"; echo r > "$GM/runlead/other/report.md"
+echo update >> "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: update report"
+expect "gate-merge: report-only commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+expect "gate-merge: gate notes the QA exemption" 0 "NOTE +r: QA at .* covers HEAD .*only run lead files changed since" gate "$GP" --no-run-checks
+refute "gate-merge: status does not mark report-only QA stale" "integration QA.*STALE" status "$GP"
+refute "gate-merge: status does not request QA after report-only commit" "--task integration:r --phase qa" status "$GP"
+gmqa
+gi "$GM" commit --allow-empty -qm "chore: empty commit"
+expect "gate-merge: empty commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+expect "gate-merge: empty commit notes QA covers HEAD" 0 "NOTE +r: QA at .* covers HEAD" gate "$GP" --no-run-checks
+echo code >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: later code"
+expect "gate-merge: code after QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+expect "gate-merge: status asks for integration QA after a code commit" 0 "--task integration:r --phase qa --sha $(git -C "$GM" rev-parse HEAD)" status "$GP"
+refute "gate-merge: code commit is not covered by QA" "covers HEAD" gate "$GP" --no-run-checks
+gmqa
+echo unrelated > "$TMP/gm-main/unrelated.txt"; gi "$TMP/gm-main" add unrelated.txt; gi "$TMP/gm-main" commit -qm "unrelated commit"
+gmv --task integration:r --phase qa --sha "$(git -C "$TMP/gm-main" rev-parse HEAD)" --by codex --state PASS
+expect "gate-merge: non-ancestor QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
+gmqa
+echo 'C:/Users/example/project' >> "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: nonportable report"
+expect "gate-merge: machine path in report blocks gate" 1 'BLOCKER r: run lead file docs/plans/gm/report.md has machine-specific path text' gate "$GP" --no-run-checks
+echo portable > "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: portable report"; gmqa
+# the run lead's follow-ups in docs/plans/backlog.md (delivery.md section 8) are never stray either
+echo b > "$GM/docs/plans/backlog.md"; gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): backlog follow-ups"; gmqa
+expect "gate-merge: the run lead's docs/plans/backlog.md is not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans/backlog.md" "changes outside every task's owned paths" gate "$GP" --no-run-checks
+# a plan file inside the repo under another name: its own path, its sibling directory's report.md and the backlog.md
+# next to it
+mkdir -p "$GM/runlead/Other"
+python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]=".."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/runlead/Other.json"
+echo r > "$GM/runlead/Other/report.md"
+echo b > "$GM/runlead/backlog.md"
 gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): in-repo plan"; gmqa
-GP2="$GM/runlead/other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
+GP2="$GM/runlead/Other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
 refute "gate-merge: a plan file inside the repo is not stray" "changes outside every task's owned paths: .*runlead" gate "$GP2" --no-run-checks
+echo 'C:/Users/example/project' >> "$GM/runlead/Other/report.md"; gi "$GM" commit -qam "docs: nonportable capitalized report"
+expect "gate-merge: machine path in capitalized report blocks gate" 1 'BLOCKER r: run lead file runlead/Other/report.md has machine-specific path text' gate "$GP2" --no-run-checks
+echo r > "$GM/runlead/Other/report.md"; gi "$GM" commit -qam "docs: portable capitalized report"; gmqa
 echo o > "$GM/other.txt"; gi "$GM" add other.txt; gi "$GM" commit -qm "chore: stray"
 expect "gate-merge: another unowned file is still stray" 1 "BLOCKER r: changes outside every task's owned paths: other.txt$" gate "$GP2" --no-run-checks
 git -C "$GM" worktree remove --force "$TMP/gm-main"

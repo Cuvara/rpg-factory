@@ -42,6 +42,17 @@
             "type": "string"
           },
           "minItems": 1
+        },
+        "report_language": {
+          "type": "string",
+          "description": "Language of the report addressed to the owner (chat replies, status, questions, final report). Everything else written is English. Absent: the user's own language."
+        },
+        "language_allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Path globs for localisation data that the english-only advisories skip, e.g. **/Localization/**."
         }
       }
     },

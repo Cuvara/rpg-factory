@@ -12,8 +12,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 - XS applies only when every path is prose (`pipeline_route.prose_path`, see "dispatch" below), no path is a contract
   or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). This plain
   form counts files, not changed lines: `tier --plan` counts the changed lines of the checkout, and the gate those of
-  the committed diff. An XS task has no task lead, task worktree or implement session: the run lead itself edits and commits it on the plan `topic`
-  branch, dispatches one cross-model review and runs the task tier command (delivery.md section 10 step 1).
+  the committed diff. An XS task has no task lead, task worktree or implement session: the run lead itself edits and
+  commits it on the plan `topic` branch, dispatches one cross-model review and runs the task tier command (delivery.md
+  section 10 step 1).
 - `tier --plan plan.json --repo <key> --paths <files>` is the form for `--registry none` and for repos the plan names
   by path: the repo is read from the plan's `repos` entry, not from the registry.
 - `planner --request <text> --runner orca` starts the L-tier planner worker. Planning is read-only and runs in the
@@ -43,14 +44,19 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 
 ## dispatch
 
+- `--note TEXT` is repeatable; `RPG_FACTORY_SESSION_NOTE` supplies one additional note. Dispatch appends each as a
+  `Session note: <text>` line to every spec kind, collapsing whitespace and dropping duplicates. The lead's
+  `<dispatch>` carries them on to its sessions. On win32, when `python3` resolves into WindowsApps or the Store alias
+  `%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe` exists (also behind a `python3` shim first on PATH), the spec
+  also explains how to use the dispatch interpreter or a `python3` shim instead of the Microsoft Store alias.
 - `dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca` prints the task-lead
   handoff. A new task worktree: `git worktree add --no-track -b <branch> <path> <base>` (beside the checkout that has
   the plan `topic` checked out, else beside the repo checkout), the `orca worktree set` lineage line of delivery.md
   section 4 "Orca visibility", then `orca agent launch --worktree path:<path>`. An existing task worktree, or the main
   checkout of a no-worktree repo, gets only the launch (never a worktree create or a new top-level worker there);
   `--placement shared|child` gives the same result. Orca allows one worker level (maximum depth 1), so the task lead
-  then creates its own Run (`orca orchestration run-create --objective <text>`), starts its sessions as workers of that Run
-  (`orca orchestration worker-start --worktree path:<task worktree>`, depth 1) and reports to the run lead with
+  then creates its own Run (`orca orchestration run-create --objective <text>`), starts its sessions as workers of that
+  Run (`orca orchestration worker-start --worktree path:<task worktree>`, depth 1) and reports to the run lead with
   `orca orchestration send --to run:<run lead run id> --type status --subject <text> --body <report>`.
   A first-wave task branches from `repos.<key>.base`; a later-wave task (one with deps) from the plan's `topic`
   integration branch when it exists, because that branch carries the earlier waves. `repos.<key>.base` stays the
@@ -79,8 +85,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   resumes the task lead in its worktree (or the main checkout of a no-worktree repo) for the fix.
 - XS task: `--phase lead` starts no session; it says the run lead edits the task on the `topic` branch and prints the
   run lead's steps: commit with explicit paths, the review command, the task tier command, the QA `verdict` record
-  (note `tier XS: lead ran task suites`) and the gate. `--phase implement` exits 2. `--phase review --sha <sha>` then needs no task worktree: the reviewer reads the topic checkout, and
-  the implementer is recorded as the run lead's model, so the review goes to the other model.
+  (note `tier XS: lead ran task suites`) and the gate. `--phase implement` exits 2. `--phase review --sha <sha>` then
+  needs no task worktree: the reviewer reads the topic checkout, and the implementer is recorded as the run lead's
+  model, so the review goes to the other model.
 - `dispatch ... --phase review --sha <sha>` and `--phase qa --sha <sha>` start one of the two alone, for a lead that
   needs only one of them. `--phase qa` (like `--phase verify`) prints the tier command (never a full run) and the case
   list for its base and suite selection (`ALL` for explicit suites). `--task integration:<repo>` targets the
@@ -189,6 +196,13 @@ factory-pipeline.py sync plan.json --task <id> [--send]
 - An XS task needs its review PASS on the run lead's commit and the lead-run QA verdict (note starting `tier XS`) at
   the `topic` HEAD, which stands in for the integration QA while none is recorded; the gate blocks it when the
   committed diff exceeds the XS rule (a non-prose path, files, changed lines, a contract or generated path).
+- The integration QA (or the tier XS lead QA) stays current after a later commit when its SHA is an ancestor of the
+  integration HEAD and every file changed between them is a run lead file (the plan file, its `report.md` and the
+  `backlog.md` beside it); the gate then prints a NOTE instead of rerunning the workspace QA. Any other changed file,
+  a QA SHA that is not an ancestor or a failing git command keeps the `QA is STALE` blocker (fail safe).
+- The gate checks the run lead files present on the integration branch with the machine-path rule of
+  `scripts/lib/plan_paths.py` (the same rule as the portable-plans case of `tests/parallel-policy.test.sh`) and lists
+  a blocker naming each file that holds machine-specific path text, so it is caught before the PR, not by CI.
 - `status` follows the same XS flow: the task's branch is the `topic`; uncommitted edits in its paths are the run
   lead's; a commit names `--phase review --sha <sha>`; after the review PASS the next step is the task tier command and
   the lead QA record at the `topic` HEAD (never an integration QA session); with that QA PASS it names the gate.
@@ -207,10 +221,11 @@ An agent is available when its `agents.<a>.bin` of the pipeline settings is on P
 auth source, checked in this order:
 
 - `orca account`: Orca's account list (when Orca runs) has auth for it;
-- `codex login`: `codex login status` exits 0;
+- `OPENAI_API_KEY set`: the variable is set;
 - `api provider <name>`: the active `model_provider` of the Codex config (`$CODEX_HOME/config.toml`, else
   `~/.codex/config.toml`; top level or the default profile) carries authentication: an `http_headers` Authorization
-  entry, an `env_key` whose variable is set, or `requires_openai_auth` with a `codex login`.
+  entry, an `env_key` whose variable is set, or a provider other than `openai` with a `base_url`;
+- `codex login`: `codex login status` exits 0 (this also covers `requires_openai_auth`).
 
 The `orca` and `codex login status` calls time out after 5 s. `agents` prints the source that made Codex available,
 or every reason it is not (e.g. `no Orca account, codex login missing, no authenticated api provider`); it never

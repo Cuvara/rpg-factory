@@ -14,8 +14,9 @@
 A suite runs when one of these holds (anything unsure runs):
   - a global input changed (GLOBAL: registry, hooks, manifests) - every suite runs;
   - a runner or selector change runs its explicitly mapped suites;
-  - a change to scripts/factory-pipeline.py or scripts/lib/pipeline_route.py (PIPELINE_SUITES) runs its two mapped
-    suites and a suite that itself names the file (exact path in its text or an EXTRA pattern), not the ~19 suites its import
+  - a change to scripts/factory-pipeline.py, scripts/lib/pipeline_route.py or scripts/lib/english.py (PIPELINE_SUITES)
+    runs its mapped suites (two for the pipeline files; english-only, file-guard, git-guard for english.py) and a
+    suite that itself names the file (exact path in its text or an EXTRA pattern), not the ~19 suites its import
     closure reaches; only selection is narrowed, hashes (suite reuse) keep the conservative closure;
   - a library or Python module change reaches a named script or suite through static imports, followed through
     every tracked Python module on the way (unresolved/dynamic libraries and unnamed leaves run all; a leaf a
@@ -76,6 +77,8 @@ DIRECT_SUITES = {
 PIPELINE_SUITES = {
     "scripts/factory-pipeline.py": {"tests/pipeline.test.sh", "tests/delivery-generic.test.sh"},
     "scripts/lib/pipeline_route.py": {"tests/pipeline.test.sh", "tests/delivery-generic.test.sh"},
+    # shared English-only detection: the check (global, scripts/checks/english-only.py) and the guards import it
+    "scripts/lib/english.py": {"tests/english-only.test.sh", "tests/file-guard.test.sh", "tests/git-guard.test.sh"},
 }
 
 SKILL_TEXT = ["skills/*", ".claude/skills/*"]

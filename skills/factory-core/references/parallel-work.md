@@ -47,8 +47,8 @@ exclusive resources, QA tiers and model policy. `plan.json` `repos.<key>` names 
 ## Tier commands of this plugin repo (delivery.md section 10, "QA tiers")
 
 The QA tiers table of delivery.md carries this repo's commands (registry `pipeline.qa_tiers`); the single-verify rule
-(`policy:single-verify`) is there too. The rules behind them are in `tests/README.md`: the run-all lock (one full run per machine; CI is the full-suite gate and
-`tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
+(`policy:single-verify`) is there too. The rules behind them are in `tests/README.md`: the run-all lock (one full run per machine; CI runs the affected suites per change, `ci-ok` must be
+green before merging and `tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
 slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for a release.
 
 ## Stacked dispatch and test selection in this repo (delivery.md sections 4 and 10)
@@ -84,3 +84,8 @@ lessons of this repo behind it, each with its reason.
 - The run report is `docs/plans/<plan>/report.md` (`docs/plans/README.md`); verdicts and specs stay in the
   per-machine state dir, so a new machine re-runs review and QA. The report layout is `report.md` in this folder's
   `references/`; it includes the Cost table (`skills/delivery/references/delivery.md` section 8).
+- `factory-pipeline.py dispatch --phase lead` takes a new task worktree's Orca parent from the checkout that holds
+  `plan.topic` and falls back to the main checkout when none has it, so the run lead sets `plan.topic` to its own
+  integration branch (or checks the topic out) before dispatching. Reason: in plan ci-matrix a task worktree landed
+  under the main checkout instead of the run lead's worktree. Dispatch prints a stderr hint; `tests/pipeline.test.sh`
+  covers it.

@@ -17,7 +17,7 @@
 # case-map: orca-lineage skills/delivery/references/delivery.md scripts/lib/compat.sh
 # case-map: agents-roles scripts/lib/compat.sh
 # case-map: plan-paths scripts/lib/plan_paths.py scripts/lib/compat.sh
-# case-map: portable-plans docs/plans/* scripts/lib/compat.sh
+# case-map: portable-plans docs/plans/* scripts/lib/plan_paths.py scripts/lib/compat.sh
 # case-map: cli-selftest scripts/lib/compat.sh
 # scripts/lib/compat.sh is sourced by the suite itself (temp dirs, copies), so it maps to every case. Inputs with no line run ALL:
 # the suite's own file, root files (AGENTS.md, README.md: agents-roles reads AGENTS.md, so it only runs with ALL), registry.json,
@@ -469,7 +469,7 @@ else:
         "Verify, once per candidate": ("diff review first", "--affected", "never a full run"),
         "Re-verify after a FAIL": ("only the failed suites", "--failed-at qa", "plus `--affected", "previous FAIL candidate", "--failed-at review"),
         "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
-        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green is the full gate", "ci+workspace"),
+        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green (ci-ok) is the merge gate", "ci+workspace"),
         "Release": ("--release", "dogfood.sh --installed"),
     }
     for label, phrases in required.items():
@@ -533,7 +533,7 @@ q_mutate "QA tiers integration row back to a full local run" "qa-tiers row chang
 q_mutate "QA tiers integration row drops the CI watch" "qa-tiers row changed: Integration QA, once per batch before the PR" \
   'sed -i "/^| Integration QA,/s/gh pr checks/gh pr view/" "$F"'
 q_mutate "QA tiers integration row drops the CI gate statement" "qa-tiers row changed: Integration QA, once per batch before the PR" \
-  'sed -i "/^| Integration QA,/s/CI green is the full gate/a green CI helps/" "$F"'
+  'sed -i "/^| Integration QA,/s/CI green (ci-ok) is the merge gate/a green CI helps/" "$F"'
 q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
@@ -683,15 +683,17 @@ fi
 if has_case portable-plans; then
 # Check every file, including untracked plans; use the same checker on injected copies.
 portable_plans() {
-  python3 -B - "$1" <<'PY'
-import re
+  python3 -B - "$1" "$ROOT" <<'PY'
+import os
 import sys
 from pathlib import Path
 
-machine_path = re.compile(r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/|/mnt/[A-Za-z](?:/|$)|/Users/|/home/|AppData', re.I | re.M)
+sys.path.insert(0, os.path.join(sys.argv[2], 'scripts', 'lib'))
+from plan_paths import machine_path_hit
+
 bad = []
 for path in sorted(Path(sys.argv[1]).rglob('*')):
-    if path.is_file() and machine_path.search(path.read_bytes().decode('utf-8', errors='replace')):
+    if path.is_file() and machine_path_hit(path.read_bytes().decode('utf-8', errors='replace')):
         bad.append(str(path))
 if bad:
     print('machine-specific absolute path: ' + ', '.join(bad))

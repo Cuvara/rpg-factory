@@ -20,10 +20,12 @@
 # Scenarios: route-wire tags-policy push-tags skills-list (default: all)
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 OUT="${DOGFOOD_OUT:-/tmp/rpgf-dogfood-codex}"
-WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
-[ -d "$WS" ] || { [ -n "$RPGF_WINDOWS" ] && [ -d C:/Workspaces/UnityIndie ] && WS=C:/Workspaces/UnityIndie; }
+WS="$(rpgf_default_workspace)"
+# codex (a native Windows program) matches its trusted project by the C:/ form
+[ -n "$RPGF_WINDOWS" ] && WS="$(cygpath -m "$WS" 2>/dev/null || printf '%s' "$WS")"
 REAL_HOME="${CODEX_HOME:-$HOME/.codex}"
 dry=false; keep=false; model=""
 while [ $# -gt 0 ]; do case "$1" in

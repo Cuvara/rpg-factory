@@ -116,20 +116,29 @@ def mark(plan, agent, reason=None):
 _cache = {}
 
 
-def _codex_provider(login):
-    """Return the active authenticated provider's name, without exposing credentials."""
+def _codex_auth():
+    """The reason codex is authenticated through its API configuration, or None; never exposes a credential value.
+    OPENAI_API_KEY set, or the active provider (the profile's model_provider first) has an Authorization http header,
+    an env_key whose variable is set, or is a non-openai provider with a base_url. A login (codex login status) is
+    checked by the caller."""
+    if os.environ.get('OPENAI_API_KEY'):
+        return 'OPENAI_API_KEY set'
     try:
         data = codexconfig.config()
         profile = data.get('profiles', {}).get(data.get('profile'), {})
-        name = profile.get('model_provider', data.get('model_provider'))
+        name = profile.get('model_provider', data.get('model_provider')) if isinstance(profile, dict) else None
         if not isinstance(name, str) or not name:
             return None
         provider = data.get('model_providers', {}).get(name, {})
+        if not isinstance(provider, dict):
+            return None
         headers = provider.get('http_headers', {})
-        header = isinstance(headers, dict) and any(k.lower() == 'authorization' for k in headers)
+        header = isinstance(headers, dict) and any(str(k).lower() == 'authorization' for k in headers)
         env_key = provider.get('env_key')
-        if header or isinstance(env_key, str) and bool(os.environ.get(env_key)) or provider.get('requires_openai_auth') is True and login:
-            return name
+        keyed = isinstance(env_key, str) and bool(os.environ.get(env_key))
+        base_url = name != 'openai' and isinstance(provider.get('base_url'), str) and bool(provider['base_url'])
+        if header or keyed or base_url:
+            return 'api provider ' + name + ' in config.toml'
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     return None
@@ -140,17 +149,19 @@ def available(pipe, plan):
     path = marks_path(plan) if plan is not None else None
     # content, not mtime: two writes within the timer resolution (Windows) share an mtime
     stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
-    try:
-        # a digest, so the memo never holds the config's header or key values
-        config_digest = hashlib.sha256((Path(codexconfig.home()) / 'config.toml').read_bytes()).digest()
-    except OSError:
-        config_digest = None
-    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'),
-           os.environ.get('PATH'), os.environ.get('CODEX_HOME'), os.environ.get('HOME'),
-           os.environ.get('USERPROFILE'), stamp, config_digest, frozenset(k for k, v in os.environ.items() if v))
+    override = os.environ.get('RPG_FACTORY_AGENTS')
+    config_digest = None
+    if override is None:
+        try:
+            # a digest, so the memo never holds the config's header or key values
+            config_digest = hashlib.sha256(Path(codexconfig.config_path()).read_bytes()).digest()
+        except OSError:
+            pass
+    key = (id(pipe), plan.get('id') if plan is not None else None, override, os.environ.get('PATH'), stamp,
+           (os.environ.get('CODEX_HOME'), os.environ.get('HOME'), os.environ.get('USERPROFILE'), config_digest,
+            frozenset(k for k, v in os.environ.items() if v)) if override is None else None)
     if key in _cache:
         return _cache[key]
-    override = os.environ.get('RPG_FACTORY_AGENTS')
     chosen = {x.strip() for x in override.split(',')} if override is not None else None
     out = {}
     candidates = pipe.get('available_agents', list(pipe['agents']))
@@ -186,15 +197,14 @@ def available(pipe, plan):
             pass
     if chosen is None and out.get('codex', {}).get('available'):
         codex_bin = pipe['agents']['codex']['bin']
-        source = 'orca account' if codex_orca else None
+        source = 'orca account' if codex_orca else _codex_auth()
         if not source:
             try:
                 login = subprocess.run([shutil.which(codex_bin), 'login', 'status'], capture_output=True,
                                        stdin=subprocess.DEVNULL, timeout=5).returncode == 0
             except (OSError, TypeError, subprocess.TimeoutExpired):
                 login = False
-            provider = _codex_provider(login) if not login else None
-            source = 'codex login' if login else 'api provider ' + provider if provider else None
+            source = 'codex login' if login else None
         out['codex'] = {'available': bool(source), 'why': codex_bin + ' on PATH; ' +
                         (source or orca_reason + ', codex login missing, no authenticated api provider')}
     for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
