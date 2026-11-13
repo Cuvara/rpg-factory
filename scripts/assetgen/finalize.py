@@ -1,4 +1,9 @@
-"""assetgen finalize: defringe (alpha purposes only), embed and qa in one fixed order, after fetch_outputs.
+"""assetgen finalize: filter, defringe (alpha purposes only), embed and qa in one fixed order, after fetch_outputs.
+
+filter comes first: fetch_outputs also downloads PreviewImage files into outputs/, so every outputs/*.png that
+runfiles.output_origins classifies as a preview (not written by a SaveImage node of the rendered workflow.json) is moved
+to <run>/previews/ (never overwritten, never deleted); a file with no SaveImage or preview evidence stays and is reported.
+filter FAILs, moving nothing, when every output is a preview. Runs whose outputs are all SaveImage files are untouched.
 
 The three verbs keep their own contracts; this module only sequences them so embed can never be skipped before qa.
 It never imports assetgen: assetgen.py passes its own module (`ag`), so there is no import cycle.
@@ -46,6 +51,56 @@ def precheck(ag, run_dir):
     if os.path.isfile(path):
         record = ag.read_json(path, "defringe record")
     return spec, record
+
+
+def free_target(directory, name):
+    """<directory>/<name>, or <stem>.<n><ext> with the first free n >= 1 when that exists: a move never overwrites."""
+    target = os.path.join(directory, name)
+    stem, ext = os.path.splitext(name)
+    n = 0
+    while os.path.lexists(target):
+        n += 1
+        target = os.path.join(directory, "%s.%d%s" % (stem, n, ext))
+    return target
+
+
+def filter_step(ag, run_dir):
+    """The filter step: {step, state: moved|skipped|FAIL, reason, results}. Moves every preview file of outputs/ to
+    previews/; save files get no row, unknown files a kept row. Nothing is deleted or overwritten."""
+    step = {"step": "filter", "state": "skipped", "reason": "", "results": []}
+    workflow = None
+    path = os.path.join(run_dir, "workflow.json")
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                workflow = json.load(f)
+        except (OSError, ValueError, UnicodeError):
+            workflow = None
+    origins = ag.runfiles.output_origins(run_dir, workflow)
+    pngs = ["outputs/" + os.path.basename(p) for p in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))]
+    previews = [o for o in pngs if origins.get(o, {}).get("kind") == "preview"]
+    unknown = [o for o in pngs if origins.get(o, {}).get("kind", "unknown") not in ("save", "preview")]
+    if not previews:
+        step["reason"] = "no preview file in outputs/"
+    elif len(previews) == len(pngs):
+        step.update(state="FAIL", reason="every outputs/*.png is a preview file (no SaveImage output): nothing to "
+                    "finalize")
+        return step
+    else:
+        target_dir = os.path.join(run_dir, ag.runfiles.PREVIEW_DIR)
+        os.makedirs(target_dir, exist_ok=True)
+        for output in previews:
+            target = free_target(target_dir, output.split("/", 1)[1])
+            os.rename(os.path.join(run_dir, *output.split("/")), target)
+            step["results"].append({"state": "moved", "output": output, "reason": "-> %s/%s: %s" % (
+                ag.runfiles.PREVIEW_DIR, os.path.basename(target), origins[output].get("reason", ""))})
+        step.update(state="moved", reason="%d moved to %s/, %d kept" % (len(previews), ag.runfiles.PREVIEW_DIR,
+                                                                         len(pngs) - len(previews)))
+    for output in unknown:
+        step["results"].append({"state": "kept", "output": output,
+                                "reason": "no SaveImage or preview evidence, left in outputs/: %s"
+                                % origins.get(output, {}).get("reason", "not classified")})
+    return step
 
 
 def wants_alpha(spec):
@@ -130,9 +185,13 @@ def run(ag, run_dir, force=False, as_json=False):
     spec, record = precheck(ag, run_dir)
     before = image_reviews(ag, run_dir)
     steps, qa_text, code, failed = [], "", 0, None
-    steps.append(defringe_step(ag, run_dir, spec, record, force))
+    steps.append(filter_step(ag, run_dir))
     if steps[-1]["state"] == "FAIL":
-        failed = "defringe"
+        failed = "filter"
+    if not failed:
+        steps.append(defringe_step(ag, run_dir, spec, record, force))
+        if steps[-1]["state"] == "FAIL":
+            failed = "defringe"
     if not failed:
         steps.append(embed_step(ag, run_dir))
         if steps[-1]["state"] == "FAIL":
