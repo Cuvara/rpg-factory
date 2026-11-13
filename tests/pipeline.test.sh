@@ -4025,14 +4025,17 @@ expect "gate-merge: the run lead's docs/plans/backlog.md is not stray" 0 "^Gate:
 refute "gate-merge: no stray line for docs/plans/backlog.md" "changes outside every task's owned paths" gate "$GP" --no-run-checks
 # a plan file inside the repo under another name: its own path, its sibling directory's report.md and the backlog.md
 # next to it
-mkdir -p "$GM/runlead/other"
-python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]=".."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/runlead/other.json"
-echo r > "$GM/runlead/other/report.md"
+mkdir -p "$GM/runlead/Other"
+python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]=".."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/runlead/Other.json"
+echo r > "$GM/runlead/Other/report.md"
 echo b > "$GM/runlead/backlog.md"
 gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): in-repo plan"; gmqa
-GP2="$GM/runlead/other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
+GP2="$GM/runlead/Other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
 refute "gate-merge: a plan file inside the repo is not stray" "changes outside every task's owned paths: .*runlead" gate "$GP2" --no-run-checks
+echo 'C:/Users/example/project' >> "$GM/runlead/Other/report.md"; gi "$GM" commit -qam "docs: nonportable capitalized report"
+expect "gate-merge: machine path in capitalized report blocks gate" 1 'BLOCKER r: run lead file runlead/Other/report.md has machine-specific path text' gate "$GP2" --no-run-checks
+echo r > "$GM/runlead/Other/report.md"; gi "$GM" commit -qam "docs: portable capitalized report"; gmqa
 echo o > "$GM/other.txt"; gi "$GM" add other.txt; gi "$GM" commit -qm "chore: stray"
 expect "gate-merge: another unowned file is still stray" 1 "BLOCKER r: changes outside every task's owned paths: other.txt$" gate "$GP2" --no-run-checks
 git -C "$GM" worktree remove --force "$TMP/gm-main"

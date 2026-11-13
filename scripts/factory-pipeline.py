@@ -2858,14 +2858,11 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: integration branch {plan['topic']} does not exist")
             continue
         heads[key] = head
-        for path in sorted(run_lead_files(plan, info["path"])):
-            _, exists_rc = git(info["path"], "cat-file", "-e", f"{head}:{path}")
-            if exists_rc != 0:
-                # cat-file also fails for a missing path; ls-tree distinguishes that from a git failure.
-                entry, rc = git(info["path"], "ls-tree", head, "--", path)
-                if rc != 0 or entry is None or entry:
-                    blockers.append(f"{key}: cannot inspect run lead file {path} on integration HEAD")
-                continue
+        entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
+        if rc != 0 or entries is None:
+            blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
+        lead_files = run_lead_files(plan, info["path"])
+        for path in sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files):
             content, rc = git(info["path"], "show", f"{head}:{path}")
             if rc != 0 or content is None:
                 blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
