@@ -8,7 +8,7 @@
 # scripts/factory-context.sh, scripts/lib/compat.sh and tests/affected.py. A guard module has no map line on purpose: every module
 # is imported by another, up to runtime.py, which every case runs through, so no module change is narrower than ALL.
 set -uo pipefail
-CASES='retry-selftest skill-read process-kill policy wrappers commit-ops gh-api v2-misc worktrees latch modes tech-skills remote-mutations local-refs classification mode-switch cli-selftest'
+CASES='retry-selftest skill-read process-kill policy wrappers commit-ops gh-api v2-misc worktrees latch modes tech-skills remote-mutations local-refs classification mode-switch language cli-selftest'
 usage() {
   printf '%s\n' 'Usage: git-guard.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
 }
@@ -1013,6 +1013,74 @@ mx allow "$SERVER" "bash -x $CTX --mode analyze"
 mx high  "$SERVER" "touch f.txt"
 mx allow "$SERVER" "bash $CTX --mode implement"
 
+fi
+
+if has_case language; then
+# ---- english-only advisory (rule english-only): the text of git commit, gh pr/issue, orca send/launch and the Agent tool
+# prompt. Vietnamese text warns and names the rule; English text and a command outside the workspace give no opinion.
+# Never a permissionDecision, never a failure exit.
+vi_msg='sửa lỗi đăng nhập của người dùng'
+lang() { # yes|no cwd command [tool-name] [field]  (field: command, or prompt for the Agent tool)
+  local expect="$1" cwd="$2" cmd="$3" tool="${4:-Bash}" field="${5:-command}" payload out rc got=no
+  payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" --arg f "$field" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{($f):$c}, cwd:$d, session_id:"guardtest"}')
+  out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
+  [[ "$out" == *'english-only'* ]] && got=yes
+  if [ "$rc" -eq 0 ] && [ "$got" = "$expect" ] && [[ "$out" != *permissionDecision* ]] && { [ "$got" = no ] || [[ "$out" == *'advisory (warn)'* ]]; }; then pass=$((pass + 1))
+  else fail=$((fail + 1)); printf 'FAIL english-only expected=%s got=%s rc=%s tool=%s cmd=%q\n  out=%s\n' "$expect" "$got" "$rc" "$tool" "$cmd" "$out"; fi
+}
+lang yes "$FEATURE" "git commit -m \"$vi_msg\""
+lang yes "$FEATURE" "git commit --message \"$vi_msg\""
+lang yes "$FEATURE" "git commit --message=\"$vi_msg\""
+lang yes "$FEATURE" "git commit -m 'fix login' -m '$vi_msg'"        # a repeated -m: the second paragraph is checked
+lang yes "$FEATURE" "git commit -am \"$vi_msg\""                    # a short-flag cluster ending in m
+lang yes "$FEATURE" "git commit -m \"\$(cat <<'EOF'
+fix login
+
+$vi_msg
+EOF
+)\""                                                                  # the heredoc form agents use
+lang yes "$FEATURE" "git -C $FEATURE commit -m \"$vi_msg\""
+lang yes "$FEATURE" "gh pr create --title \"$vi_msg\" --body 'fix login'"
+lang yes "$FEATURE" "gh pr create --title 'fix login' --body \"$vi_msg\""
+lang yes "$FEATURE" "gh pr edit 7 --body \"$vi_msg\""
+lang yes "$FEATURE" "gh issue create --title 'fix login' --body \"$vi_msg\""
+lang yes "$FEATURE" "gh issue comment 7 --body \"$vi_msg\""
+lang yes "$FEATURE" "gh --repo o/r pr create -t \"$vi_msg\" -b x"
+lang yes "$FEATURE" "orca orchestration send --from t --type worker_done --subject done --body \"$vi_msg\""
+lang yes "$FEATURE" "orca orchestration send --from t --subject \"$vi_msg\" --body done"
+lang yes "$FEATURE" "orca agent launch --agent claude --prompt \"$vi_msg\""
+lang yes "$FEATURE" "echo ok && git commit -m \"$vi_msg\""           # inside a command list
+lang yes "$FEATURE" "bash -c 'git commit -m \"$vi_msg\"'"             # inside a nested shell
+lang yes "$FEATURE" "git commit -m \"$vi_msg\"" PowerShell
+lang yes "$FEATURE" "$vi_msg" Agent prompt                           # the Agent tool prompt
+lang yes "$FEATURE" "$vi_msg" Task prompt
+# English text, and commands that carry no message text, give no opinion.
+lang no  "$FEATURE" 'git commit -m "fix login"'
+lang no  "$FEATURE" 'git commit -m "fix: handle the café input when the token expires"'  # one accented letter stays below the threshold
+lang no  "$FEATURE" "gh pr create --title 'fix login' --body 'handles the token expiry'"
+lang no  "$FEATURE" "gh issue comment 7 --body 'looks good'"
+lang no  "$FEATURE" "orca orchestration send --from t --type heartbeat --subject alive --phase implementing"
+lang no  "$FEATURE" "orca agent launch --agent claude --prompt 'read the spec'"
+lang no  "$FEATURE" "echo \"$vi_msg\""                               # text that is not a message the guard covers
+lang no  "$FEATURE" "gh pr create --fill --title 'fix login' --body-file \"$TMP/$vi_msg.md\""   # a file name is not message text
+lang no  "$FEATURE" 'find the file' Agent prompt
+lang no  "$FEATURE" '' Agent prompt
+# A command outside every workspace (and not a worktree of one) gets no opinion.
+lang no  "$OUT" "git commit -m \"$vi_msg\""
+lang no  "$OUT" "$vi_msg" Agent prompt
+# Malformed payloads and an unrelated tool are no opinion (rc 0, no output).
+for bad in '{"tool_name":"Agent","tool_input":{"prompt":42},"cwd":"/"}' '{"tool_name":"Agent","tool_input":null}' '{"tool_name":"Agent"}'; do
+  out=$(guard_command <<<"$bad" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL english-only malformed Agent payload %s: rc=%s out=%s\n' "$bad" "$rc" "$out"; fi
+done
+# The advisory names the first offending line and merges with the advisories of the same command (a commit on a
+# protected branch keeps its own reason).
+out=$(guard_command <<<"$(jq -cn --arg c "git commit -m 'fix login' -m '$vi_msg'" --arg d "$SERVER" '{hook_event_name:"PreToolUse", tool_name:"Bash", tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')")
+if [[ "$out" == *'commit on protected branch'* && "$out" == *'english-only'* && "$out" == *'line 1'* ]]; then pass=$((pass + 1))
+else fail=$((fail + 1)); printf 'FAIL english-only does not merge with the protected-branch advisory: %s\n' "$out"; fi
+# The Agent tool and the shell tools share the hook wiring: hooks.json routes the Agent tool to the git guard.
+if jq -e '.hooks.PreToolUse[] | select(.matcher == "Agent|Task") | .hooks[].command | test("git-guard[.]py")' "$ROOT/hooks/hooks.json" >/dev/null; then pass=$((pass + 1))
+else fail=$((fail + 1)); echo 'FAIL hooks.json: no Agent matcher routed to git-guard.py'; fi
 fi
 
 # The case selection itself: --help exits 0, an unknown argument or case exits 2 before any run, and a subset runs

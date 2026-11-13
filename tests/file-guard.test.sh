@@ -127,6 +127,41 @@ PY2
 mkdir -p "$TMP/rpg-factory/stale-session" && echo "old STOP" > "$TMP/rpg-factory/stale-session/LATCH"
 t allow Write "$C/Assets/Scripts/Net/NewFile.cs" stale-session
 t allow Edit  "$S/backend/deploy/compose.yml" fresh-session
+# rule english-only: non-English text written into a governed path (registered repo, plugin checkout, docs/plans, harness
+# plan or memory directory) gives a warn advisory; English text, a Read and a localisation path give none
+VI='"Xin ch\u00e0o c\u00e1c b\u1ea1n, \u0111\u00e2y l\u00e0 t\u00e0i li\u1ec7u ti\u1ebfng Vi\u1ec7t cho d\u1ef1 \u00e1n"'
+EN='"Hello everyone, this is the English document for the project"'
+lang() { # expected tool path text-json [tool_input-jq-builder]
+  local o g; o=$(jq -cn --arg t "$2" --arg p "$3" --argjson x "$4" --arg d "$C" \
+    '{tool_name:$t,cwd:$d,session_id:"fg",tool_input:({file_path:$p} + (if $t=="Write" then {content:$x} elif $t=="Edit" then {old_string:"a",new_string:$x} elif $t=="MultiEdit" then {edits:[{old_string:"a",new_string:"b"},{old_string:"c",new_string:$x}]} elif $t=="NotebookEdit" then {notebook_path:$p,new_source:$x} else {} end))}' | python3 -B "$FG")
+  g=$(jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" elif ((.hookSpecificOutput.additionalContext // "") | test("^rpg-factory advisory [(]warn[)].*rule english-only")) then "warn" else "none" end' <<<"${o:-{\}}")
+  if [ "$g" = "$1" ]; then pass=$((pass + 1)); echo "PASS  english-only $1  $2 ${3#$TMP/}"; else fail=$((fail + 1)); echo "FAIL  english-only expected $1 got $g  $2 ${3#$TMP/}: $o"; fi; }
+HOME_DIR="$TMP/home"
+lang warn Write "$C/Assets/Scripts/Net/NewFile.cs" "$VI"                       # a registered repo file
+lang warn Edit  "$S/backend/deploy/compose.yml" "$VI"
+lang warn Write "$HOME_DIR/.claude/plans/x.md" "$VI"                           # a harness plan file (outside the workspace)
+lang warn Write "$HOME_DIR/.claude/projects/p/memory/m.md" "$VI"               # a harness memory file
+lang warn Write "$TMP/other/docs/plans/plan.md" "$VI"                          # a docs/plans/ directory
+lang warn Write "$ROOT/docs/some-new-doc.md" "$VI"                             # the plugin checkout
+lang warn MultiEdit "$C/Assets/Scripts/Net/NewFile.cs" "$VI"                   # each edits[].new_string
+lang warn NotebookEdit "$C/Assets/Scripts/Net/nb.ipynb" "$VI"                  # new_source
+lang none Write "$C/Assets/Scripts/Net/NewFile.cs" "$EN"                       # English
+lang none Edit  "$HOME_DIR/.claude/plans/x.md" "$EN"
+lang none MultiEdit "$C/Assets/Scripts/Net/NewFile.cs" "$EN"
+lang none Read  "$C/Assets/Scripts/Net/NewFile.cs" "$VI"                       # a Read never triggers it
+lang none Write "$C/Assets/Localization/vi.json" "$VI"                         # localisation data (workspace.language_allow)
+lang none Write "$C/Assets/Locales/vi/strings.po" "$VI"
+lang none Write "$C/Assets/i18n/vi.txt" "$VI"
+lang none Write "$S/backend/deploy/messages.po" "$VI"
+lang none Write "$TMP/outside/vi.txt" "$VI"                                    # not governed: no opinion
+lang none Write "$HOME_DIR/.claude/projects/p/notes.md" "$VI"                  # only the memory directory of a project is governed
+o=$(jq -cn --arg p "$C/Assets/Scripts/Net/NewFile.cs" --arg d "$C" --argjson x "$VI" '{tool_name:"Write",tool_input:{file_path:$p,content:$x},cwd:$d,session_id:"fg"}' | python3 -B "$FG")
+jq -e '.hookSpecificOutput | (has("permissionDecision") | not) and (.additionalContext | test("line 1:"))' >/dev/null <<<"$o" \
+  && { pass=$((pass + 1)); echo "PASS  english-only advisory names the first offending line, no permissionDecision"; } || { fail=$((fail + 1)); echo "FAIL  english-only advisory shape: $o"; }
+# combined with another advisory (a generated path) both are reported
+o=$(jq -cn --arg p "$S/backend/shared/proto/gen/wire.pb.go" --arg d "$C" --argjson x "$VI" '{tool_name:"Write",tool_input:{file_path:$p,content:$x},cwd:$d,session_id:"fg"}' | python3 -B "$FG")
+jq -e '.hookSpecificOutput.additionalContext | test("generated") and test("english-only")' >/dev/null <<<"$o" \
+  && { pass=$((pass + 1)); echo "PASS  english-only combines with the generated-path advisory"; } || { fail=$((fail + 1)); echo "FAIL  combined advisory: $o"; }
 out=$(echo 'garbage' | python3 -B "$FG"; echo "rc=$?"); [ "$out" = "rc=0" ] && { pass=$((pass + 1)); echo "PASS  malformed input -> no opinion"; } || { fail=$((fail + 1)); echo "FAIL  malformed: $out"; }
 out=$(jq -cn --arg p "$C/Packages/com.cuvara.dots/a.cs" '{tool_name:"Edit",tool_input:{file_path:$p},cwd:"/"}' | RPG_FACTORY_GUARD=off python3 -B "$FG")
 [ -z "$out" ] && { pass=$((pass + 1)); echo "PASS  RPG_FACTORY_GUARD=off disables it"; } || { fail=$((fail + 1)); echo "FAIL  guard off: $out"; }

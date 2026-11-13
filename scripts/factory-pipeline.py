@@ -1399,7 +1399,8 @@ def cmd_planner(a, reg):
               + rubric_lines(a.policy, "   ") + "\n"
               f"3. Write plan.json ({SCHEMA}, docs/schemas/pipeline-plan.schema.json) and run\n"
               f"   `python3 -B ${{CLAUDE_PLUGIN_ROOT}}/scripts/factory-pipeline.py{' --registry none' if reg.get('_defaults') else ''} validate plan.json` until it prints OK.\n"
-              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.")
+              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
+              + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
     emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
     return 0
@@ -1566,18 +1567,26 @@ def python_alias_line(platform=None, which=None, exe=None, probe=None):
             f"{shlex.quote(exe)} (the interpreter that runs dispatch) or put a python3 shim to it first on PATH.")
 
 
-def spec_session_lines(a):
+def language_line(reg):
+    """The Language line of every spec: everything written is English; only the run lead's report to the owner uses the
+    report language (registry or pipeline-defaults workspace.report_language; absent: the user's own language)."""
+    ws = (reg or {}).get("workspace")
+    lang = ws.get("report_language") if isinstance(ws, dict) else None
+    lang = lang.strip() if isinstance(lang, str) and lang.strip() else "the user's language"
+    return ("Language: write everything in English (files, plans, briefs, messages, commits, PR text). Reports between "
+            f"sessions are English; only the run lead reports to the owner in {lang}.")
+
+
+def spec_session_lines(a, reg=None):
     """Return the lines to append to a dispatch spec."""
-    lines = [f"Session note: {note}" for note in session_notes(a)]
+    lines = [language_line(reg)] + [f"Session note: {note}" for note in session_notes(a)]
     alias = python_alias_line()
     return lines + ([alias] if alias else [])
 
 
-def with_session_lines(a, prompt):
+def with_session_lines(a, prompt, reg=None):
     """Append session lines, preserving the prompt's trailing newline."""
-    lines = spec_session_lines(a)
-    if not lines:
-        return prompt
+    lines = spec_session_lines(a, reg)
     return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
 
 
@@ -1896,7 +1905,7 @@ def cmd_dispatch(a, reg):
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
-        prompt = with_session_lines(a, with_test_env(prompt))
+        prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1971,7 +1980,7 @@ def cmd_dispatch(a, reg):
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
                              subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
-        prompt = with_session_lines(a, prompt)
+        prompt = with_session_lines(a, prompt, reg)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
@@ -2052,7 +2061,7 @@ def cmd_dispatch(a, reg):
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt = with_session_lines(a, with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks))
+        prompt = with_session_lines(a, with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks), reg)
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -2099,7 +2108,7 @@ def cmd_dispatch(a, reg):
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
-        prompt = with_session_lines(a, with_test_env(prompt))
+        prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
@@ -2145,7 +2154,7 @@ def cmd_dispatch(a, reg):
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
-    prompt = with_session_lines(a, prompt)
+    prompt = with_session_lines(a, prompt, reg)
     started = emit(a, reg, agent, prompt, place, title, plan, role=review_role(grade))
     full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     sha = full if rc == 0 and full else a.sha

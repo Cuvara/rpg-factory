@@ -17,6 +17,11 @@ never crashes a session (any error = no opinion).
             imported samples): change it through its generator
           - secrets (.env, kubeconfig.local; case-insensitive)
   warn  a Read of secrets (.env, kubeconfig.local; case-insensitive)
+  warn  rule english-only: a write whose text (Write content, Edit new_string, each MultiEdit new_string, NotebookEdit
+        new_source) is not English (lib/english.py) and whose target is inside a registered repo, the plugin checkout,
+        a docs/plans/ directory or a harness .claude/plans or .claude/projects/<x>/memory directory. Paths matching the
+        registry workspace.language_allow (fallback: skills/delivery/pipeline-defaults.json) and the plugin's
+        english-only allowlist are skipped. A Read never triggers it.
   warn  a Read of a registered skill's SKILL.md: load it with the Skill tool instead
 
 Not covered (documented limitation): MCP tools that write files (e.g. Unity-MCP asset/scene tools)
@@ -25,6 +30,7 @@ have tool-specific inputs; they are not inspected here. The registry gate `unity
 import fnmatch
 import json
 import os
+import pathlib
 import re
 import sys
 
@@ -164,7 +170,106 @@ def repo_of(path, ws, registry):
     return None, None, None
 
 
+def written_text(payload):
+    """The text a write tool call would put into the file (empty for a Read or an unknown shape)."""
+    ti = payload.get("tool_input") or {}
+    tool = payload.get("tool_name")
+    if tool == "Write":
+        parts = [ti.get("content")]
+    elif tool == "Edit":
+        parts = [ti.get("new_string")]
+    elif tool == "MultiEdit":
+        parts = [e.get("new_string") for e in ti.get("edits") or [] if isinstance(e, dict)]
+    elif tool == "NotebookEdit":
+        parts = [ti.get("new_source")]
+    else:
+        parts = []
+    return "\n".join(p for p in parts if isinstance(p, str))
+
+
+def plugin_checkout(path):
+    """The plugin checkout (directory with .claude-plugin/plugin.json) holding path, else None: a stat walk upward."""
+    d = os.path.dirname(path)
+    for _ in range(16):
+        if os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+    return None
+
+
+def language_allow_globs(registry):
+    globs = (registry.get("workspace") or {}).get("language_allow")
+    if globs is None:  # no registry setting: the plugin's workspace defaults
+        try:
+            import factory_session
+            data = json.load(open(os.path.join(factory_session.PLUGIN_ROOT, "skills", "delivery", "pipeline-defaults.json"), encoding="utf-8"))
+            globs = (data.get("workspace") or {}).get("language_allow")
+        except (OSError, ValueError):
+            globs = None
+    return [g for g in globs or [] if isinstance(g, str)]
+
+
+def language_advisory(payload, registry, path):
+    """The english-only advisory text for a write of non-English text into a governed path, else None."""
+    if payload.get("tool_name") not in WRITE_TOOLS:
+        return None
+    text = written_text(payload)
+    if not text or text.isascii():  # the common case ends here: no per-character work
+        return None
+    import english
+    hit = english.first_offending_line(text)
+    if not hit:
+        return None
+    norm = path.replace("\\", "/")
+    low = norm.lower()
+    if any(fnmatch.fnmatch(low, g.lower()) for g in language_allow_globs(registry)):
+        return None
+    root = plugin_checkout(path)
+    segs = [s.lower() for s in norm.split("/")]
+    harness = any(segs[i:i + 2] == [".claude", "plans"] or (segs[i] == ".claude" and segs[i + 1:i + 2] == ["projects"] and "memory" in segs[i + 3:i + 4])
+                  for i in range(len(segs) - 1)) or any(segs[i:i + 2] == ["docs", "plans"] for i in range(len(segs) - 1))
+    governed = bool(root) or harness
+    if not governed:
+        ws = workspace.find_workspace(os.path.dirname(path), registry)
+        governed = bool(ws and within(path, ws) and repo_of(path, ws, registry)[0])
+        if not governed:  # a linked worktree outside the workspace: its main checkout decides
+            lw = workspace.linked_worktree(os.path.dirname(path))
+            top, main = lw or (None, None)
+            ws2 = workspace.find_workspace(main, registry) if top and main and os.path.normcase(top) != os.path.normcase(main) else None
+            governed = bool(ws2 and within(main, ws2) and repo_of(path, ws2, registry)[0])
+    if not governed:
+        return None
+    if root:  # the plugin's own allowlist: path:* entries (a line number does not map onto an Edit fragment)
+        try:
+            rel = os.path.relpath(path, root).replace("\\", "/")
+            if f"{rel}:*" in english.allowlist(pathlib.Path(root, "tests", "fixtures", "english-allow.txt")):
+                return None
+        except (OSError, ValueError):
+            pass
+    number, line = hit
+    shown = line.strip()
+    shown = shown[:117] + "..." if len(shown) > 120 else shown
+    return (f"rule english-only: the text written to {os.path.basename(path)} is not English (line {number}: \"{shown}\"). "
+            "Everything written is English (code, comments, docs, plans, briefs, messages, memory); only the report to the owner "
+            "uses the report language. Rewrite it in English, or add the path to workspace.language_allow if it is localisation data")
+
+
 def evaluate(payload, registry):
+    R = _evaluate(payload, registry)
+    try:
+        path = target(payload)
+        note = language_advisory(payload, registry, path) if path else None
+    except Exception:
+        note = None  # a guard error is no opinion
+    if note:
+        R = R + [("ask", note)]
+    return R
+
+
+def _evaluate(payload, registry):
     tool = payload.get("tool_name")
     path = target(payload)
     if not path:
@@ -240,7 +345,7 @@ def main():
 
 
 if __name__ == "__main__":
-    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):  # Windows pipes default to cp1252: payload and output are UTF-8 everywhere
         if hasattr(_stream, "reconfigure"):
             _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

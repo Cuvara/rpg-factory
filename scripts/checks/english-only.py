@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-import unicodedata
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+from english import allowlist, classify  # noqa: E402  (shared detection: scripts/lib/english.py)
 
 
 def scoped_files(root: Path) -> list[Path]:
@@ -45,40 +46,6 @@ def content_lines(file: Path):
             for offset, part in enumerate(value.splitlines() or [value]):
                 yield start_line + offset, part
         index = end
-
-
-def is_letter(char: str) -> bool:
-    return unicodedata.category(char).startswith("L")
-
-
-def classify(line: str) -> list[str]:
-    letters = [char for char in line if is_letter(char)]
-    reasons: list[str] = []
-    foreign = [char for char in letters
-               if "LATIN" not in unicodedata.name(char, "") and "ASCII" not in unicodedata.name(char, "")]
-    if foreign:
-        names = sorted({unicodedata.name(char, "UNKNOWN") for char in foreign})
-        reasons.append("non-Latin letters: " + ", ".join(names))
-    non_ascii_latin = [char for char in letters if ord(char) > 127 and "LATIN" in unicodedata.name(char, "")]
-    if len(non_ascii_latin) >= 2 and letters and len(non_ascii_latin) / len(letters) >= 0.05:
-        reasons.append(f"non-ASCII Latin letters: {len(non_ascii_latin)}/{len(letters)}")
-    return reasons
-
-
-def allowlist(path: Path) -> dict[str, str]:
-    entries: dict[str, str] = {}
-    if not path.exists():
-        return entries
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = re.fullmatch(r"([^:#]+):(\*|\d+)\s+#\s*(.+)", line)
-        if not match:
-            raise ValueError(f"{path}:{number}: expected path:line or path:* followed by # reason")
-        key = f"{match.group(1).strip()}:{match.group(2)}"
-        entries[key] = match.group(3).strip()
-    return entries
 
 
 def main() -> int:

@@ -79,6 +79,11 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <
 
 Rules:
 
+- **Language.** This report, as a chat reply to the owner, is written in the workspace report language (registry
+  `workspace.report_language`; unset means the owner's own language). Everything else is English: code, comments, docs,
+  changelog entries, commit messages, PR and issue text, plan files (including the harness plan-mode file), briefs and
+  specs for agents, messages between sessions, artifacts and memory files. The snapshot's `Language:` line states both
+  halves.
 - **Never** write "tests pass", "looks good", or "all green" without the counts in the table.
 - If a fast check is not PASS, the task is not done. Say so in the Summary.
 - Report pre-existing failures separately from failures your change introduced. Prove
