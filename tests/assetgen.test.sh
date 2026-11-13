@@ -368,6 +368,69 @@ u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
 
 echo "-- workflow.ui.json: ui block groups, notes, colors"
+python3 -B - "$ROOT" >"$TMP/staged-layout-check" 2>&1 <<'EOF'
+import json, math, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts/assetgen"))
+import uiworkflow
+
+known = json.loads((root / "scripts/assetgen/data/known-nodes.json").read_text(encoding="utf-8"))["nodes"]
+def rect(node):
+    x, y = node["pos"]
+    w, h = node["size"]
+    return (x, y - 30, x + w, y + h)
+def bounds(group):
+    x, y, w, h = group["bounding"]
+    return (x, y, x + w, y + h)
+def contains(a, b):
+    return a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
+def intersects(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+templates = sorted((root / "templates/assetgen/workflows").glob("staged-*.json"))
+assert templates, "no staged templates found"
+for path in templates:
+    t = json.loads(path.read_text(encoding="utf-8"))
+    ui = uiworkflow.to_ui(t["workflow"], known, None, t["ui"])
+    nodes = {n["id"]: n for n in ui["nodes"]}
+    for link in ui["links"]:
+        _, src, src_slot, dst, dst_slot, _ = link
+        source, target = nodes[src], nodes[dst]
+        a = (source["pos"][0] + source["size"][0], source["pos"][1] + 14 + 20 * src_slot)
+        b = (target["pos"][0], target["pos"][1] + 14 + 20 * dst_slot)
+        d = math.hypot(b[0] - a[0], b[1] - a[1]) * 0.25
+        controls = (a, (a[0] + d, a[1]), (b[0] - d, b[1]), b)
+        for i in range(1, 65):
+            u = i / 65
+            x, y = (sum(weight * point[axis] for weight, point in zip(
+                ((1-u)**3, 3*(1-u)**2*u, 3*(1-u)*u*u, u**3), controls)) for axis in (0, 1))
+            for nid, node in nodes.items():
+                if nid in (src, dst):
+                    continue
+                x1, y1, x2, y2 = rect(node)
+                assert not (x1 < x < x2 and y1 < y < y2), (path.name, link, nid)
+    notes = [n for n in ui["nodes"] if n["type"] == "Note"]
+    assert len(notes) == len(t["ui"].get("notes", [])), path.name
+    assert len(ui["groups"]) == len(t["ui"]["groups"]), path.name
+    for group, decl in zip(ui["groups"], t["ui"]["groups"]):
+        members = {int(n) for n in decl["nodes"]}
+        members.update(n["id"] for n, note in zip(notes, t["ui"].get("notes", [])) if note["group"] == group["title"])
+        box = bounds(group)
+        assert all(contains(box, rect(nodes[n])) for n in members), (path.name, group)
+        assert all(not intersects(box, rect(n)) for nid, n in nodes.items() if nid not in members), (path.name, group)
+    for left, right in zip(ui["groups"], ui["groups"][1:]):
+        assert bounds(left)[0] <= bounds(right)[0], (path.name, left, right)
+    if path.name == "staged-icon.json":
+        save = next(n for n in nodes.values() if n["type"] == "SaveImage")
+        for node in (n for n in nodes.values() if n["type"] in ("ImageScale", "PreviewImage")):
+            assert rect(save)[3] <= rect(node)[1] or rect(node)[3] <= rect(save)[1], (path.name, save, node)
+print("ok")
+EOF
+staged_layout_rc=$?
+[ $staged_layout_rc -eq 0 ] && ok "workflow.ui.json staged templates: no wire crosses an unrelated node, Save off the preview row, groups hold members and notes" \
+  || no "workflow.ui.json staged templates layout rc=$staged_layout_rc" "$(cat "$TMP/staged-layout-check")"
 cp "$ROOT/tests/fixtures/assetgen/ui-layout.json" "$GL/templates/ui-layout.json"
 mkrun ui-layout-001 icon --style stylized-painterly --authoring "$AUTH" --template ui-layout
 ud="$RUNS/ui-layout-001"
