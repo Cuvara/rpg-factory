@@ -81,6 +81,21 @@ A purpose may declare these fields:
 - `qa.outlines`: turns on the edge check.
 - `qa.size`: the `png-size` rule. `mode` is `exact` or `min` (against `expect`, default the requested size), `aspect` (ratio within `aspect_tolerance`, optional `min_area` share of the expected pixels), `orientation` (`orientation` `landscape`, `portrait` or `square`, or `auto` from `expect`; square when the long side is at most `square_tolerance` longer, default 0.05; the core square purposes `icon`, `sprite-2d` and `texture-tileable` set 0.15, which real service outputs such as 1322x1190 meet), `area` (no aspect at all) or `any`. A landscape or portrait purpose may set `allow_swap: true` (a boolean, default false; `ref-3d-turnaround` sets false), so the swapped orientation (1024x1536 returned for a 1536x1024 request) passes. `aspect`, `orientation` and `area` also need a short side of at least `min_side` (default 256) and, with `min_pixels`, at least that many pixels. The image service ignores the requested size (the e2e returned 1672x941 for both 1536x1024 and 1024x1024 requests), so the core purposes grade orientation or area plus these floors, never an exact size. Every core purpose sets both floors: `concept-2d` (area, short side 768) and `ref-3d-turnaround` (landscape, short side 512) 1000000 pixels, `icon`, `sprite-2d` and `texture-tileable` (square orientation), `ui-element` and `image-edit` (area) a 512 px short side and 512x512 pixels, so a 256x256 output fails each. The per-purpose values are data (`templates/assetgen/purposes/*.json`); `runfiles.qa_errors` validates them and `lint` reports the same rules.
 
+The core effect purposes (handoff domain `vfx`, default family `vfx`, template `image-generate`, opaque pure-black `#000000` background, bright subject for additive blending) are:
+
+- `vfx-flipbook`: a 1024x1024 sheet, a 4 x 4 grid of equal frames in reading order with dark gutters.
+- `vfx-noise-tileable`: grayscale noise, tileable on both axes. It fills the frame, so it has no black-background check.
+- `vfx-trail`: a 1536x1024 landscape strip, tileable on the x axis only, with dark top and bottom edges.
+- `vfx-sprite`: one centred glow, flare, puff or debris shape with dark margins.
+
+They add these QA rules to the purpose `qa` block (`scripts/assetgen/qa.py`):
+
+- `qa.flipbook_grid` (`png-flipbook-grid`): `columns` and `rows` of the declared grid. The check needs dark gutters between the cells and no blank cell.
+- `qa.black_background` (`png-black-background`): the mean border luminance of each graded edge is at most `max_luminance`; every edge is graded on its own, so one bright edge fails the check. The optional `edges` list (`top`, `bottom`, `left`, `right`) limits the check to those borders, so a trail grades only its top and bottom edges.
+- `qa.tileable.axis` (`png-tileable`): `x`, `y` or `both` (default `both`, the behaviour before the option). `vfx-trail` sets `x`, so only the left and right edges must match.
+
+Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes, so a transform after generation would break the binding, and the image service ignores the requested size, so a power-of-two output cannot be requested. Those transforms belong to the consuming package's import tool. Each effect purpose says so in `constraints.processing`.
+
 A style's optional `STYLE.md` is explanation only. Art decisions stay ADR-style artifacts of the existing kinds. Machine-checkable constraints live only in the structured style data.
 
 Every spec, review binding, anchor, rejection and gen-run records the same style reference `{style_id, version, sha256}`. The `sha256` is the content hash of the merged style data.

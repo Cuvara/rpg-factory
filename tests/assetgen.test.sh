@@ -4,7 +4,8 @@
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
 # lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
-# the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
+# the 2x2 tile preview of tileable purposes and --no-write), the four vfx purposes (list, show handoff domain vfx, resolve with realistic-pbr,
+# golden renders, png-flipbook-grid, png-black-background and tileable axis x QA on small fixtures, malformed data), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes incl. aspect + min area, orientation, area + min pixels, real 9router sizes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
@@ -64,9 +65,13 @@ git init -q -b main "$AUTH" && git -C "$AUTH" add -A && git -C "$AUTH" "${G[@]}"
 echo "-- list / show"
 AG list --json > "$TMP/l.json" 2>"$TMP/err"; rc=$?
 n=$(jq '[.entries[] | select(.layer == "core")] | length' "$TMP/l.json")
-[ $rc -eq 0 ] && [ "$n" = 15 ] && ok "core list: 7 purposes + 6 styles + 2 templates" || no "core list rc=$rc n=$n" "$(cat "$TMP/err")"
+[ $rc -eq 0 ] && [ "$n" = 19 ] && ok "core list: 11 purposes + 6 styles + 2 templates" || no "core list rc=$rc n=$n" "$(cat "$TMP/err")"
 ids=$(jq -r '[.entries[] | select(.kind != "template") | .kind + ":" + .id] | sort | join(" ")' "$TMP/l.json")
-[ "$ids" = "purpose:concept-2d purpose:icon purpose:image-edit purpose:ref-3d-turnaround purpose:sprite-2d purpose:texture-tileable purpose:ui-element style:anime-cel style:flat-ui style:low-poly style:pixel-art style:realistic-pbr style:stylized-painterly" ]   && ok "every core purpose and style id is listed" || no "ids: $ids"
+[ "$ids" = "purpose:concept-2d purpose:icon purpose:image-edit purpose:ref-3d-turnaround purpose:sprite-2d purpose:texture-tileable purpose:ui-element purpose:vfx-flipbook purpose:vfx-noise-tileable purpose:vfx-sprite purpose:vfx-trail style:anime-cel style:flat-ui style:low-poly style:pixel-art style:realistic-pbr style:stylized-painterly" ]   && ok "every core purpose and style id is listed" || no "ids: $ids"
+for vp in vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do
+  AG show "$vp" --json > "$TMP/s.json" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 0 ] && [ "$(jq -r '.data.handoff_domain + "|" + .data.default_family + "|" + .data.default_template + "|" + .data.params.background' "$TMP/s.json")" = "vfx|vfx|image-generate|opaque" ]     && ok "show $vp: handoff domain vfx, family vfx, template image-generate, opaque background" || no "show $vp rc=$rc: $(head -c 300 "$TMP/s.json")" "$(cat "$TMP/err")"
+done
 AG list --authoring "$AUTH" --json > "$TMP/l.json"
 lay() { jq -r --arg k "$1" --arg i "$2" '.entries[] | select(.kind == $k and .id == $i) | .layer' "$TMP/l.json"; }
 [ "$(lay purpose icon)/$(lay style pixel-art)/$(lay style rpg-dark)/$(lay template image-generate)/$(lay purpose sprite-2d)" = \
@@ -120,6 +125,9 @@ echo '{"extends": "icon", "params": {"tint": "red"}}' > "$BAD/assetgen/purposes/
 AG resolve --purpose icon --style pixel-art --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "param 'tint' that template 'image-generate' does not declare" "$TMP/err" && ok "purpose param not declared by the template: error" || no "undeclared purpose param rc=$rc" "$(cat "$TMP/err")"
 
+AG resolve --purpose vfx-sprite --style realistic-pbr --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(r '.style.id + "|" + .style_lock.family + "|" + .style_lock.family_source + "|" + .style_lock.style.style_id')" = "realistic-pbr|vfx|purpose|realistic-pbr" ]   && [ "$(r .params.background)/$(r .param_sources.background)" = "opaque/core:templates/assetgen/purposes/vfx-sprite.json" ]   && [ "$(r .hints.processing.from)" = purpose ]   && ok "resolve vfx-sprite with realistic-pbr: style realistic-pbr, family vfx from the purpose, opaque background, processing constraint"   || no "vfx-sprite + realistic-pbr rc=$rc" "$(cat "$TMP/err"; jq -c '{style: .style.id, lock: .style_lock.family, hints: .hints}' "$TMP/r.json")"
+
 echo "-- resolve: purpose constraints beat style hints (data/precedence.json)"
 AG resolve --purpose ref-3d-turnaround --style stylized-painterly --json > "$TMP/r.json"
 [ "$(r .hints.lighting.from)" = purpose ] && [ "$(r .hints.lighting.text)" = "$(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" ] \
@@ -158,7 +166,7 @@ mkrun() { # mkrun NAME PURPOSE [resolve args...]
   printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
 }
 mkdir -p "$GOLD"
-for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit; do
+for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do
   mkrun "golden-$p-001" "$p" --style stylized-painterly || { no "resolve $p"; continue; }
   extra=(); [ "$p" = image-edit ] && extra=(--param reference_image=ref.png)
   out=$(AG render --run "$RUNS/golden-$p-001" "${extra[@]}" 2>&1); rc=$?
@@ -298,7 +306,7 @@ assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent
 print("ok")
 EOF
 KN="$ROOT/scripts/assetgen/data/known-nodes.json"
-for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit; do
+for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do
   d="$RUNS/golden-$p-001"; [ "$p" = icon ] && AG render --run "$d" >/dev/null
   [ "$p" = image-edit ] && AG render --run "$d" --param reference_image=ref.png >/dev/null
   out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
@@ -394,6 +402,12 @@ mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}
 mal mal-orient '{"extends": "icon", "qa": {"size": {"mode": "orientation", "orientation": "wide"}}}'
 mal mal-pixels '{"extends": "concept-2d", "qa": {"size": {"mode": "area", "min_pixels": 0}}}'
 mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
+mal mal-flip '{"extends": "vfx-flipbook", "qa": {"flipbook_grid": {"columns": 0, "rows": "4", "max_gutter_luminance": 300, "min_cell_stddev": -1}}}'
+mal mal-flip-obj '{"extends": "vfx-flipbook", "qa": {"flipbook_grid": 4}}'
+mal mal-flip-one '{"extends": "vfx-flipbook", "qa": {"flipbook_grid": {"columns": 1, "rows": 1}}}'
+mal mal-blackbg '{"extends": "vfx-sprite", "qa": {"black_background": {"max_luminance": -1, "border": 0.6, "edges": ["top", "top", "middle"]}}}'
+mal mal-blackbg-obj '{"extends": "vfx-sprite", "qa": {"black_background": "black"}}'
+mal mal-axis '{"extends": "vfx-trail", "qa": {"tileable": {"max_seam_error": 0.06, "axis": "z"}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
   local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
@@ -416,11 +430,23 @@ expect_mal mal-area "qa.size.min_area must be a number above 0 and at most 1" "m
 expect_mal mal-orient "qa.size.orientation must be one of" "malformed purpose: unknown qa.size.orientation -> FAIL row"
 expect_mal mal-pixels "qa.size.min_pixels must be a number >= 1" "malformed purpose: qa.size.min_pixels 0 -> FAIL row"
 expect_mal mal-sqtol "qa.size.square_tolerance must be a number between 0 and 1" "malformed purpose: qa.size.square_tolerance 1.5 -> FAIL row"
+expect_mal mal-flip "qa.flipbook_grid.columns must be an integer >= 1" "malformed purpose: qa.flipbook_grid columns 0 -> FAIL row"
+got=$(AG lint "$LA/assetgen/purposes/mal-flip.json" --authoring "$LA" 2>&1)
+{ grep -q "qa.flipbook_grid.rows must be an integer >= 1" <<<"$got" && grep -q "qa.flipbook_grid.max_gutter_luminance must be a number between 0 and 255" <<<"$got"   && grep -q "qa.flipbook_grid.min_cell_stddev must be a number >= 0" <<<"$got"; }   && ok "malformed purpose: every malformed qa.flipbook_grid field is named" || no "mal-flip reasons" "$got"
+expect_mal mal-flip-obj "qa.flipbook_grid must be an object" "malformed purpose: qa.flipbook_grid not an object -> FAIL row"
+expect_mal mal-flip-one "qa.flipbook_grid columns x rows must be at least 2" "malformed purpose: a 1 x 1 flipbook grid -> FAIL row"
+expect_mal mal-blackbg "qa.black_background.max_luminance must be a number between 0 and 255" "malformed purpose: qa.black_background max_luminance -1 -> FAIL row"
+got=$(AG lint "$LA/assetgen/purposes/mal-blackbg.json" --authoring "$LA" 2>&1)
+{ grep -q "qa.black_background.border must be a number above 0 and below 0.5" <<<"$got" && grep -q "qa.black_background.edges must be a non-empty list of distinct values" <<<"$got"; }   && ok "malformed purpose: border 0.6 and duplicate or unknown edges are named" || no "mal-blackbg reasons" "$got"
+expect_mal mal-blackbg-obj "qa.black_background must be an object" "malformed purpose: qa.black_background not an object -> FAIL row"
+expect_mal mal-axis "qa.tileable.axis must be one of" "malformed purpose: qa.tileable.axis z -> FAIL row"
 python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
 import runfiles
-for bad in ([], "x", None, {"size": []}, {"tileable": True, "not_blank": 1}, {"transparent_corners": "yes"}):
+for bad in ([], "x", None, {"size": []}, {"tileable": True, "not_blank": 1}, {"transparent_corners": "yes"},
+            {"flipbook_grid": []}, {"flipbook_grid": {"columns": "4"}}, {"black_background": 1}, {"tileable": {"max_seam_error": 0.06, "axis": 5}},
+            {"tileable": {"max_seam_error": 0.06, "axis": ["x"]}}, {"black_background": {"edges": [["top"]]}}):
     runfiles.required_checks(bad)
     assert runfiles.qa_errors(bad) or bad is None, bad
 assert runfiles.qa_errors(None) == ["qa must be an object"]
@@ -435,7 +461,7 @@ expect_lint link--1 FAIL "node 1 has no output -1" "link output index -1: FAIL (
 expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAIL, no traceback"
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
-AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "17 PASS, 3 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
+AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "21 PASS, 3 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no usable structured style fields (palette.colors, tone, canvas, outline.edge_darkness): .*no style-\* QA row can grade" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no usable structured style fields" "$TMP/o" \
   && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without usable structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
@@ -495,6 +521,37 @@ def fringe(x, y):
         return ((255, 220, 0) if (x + y) % 2 else (255, 40, 0)) + (8 + (x * 7 + y * 3) % 24,)
     return (0, 0, 0, 0)
 save("fringe.png", 512, 512, fringe)
+# vfx purposes: opaque pure-black effect textures
+def flipbook(blank=None, gutter=0, bg=0):
+    n, cell = 4, 128  # a 4 x 4 grid of 128 px cells on a 512 x 512 sheet
+    def f(x, y):
+        col, row = x // cell, y // cell
+        if blank == (col, row):
+            return (bg, bg, bg, 255)
+        if gutter and 16 <= x < 496 and 16 <= y < 496 and any(min(abs(x - k * cell), abs(y - k * cell)) < gutter for k in range(1, n)):  # inside the black border
+            return (200, 200, 200, 255)
+        i = col + 4 * row
+        d = math.hypot(x - (col + 0.5) * cell, y - (row + 0.5) * cell)  # a distinct bright blob per cell
+        v = max(0.0, 1.0 - d / (24 + 2 * i))
+        return (max(bg, int(255 * v)), max(bg, int(255 * v * (0.3 + 0.04 * i))), max(bg, int(255 * v * (1 - 0.05 * i))), 255)
+    return f
+save("flipbook-ok.png", 512, 512, flipbook(), alpha=False)
+save("flipbook-blank.png", 512, 512, flipbook(blank=(2, 1)), alpha=False)  # the cell in column 3, row 2 is empty
+save("flipbook-gutter.png", 512, 512, flipbook(gutter=8), alpha=False)  # bright lines where the gutters belong
+def glow(bg):
+    def f(x, y):
+        v = math.exp(-(math.hypot(x - 256, y - 256) / 90.0) ** 2)
+        return (max(bg, int(255 * v)), max(bg, int(190 * v)), max(bg, int(80 * v)), 255)
+    return f
+save("glow-ok.png", 512, 512, glow(0), alpha=False)  # a centred glow on pure black
+save("glow-grey.png", 512, 512, glow(90), alpha=False)  # the same glow on a grey background
+save("glow-edge.png", 512, 512, lambda x, y: (60, 60, 60, 255) if x >= 497 else glow(0)(x, y), alpha=False)  # a 15 px bright right edge: pooled border mean under 16
+def streak(x, y):  # a horizontal streak that repeats every half width (wraps left-right) and fades to black before the top and bottom
+    v = math.exp(-(abs(y - 256) / 60.0) ** 2) * (0.65 + 0.35 * math.cos(2 * math.pi * 2 * x / 768))
+    return (int(255 * v), int(160 * v), int(60 * v), 255)
+save("trail-ok.png", 768, 512, streak, alpha=False)
+save("trail-xgrad.png", 768, 512, lambda x, y: (x * 255 // 768, x * 255 // 768, x * 255 // 768, 255), alpha=False)  # left-to-right gradient: the x seam is open
+save("trail-ygrad.png", 768, 512, lambda x, y: (y * 255 // 512, y * 255 // 512, y * 255 // 512, 255), alpha=False)  # wraps left-right, not top-bottom
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
 open(os.path.join(out, "corrupt.png"), "wb").write(bytes(data))
 open(os.path.join(out, "not-a-png.png"), "wb").write(b"GIF89a not a png")
@@ -689,6 +746,62 @@ qarun qa-trns-001 icon trns-icon.png
 ASSETGEN_NO_PIL=1 AG qa --run "$RUNS/qa-trns-001" --json > "$TMP/q.json"; rc=$?
 [ $rc -eq 0 ] && [ "$(st png-alpha)/$(st png-corners)/$(st png-not-blank)" = "PASS/PASS/PASS" ] \
   && ok "QA without Pillow: a gray PNG transparent through tRNS passes alpha required and corners" || no "tRNS qa rc=$rc" "$(jq -c .results "$TMP/q.json")"
+
+echo "-- qa: vfx purposes (png-flipbook-grid, png-black-background, tileable axis x)"
+rsn() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .reasons[0]] | join(" | ")' "$TMP/q.json"; }
+qarun qa-flip-ok-001 vfx-flipbook flipbook-ok.png
+[ $rc -eq 0 ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] && [ "$(st png-flipbook-grid)/$(st png-black-background)/$(st png-alpha)/$(st png-not-blank)/$(st png-size)" = "PASS/PASS/PASS/PASS/PASS" ] \
+  && rsn png-flipbook-grid | grep -qF "4x4 grid, gutter luminance mean" && rsn png-flipbook-grid | grep -qF "no blank cell (stddev at least 2.00)" \
+  && ok "vfx-flipbook: a 4x4 grid of distinct blobs with black gutters passes png-flipbook-grid and png-black-background" || no "flipbook ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+ASSETGEN_NO_PIL=1 AG qa --run "$RUNS/qa-flip-ok-001" --json > "$TMP/q.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(st png-flipbook-grid)/$(st png-black-background)" = "PASS/PASS" ] \
+  && ok "vfx-flipbook: the stdlib decoder gives the same PASS" || no "flipbook ok stdlib rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-flip-blank-001 vfx-flipbook flipbook-blank.png
+[ $rc -eq 1 ] && [ "$(st png-flipbook-grid)" = FAIL ] && rsn png-flipbook-grid | grep -qF "blank cells (column,row) (3,2) (stddev below 2.00)" \
+  && ok "vfx-flipbook: one blank cell fails png-flipbook-grid and names it (3,2)" || no "flipbook blank rc=$rc" "$(rsn png-flipbook-grid)"
+qarun qa-flip-gutter-001 vfx-flipbook flipbook-gutter.png
+gm=$(rsn png-flipbook-grid | sed 's/.*gutter luminance mean \([0-9]*\)\..*/\1/')
+[ $rc -eq 1 ] && [ "$(st png-flipbook-grid)/$(st png-black-background)" = "FAIL/PASS" ] && rsn png-flipbook-grid | grep -qF "no blank cell" \
+  && [ "${gm:-0}" -gt 32 ] \
+  && ok "vfx-flipbook: bright gutters fail png-flipbook-grid (mean $gm, max 32), the black border still passes" || no "flipbook gutter rc=$rc" "$(rsn png-flipbook-grid)"
+qarun qa-flip-plain-001 vfx-flipbook glow-ok.png
+[ $rc -eq 1 ] && [ "$(st png-flipbook-grid)" = FAIL ] && rsn png-flipbook-grid | grep -qF "blank cells" \
+  && ok "vfx-flipbook: one glow across the sheet is not a grid (most cells blank)" || no "flipbook plain rc=$rc" "$(rsn png-flipbook-grid)"
+qarun qa-black-ok-001 vfx-sprite glow-ok.png
+[ $rc -eq 0 ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] && [ "$(st png-black-background)/$(st png-alpha)/$(st png-not-blank)" = "PASS/PASS/PASS" ] \
+  && rsn png-black-background | grep -qF "border luminance mean per edge (max 16.0) over a 15 px band: top 0.0, bottom 0.0, left 0.0, right 0.0" \
+  && ! rsn png-black-background | grep -q "over the limit" \
+  && ok "vfx-sprite: a centred glow on black passes png-black-background (mean per edge named)" || no "black ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-black-grey-001 vfx-sprite glow-grey.png
+[ $rc -eq 1 ] && [ "$(st png-black-background)" = FAIL ] && rsn png-black-background | grep -qF "top 90.0, bottom 90.0, left 90.0, right 90.0; edges over the limit: top, bottom, left, right" \
+  && ok "vfx-sprite: a grey border fails png-black-background" || no "black grey rc=$rc" "$(rsn png-black-background)"
+qarun qa-black-edge-001 vfx-sprite glow-edge.png
+[ $rc -eq 1 ] && [ "$(st png-black-background)" = FAIL ] && rsn png-black-background | grep -qF "right 60.0; edges over the limit: right" \
+  && ok "vfx-sprite: one bright right edge fails png-black-background although the pooled border mean is under 16" || no "black edge rc=$rc" "$(rsn png-black-background)"
+qarun qa-black-icon-001 vfx-sprite icon-ok.png
+[ $rc -eq 1 ] && [ "$(st png-alpha)" = FAIL ] && ok "vfx-sprite: a transparent image fails alpha forbidden (opaque background)" || no "vfx-sprite alpha rc=$rc $(st png-alpha)"
+qarun qa-trail-ok-001 vfx-trail trail-ok.png
+[ $rc -eq 0 ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] && [ "$(st png-tileable)/$(st png-black-background)/$(st png-size)" = "PASS/PASS/PASS" ] \
+  && rsn png-tileable | grep -qF "on the x axis" && rsn png-black-background | grep -qF "top 0.0, bottom 0.0" && ! rsn png-black-background | grep -q "left" \
+  && ok "vfx-trail: a horizontal streak that wraps left-right passes tileable on the x axis and black top and bottom edges" || no "trail ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-trail-xgrad-001 vfx-trail trail-xgrad.png
+[ $rc -eq 1 ] && [ "$(st png-tileable)" = FAIL ] && rsn png-tileable | grep -q "seam error .* on the x axis" \
+  && ok "vfx-trail: a left-to-right gradient fails the x-axis seam check" || no "trail xgrad rc=$rc" "$(rsn png-tileable)"
+qarun qa-trail-ygrad-001 vfx-trail trail-ygrad.png
+[ "$(st png-tileable)" = PASS ] && rsn png-tileable | grep -qF "seam error 0.000 on the x axis" \
+  && ok "vfx-trail: a top-to-bottom gradient wraps left-right, so the x-axis seam check passes" || no "trail ygrad x rc=$rc" "$(rsn png-tileable)"
+qarun qa-trail-ygradboth-001 texture-tileable trail-ygrad.png
+[ "$(st png-tileable)" = FAIL ] && ! rsn png-tileable | grep -q "axis" \
+  && ok "the same image fails png-tileable for a both-axes purpose (axis defaults to both, detail unchanged)" || no "trail ygrad both rc=$rc" "$(rsn png-tileable)"
+qarun qa-noise-001 vfx-noise-tileable tile-ok.png
+[ $rc -eq 0 ] && [ "$(st png-tileable)/$(st png-alpha)" = "PASS/PASS" ] && ! rsn png-tileable | grep -q "axis" \
+  && ok "vfx-noise-tileable: a wrapping pattern passes the both-axes seam check" || no "noise ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-noise-bad-001 vfx-noise-tileable tile-bad.png
+[ $rc -eq 1 ] && [ "$(st png-tileable)" = FAIL ] && ok "vfx-noise-tileable: a horizontal gradient fails the seam check" || no "noise bad rc=$rc $(st png-tileable)"
+for vp in vfx-flipbook vfx-sprite vfx-trail; do
+  qarun "qa-vfx-small-$vp-001" "$vp" icon-small.png
+  [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "$vp: 256x256 fails png-size (floors)" || no "$vp small rc=$rc $(st png-size)"
+done
 
 echo "-- review-cmd (prints only)"
 d="$RUNS/qa-icon-ok-001"

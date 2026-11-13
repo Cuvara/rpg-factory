@@ -1,0 +1,86 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "VFX flipbook sheet",
+ "description": "Opaque pure-black sprite sheet of one effect animation, a 4 x 4 grid of equal frames in reading order, for additive-blend particle flipbooks.",
+ "handoff_domain": "vfx",
+ "default_template": "image-generate",
+ "default_family": "vfx",
+ "dimensions": [
+  "palette",
+  "lighting",
+  "shape",
+  "composition"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1024x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name the effect and its animation (for example fire burst, smoke puff, magic hit spark) and how it evolves from the first frame to the last.",
+   "State a 4 x 4 grid of 16 equal square frames in reading order, left to right and top to bottom, with dark gutters between frames.",
+   "No frame touches another frame or the sheet border: every frame keeps a dark margin around the effect.",
+   "Ask for an opaque pure-black (#000000) background and a bright, saturated subject that works with additive blending.",
+   "No text, no frame numbers, no grid lines drawn in colour, no ground, no characters."
+  ],
+  "must_include": [
+   "effect name",
+   "4 x 4 grid of equal frames",
+   "reading order",
+   "dark gutters",
+   "opaque pure black #000000 background",
+   "bright additive-blend-friendly subject"
+  ],
+  "avoid": [
+   "frames touching each other",
+   "grey or coloured background",
+   "text or frame numbers",
+   "ground, horizon or scene",
+   "characters",
+   "transparent background",
+   "empty frames"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear effect and its animation arc from the first frame to the last.",
+  "The prompt states a 4 x 4 grid of equal frames in reading order with dark gutters and no frame touching another.",
+  "The prompt asks for an opaque pure-black (#000000) background and a bright subject that suits additive blending.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a pure-black background, or a full scene and isolated frames)."
+ ],
+ "image_rubric": [
+  "The image shows a 4 x 4 grid of 16 equal frames of the effect the prompt asked for, without extra subjects.",
+  "The frames read in order left to right and top to bottom and show a coherent animation progression.",
+  "No frame is blank and no frame touches another frame or the sheet border; gutters are dark.",
+  "The background is pure black everywhere outside the effect; no grey haze, vignette or gradient.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, frame numbers, watermark, signature or frame."
+ ],
+ "constraints": {
+  "background": "Opaque pure black (#000000) background; the effect is bright and suits additive blending.",
+  "framing": "4 x 4 grid of equal frames in reading order with dark gutters; no frame touches another frame or the sheet border.",
+  "processing": "Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool."
+ },
+ "qa": {
+  "size": {
+   "mode": "orientation",
+   "expect": "1024x1024",
+   "square_tolerance": 0.15,
+   "min_side": 512,
+   "min_pixels": 262144
+  },
+  "alpha": "forbidden",
+  "flipbook_grid": {
+   "columns": 4,
+   "rows": 4
+  },
+  "black_background": {
+   "max_luminance": 16
+  },
+  "not_blank": {
+   "min_stddev": 2.0
+  }
+ }
+}
