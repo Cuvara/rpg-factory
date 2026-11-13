@@ -23,7 +23,9 @@ Local models (UNTESTED on RTX 5060: the block is a declaration compared with pla
 number): a template's optional requires block {profile, peak_vram_gb, ram_gb, packs, models[{kind, name, size_gb}]}
 is checked against data/hardware.json (profile id, the profile's VRAM and RAM ceilings and pack ids, model kinds, a
 model name that is a file name; no link, path or credential). A node of a known-nodes pack needs its pack id in
-requires.packs, and a local_model_nodes or pack node needs the block. No requires and no such node: nothing changes.
+requires.packs, and a local_model_nodes or pack node needs the block and a profile with a GPU (hardware.json
+requires.gpu true; api-only has none and stays valid for an API-only graph). No requires and no such node: nothing
+changes.
 """
 import json
 import math
@@ -71,19 +73,20 @@ def is_number(v):
 
 def hardware():
     """(profiles, kinds) of data/hardware.json: {profile id: {"vram": requires.min_vram_gb, "ram":
-    requires.min_ram_gb, "packs": [pack id]}} and the model kinds any profile names (file order). ValueError with one
-    message when the file is missing or malformed."""
+    requires.min_ram_gb, "gpu": requires.gpu (a bool), "packs": [pack id]}} and the model kinds any profile names
+    (file order). ValueError with one message when the file is missing or malformed."""
     try:
         with open(HARDWARE, encoding="utf-8") as f:
             raw = json.load(f)
         profiles, kinds = {}, []
         for p in raw["profiles"]:
             entry = {"vram": p["requires"]["min_vram_gb"], "ram": p["requires"]["min_ram_gb"],
-                     "packs": [pack["id"] for pack in p["packs"]]}
+                     "gpu": p["requires"]["gpu"], "packs": [pack["id"] for pack in p["packs"]]}
             found = [m["kind"] for m in p["models"]]
             if (not isinstance(p["id"], str) or not is_number(entry["vram"]) or not is_number(entry["ram"])
+                    or not isinstance(entry["gpu"], bool)
                     or not all(isinstance(x, str) for x in entry["packs"] + found)):
-                raise ValueError("profile %r: id, pack ids and model kinds must be strings, min_vram_gb and min_ram_gb numbers" % (p["id"],))
+                raise ValueError("profile %r: id, pack ids and model kinds must be strings, min_vram_gb and min_ram_gb numbers, gpu a bool" % (p["id"],))
             profiles[p["id"]] = entry
             kinds += [k for k in found if k not in kinds]
         if not profiles:
@@ -186,7 +189,8 @@ def requires_errors(data, graph):
     what a local template needs: a data/hardware.json profile, the peak VRAM and the RAM it declares (never above the
     profile's min_vram_gb / min_ram_gb), the node packs its workflow uses and its model files (kind, file name, size).
     A node of a known-nodes pack needs that pack id in requires.packs; a local_model_nodes or pack node needs the
-    block. A template without the block and without such a node gets no error and no warning."""
+    block and a declared profile with a GPU (hardware.json requires.gpu true): one error per such node otherwise.
+    A template without the block and without such a node gets no error and no warning."""
     registry = known_registry()
     pack_of = {name: pid for pid, spec in registry.get("packs", {}).items() for name in spec.get("nodes", [])}
     local = set(registry.get("local_model_nodes", []))
@@ -213,6 +217,10 @@ def requires_errors(data, graph):
         errs.append("requires.profile missing (one of %s; data/hardware.json)" % ", ".join(profiles))
     elif limits is None:
         errs.append("requires.profile %r is not a hardware profile (%s; data/hardware.json)" % (profile, ", ".join(profiles)))
+    elif not limits["gpu"]:
+        with_gpu = ", ".join(pid for pid, p in profiles.items() if p["gpu"]) or "hardware.json has none"
+        errs += ["node %s (%s) runs a local model, but profile %s has no GPU (hardware.json requires.gpu false); declare a local profile (%s)"
+                 % (nid, ctype, profile, with_gpu) for nid, ctype in typed if ctype in local or ctype in pack_of]
     for key, limit, field in (("peak_vram_gb", "vram", "min_vram_gb"), ("ram_gb", "ram", "min_ram_gb")):
         value = req.get(key)
         if not is_number(value) or value < 0:
