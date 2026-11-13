@@ -41,7 +41,8 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        style inputs it graded with (style_binding = runfiles.qa_style_binding of spec.json and the run's
                        anchor copies: style ref, effective style data hash, family, anchor copy hashes), else FAIL as
                        stale (re-run qa and manifest); a report without style_binding counts as stale.
-  gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
+  gen-run-outputs      outputs recorded, inside the run directory and under outputs/, on disk, sha256 equal; no
+                       unrecorded outputs/*.png (previews/ is never listed: preview files are not deliverables)
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present; run.md spec.params equal the rendered params
                        (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest).
@@ -310,15 +311,18 @@ def check(artifact, ctx):
     fails, todo = [], []
     if not outputs:
         todo.append("no outputs recorded (fetch_outputs into outputs/, then assetgen.py manifest)")
+    out_dir = resolve("outputs")
     for path, digest in recorded.items():
         full = resolve(path) if isinstance(path, str) else None
         if full is None:
             fails.append("output %r is not a path inside the run directory" % path)
+        elif out_dir is None or out_dir not in full.parents:
+            fails.append("output %s is not under outputs/: previews/ files are never deliverables; re-run finalize "
+                         "and manifest" % path)
         elif not full.is_file():
             todo.append("output %s is missing on disk" % path)
         elif sha256_file(full) != digest:
             fails.append("output %s: sha256 on disk differs from the record; re-run qa and manifest" % path)
-    out_dir = resolve("outputs")
     if out_dir is not None and out_dir.is_dir():
         for name in sorted(os.listdir(out_dir)):
             if name.lower().endswith(".png") and "outputs/" + name not in recorded:

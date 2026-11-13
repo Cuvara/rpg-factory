@@ -1,0 +1,20 @@
+{
+  "prompt_id": "00000000-0000-4000-8000-000000000000",
+  "client_id": "00000000-0000-4000-8000-0000000000c1",
+  "workflow": {},
+  "where": "local",
+  "host": "127.0.0.1",
+  "port": 8188,
+  "base_url": null,
+  "submitted_at": "2026-11-13T01:26:27+00:00",
+  "updated_at": "2026-11-13T01:27:02+00:00",
+  "completed_at": "2026-11-13T01:27:02+00:00",
+  "status": "completed",
+  "outputs": [],
+  "error": null,
+  "watcher_pid": null,
+  "watcher_pid_create_time": null,
+  "record": null,
+  "item_map": null,
+  "client_id_borrowed": false
+}
