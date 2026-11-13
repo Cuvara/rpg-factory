@@ -1,5 +1,14 @@
 {
   "schema": "rpg-factory.pipeline-defaults/1",
+  "workspace": {
+    "description": "Optional language settings for a workspace without a registry: report_language is the language of the report to the owner (absent means the user's own language; everything else written is English); language_allow lists path globs for localisation data that the english-only advisories skip.",
+    "language_allow": [
+      "**/Localization/**",
+      "**/Locales/**",
+      "**/i18n/**",
+      "**/*.po"
+    ]
+  },
   "pipeline": {
     "description": "Delivery pipeline (scripts/factory-pipeline.py, policy skills/delivery/references/delivery.md, RPG specifics in skills/factory-core/references/parallel-work.md): task tiers, the agents that implement and review, cross-model review pairing and shared exclusive resources.",
     "tiers": {
@@ -74,7 +83,7 @@
     "qa_tiers": {
       "task": "affected",
       "integration": "ci+workspace",
-      "description": "Task QA runs affected and explicit check suites once; integration runs tests/run-all.sh --workspace-only locally and CI green is the full-suite gate."
+      "description": "Task QA runs affected and explicit check suites once; integration runs tests/run-all.sh --workspace-only locally; CI runs the affected suites per change and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
     },
     "available_agents": [
       "claude",

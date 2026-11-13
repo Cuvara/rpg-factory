@@ -24,6 +24,9 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+from workspace import default_workspace
+
 PKGS = {
     "com.cuvara.netcode": ("Netcode", "package.json", "https://github.com/Cuvara/Netcode.git"),
     "com.cuvara.dots": ("UnityDots", "package.json", "https://github.com/Cuvara/UnityDots.git"),
@@ -46,7 +49,7 @@ def pkg_json_at(repo, ref, path):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    ws = os.environ.get("RPG_FACTORY_WORKSPACE", "/mnt/c/Workspaces/UnityIndie")
+    ws = default_workspace()
     if "--workspace" in sys.argv:
         ws = sys.argv[sys.argv.index("--workspace") + 1]
         args = [a for a in args if a != ws]

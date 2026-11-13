@@ -1,0 +1,106 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "workspace-default",
+  "title": "Backlog workspace-default-by-platform: one workspace default helper, gate staleness for run lead files, portable run lead files",
+  "topic": "workspace-default",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "workspace-helper",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a new shared helper in shell and Python, a new suite and its registration",
+      "objective": "Backlog topic workspace-default-by-platform item 1, part 1. When RPG_FACTORY_WORKSPACE is unset, scripts and suites default the workspace to the WSL drive form of Workspaces/UnityIndie, which fails on Git Bash for Windows. tests/routing.test.sh already has default_workspace() (an explicit non-empty RPG_FACTORY_WORKSPACE wins; the Git Bash drive form on MINGW, MSYS and Cygwin by uname -s; the WSL form elsewhere). Make it the one shared helper: (a) a new sourceable scripts/lib/workspace.sh defining rpgf_default_workspace with exactly that behaviour (uname looked up at call time so a test can stub it; no side effects when sourced); (b) default_workspace(env=None, nt=None) in scripts/lib/workspace.py with the same rule for Python (explicit env value wins; otherwise the WSL form passed through native_path, so Windows Python gets the drive-letter form); keep workspace.py stdlib-only and cheap to import. Switch tests/routing.test.sh to source the shell helper (keep its export and its stubbed-uname self-tests working) and switch the workspace defaults inside tests/run-all.sh to the helper. New suite tests/workspace-default.test.sh covering both helpers with a stubbed platform (Git Bash, MSYS, Cygwin, Linux, explicit value wins, empty value falls back), registered in tests/run-all.sh like the other suites, listed in tests/README.md and scripts/README.md (one line each). Changelog fragment changelog.d/workspace-default.md (### Fixed). Do not touch other callers (task workspace-callers).",
+      "paths": [
+        "scripts/lib/workspace.sh",
+        "scripts/lib/workspace.py",
+        "tests/workspace-default.test.sh",
+        "tests/routing.test.sh",
+        "tests/run-all.sh",
+        "tests/README.md",
+        "scripts/README.md",
+        "changelog.d/workspace-default.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/workspace-default.test.sh",
+        "tests/routing.test.sh",
+        "tests/run-all-parallel.test.sh"
+      ],
+      "acceptance": [
+        "one shell and one Python helper give the same default on every platform; an explicit value wins",
+        "routing.test.sh and run-all.sh use the helper; the new suite is registered and passes",
+        "the file guard and hooks that import workspace.py stay stdlib-only and fast"
+      ]
+    },
+    {
+      "id": "workspace-callers",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "replace one default value per caller with the shared helper",
+      "objective": "Backlog topic workspace-default-by-platform item 1, part 2 (after task workspace-helper). Replace the hard-coded WSL-form workspace default with the shared helper in every remaining caller: scripts/checks/pin-plan.py and scripts/checks/pin-status.py and tests/routing-properties.test.py (Python: workspace.default_workspace(), importing scripts/lib the way each file already finds sibling modules, or adding the same sys.path line other checks use); scripts/checks/wire-parity.sh, scripts/checks/netcode-headless.sh, tests/dogfood.sh and tests/dogfood-codex.sh (shell: source scripts/lib/workspace.sh relative to the script and call rpgf_default_workspace). Keep each script's behaviour when RPG_FACTORY_WORKSPACE is set, and its messages (a message may name the resolved path). Update the workspace sentence at the end of the Commands section of .claude/CLAUDE.md to say the default depends on the platform (Git Bash drive form or WSL form) and that RPG_FACTORY_WORKSPACE overrides it. Extend changelog.d/workspace-default.md by one sentence naming the callers. A grep for the WSL-form literal path under scripts/ and tests/ must find only scripts/lib/workspace.sh, scripts/lib/workspace.py, tests/workspace-default.test.sh and test fixtures.",
+      "paths": [
+        "scripts/checks/pin-plan.py",
+        "scripts/checks/pin-status.py",
+        "scripts/checks/wire-parity.sh",
+        "scripts/checks/netcode-headless.sh",
+        "tests/routing-properties.test.py",
+        "tests/dogfood.sh",
+        "tests/dogfood-codex.sh",
+        ".claude/CLAUDE.md",
+        "changelog.d/workspace-default.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "workspace-helper"
+      ],
+      "checks": [
+        "tests/workspace-default.test.sh",
+        "tests/netcode-headless.test.sh",
+        "tests/routing-properties.test.py"
+      ],
+      "acceptance": [
+        "no caller hard-codes the workspace default any more",
+        "an exported RPG_FACTORY_WORKSPACE still wins in every caller",
+        ".claude/CLAUDE.md describes the platform default"
+      ]
+    },
+    {
+      "id": "gate-lead-files",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "gate logic: a wrong exemption lets untested code through READY_FOR_PR",
+      "objective": "Backlog topic workspace-default-by-platform items 2 and 3, in scripts/factory-pipeline.py. (1) gate marks the integration QA STALE whenever the integration HEAD differs from the QA SHA (the 'QA is STALE (ran on' blocker), so a commit that only changes run lead files (run_lead_files(): the plan file, its report.md, the backlog.md beside it) forces a 15-20 minute rerun of the workspace QA. Treat the QA as current when the QA SHA is an ancestor of HEAD and every file changed between them is a run lead file; any other changed file, a non-ancestor QA SHA or a failing git command keeps the STALE blocker (fail safe). (2) In plan ci-backlog-followups the run lead committed a plan and report containing machine-specific path text; only CI's parallel-policy portable-plans case caught it, after the PR was open. Make gate also check the run lead files present on the integration branch with the same machine-path rule the portable-plans case of tests/parallel-policy.test.sh uses, and report a blocker naming the file. Move that regex into one place that both the test and factory-pipeline.py use (for example scripts/lib/plan_paths.py) so they cannot drift; the parallel-policy case keeps its mutations and passes. Tests in tests/pipeline.test.sh: a report-only commit after QA keeps READY_FOR_PR; a code commit after QA is STALE; a run lead file with a machine path blocks the gate. Document both in docs/pipeline-cli.md ('gate'), and rewrap the lines of docs/pipeline-cli.md that are longer than 120 columns (backlog item 3). Changelog fragment changelog.d/gate-lead-files.md (### Changed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/plan_paths.py",
+        "tests/pipeline.test.sh",
+        "tests/parallel-policy.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/gate-lead-files.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/parallel-policy.test.sh",
+        "tests/delivery-generic.test.sh"
+      ],
+      "acceptance": [
+        "a commit of run lead files only after integration QA does not make it STALE; any other file does",
+        "gate blocks a run lead file with machine-specific path text, using the same rule as the portable-plans case",
+        "docs/pipeline-cli.md has no line over 120 columns"
+      ]
+    }
+  ]
+}

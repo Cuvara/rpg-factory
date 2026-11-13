@@ -1,0 +1,183 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "ci-matrix",
+  "title": "CI runs one matrix job per affected suite instead of the whole run-all",
+  "topic": "ci-matrix",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "ci-plan",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add scripts/ci-plan.py (read-only): given --base REF (or none) and the event kind, print a JSON matrix of {suite, cases, os} for the CI. It reads the runnable suites from 'tests/run-all.sh --list-suites --no-workspace --no-claude' and selects with tests/affected.py (cases), never re-implementing selection. Fail-safe: no base, an unusable base (all-zero push 'before', unknown sha), an affected.py error, or a changed file in .github/workflows/**, .github/actions/**, tests/run-all.sh, tests/affected.py, scripts/ci-plan.py or tests/ci-windows-suites.txt selects every suite (full). A 'full' input forces full. The os list of a suite is ubuntu-24.04 plus windows-2025 only when the suite is named in tests/ci-windows-suites.txt (data file, one suite path per line, # comments; seed it with the OS-sensitive suites: git-guard, file-guard, git-env-isolation, run-checks, worktree*, compat, hook-perf, new-skill, installed/hook suites). Also print the changed files count and, for the job summary, a markdown table of run versus skipped suites. Add tests/ci-plan.test.sh (temp git repos or a stand-in changed list; cases: one skill file changed gives only its suites, registry change gives full, workflow change gives full, missing base gives full, docs-only change gives few suites, every listed suite is selected or has a reason, windows list names only existing suites) and register it in tests/run-all.sh. If run-all has no way to run only the inline checks, add '--inline-only' (with a case in tests/run-all-parallel.test.sh) so a PR that selects no suite still gets the inline checks.",
+      "paths": [
+        "scripts/ci-plan.py",
+        "tests/ci-plan.test.sh",
+        "tests/ci-windows-suites.txt",
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/ci-plan.test.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "ci-plan.test.sh passes and is listed by run-all.sh --list-suites",
+        "a PR that changes one skill file yields only the suites affected.py selects for it, a registry or workflow change yields every suite",
+        "no suite selection logic is duplicated outside tests/affected.py"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "orca-parent-hint",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Root cause of a task worktree registered under the main checkout instead of the run lead's worktree: factory-pipeline.py dispatch --phase lead takes the Orca parent from the checkout that holds plan.topic (worktree_for(path, plan['topic'])) and silently falls back to the main checkout when no checkout has it. Keep the rule (delivery.md 'Orca visibility' is right) but make the fallback loud: when the topic branch is checked out nowhere, print a stderr hint in dispatch --phase lead (same style as base_health_hint) saying the parent falls back to the main checkout and that the run lead should set plan.topic to its own integration branch (or check the topic out) before dispatching. No change to the printed commands. Add a case in tests/pipeline.test.sh (topic checked out: no hint and parent is that checkout; topic not checked out: hint printed and parent is the main checkout), a one-line lesson with its reason in skills/factory-core/references/parallel-work.md, and changelog fragment changelog.d/orca-parent-hint.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        "changelog.d/orca-parent-hint.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "pipeline.test.sh passes with the new cases",
+        "dispatch output (commands) is byte-identical to before; only a stderr hint is new",
+        "the lesson names the reason and the test"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "ci-workflow",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Rewrite .github/workflows/tests.yml as: job 'plan' (ubuntu, fetch-depth 0, base = PR base sha or push 'before', workflow_dispatch input 'full' forces full) running scripts/ci-plan.py and exposing matrix, inline and full outputs plus the job summary table; job 'suite' (needs plan, strategy.matrix from fromJSON, fail-fast false, one job per {suite,os}) running 'tests/run-all.sh --only-suites <suite> --no-workspace --no-claude' with the case subset the plan gives; job 'inline-checks' (ubuntu and windows) for the checks that run even when no suite is selected; job 'ci-ok' (if always(), needs all) that fails when any needed job failed or was cancelled and is the single required check. Move the repeated setup (LF autocrlf, checkout pin, python3.exe on Windows, long TMPDIR, git identity, tool versions) into the composite action .github/actions/setup-ci/action.yml; keep the pinned action SHAs of the current file. Keep concurrency, permissions: contents read, timeouts, and upload a log artifact per suite and os. Keep the header comment accurate (affected only on PR and push, full by workflow_dispatch).",
+      "paths": [
+        ".github/workflows/tests.yml",
+        ".github/actions/setup-ci/action.yml"
+      ],
+      "exclusions": [],
+      "deps": [
+        "ci-plan"
+      ],
+      "checks": [
+        "tests/ci-plan.test.sh"
+      ],
+      "acceptance": [
+        "the workflow parses as YAML and every 'needs' target exists",
+        "ci-ok fails on a failed or cancelled matrix job and passes when the matrix is skipped because nothing is affected",
+        "action pins are unchanged"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "ci-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Document the new CI: changelog fragment changelog.d/ci-matrix.md (### Changed), the CI description in docs/architecture/overview.md, docs/releasing.md (a release runs the full matrix through workflow_dispatch full=true plus the local --release gate), scripts/README.md (ci-plan.py entry) and tests/README.md (CI section, ci-plan.test.sh, ci-windows-suites.txt). In .claude/CLAUDE.md change 'CI is the full-suite gate' to affected-only per PR with a full run by workflow_dispatch, name 'ci-ok' as the single required check, and add one operating lesson with its reason (a dynamic matrix cannot be a required check; only ci-ok can). Mirror the same wording in skills/delivery/references/delivery.md ('CI is the full gate' bullet and the integration QA row) so tests/skills-lint.sh and tests/parallel-policy.test.sh stay green. Also state, in the changelog fragment (### Added for scripts/ci-plan.py, run-all --inline-only and tests/ci-windows-suites.txt; ### Changed for the workflow) and in tests/README.md: the suite job runs every case of a selected suite (run-all has no case subset for --only-suites; a follow-up), workflow_dispatch with full=false has no base so it also plans every suite, and branch protection must require only 'ci-ok' (the old 'run-all (no workspace, <os>)' checks no longer exist). The hint of changelog.d/orca-parent-hint.md already exists; do not touch it.",
+      "paths": [
+        "changelog.d/ci-matrix.md",
+        "docs/architecture/overview.md",
+        "docs/releasing.md",
+        "scripts/README.md",
+        "tests/README.md",
+        ".claude/CLAUDE.md",
+        "skills/delivery/references/delivery.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "ci-workflow"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "tests/parallel-policy.test.sh",
+        "tests/changelog.test.sh"
+      ],
+      "acceptance": [
+        "changelog.py check passes and CHANGELOG.md [Unreleased] is untouched",
+        "the CI wording is the same in CLAUDE.md, delivery.md and tests/README.md"
+      ],
+      "implementer": "claude",
+      "reviewer": "codex"
+    },
+    {
+      "id": "ci-wording",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "replace one stale sentence in four places and its test assertion",
+      "objective": "After the CI moved to affected-only per PR (ci-ok the single required check, every suite via workflow_dispatch full=true), the sentence 'CI green is the full-suite gate' / 'CI is the full-suite gate' is stale. Replace it with the wording now in .claude/CLAUDE.md and skills/delivery/references/delivery.md (CI runs the affected suites per change and ci-ok must be green before merging; every suite via workflow_dispatch full=true) in scripts/factory-pipeline.py (module docstring near line 121 and the QA policy strings near lines 1675-1679, which verify and QA specs print), skills/delivery/pipeline-defaults.json (qa_tiers description) and registry/core.json (same description), then rebuild registry.json with `python3 -B scripts/build-registry.py`. Update the assertion in tests/pipeline.test.sh near line 960 to the new text. Add a line to changelog.d/ci-matrix.md (### Changed). Keep every string free of quote characters (pp_spec in pipeline.test.sh shlex-splits dispatch output). Also skills/factory-core/references/parallel-work.md (Tier commands section): same replacement.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "skills/delivery/pipeline-defaults.json",
+        "registry/core.json",
+        "registry.json",
+        "tests/pipeline.test.sh",
+        "changelog.d/ci-matrix.md",
+        "skills/factory-core/references/parallel-work.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "ci-docs",
+        "orca-parent-hint"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/delivery-generic.test.sh"
+      ],
+      "acceptance": [
+        "no 'full-suite gate' wording left outside CHANGELOG.md history (git grep)",
+        "build-registry.py --check passes",
+        "pipeline.test.sh passes"
+      ],
+      "implementer": "claude",
+      "reason": "codex unavailable on this machine"
+    },
+    {
+      "id": "ci-gate-pin",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one pinned policy phrase in a doc and its test pins",
+      "objective": "skills/delivery/references/delivery.md still calls CI 'the full gate' although CI now runs only the affected suites per change: the QA tiers row 'Integration QA, once per batch before the PR' says 'CI green is the full gate' and the bullet heading reads '**CI is the full gate.**'. Replace the row phrase with 'CI green (ci-ok) is the merge gate' and the heading with '**CI is the merge gate.**' (keep the bullet body), and update the pins in tests/parallel-policy.test.sh (the qa-tiers row tuple near line 469 and the q_mutate case near line 533) to the new phrase. delivery.md must stay under its 32 KiB size cap (tests/delivery-generic.test.sh; about 200 bytes of headroom): the new text must not be longer overall. No quote characters in the phrase. Add a line to changelog.d/ci-matrix.md (### Changed).",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "tests/parallel-policy.test.sh",
+        "changelog.d/ci-matrix.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "ci-docs",
+        "ci-wording"
+      ],
+      "checks": [
+        "tests/parallel-policy.test.sh",
+        "tests/delivery-generic.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "git grep -n 'full gate' finds nothing outside CHANGELOG.md",
+        "parallel-policy, delivery-generic and skills-lint pass"
+      ],
+      "implementer": "claude",
+      "reason": "codex unavailable on this machine"
+    }
+  ]
+}

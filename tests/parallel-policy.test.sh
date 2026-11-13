@@ -17,7 +17,7 @@
 # case-map: orca-lineage skills/delivery/references/delivery.md scripts/lib/compat.sh
 # case-map: agents-roles scripts/lib/compat.sh
 # case-map: plan-paths scripts/lib/plan_paths.py scripts/lib/compat.sh
-# case-map: portable-plans docs/plans/* scripts/lib/compat.sh
+# case-map: portable-plans docs/plans/* scripts/lib/plan_paths.py scripts/lib/compat.sh
 # case-map: cli-selftest scripts/lib/compat.sh
 # scripts/lib/compat.sh is sourced by the suite itself (temp dirs, copies), so it maps to every case. Inputs with no line run ALL:
 # the suite's own file, root files (AGENTS.md, README.md: agents-roles reads AGENTS.md, so it only runs with ALL), registry.json,
@@ -209,7 +209,7 @@ if has_case policy-markers; then
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
-  child-merge-remove child-no-run-all which-model subagents-read-only single-verify)
+  child-merge-remove child-no-run-all which-model subagents-read-only single-verify stacked-dispatch)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files, except in a tier XS task (section 10 step 1); an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
@@ -222,6 +222,7 @@ declare -A POLICY_SENTENCE=(
   [which-model]='| Role or kind | Model | Registry |'
   [subagents-read-only]='In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.'
   [single-verify]='One verify session reviews the whole task diff: a prose subtask written by the verifier'"'"'s model is covered, and a code subtask written by the verifier'"'"'s model is listed by the gate as `SAME_MODEL (single verify)`, never blocking.'
+  [stacked-dispatch]="A dependent task with exactly one in-flight dependency starts from that dependency's tip as a sibling <topic>-<id> worktree, implements in parallel, never verifies before the dependency's review PASS SHA is in its HEAD, merges (never rebases) the dependency branch when told, and is integrated after the dependency."
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
 PLACEMENT_ROWS=('| shared (default) |' '| child |')
@@ -315,6 +316,8 @@ s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence change
   'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
 s_mutate "canonical sentence changed (single verify blocks on a code subtask)" "sentence changed under policy:single-verify" \
   'sed -i "s/, never blocking\.\$/, blocking until its own review passes./" "$F"'
+s_mutate "canonical sentence changed (stacked dependent may rebase)" "sentence changed under policy:stacked-dispatch" \
+  'sed -i "s/, merges (never rebases) the dependency branch when told,/, rebases onto the dependency branch when told,/" "$F"'
 s_mutate "canonical sentence changed (subagents may write)" "sentence changed under policy:subagents-read-only" \
   'sed -i "s/^In-session subagents are read-only scouts;/In-session subagents are scouts;/" "$F"'
 s_mutate "placement table removed" "marker missing: policy:placement-table" \
@@ -466,7 +469,7 @@ else:
         "Verify, once per candidate": ("diff review first", "--affected", "never a full run"),
         "Re-verify after a FAIL": ("only the failed suites", "--failed-at qa", "plus `--affected", "previous FAIL candidate", "--failed-at review"),
         "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
-        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green is the full gate", "ci+workspace"),
+        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green (ci-ok) is the merge gate", "ci+workspace"),
         "Release": ("--release", "dogfood.sh --installed"),
     }
     for label, phrases in required.items():
@@ -530,7 +533,7 @@ q_mutate "QA tiers integration row back to a full local run" "qa-tiers row chang
 q_mutate "QA tiers integration row drops the CI watch" "qa-tiers row changed: Integration QA, once per batch before the PR" \
   'sed -i "/^| Integration QA,/s/gh pr checks/gh pr view/" "$F"'
 q_mutate "QA tiers integration row drops the CI gate statement" "qa-tiers row changed: Integration QA, once per batch before the PR" \
-  'sed -i "/^| Integration QA,/s/CI green is the full gate/a green CI helps/" "$F"'
+  'sed -i "/^| Integration QA,/s/CI green (ci-ok) is the merge gate/a green CI helps/" "$F"'
 q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
@@ -680,15 +683,17 @@ fi
 if has_case portable-plans; then
 # Check every file, including untracked plans; use the same checker on injected copies.
 portable_plans() {
-  python3 -B - "$1" <<'PY'
-import re
+  python3 -B - "$1" "$ROOT" <<'PY'
+import os
 import sys
 from pathlib import Path
 
-machine_path = re.compile(r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/|/mnt/[A-Za-z](?:/|$)|/Users/|/home/|AppData', re.I | re.M)
+sys.path.insert(0, os.path.join(sys.argv[2], 'scripts', 'lib'))
+from plan_paths import machine_path_hit
+
 bad = []
 for path in sorted(Path(sys.argv[1]).rglob('*')):
-    if path.is_file() and machine_path.search(path.read_bytes().decode('utf-8', errors='replace')):
+    if path.is_file() and machine_path_hit(path.read_bytes().decode('utf-8', errors='replace')):
         bad.append(str(path))
 if bad:
     print('machine-specific absolute path: ' + ', '.join(bad))

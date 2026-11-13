@@ -133,12 +133,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   report NOT_RUN or fail with `jq: command not found` until a PATH shim was used. Make `doctor` name both.
 - The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
   `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
-- Codex availability: `scripts/lib/pipeline_route.py` marks Codex unavailable when `orca account list` shows no Codex
-  account and no system auth (`hasAuth: false`), but a Codex CLI that runs on an API key is fine. Detect the key
-  (`OPENAI_API_KEY` in the environment) or fall back to a probe before marking it down; until then
-  `RPG_FACTORY_AGENTS=claude,codex` overrides the detection. Seen on the second machine: every review was
-  `SAME_MODEL` until the override, and the Codex cross-model reviews then found three real P2 defects in
-  `lead-report` that the Claude reviews had missed.
 - `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
   checks-lows, after ci-coverage) then shows nine foreign files as scope findings (a false FAIL). Use the task's
   recorded base or the integration base it merged.
@@ -152,7 +146,58 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
+### workspace-default-followups
+
+From plan workspace-default (`docs/plans/workspace-default/report.md`):
+
+- `scripts/README.md` still states the old WSL-form workspace default; mirror the platform sentence of
+  `.claude/CLAUDE.md` "Commands".
+- No test stops a caller from hard-coding the workspace literal again: add a grep case to
+  `tests/workspace-default.test.sh` (allowed: the two helpers, their suite, test fixtures).
+- Integration QA with `RPG_FACTORY_WORKSPACE` unset on Git Bash still fails 6 of 22 checks: `scripts/check-registry.sh`
+  ("registry paths exist in workspace") and `factory-context.sh` (four cases: markers not found) take the workspace
+  from the registry root default or the environment, not from the shared helper, and
+  `scripts/checks/netcode-headless.sh` uses the workspace for the Netcode source only when `RPG_FACTORY_WORKSPACE` is
+  exported. Route them through `scripts/lib/workspace.{sh,py}` too.
+- `scripts/lib/workspace.sh`: stock Cygwin mounts drives under a cygdrive prefix, not at the root; the helper assumes
+  the Git Bash form there too.
+- `gate` checks run lead files for machine paths, but other docs checks on `docs/plans` (English only) are still caught
+  only by CI.
+
+### language-policy-followups
+
+From plan language-policy (`docs/plans/language-policy/report.md`):
+
+- `changelog.d/language-policy.md` does not name the Agent-tool prompt check (`hooks/hooks.json` matcher `Agent|Task`).
+- `tests/installed-safety.sh` has no english-only case, and none for an Agent prompt.
+- The `--domain` and `--graph` views of the snapshot print no `Language:` line.
+- `skills/factory-core/references/plugin-review.md` still has the short "English only" bullet.
+- `scripts/file-guard.py` ignores `path:line` entries of the english-only allowlist (an Edit fragment has no file
+  line); only `path:*` works.
+- Git guard lows: the `orca` positional parse misses a global option that takes a value; the `Agent|Task` matcher
+  fires for any tool named Task; the plugin-checkout rule governs every plugin checkout.
+- `factory-pipeline.py status` and `cleanup` call `orca orchestration worker-list --full`, which Orca 1.4.244
+  rejects ("Unknown flag --full"), so the unreleased-worker check cannot run there.
+- `status` lists a sibling integration worktree of another plan as a "leftover child" of this plan's integration
+  checkout when its Orca parent is the main checkout (seen with `feat/skills/vfx-graph` while the main checkout held
+  `fix/core/language-policy`). Tell a child of the plan from a worktree of another topic.
+- A plan-scoped owner override cannot name a model outside `pipeline.models.scope` (the personal policy file may only
+  narrow it), so the run lead had to edit the printed launch command by hand. Decide whether a plan may widen the
+  scope for itself, with the owner's word recorded in the plan.
+- Codex stops at its "Hooks need review" trust prompt in a checkout whose hooks it has not seen; `agents` detection
+  still reports it available. Probe for the prompt, or document the one-time trust step in `docs/codex.md`.
+
 ## Covered
+
+- **workspace-default-by-platform**: shipped in plan workspace-default (`changelog.d/workspace-default.md`,
+  `changelog.d/gate-lead-files.md`).
+
+- **ci-backlog-followups**: shipped in plan ci-backlog-followups (`changelog.d/routing-workspace.md`,
+  `changelog.d/alias-probe.md`, `changelog.d/codex-config-reuse.md`).
+
+- **ci-matrix-followups** and the Codex availability item of plugin-flow-5-followups: shipped in plans ci-followups
+  (`changelog.d/ci-cases.md`, `changelog.d/pipeline-followups.md`, `changelog.d/orca-wait-stall.md`) and ci-backlog
+  (`changelog.d/dispatch-notes.md`, `changelog.d/codex-detect.md`, delivery.md trimmed to 1582 bytes under its cap).
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,
   per-candidate verdict records): shipped in plan plugin-flow (`changelog.d/child-worktrees.md`).
