@@ -278,7 +278,7 @@
   "11": {
    "class_type": "CLIPTextEncode",
    "inputs": {
-    "text": "blurry, low quality, watermark, text, logo, signature, frame, characters in the foreground",
+    "text": "blurry, low quality, watermark, text, logo, signature, frame",
     "clip": [
      "3",
      1
