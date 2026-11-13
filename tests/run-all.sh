@@ -55,6 +55,7 @@
 #                   Busy slots queue with a wait message; dead holders are reclaimed. Full runs keep their own lock.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -888,6 +889,7 @@ run "asset-gen engine, core templates, image QA, gen-run quality plugin (temp au
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+run "workspace default by platform (shell + Python helper, stubbed uname)" env -u TMPDIR tests/workspace-default.test.sh
 # plan paths (task checks-lows): skipped while the suite is absent; the run line stays visible to list_suites
 if [ -f tests/plan-paths.test.sh ]; then run "plan paths (portable plan path validation)" env -u TMPDIR tests/plan-paths.test.sh; fi
 fi
@@ -1014,12 +1016,13 @@ fi
 # ---- Factory check scripts against the live workspace (read-only)
 live_checks() {
   local wsr cl pin_files out hout ph r p rc
+  wsr="$(rpgf_default_workspace)"
   run "sgl-determinism on Shared.GameLogic" python3 -B scripts/checks/sgl-determinism.py \
-    "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
+    "$wsr/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
   # pin-status reads the client's working tree. When the user has uncommitted pin files (the local file:
   # toggle is a human gate and their state), a live FAIL says nothing about this plugin: then verify the
   # committed HEAD through a read-only export and report SKIP with the reason - never PASS.
-  wsr="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"; cl="$wsr/IndieRPGMMOAdventure"
+  cl="$wsr/IndieRPGMMOAdventure"
   pin_files=(Packages/manifest.json Packages/packages-lock.json "Assets/Samples/Netcode/DOTS Sample/.sample-source")
   if ! gated scripts/checks/pin-status.py; then :
   elif out=$(python3 -B scripts/checks/pin-status.py 2>&1); then ok "pin-status (client pins vs upstream tags)"
@@ -1044,7 +1047,7 @@ live_checks() {
   fi
   for p in Netcode UnityDots UIToolkit; do
     gated scripts/checks/package-ready.py || continue
-    out=$(python3 -B scripts/checks/package-ready.py "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/$p" 2>&1); rc=$?
+    out=$(python3 -B scripts/checks/package-ready.py "$wsr/$p" 2>&1); rc=$?
     { [ $rc -eq 0 ] && grep -q "READY to tag" <<<"$out"; } || { [ $rc -eq 1 ] && grep -q "NOT READY" <<<"$out"; } \
       && ok "package-ready $p -> $(grep -m1 -oE 'NOT READY|READY to tag v[0-9.]+' <<<"$out")" || bad "package-ready $p" "$out"
   done

@@ -55,8 +55,9 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 ## Libraries
 
 - `lib/` - `context.py` + `resolve.jq` (routing engine), `snapshot_render.py` (snapshot text, domain views, Next line),
-  `workspace.py` (workspace and checkout path helpers shared by the hooks and routing), `english.py` (shared
-  english-only detection used by `checks/english-only.py`, `file-guard.py` and the git guard), `gitguard.py` (git guard
+  `workspace.py` (workspace and checkout path helpers shared by the hooks and routing; `default_workspace`), `workspace.sh`
+  (`rpgf_default_workspace`: the same platform default for shell callers), `english.py` (shared english-only detection
+  used by `checks/english-only.py`, `file-guard.py` and the git guard), `gitguard.py` (git guard
   facade; loads the `rpgf_guard/` package by path as `rpgf_guard`: `common`, `shell`, `git`, `process`, `gates`, `mode`,
   `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
   pollution fingerprints), `runchecks_grade.py` (check parser choice and result grading for `run-checks.py`),
@@ -65,7 +66,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   section 10 "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
   `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
   `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
-  `tests/hook-perf.test.sh`
+  `tests/hook-perf.test.sh`, `tests/workspace-default.test.sh`
 - `ui/` - UI plan engine (`ui_plan.py`, data in `ui/data/`), `ui_catalog.py`, `ui_select.py`, `figma_env.py`.
   `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh`, `tests/ui-figma-env.test.sh`
 - `assetgen/` - asset-gen engine modules: `layers.py` (core and game layers, override and extends), `lint.py` (offline data

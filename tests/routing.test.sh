@@ -43,16 +43,8 @@ if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
 all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
 has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-# default_workspace: an explicit (non-empty) RPG_FACTORY_WORKSPACE wins; otherwise the drive form /c/... on Git Bash,
-# MSYS and Cygwin, the WSL form /mnt/c/... elsewhere. `uname` is looked up at call time, so a test can stub it.
-default_workspace() {
-  if [ -n "${RPG_FACTORY_WORKSPACE:-}" ]; then printf '%s\n' "$RPG_FACTORY_WORKSPACE"; return; fi
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) printf '%s\n' /c/Workspaces/UnityIndie ;;
-    *) printf '%s\n' /mnt/c/Workspaces/UnityIndie ;;
-  esac
-}
-WS="$(default_workspace)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
+WS="$(rpgf_default_workspace)"
 # The bare factory-context.sh calls below read the workspace from the environment.
 export RPG_FACTORY_WORKSPACE="$WS"
 CTX="$ROOT/scripts/factory-context.sh"
@@ -402,17 +394,17 @@ if has_case cli-selftest; then
     else fail=$((fail + 1)); echo "FAIL  default workspace: $1 gave '$2', want '$3'"; fi
   }
   ws_expect "MINGW64_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MINGW64_NT-10.0-26200; }; default_workspace)" /c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MINGW64_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
   ws_expect "MSYS_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MSYS_NT-10.0-26200; }; default_workspace)" /c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MSYS_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
   ws_expect "CYGWIN_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo CYGWIN_NT-10.0; }; default_workspace)" /c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo CYGWIN_NT-10.0; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
   ws_expect "Linux -> /mnt/c/ WSL form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo Linux; }; default_workspace)" /mnt/c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo Linux; }; rpgf_default_workspace)" /mnt/c/Workspaces/UnityIndie
   ws_expect "empty RPG_FACTORY_WORKSPACE counts as unset" \
-    "$(RPG_FACTORY_WORKSPACE=; uname() { echo Linux; }; default_workspace)" /mnt/c/Workspaces/UnityIndie
+    "$(RPG_FACTORY_WORKSPACE=; uname() { echo Linux; }; rpgf_default_workspace)" /mnt/c/Workspaces/UnityIndie
   ws_expect "explicit RPG_FACTORY_WORKSPACE wins on MINGW64_NT" \
-    "$(RPG_FACTORY_WORKSPACE=/x/explicit-ws; uname() { echo MINGW64_NT-10.0-26200; }; default_workspace)" /x/explicit-ws
+    "$(RPG_FACTORY_WORKSPACE=/x/explicit-ws; uname() { echo MINGW64_NT-10.0-26200; }; rpgf_default_workspace)" /x/explicit-ws
   ws_expect "resolved workspace is exported" "$(bash -c 'printf %s "$RPG_FACTORY_WORKSPACE"')" "$WS"
   bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown case exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown case exited $rc, want 2"; }

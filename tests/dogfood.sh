@@ -24,8 +24,9 @@
 #        tests/dogfood.sh --grade-two-level <transcript.jsonl> [<clone dir>]
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
+WS="$(rpgf_default_workspace)"
 OUT="${DOGFOOD_OUT:-/tmp/rpgf-dogfood}"
 
 # Grade a two-level run lead transcript (stream-json). With a clone dir, also check the clone and every worktree it

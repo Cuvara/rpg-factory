@@ -90,5 +90,7 @@ python3 -B scripts/build-registry.py [--check]   # registry.json from registry/
 python3 -B scripts/changelog.py check|preview    # changelog fragments (release X.Y.Z: docs/releasing.md)
 ```
 
-Workspace defaults to `/mnt/c/Workspaces/UnityIndie`; override with `RPG_FACTORY_WORKSPACE`. Run Python with `-B`.
+The workspace default depends on the platform: `/c/Workspaces/UnityIndie` on Git Bash (drive form; Python on Windows
+uses `C:/Workspaces/UnityIndie`), `/mnt/c/Workspaces/UnityIndie` elsewhere (WSL form); `RPG_FACTORY_WORKSPACE`
+overrides it. Run Python with `-B`.
 Every other command and single suite: `scripts/README.md` "Commands".

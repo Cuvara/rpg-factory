@@ -10,8 +10,20 @@ argument or environment value before Windows Python sees it (`/mnt/c/ws` arrives
 elsewhere nothing changes (native_abs would turn `C:/...` into `/mnt/c/...` on POSIX, so it is gated on Windows).
 """
 import os
+import re
 
 from workspace import find_workspace, native_abs  # scripts/lib is on sys.path (factory-pipeline.py)
+
+
+MACHINE_PATH = re.compile(
+    r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/'
+    r'|/mnt/[A-Za-z](?:/|$)|/Users/|/home/|AppData', re.I | re.M)
+
+
+def machine_path_hit(text):
+    """Return the first machine-specific path match, or None."""
+    match = MACHINE_PATH.search(text)
+    return match.group(0) if match else None
 
 
 def _is_nt():
