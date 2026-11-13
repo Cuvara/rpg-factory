@@ -1,0 +1,67 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Graph style hybrid clean fixture",
+  "description": "UNTESTED on RTX 5060: a hybrid template that follows the workflow style guide and the local-8gb profile rules as a static declaration only (never generated, never measured): the API image node makes the base image, one SDXL checkpoint with IPAdapter and one ControlNet refines it locally, the one reviewed prompt feeds the image node and the positive encoder, the negative holds its own text, a tiled VAE decode, one suffixed SaveImage in Output. Credentials are read by the node at run time, never stored here.",
+  "params": {
+    "prompt": {"type": "string", "required": true, "description": "Final reviewed prompt (filled from --prompt-file)."},
+    "model": {"type": "string", "default": "cx/gpt-5.6-sol-image", "description": "Image model id served through the NineRouterImage node."},
+    "size": {"type": "enum", "options": ["auto", "1024x1024", "1536x1024", "1024x1536"], "default": "1024x1024", "description": "Requested size of the base image."},
+    "quality": {"type": "enum", "options": ["auto", "low", "medium", "high"], "default": "auto", "description": "Image quality."},
+    "background": {"type": "enum", "options": ["auto", "opaque", "transparent"], "default": "auto", "description": "Background mode."},
+    "filename_prefix": {"type": "string", "default": "assetgen/run", "description": "SaveImage filename prefix in the ComfyUI output folder."},
+    "reference_image": {"type": "string", "required": true, "description": "Name of the reference image in the ComfyUI input folder."}
+  },
+  "requires": {
+    "profile": "local-8gb",
+    "peak_vram_gb": 7.0,
+    "ram_gb": 24,
+    "packs": ["comfyui_ipadapter_plus"],
+    "models": [
+      {"kind": "checkpoints", "name": "sd_xl_base_1.0.safetensors", "size_gb": 6.9},
+      {"kind": "controlnet", "name": "controlnet-canny-sdxl-1.0.safetensors", "size_gb": 2.5},
+      {"kind": "ipadapter", "name": "ip-adapter-plus_sdxl_vit-h.safetensors", "size_gb": 0.8},
+      {"kind": "clip_vision", "name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors", "size_gb": 2.5}
+    ]
+  },
+  "output_node": "15",
+  "workflow": {
+    "1": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "{{prompt}}"}, "_meta": {"title": "Prompt (Claude, Codex review <state>)"}},
+    "2": {"class_type": "LoadImage", "inputs": {"image": "{{reference_image}}"}, "_meta": {"title": "Reference image"}},
+    "3": {"class_type": "NineRouterImage", "inputs": {"user_prompt": ["1", 0], "model": "{{model}}", "size": "{{size}}", "quality": "{{quality}}", "background": "{{background}}", "reference_images": ["2", 0]}, "_meta": {"title": "Generate base image"}},
+    "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"}, "_meta": {"title": "Load SDXL checkpoint"}},
+    "5": {"class_type": "IPAdapterUnifiedLoader", "inputs": {"model": ["4", 0], "preset": "PLUS (high strength)"}, "_meta": {"title": "Load IPAdapter"}},
+    "6": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "controlnet-canny-sdxl-1.0.safetensors"}, "_meta": {"title": "Load ControlNet"}},
+    "7": {"class_type": "IPAdapterAdvanced", "inputs": {"model": ["5", 0], "ipadapter": ["5", 1], "image": ["2", 0], "weight": 0.6, "weight_type": "linear", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}, "_meta": {"title": "Apply reference style"}},
+    "8": {"class_type": "CLIPTextEncode", "inputs": {"text": ["1", 0], "clip": ["4", 1]}, "_meta": {"title": "Encode reviewed prompt"}},
+    "9": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, low quality, watermark, text", "clip": ["4", 1]}, "_meta": {"title": "Encode negative"}},
+    "10": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["8", 0], "negative": ["9", 0], "control_net": ["6", 0], "image": ["3", 0], "strength": 0.5, "start_percent": 0.0, "end_percent": 0.8, "vae": ["4", 2]}, "_meta": {"title": "Keep the base layout"}},
+    "11": {"class_type": "VAEEncode", "inputs": {"pixels": ["3", 0], "vae": ["4", 2]}, "_meta": {"title": "Encode base image"}},
+    "12": {"class_type": "KSampler", "inputs": {"model": ["7", 0], "seed": 0, "steps": 20, "cfg": 6.0, "sampler_name": "euler", "scheduler": "karras", "positive": ["10", 0], "negative": ["10", 1], "latent_image": ["11", 0], "denoise": 0.45}, "_meta": {"title": "Refine locally"}},
+    "13": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["12", 0], "vae": ["4", 2], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}, "_meta": {"title": "Decode in tiles"}},
+    "14": {"class_type": "ImageScale", "inputs": {"image": ["13", 0], "upscale_method": "lanczos", "width": 1024, "height": 1024, "crop": "center"}, "_meta": {"title": "Resize to target"}},
+    "15": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}-final", "images": ["14", 0]}, "_meta": {"title": "Save final image"}},
+    "16": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}, "_meta": {"title": "Preview base image"}}
+  },
+  "ui": {
+    "groups": [
+      {"title": "Prompt", "color": "pale_blue", "nodes": ["1"]},
+      {"title": "References", "color": "cyan", "nodes": ["2"]},
+      {"title": "Generate", "color": "green", "nodes": ["3"]},
+      {"title": "Models", "color": "brown", "nodes": ["4", "5", "6"]},
+      {"title": "Refine (local)", "color": "blue", "nodes": ["7", "8", "9", "10", "11", "12", "13"]},
+      {"title": "Post-process", "color": "yellow", "nodes": ["14"]},
+      {"title": "Preview", "color": "red", "nodes": ["16"]},
+      {"title": "Output", "color": "purple", "nodes": ["15"]}
+    ],
+    "notes": [
+      {"text": "The reviewed prompt; render fills it from prompt.md. It feeds the image node and the positive encoder.", "group": "Prompt"},
+      {"text": "The reference image render names with --param reference_image.", "group": "References"},
+      {"text": "The one API image node makes the base image.", "group": "Generate"},
+      {"text": "Local loaders: one SDXL checkpoint, the IPAdapter and one ControlNet (UNTESTED on RTX 5060).", "group": "Models"},
+      {"text": "Local refine pass: IPAdapter style, one ControlNet on the base layout, batch 1, tiled VAE decode (UNTESTED on RTX 5060).", "group": "Refine (local)"},
+      {"text": "Resize to the target size.", "group": "Post-process"},
+      {"text": "The preview shows the API base image.", "group": "Preview"},
+      {"text": "The only saved file: the run prefix plus the -final suffix.", "group": "Output"}
+    ]
+  }
+}

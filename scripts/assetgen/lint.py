@@ -15,17 +15,26 @@ malformed per consistency.field_states, the parsing the style checks use) is a W
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
 lint_rows adds one {path, check: "assetgen-graph-style", ...} row per template (a core or game layer template, merged
 as lint_data merges it, or a standalone file with the template schema): the workflow style guide (graphstyle.py:
-titles, one stage group per node, the group vocabulary and order, a Note per group, the reviewed prompt linked
-directly into the one NineRouterImage, SaveImage only in Output with a filename suffix, no static LoadImage file).
-A legacy template without a ui block is a WARN, never a FAIL. An unreadable file or a layer load error gets no extra
-row (its assetgen-lint row already FAILs).
+titles, one stage group per node, the group vocabulary Prompt, References, Generate, Models, Refine (local),
+Post-process, Preview, Output and its order, a Note per group, the reviewed prompt as one PrimitiveStringMultiline
+feeding every positive text input, SaveImage only in Output with a filename suffix, no static LoadImage file) plus the
+profile rules (graphstyle.py: profile, vram, checkpoints, controlnet, batch, tiled-vae, flux) for the template's own
+requires.profile: lint_rows passes profile=None and hardware=hardware_or_none() (None when data/hardware.json is
+malformed: the requires check already FAILs, and no profile rule runs). A legacy template without a ui block is a
+WARN, never a FAIL. An unreadable file or a layer load error gets no extra row (its assetgen-lint row already FAILs).
+Render targets: template_target_errors (assetgen.template_target_errors is the same function; render runs it on the
+filled workflow) checks a template's anchor_target (an existing node, one of its inputs, an input that takes anchors:
+ANCHOR_TARGETS) and primary_node (an existing generation node; required when the graph has more than one
+NineRouterImage). template_errors runs it on the template's own workflow, so a bad declaration FAILs lint, not only
+render.
 Local models (UNTESTED on RTX 5060: the block is a declaration compared with planning thresholds, never a measured
-number): a template's optional requires block {profile, peak_vram_gb, ram_gb, packs, models[{kind, name, size_gb}]}
-is checked against data/hardware.json (profile id, the profile's VRAM and RAM ceilings and pack ids, model kinds, a
-model name that is a file name; no link, path or credential). A node of a known-nodes pack needs its pack id in
-requires.packs, and a local_model_nodes or pack node needs the block and a profile with a GPU (hardware.json
-requires.gpu true; api-only has none and stays valid for an API-only graph). No requires and no such node: nothing
-changes.
+number; nothing is generated or measured): a template's optional requires block {profile, peak_vram_gb, ram_gb,
+packs, models[{kind, name, size_gb}], offload} is checked against data/hardware.json (profile id, the profile's VRAM
+and RAM ceilings and pack ids, model kinds, a model name that is a file name; no link, path or credential; offload a
+bool: true declares that one checkpoint is unloaded before the next loads, which the graph-style checkpoints rule
+reads). A node of a known-nodes pack needs its pack id in requires.packs, and a local_model_nodes or pack node needs
+the block and a profile with a GPU (hardware.json requires.gpu true; api-only has none and stays valid for an
+API-only graph). No requires and no such node: nothing changes.
 """
 import json
 import math
@@ -51,7 +60,7 @@ FORBIDDEN = [
     (re.compile(r"\bsk-[A-Za-z0-9_-]{12,}"), "API key value"),
 ]
 HARDWARE = os.path.join(layers.HERE, "data", "hardware.json")
-REQUIRES_KEYS = ("profile", "peak_vram_gb", "ram_gb", "packs", "models")
+REQUIRES_KEYS = ("profile", "peak_vram_gb", "ram_gb", "packs", "models", "offload")
 MODEL_KEYS = ("kind", "name", "size_gb")
 EXTRA_MODEL_KINDS = ("loras", "vae")  # model folders a template may name that no hardware profile lists
 
@@ -95,6 +104,15 @@ def hardware():
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise ValueError("data/hardware.json is missing or malformed (%s: %s): the requires block cannot be checked"
                          % (type(exc).__name__, str(exc).replace("\n", " ")))
+
+
+def hardware_or_none():
+    """The profiles of hardware() for the graph-style profile rules, or None when data/hardware.json is missing or
+    malformed (the requires check reports that; the graph style then runs no profile rule)."""
+    try:
+        return hardware()[0]
+    except ValueError:
+        return None
 
 
 def domains():
@@ -228,6 +246,8 @@ def requires_errors(data, graph):
         elif limits is not None and value > limits[limit]:
             errs.append("requires.%s %s is above %s %s of profile %s (data/hardware.json): the template would not fit the machine the profile describes"
                         % (key, value, field, limits[limit], profile))
+    if "offload" in req and not isinstance(req["offload"], bool):
+        errs.append("requires.offload must be true or false")
     declared = req.get("packs", [])
     if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
         errs.append("requires.packs must be a list of pack ids (strings)")
@@ -265,6 +285,46 @@ def requires_errors(data, graph):
     return errs, warns
 
 
+ANCHOR_TARGETS = (("NineRouterImage", "reference_images"), ("IPAdapterAdvanced", "image"))
+
+
+def template_target_errors(tmpl, workflow):
+    """Errors of a template's optional anchor_target and primary_node declarations against workflow (render: the
+    filled workflow, on every render; lint: the template's own workflow). assetgen.template_target_errors is this."""
+    errors = []
+    if "anchor_target" in tmpl:
+        target = tmpl["anchor_target"]
+        if not (isinstance(target, dict) and set(target) == {"node", "input"}
+                and all(isinstance(target[k], str) for k in ("node", "input"))):
+            errors.append('anchor_target must be {"node": <node id>, "input": <input name>}')
+        elif target["node"] not in workflow:
+            errors.append("anchor_target.node %r is not a node of the workflow" % target["node"])
+        else:
+            node = workflow[target["node"]]
+            cls = node.get("class_type") if isinstance(node, dict) else None
+            known = known_nodes().get(cls, {}) if isinstance(cls, str) else {}
+            if target["input"] not in known.get("inputs", {}):
+                errors.append("anchor_target.input %r is not an input of node %s (%s)" %
+                              (target["input"], target["node"], cls))
+            elif (cls, target["input"]) not in ANCHOR_TARGETS:
+                errors.append("anchor_target %s.%s cannot take anchors (allowed: NineRouterImage.reference_images, IPAdapterAdvanced.image)" %
+                              (cls, target["input"]))
+    if "primary_node" in tmpl:
+        primary = tmpl["primary_node"]
+        if not isinstance(primary, str) or primary not in workflow:
+            errors.append("primary_node %r is not a node of the workflow" % (primary,))
+        else:
+            node = workflow[primary]
+            cls = node.get("class_type") if isinstance(node, dict) else None
+            if cls not in runfiles.GENERATION_NODES:
+                errors.append("primary_node %s (%s) is not a generation node (NineRouterImage, KSampler)" % (primary, cls))
+    else:
+        count = sum(1 for node in workflow.values() if isinstance(node, dict) and node.get("class_type") == "NineRouterImage")
+        if count > 1:
+            errors.append("the template has %d NineRouterImage nodes: declare primary_node (the node whose size the run requests)" % count)
+    return errors
+
+
 def template_errors(data, ident):
     errs, warns = [], []
     params = data.get("params")
@@ -288,6 +348,8 @@ def template_errors(data, ident):
     e, w = requires_errors(data, graph)
     errs += e
     warns += w
+    if isinstance(graph, dict):  # a workflow that is not an object already FAILs check_graph
+        errs += template_target_errors(data, graph)
     errs += [e for e in stylelock.purpose_errors(data) if e.startswith("max_references")]
     out = data.get("output_node")
     if not isinstance(graph, dict) or not isinstance(out, str) or out not in graph:
@@ -527,11 +589,13 @@ def template_data(path, authoring=None):
 
 
 def lint_rows(path, authoring=None):
-    """[lint_file(path)] plus one assetgen-graph-style row (graphstyle.template_row) when path is a template."""
+    """[lint_file(path)] plus one assetgen-graph-style row (graphstyle.template_row) when path is a template; its
+    profile rules use the template's own requires.profile (profile=None) against hardware_or_none()."""
     rows = [lint_file(path, authoring)]
     data, _ = template_data(path, authoring)
     if isinstance(data, dict):
-        rows.append(graphstyle.template_row(data, known_nodes(), display(path, authoring)))
+        rows.append(graphstyle.template_row(data, known_nodes(), display(path, authoring),
+                                            profile=None, hardware=hardware_or_none()))
     return rows
 
 

@@ -9,12 +9,14 @@
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
 # the local node registry (UNTESTED on RTX 5060: the 13 core SDXL nodes from the saved object_info, the 4 pack nodes
 # from object_info-packs.json, known-nodes packs and local_model_nodes against data/hardware.json) and the template
-# requires block (profile, peak_vram_gb, ram_gb, packs, models: accepted complete, refused without a profile, with an
-# undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, missing next to
-# local nodes, or naming a profile without a GPU (api-only) next to a local or pack node; hardware.json missing or
-# malformed, a non-bool requires.gpu included, is one FAIL reason, no traceback),
+# requires block (profile, peak_vram_gb, ram_gb, packs, models, offload: accepted complete, refused without a profile,
+# with an undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, a non-bool
+# offload, missing next to local nodes, or naming a profile without a GPU (api-only) next to a local or pack node;
+# hardware.json missing or malformed, a non-bool requires.gpu included, is one FAIL reason, no traceback),
 # the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
-# and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy
+# and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, --profile (an unknown id exits 2, a
+# hybrid template under local-8gb PASSES and under api-only FAILS naming the profile, core templates keep their
+# result; UNTESTED on RTX 5060: static checks only), assetgen-graph-style lint rows, legacy
 # templates WARN; a style-locked render of a grouped template lays its anchors into References; the gen-run
 # quality check gen-run-workflow-style: WARN, never FAIL, no row without workflow.ui.json),
 # review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
@@ -32,7 +34,8 @@
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
 # manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
-# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060),
+# errors for a missing node or input; lint FAILs a template whose anchor_target or primary_node is bad, render keeps
+# its messages; primary_node and requested_size; UNTESTED on RTX 5060),
 # profile routing (resolve --profile: route, fallback, refusal above the profile, auto; UNTESTED on RTX 5060), style lock QA rows
 # through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs the run's anchor copies, edges, canvas; older specs
 # without rows) and the gen-run plugin's style-* row rule, the
@@ -754,12 +757,12 @@ lv local-pack-unused 'del(.workflow["15"]) | .workflow["16"].inputs.images = ["1
 expect_lint local-pack-unused WARN "requires.packs declares cut-out (BiRefNet or rembg), but no workflow node comes from that pack" "requires.packs: a declared pack no node uses (warning)"
 lv local-no-requires 'del(.requires)'
 got=$(lint_of local-no-requires)
-case "$got" in "FAIL "*"node 2 (CheckpointLoaderSimple) runs a local model: the template needs a requires block (profile, peak_vram_gb, ram_gb, packs, models)"*) : ;; *) false ;; esac \
+case "$got" in "FAIL "*"node 2 (CheckpointLoaderSimple) runs a local model: the template needs a requires block (profile, peak_vram_gb, ram_gb, packs, models, offload)"*) : ;; *) false ;; esac \
   && grep -qF "node 15 (InspyrenetRembg) runs a local model" <<<"$got" && grep -qF "node 11 (KSampler) runs a local model" <<<"$got" \
   && ! grep -qF "node 1 (NineRouterImage)" <<<"$got" && ! grep -qF "requires.packs" <<<"$got" \
   && ok "lint local nodes with no requires block: every local and pack node is named, API nodes are not" || no "lint local nodes with no requires block" "$got"
 lv local-requires-list '.requires = ["local-8gb"]'
-expect_lint local-requires-list FAIL "requires must be an object (profile, peak_vram_gb, ram_gb, packs, models)" "requires that is not an object"
+expect_lint local-requires-list FAIL "requires must be an object (profile, peak_vram_gb, ram_gb, packs, models, offload)" "requires that is not an object"
 lv local-vram-over '.requires.peak_vram_gb = 7.6'
 expect_lint local-vram-over FAIL "requires.peak_vram_gb 7.6 is above min_vram_gb $vram_max of profile local-8gb" "requires.peak_vram_gb 7.6 above profile local-8gb"
 lv local-ram-over '.requires.ram_gb = 64'
@@ -785,7 +788,16 @@ expect_lint local-model-kind FAIL "requires.models[0].kind 'diffusers' is not a 
 lv local-credential '.requires.api_key = "placeholder"'
 expect_lint local-credential FAIL "requires contains a credential or endpoint key" "credential key inside requires"
 lv local-unknown-key '.requires.notes = "fits"'
-expect_lint local-unknown-key FAIL "requires.notes: unknown key (a requires block holds only profile, peak_vram_gb, ram_gb, packs, models)" "unknown requires key"
+expect_lint local-unknown-key FAIL "requires.notes: unknown key (a requires block holds only profile, peak_vram_gb, ram_gb, packs, models, offload)" "unknown requires key"
+# requires.offload (UNTESTED on RTX 5060: a declaration the graph-style checkpoints rule reads, nothing measured)
+lv local-offload-true '.requires.offload = true'
+expect_clean local-offload-true "requires.offload true is accepted"
+lv local-offload-false '.requires.offload = false'
+expect_clean local-offload-false "requires.offload false is accepted"
+lv local-offload-string '.requires.offload = "yes"'
+expect_lint local-offload-string FAIL "requires.offload must be true or false" "requires.offload that is not a bool (\"yes\")"
+lv local-offload-number '.requires.offload = 1'
+expect_lint local-offload-number FAIL "requires.offload must be true or false" "requires.offload that is not a bool (1)"
 lv local-bad-input '.workflow["11"].inputs.cfg_scale = 7'
 expect_lint local-bad-input FAIL "node 11 (KSampler): unknown input cfg_scale" "unknown input on KSampler"
 lv local-bad-combo '.workflow["11"].inputs.scheduler = "fastest"'
@@ -960,6 +972,27 @@ gs_want=$(for t in $CORE_TEMPLATES; do if has_groups "$CORE/workflows/$t.json"; 
   && jq -e '.summary.FAIL == 0 and ([.results[] | select(.path | test("workflows/image-(generate|edit)\\.json$")) | .reasons[0] | startswith("legacy template without a ui block")] | length == 2 and all)' "$TMP/gl.json" >/dev/null \
   && ok "graph-lint without a path: one row per core template; legacy image-generate and image-edit WARN (never FAIL), exit 0" \
   || no "graph-lint core templates rc=$rc: $gs_rows (want $gs_want)" "$(cat "$TMP/err"; jq -c '.results[] | select(.state != "PASS")' "$TMP/gl.json")"
+# --profile (UNTESTED on RTX 5060: the profile rules are static checks of a template's declarations against
+# data/hardware.json; nothing is generated or measured)
+gl_rows() { jq -c '[.results[] | {path, state, reasons}]' "$1"; }
+AG graph-lint --profile api-only --json > "$TMP/gl-api.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(gl_rows "$TMP/gl-api.json")" = "$(gl_rows "$TMP/gl.json")" ] \
+  && ok "graph-lint --profile api-only over the core templates: the same rows as without --profile (API-only staged templates keep their result), exit 0" \
+  || no "graph-lint --profile api-only core templates rc=$rc" "$(cat "$TMP/err"; diff <(gl_rows "$TMP/gl.json") <(gl_rows "$TMP/gl-api.json"))"
+AG graph-lint --profile bogus "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
+hw_ids=$(jq -r '[.profiles[].id] | join(", ")' "$ROOT/scripts/assetgen/data/hardware.json")
+[ $rc -eq 2 ] && ! grep -q '^assetgen graph-lint:' "$TMP/o" && grep -qF -- "--profile bogus: one of $hw_ids (data/hardware.json)" "$TMP/err" \
+  && ok "graph-lint --profile bogus: usage error naming the hardware profile ids, exit 2" || no "graph-lint --profile bogus rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG graph-lint --profile auto "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && ok "graph-lint --profile auto: not a hardware profile id (auto is resolve only), exit 2" || no "graph-lint --profile auto rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG graph-lint --profile local-8gb "$GS/hybrid-clean.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS .*tests/fixtures/assetgen/graph-style/hybrid-clean.json$' "$TMP/o" \
+  && ok "graph-lint --profile local-8gb: the clean hybrid template PASSES, exit 0" || no "graph-lint hybrid local-8gb rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint --profile api-only "$GS/hybrid-clean.json" --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && [ "$(jq -r '.results[0].state' "$TMP/o")" = FAIL ] \
+  && jq -e '[.results[0].reasons[] | select(startswith("profile:") and contains("api-only"))] | length > 0' "$TMP/o" >/dev/null \
+  && ok "graph-lint --profile api-only: the hybrid template FAILS with a profile: reason naming api-only, exit 1" \
+  || no "graph-lint hybrid api-only rc=$rc" "$(cat "$TMP/o")"
 AG lint --authoring "$AUTH" --json > "$TMP/o" 2>&1
 want_paths=$( { for t in $CORE_TEMPLATES; do echo "core:templates/assetgen/workflows/$t.json"; done
   for f in "$GL"/templates/*.json; do echo "game:assetgen/templates/$(basename "$f")"; done; } | LC_ALL=C sort)
@@ -3670,6 +3703,21 @@ anchor_bad disallowed '.template.data.anchor_target = {"node":"9","input":"laten
 anchor_bad primary-missing '.template.data.primary_node = "missing"' "FAIL primary_node 'missing' is not a node of the workflow"
 anchor_bad primary-class '.template.data.primary_node = "4"' 'FAIL primary_node 4 (CheckpointLoaderSimple) is not a generation node'
 anchor_bad primary-ambiguous 'del(.template.data.primary_node) | .template.data.workflow["13"] = .template.data.workflow["1"]' 'FAIL the template has 2 NineRouterImage nodes: declare primary_node'
+# lint runs the same check on the template's own workflow: a bad anchor_target or primary_node FAILs lint, not only render
+LF="$ROOT/tests/fixtures/assetgen/local"
+lint_target() { AG lint "$LF/$1.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))'; }
+got=$(lint_target hybrid-anchor-template)
+[ "$got" = "PASS " ] && ok "lint: the hybrid anchor template (anchor_target 12.image, primary_node 1) PASSES" || no "lint hybrid anchor template" "$got"
+for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of the workflow" \
+         "target-anchor-missing-input|anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)" \
+         "target-anchor-disallowed|anchor_target KSampler.latent_image cannot take anchors" \
+         "target-primary-missing|primary_node '99' is not a node of the workflow" \
+         "target-primary-not-generation|primary_node 4 (CheckpointLoaderSimple) is not a generation node"; do
+  f=${c%%|*}; got=$(lint_target "$f")
+  jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LF/$f.json" >/dev/null \
+    && case "$got" in "FAIL ${c#*|}"*) : ;; *) false ;; esac \
+    && ok "lint FAILs $f: ${c#*|}" || no "lint $f" "$got"
+done
 
 python3 -B - "$ROOT" > "$TMP/anchor-size" 2>&1 <<'EOF'
 import glob, json, os, sys

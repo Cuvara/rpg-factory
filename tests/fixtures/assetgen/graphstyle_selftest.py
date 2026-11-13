@@ -5,7 +5,11 @@ with a violation that starts with the rule id and names the node (`node <id> (<c
 (`group "<title>"`). The UI form is the clean template laid out by uiworkflow.to_ui as render writes workflow.ui.json
 (placeholders filled, filename_prefix assetgen/<run_id>-final, extra.assetgen.run_id), then mutated. Style-lock
 anchor nodes obey the title and group rules like every node; the render cases add them with assetgen.wire_references
-and lay them out through assetgen.ui_with_references (References group). No file is written, no network. Prints 'ok N - <name>' or 'not ok N - <name>' per case and exits 1 when any case fails.
+and lay them out through assetgen.ui_with_references (References group). The hybrid fixture
+tests/fixtures/assetgen/graph-style/hybrid-clean.json (API base image plus a local refine, requires.profile local-8gb)
+passes every rule, also under the lint.hardware() profiles; each prompt fan-out and profile rule gets a passing and a
+failing case whose message names the node and the profile. UNTESTED on RTX 5060: the profile rules are static checks
+of a declaration; nothing here generates or measures anything. No file is written, no network. Prints 'ok N - <name>' or 'not ok N - <name>' per case and exits 1 when any case fails.
 """
 import copy
 import glob
@@ -104,7 +108,8 @@ def _():
     row = graphstyle.template_row(template(), KNOWN, "clean.json")
     assert row == {"path": "clean.json", "check": graphstyle.CHECK, "state": "PASS", "reasons": []}, row
     assert graphstyle.CHECK == "assetgen-graph-style"
-    assert graphstyle.STAGES == ("Prompt", "References", "Generate", "Post-process", "Preview", "Output")
+    assert graphstyle.STAGES == ("Prompt", "References", "Generate", "Models", "Refine (local)", "Post-process",
+                                 "Preview", "Output")
     assert graphstyle.NOTE_TYPES == ("Note", "MarkdownNote")
 
 
@@ -616,6 +621,422 @@ def _():
     rule(graphstyle.ui_violations(ui, KNOWN), "unknown", "node 4 (NoSuchNode")
     row = graphstyle.ui_row({"nodes": "x"}, KNOWN, "w.json")
     assert row["state"] == "FAIL" and row["reasons"][0].startswith("layout:"), row
+
+
+# -- hybrid graphs and profile rules (UNTESTED on RTX 5060: static checks of a declaration, nothing generated) ------
+
+with open(os.path.join(ROOT, "tests", "fixtures", "assetgen", "graph-style", "hybrid-clean.json"), encoding="utf-8") as _f:
+    HYBRID = json.load(_f)
+
+
+def hardware_profiles():
+    import lint
+    return lint.hardware()[0]
+
+
+def hybrid(mutate=None):
+    data = copy.deepcopy(HYBRID)
+    if mutate:
+        mutate(data)
+    return data
+
+
+def into(d, title, nid, node_data):
+    """Adds node nid to the hybrid template's workflow and to the ui group of that title."""
+    d["workflow"][nid] = node_data
+    next(g for g in d["ui"]["groups"] if g["title"] == title)["nodes"].append(nid)
+
+
+def profile_violations(data, profile=None):
+    return graphstyle.template_violations(data, KNOWN, profile, hardware_profiles())
+
+
+def core_templates():
+    paths = sorted(glob.glob(os.path.join(ROOT, "templates", "assetgen", "workflows", "*.json")))
+    out = []
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            out.append((os.path.basename(path), json.load(f)))
+    return out
+
+
+@case("hybrid-clean.json: no violation without hardware and under local-8gb (explicit or from requires.profile); description starts 'UNTESTED on RTX 5060:'")
+def _():
+    data = hybrid()
+    assert data["description"].startswith("UNTESTED on RTX 5060:"), data["description"]
+    assert data["requires"]["profile"] == "local-8gb" and data["requires"]["peak_vram_gb"] == 7.0, data["requires"]
+    assert [g["title"] for g in data["ui"]["groups"]] == list(graphstyle.STAGES)
+    assert graphstyle.template_violations(data, KNOWN) == []
+    assert profile_violations(data) == []
+    assert profile_violations(data, "local-8gb") == []
+    row = graphstyle.template_row(data, KNOWN, "hybrid-clean.json", None, hardware_profiles())
+    assert row == {"path": "hybrid-clean.json", "check": graphstyle.CHECK, "state": "PASS", "reasons": []}, row
+
+
+@case("hybrid-clean.json also passes the lint.py template checks (lint.template_errors: no error, no warning)")
+def _():
+    import lint
+    assert lint.template_errors(hybrid(), "hybrid-clean") == ([], [])
+
+
+@case("hardware=None keeps the old result: clean.json and every core template give the same row with and without the lint.hardware() profiles")
+def _():
+    hw = hardware_profiles()
+    assert list(hw) == ["api-only", "local-4gb", "local-8gb"], list(hw)
+    for name, data in [("clean.json", template())] + core_templates():
+        base = graphstyle.template_row(data, KNOWN, name)
+        assert graphstyle.template_row(data, KNOWN, name, None, None) == base, name
+        for profile in [None] + list(hw):
+            assert graphstyle.template_row(data, KNOWN, name, profile, hw) == base, (name, profile)
+        if name.startswith("staged-") or name == "clean.json":
+            assert base["state"] == "PASS" and base["reasons"] == [], (name, base)
+
+
+@case("vocabulary: Models and Refine (local) sit between Generate and Post-process; swapped they FAIL order")
+def _():
+    st = graphstyle.STAGES
+    assert st.index("Generate") < st.index("Models") < st.index("Refine (local)") < st.index("Post-process"), st
+
+    def swap(d):
+        g = d["ui"]["groups"]
+        g[3], g[4] = g[4], g[3]
+    rule(graphstyle.template_violations(hybrid(swap), KNOWN), "order", 'group "Models"', 'group "Refine (local)"')
+
+    def refine_after_post(d):
+        g = d["ui"]["groups"]
+        g[4], g[5] = g[5], g[4]
+    rule(graphstyle.template_violations(hybrid(refine_after_post), KNOWN), "order", 'group "Post-process"')
+
+    def misspelled(d):
+        d["ui"]["groups"][4]["title"] = "Refine"
+        for note in d["ui"]["notes"]:
+            if note["group"] == "Refine (local)":
+                note["group"] = "Refine"
+    rule(graphstyle.template_violations(hybrid(misspelled), KNOWN), "vocabulary", 'group "Refine"', "Refine (local)")
+
+
+def local_only(d):
+    """The hybrid template without the API image node: the reference image feeds the local refine."""
+    del d["workflow"]["3"]
+    for nid, name in (("10", "image"), ("11", "pixels"), ("16", "images")):
+        d["workflow"][nid]["inputs"][name] = ["2", 0]
+    d["ui"]["groups"] = [g for g in d["ui"]["groups"] if g["title"] != "Generate"]
+    d["ui"]["notes"] = [n for n in d["ui"]["notes"] if n["group"] != "Generate"]
+
+
+@case("one-image-node: no NineRouterImage passes with a local KSampler; without one it FAILS 'or a local KSampler'")
+def _():
+    assert graphstyle.template_violations(hybrid(local_only), KNOWN) == []
+    assert profile_violations(hybrid(local_only)) == []
+
+    def no_sampler(d):
+        local_only(d)
+        d["workflow"]["12"]["class_type"] = "VAEEncode"
+        d["workflow"]["12"]["inputs"] = {"pixels": ["2", 0], "vae": ["4", 2]}
+    hits = rule(graphstyle.template_violations(hybrid(no_sampler), KNOWN), "one-image-node", "0 NineRouterImage",
+                "or a local KSampler")
+    assert len(hits) == 1, hits
+    hits = rule(graphstyle.template_violations(template(two_image_nodes), KNOWN), "one-image-node", "(3, 7)")
+    assert not any("KSampler" in h for h in hits), hits
+
+
+def literal_positive(d):
+    d["workflow"]["8"]["inputs"]["text"] = "a fixed prompt that bypasses the review"
+
+
+def second_prompt_node(d):
+    into(d, "Prompt", "17", {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "{{prompt}}"},
+                             "_meta": {"title": "Second prompt"}})
+    d["workflow"]["8"]["inputs"]["text"] = ["17", 0]
+
+
+def string_positive(d):
+    into(d, "Prompt", "17", {"class_type": "PrimitiveString", "inputs": {"value": "{{prompt}}"},
+                             "_meta": {"title": "Short prompt"}})
+    d["workflow"]["8"]["inputs"]["text"] = ["17", 0]
+
+
+def negative_from_prompt(d):
+    d["workflow"]["9"]["inputs"]["text"] = ["1", 0]
+
+
+def negative_placeholder(d):
+    d["workflow"]["9"]["inputs"]["text"] = "{{prompt}}, blurry"
+
+
+def two_holders(d):
+    into(d, "Prompt", "17", {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "{{prompt}}"},
+                             "_meta": {"title": "Unused prompt copy"}})
+
+
+def literal_reviewed_source(d):
+    d["workflow"]["1"]["inputs"]["value"] = "A fixed prompt that bypasses the review."
+
+
+def direct_literal_positive(d):
+    """No ControlNet between the encoders and the sampler: the encoder is positive by its direct link."""
+    d["workflow"]["12"]["inputs"]["positive"] = ["8", 0]
+    d["workflow"]["12"]["inputs"]["negative"] = ["9", 0]
+    del d["workflow"]["10"]
+    d["ui"]["groups"][4]["nodes"].remove("10")
+    literal_positive(d)
+
+
+def sdxl_encoder(d):
+    d["workflow"]["8"] = {"class_type": "CLIPTextEncodeSDXL", "_meta": {"title": "Encode reviewed prompt (SDXL)"},
+                          "inputs": {"clip": ["4", 1], "width": 1024, "height": 1024, "crop_w": 0, "crop_h": 0,
+                                     "target_width": 1024, "target_height": 1024, "text_g": ["1", 0], "text_l": ["1", 0]}}
+
+
+HYBRID_PROMPT_FAILS = [
+    ("the positive encoder text as a literal value", literal_positive,
+     ('node 8 (CLIPTextEncode "Encode reviewed prompt") text is a literal value', "node 1 (PrimitiveStringMultiline")),
+    ("the positive encoder text linked from a second PrimitiveStringMultiline", second_prompt_node,
+     ("node 8 (CLIPTextEncode", "node 17 (PrimitiveStringMultiline", "node 1 (PrimitiveStringMultiline", "second prompt node")),
+    ("the positive encoder text linked from a PrimitiveString", string_positive,
+     ("node 8 (CLIPTextEncode", "node 17 (PrimitiveString", "node 1 (PrimitiveStringMultiline")),
+    ("the negative-only encoder linked from the reviewed prompt", negative_from_prompt,
+     ("node 9 (CLIPTextEncode", "node 1 (PrimitiveStringMultiline", "only negative")),
+    ("the negative-only encoder holding {{prompt}}", negative_placeholder, ("node 9 (CLIPTextEncode", "{{prompt}}")),
+    ("two PrimitiveStringMultiline nodes holding {{prompt}}", two_holders,
+     ("node 1 (PrimitiveStringMultiline", "node 17 (PrimitiveStringMultiline", "exactly one")),
+    ("the reviewed prompt node holding literal text (the encoder named too)", literal_reviewed_source,
+     ("node 8 (CLIPTextEncode", "text is linked from node 1 (PrimitiveStringMultiline", "{{prompt}}")),
+    ("a literal positive encoder wired straight into the sampler (no ControlNet)", direct_literal_positive,
+     ("node 8 (CLIPTextEncode", "literal value")),
+]
+
+for _label, _mutate, _names in HYBRID_PROMPT_FAILS:
+    def _hybrid_prompt(mutate=_mutate, names=_names):
+        assert graphstyle.template_violations(hybrid(), KNOWN) == []
+        violations = graphstyle.template_violations(hybrid(mutate), KNOWN)
+        rule(violations, "prompt", *names)
+        assert graphstyle.template_row(hybrid(mutate), KNOWN, "h.json")["state"] == "FAIL"
+    case("hybrid prompt: %s FAILS, naming %s" % (_label, " ".join(_names)))(_hybrid_prompt)
+
+
+@case("hybrid prompt passes: a CLIPTextEncodeSDXL with text_g and text_l from the reviewed prompt; the literal negative; polarity through ControlNetApplyAdvanced")
+def _():
+    assert graphstyle.template_violations(hybrid(sdxl_encoder), KNOWN) == []
+
+    def sdxl_literal(d):
+        sdxl_encoder(d)
+        d["workflow"]["8"]["inputs"]["text_l"] = "literal"
+    rule(graphstyle.template_violations(hybrid(sdxl_literal), KNOWN), "prompt", "node 8 (CLIPTextEncodeSDXL", "text_l")
+    nodes = {nid: {"type": n["class_type"], "title": n["_meta"]["title"], "inputs": n["inputs"]}
+             for nid, n in hybrid()["workflow"].items()}
+    assert [(nid, name, pos) for nid, name, pos in graphstyle.text_inputs(nodes)] == [
+        ("3", "user_prompt", True), ("8", "text", True), ("9", "text", False)]
+
+
+@case("hybrid UI form: the rendered hybrid passes; a literal positive encoder text FAILS prompt naming the encoder")
+def _():
+    data = hybrid()
+    assert graphstyle.ui_violations(ui_form(data), KNOWN) == []
+    graph = render_graph(data)
+    graph["8"]["inputs"]["text"] = "A literal prompt typed into the encoder."
+    rule(graphstyle.ui_violations(ui_form(data, graph=graph), KNOWN), "prompt", "node 8 (CLIPTextEncode",
+         "literal value")
+
+
+def late_image_node(source="1"):
+    """The hybrid template with the image node renamed 3 -> 30 (its id sorts after the encoders) and its user_prompt
+    linked from source; source "31" adds a second PrimitiveStringMultiline with literal text."""
+    def mutate(d):
+        wf = d["workflow"]
+        wf["30"] = wf.pop("3")
+        for nid, name in (("10", "image"), ("11", "pixels"), ("16", "images")):
+            wf[nid]["inputs"][name] = ["30", 0]
+        gen = next(g for g in d["ui"]["groups"] if g["title"] == "Generate")
+        gen["nodes"] = ["30" if n == "3" else n for n in gen["nodes"]]
+        if source == "31":
+            into(d, "Prompt", "31", {"class_type": "PrimitiveStringMultiline", "_meta": {"title": "API prompt"},
+                                     "inputs": {"value": "A second prompt typed for the API leg."}})
+        wf["30"]["inputs"]["user_prompt"] = [source, 0]
+    return mutate
+
+
+@case("hybrid prompt: an image node whose id sorts after the encoder, fed from a second PrimitiveStringMultiline, FAILS in the template and the UI form; fed from the reviewed prompt it passes")
+def _():
+    names = ('node 30 (NineRouterImage "Generate base image") user_prompt is linked from node 31 '
+             '(PrimitiveStringMultiline "API prompt"), a second prompt node', 'node 1 (PrimitiveStringMultiline')
+    data = hybrid(late_image_node("31"))
+    hits = rule(graphstyle.template_violations(data, KNOWN), "prompt", *names)
+    assert len([h for h in hits if "second prompt node" in h]) == 1, hits
+    assert graphstyle.template_row(data, KNOWN, "h.json")["state"] == "FAIL"
+    hits = rule(graphstyle.ui_violations(ui_form(data), KNOWN), "prompt", *names)
+    assert len(hits) == 1, hits
+    good = hybrid(late_image_node("1"))
+    assert graphstyle.template_violations(good, KNOWN) == []
+    assert profile_violations(good) == []
+    assert graphstyle.ui_violations(ui_form(good), KNOWN) == []
+
+
+@case("hybrid prompt: a literal NineRouterImage.user_prompt is one prompt violation (the _check message, no fan-out duplicate)")
+def _():
+    data = hybrid(set_input("3", "user_prompt", "a literal prompt"))
+    hits = rule(graphstyle.template_violations(data, KNOWN), "prompt", "node 3 (NineRouterImage", "literal value")
+    assert len(hits) == 1, hits
+
+
+def second_checkpoint(d, name="sd_xl_refiner_1.0.safetensors"):
+    into(d, "Models", "17", {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": name},
+                             "_meta": {"title": "Load refiner checkpoint"}})
+
+
+def second_controlnet(d):
+    into(d, "Refine (local)", "18", {"class_type": "ControlNetApplyAdvanced", "_meta": {"title": "Keep the pose"},
+                                     "inputs": {"positive": ["10", 0], "negative": ["10", 1], "control_net": ["6", 0],
+                                                "image": ["2", 0], "strength": 0.4, "start_percent": 0.0,
+                                                "end_percent": 0.6, "vae": ["4", 2]}})
+    d["workflow"]["12"]["inputs"]["positive"] = ["18", 0]
+    d["workflow"]["12"]["inputs"]["negative"] = ["18", 1]
+
+
+def latent(batch=1, width=1024, height=1024):
+    def mutate(d):
+        into(d, "Refine (local)", "19", {"class_type": "EmptyLatentImage", "_meta": {"title": "Empty latent"},
+                                         "inputs": {"width": width, "height": height, "batch_size": batch}})
+        d["workflow"]["12"]["inputs"]["latent_image"] = ["19", 0]
+    return mutate
+
+
+def plain_decode(d):
+    d["workflow"]["13"] = {"class_type": "VAEDecode", "inputs": {"samples": ["12", 0], "vae": ["4", 2]},
+                           "_meta": {"title": "Decode"}}
+
+
+def chain(*mutations):
+    def mutate(d):
+        for m in mutations:
+            m(d)
+    return mutate
+
+
+def set_input(nid, name, value):
+    return lambda d: d["workflow"][nid]["inputs"].__setitem__(name, value)
+
+
+def set_require(key, value):
+    return lambda d: d["requires"].__setitem__(key, value)
+
+
+def batch_param(options):
+    def mutate(d):
+        d["params"]["batch"] = {"type": "enum", "options": options, "default": 1, "description": "Batch size."}
+        latent(batch="{{batch}}")(d)
+    return mutate
+
+
+def upscaled_refine(d):
+    into(d, "Models", "20", {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "4x-UltraSharp.pth"},
+                             "_meta": {"title": "Load upscaler"}})
+    into(d, "Refine (local)", "21", {"class_type": "ImageUpscaleWithModel", "_meta": {"title": "Upscale base image"},
+                                     "inputs": {"upscale_model": ["20", 0], "image": ["3", 0]}})
+    d["workflow"]["11"]["inputs"]["pixels"] = ["21", 0]
+
+
+def small_sizes(d):
+    d["params"]["size"]["options"] = ["auto", "1024x1024"]
+
+
+def refine_from_reference(d):
+    d["workflow"]["11"]["inputs"]["pixels"] = ["2", 0]
+
+
+def flux_param(d):
+    d["params"]["checkpoint"] = {"type": "string", "default": "flux1-dev.safetensors", "description": "Checkpoint file."}
+    d["workflow"]["4"]["inputs"]["ckpt_name"] = "{{checkpoint}}"
+
+
+PROFILE_CASES = [
+    # (rule, label, mutation, profile argument, names in the failing message or None for a pass)
+    ("profile", "linted under api-only, below requires.profile local-8gb", None, "api-only",
+     ('node 4 (CheckpointLoaderSimple "Load SDXL checkpoint")', "node 5 (IPAdapterUnifiedLoader", "...",
+      "under profile api-only")),
+    ("profile", "linted under local-4gb", None, "local-4gb", ("requires profile local-8gb", "under profile local-4gb")),
+    ("profile", "linted under its own profile local-8gb", None, "local-8gb", None),
+    ("vram", "requires.peak_vram_gb 7.9 above local-8gb's 7.5", set_require("peak_vram_gb", 7.9), None,
+     ("node 4 (CheckpointLoaderSimple", "under profile local-8gb", "7.9")),
+    ("vram", "peak_vram_gb 7.0 linted under local-4gb (3.5)", None, "local-4gb",
+     ("node 4 (CheckpointLoaderSimple", "under profile local-4gb")),
+    ("vram", "requires.peak_vram_gb 7.5 (the local-8gb ceiling)", set_require("peak_vram_gb", 7.5), None, None),
+    ("checkpoints", "two different checkpoints without offload", second_checkpoint, None,
+     ("node 4 (CheckpointLoaderSimple", "node 17 (CheckpointLoaderSimple", "under profile local-8gb")),
+    ("checkpoints", "two different checkpoints with requires.offload true",
+     chain(second_checkpoint, set_require("offload", True)), None, None),
+    ("checkpoints", "two loaders of the same checkpoint file",
+     lambda d: second_checkpoint(d, "sd_xl_base_1.0.safetensors"), None, None),
+    ("controlnet", "two ControlNetApplyAdvanced chained into one KSampler", second_controlnet, None,
+     ("node 12 (KSampler", "node 10 (ControlNetApplyAdvanced", "node 18 (ControlNetApplyAdvanced", "under profile local-8gb")),
+    ("controlnet", "one ControlNet in the path (hybrid-clean)", None, None, None),
+    ("batch", "EmptyLatentImage batch_size 2", latent(batch=2), None,
+     ("node 19 (EmptyLatentImage", "batch_size 2", "under profile local-8gb")),
+    ("batch", "a {{batch}} placeholder whose enum allows 2", batch_param([1, 2]), None,
+     ("node 19 (EmptyLatentImage", "under profile local-8gb")),
+    ("batch", "EmptyLatentImage batch_size 1", latent(batch=1), None, None),
+    ("batch", "a {{batch}} placeholder with default 1 and only option 1", batch_param([1]), None, None),
+    ("tiled-vae", "a VAEDecode after a refine of a NineRouterImage whose size enum allows 1536x1024", plain_decode, None,
+     ("node 13 (VAEDecode", "under profile local-8gb", "VAEDecodeTiled")),
+    ("tiled-vae", "a VAEDecode of a 1280 px EmptyLatentImage", chain(plain_decode, latent(width=1280)), None,
+     ("node 13 (VAEDecode", "under profile local-8gb")),
+    ("tiled-vae", "a VAEDecode after an upscale model", chain(plain_decode, upscaled_refine), None,
+     ("node 13 (VAEDecode", "under profile local-8gb")),
+    ("tiled-vae", "a VAEDecode when every size is at most 1024 px", chain(plain_decode, small_sizes), None, None),
+    ("tiled-vae", "a VAEDecode of a 1024 px EmptyLatentImage", chain(plain_decode, latent()), None, None),
+    ("tiled-vae", "a VAEDecode of a LoadImage (unknown size)", chain(plain_decode, refine_from_reference), None, None),
+    ("flux", "an fp16 Flux checkpoint under local-8gb", set_input("4", "ckpt_name", "flux1-dev-fp16.safetensors"), None,
+     ('node 4 (CheckpointLoaderSimple "Load SDXL checkpoint") ckpt_name "flux1-dev-fp16.safetensors"', "under profile local-8gb")),
+    ("flux", "an unmarked Flux checkpoint from a param default", flux_param, None,
+     ("node 4 (CheckpointLoaderSimple", "flux1-dev.safetensors", "under profile local-8gb")),
+    ("flux", "a Flux fp16 file in requires.models", lambda d: d["requires"]["models"][0].__setitem__("name", "FLUX1-dev.safetensors"),
+     None, ("requires.models[0]", "under profile local-8gb")),
+    ("flux", "a GGUF Flux checkpoint under local-4gb (any precision is excluded)",
+     set_input("4", "ckpt_name", "flux1-dev-Q8_0.gguf"), "local-4gb", ("node 4 (CheckpointLoaderSimple", "under profile local-4gb")),
+    ("flux", "a GGUF Q8 Flux checkpoint under local-8gb", set_input("4", "ckpt_name", "flux1-dev-Q8_0.gguf"), None, None),
+    ("flux", "an fp8 Flux checkpoint under local-8gb", set_input("4", "ckpt_name", "flux1-dev-fp8.safetensors"), None, None),
+    ("flux", "a literal negative prompt mentioning flux under local-8gb (prompt text is not a model file)",
+     set_input("9", "text", "blurry, flux artifacts, FLUX fp16 look"), None, None),
+    ("flux", "a literal negative prompt mentioning flux under local-4gb",
+     set_input("9", "text", "blurry, flux artifacts"), "local-4gb", None),
+]
+
+
+def _profile_case(rule_id, mutate, profile, names):
+    def fn():
+        data = hybrid(mutate)
+        violations = profile_violations(data, profile)
+        if names is None:
+            no_rule(violations, rule_id)
+            return
+        hits = rule(violations, rule_id, *names)
+        assert all("under profile " in h and "node " in h or "requires.models[" in h for h in hits), hits
+        no_profile = graphstyle.template_violations(data, KNOWN)
+        no_rule(no_profile, rule_id)  # hardware=None: no profile rule
+        row = graphstyle.template_row(data, KNOWN, "h.json", profile, hardware_profiles())
+        assert row["state"] == "FAIL" and row["reasons"] == violations, row
+    return fn
+
+
+for _rule, _label, _mutate, _profile, _names in PROFILE_CASES:
+    case("profile rule %s: %s %s%s" % (_rule, _label, "FAILS, naming " + " ".join(_names) if _names else "passes",
+                                       " (--profile %s)" % _profile if _profile else ""))(
+        _profile_case(_rule, _mutate, _profile, _names))
+
+
+@case("profile rules run only under a GPU profile: api-only reports the profile rule alone; an unknown profile or requires.profile runs none")
+def _():
+    data = hybrid(chain(second_checkpoint, second_controlnet, latent(batch=2, width=1280), plain_decode,
+                        set_input("4", "ckpt_name", "flux1-dev.safetensors")))
+    under_8gb = profile_violations(data)
+    for rule_id in ("checkpoints", "controlnet", "batch", "tiled-vae", "flux"):
+        rule(under_8gb, rule_id, "under profile local-8gb")
+    api = [v.split(":")[0] for v in profile_violations(data, "api-only")]
+    base = [v.split(":")[0] for v in graphstyle.template_violations(data, KNOWN)]
+    assert api == base + ["profile"], api
+    assert profile_violations(data, "local-99gb") == graphstyle.template_violations(data, KNOWN)
+    data["requires"]["profile"] = "local-99gb"
+    assert profile_violations(data) == graphstyle.template_violations(data, KNOWN)
 
 
 def main():
