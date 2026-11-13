@@ -1,0 +1,17 @@
+{
+  "schema": "rpg-factory.comfy-model-hashes/1",
+  "models": [
+    {
+      "kind": "checkpoints",
+      "name": "sdxl.safetensors",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 1
+    },
+    {
+      "kind": "loras",
+      "name": "style.safetensors",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 1
+    }
+  ]
+}

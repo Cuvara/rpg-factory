@@ -215,6 +215,149 @@
           "$ref": "#/$defs/sha256"
         }
       }
+    },
+    "local_generation": {
+      "type": "object",
+      "required": [
+        "models",
+        "loras",
+        "samplers",
+        "requires_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "node",
+              "class_type",
+              "kind",
+              "name",
+              "sha256",
+              "verified"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "node": {
+                "type": "string"
+              },
+              "class_type": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "name": {},
+              "sha256": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  {
+                    "enum": [
+                      null
+                    ]
+                  }
+                ]
+              },
+              "verified": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "loras": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "node",
+              "name",
+              "strength_model",
+              "strength_clip",
+              "sha256",
+              "verified"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "node": {
+                "type": "string"
+              },
+              "name": {},
+              "strength_model": {},
+              "strength_clip": {},
+              "sha256": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  {
+                    "enum": [
+                      null
+                    ]
+                  }
+                ]
+              },
+              "verified": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "samplers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "node",
+              "class_type",
+              "seed",
+              "seed_param",
+              "sampler_name",
+              "scheduler",
+              "steps",
+              "cfg",
+              "denoise"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "node": {
+                "type": "string"
+              },
+              "class_type": {
+                "type": "string"
+              },
+              "seed": {},
+              "seed_param": {
+                "anyOf": [
+                  {"type": "string"},
+                  {"enum": [null]}
+                ]
+              },
+              "sampler_name": {},
+              "scheduler": {},
+              "steps": {},
+              "cfg": {},
+              "denoise": {}
+            }
+          }
+        },
+        "requires_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        }
+      },
+      "description": "UNTESTED on RTX 5060: Records what the local stage loaded and how it sampled. sha256 comes only from the comfy-desktop-setup model hash cache; otherwise verified is false. This is not a measured or quality claim."
     }
   },
   "properties": {
@@ -280,6 +423,9 @@
         },
         "workflow": {
           "$ref": "#/$defs/nullable_string"
+        },
+        "local": {
+          "$ref": "#/$defs/local_generation"
         }
       }
     },
