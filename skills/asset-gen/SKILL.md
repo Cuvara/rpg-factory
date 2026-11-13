@@ -113,7 +113,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 ## Generated & protected paths
 
 - `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `references/anchor-*.png`, `outputs-raw/`,
-  `previews/`, `defringe.json`, `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
+  `raw/`, `previews/`, `defringe.json`, `finalize.json`, `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
 - `<run>/review-prompt.json`, `review-image.json`: the reviewer's (`-o` of the printed command); `review-image-claude.json`, `fetch.json`: yours.
 - `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `finalize` (filter to `previews/`, fit, defringe, embed); the SHA-256 after it is the record.
 - `approvals/AGEN-<run_id>/`: `approve-record` on a person's explicit word; the person commits and signs it.

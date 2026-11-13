@@ -602,6 +602,7 @@ mal mal-orient '{"extends": "icon", "qa": {"size": {"mode": "orientation", "orie
 mal mal-pixels '{"extends": "concept-2d", "qa": {"size": {"mode": "area", "min_pixels": 0}}}'
 mal mal-fit-forbidden '{"extends": "icon", "qa": {"alpha": "forbidden", "size": {"fit": "pad"}}}'
 mal mal-fit-any '{"extends": "icon", "qa": {"alpha": "any", "size": {"fit": "pad"}}}'
+mal mal-fit-swap '{"extends": "icon", "qa": {"size": {"allow_swap": true}}}'
 mal mal-fit-crop '{"extends": "icon", "qa": {"size": {"fit": "crop"}}}'
 mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
@@ -613,6 +614,7 @@ $(cat "$TMP/err")" ;; esac
 }
 expect_mal mal-fit-forbidden "qa.size.fit pad needs qa.alpha required" "fit pad rejects forbidden alpha"
 expect_mal mal-fit-any "qa.size.fit pad needs qa.alpha required" "fit pad rejects any alpha"
+expect_mal mal-fit-swap "qa.size.fit pad needs qa.size.allow_swap false" "fit pad rejects allow_swap"
 expect_mal mal-fit-crop "qa.size.fit must be one of" "unknown fit value"
 expect_mal mal-size "qa.size must be an object" "malformed purpose: qa.size a list -> FAIL row, exit 1, no traceback"
 expect_mal mal-qa "qa must be an object" "malformed purpose: qa not an object -> FAIL row"
@@ -783,6 +785,7 @@ row16 = bytes(b for x in range(512) for b in (x % 256, 0, 255 - x % 256, 0, 60, 
 def disc_rows(w, h):
     return [bytes(c for x in range(w) for c in ((200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.3) ** 2 else (0, 0, 0, 0)))
             for y in range(h)]
+open(os.path.join(out, "svc-small.png"), "wb").write(png.encode_raw(600, 300, 8, 6, disc_rows(600, 300)))
 open(os.path.join(out, "svc-fit.png"), "wb").write(png.encode_raw(1536, 1024, 8, 6, disc_rows(1536, 1024)))  # landscape SaveImage
 open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row16] * 512))
@@ -1859,6 +1862,7 @@ pixels_rc=$?
 [ $rc -eq 0 ] && [ $pixels_rc -eq 0 ] \
   && jq -e '[.steps[] | select(.step == "fit") | select(.state == "fitted") | .results[] | select(.state == "padded" and .output == "outputs/937cc86a_000.png" and .raw == "raw/937cc86a_000.png" and .original_size == "1536x1024" and .fitted_size == "1536x1536" and .offset == [0,256])] | length == 1' "$TMP/fit.json" >/dev/null \
   && [ "$(sha "$fitlive/raw/937cc86a_000.png")" = "$(sha "$FX/svc-fit.png")" ] \
+  && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
   && jq -e '[.results[] | select(.check == "png-size" and .state == "PASS")] | length == 1' "$fitlive/qa.json" >/dev/null \
   && ok "fit: staged landscape icon is centered on transparent bands, original preserved and png-size PASS" \
   || no "fit live rc=$rc pixels=$pixels_rc" "$(cat "$TMP/err" "$TMP/fit-pixels" "$TMP/fit.json")"
@@ -1867,7 +1871,23 @@ AG finalize --run "$fitlive" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped")] | length == 1' "$TMP/fit.json" >/dev/null \
   && [ "$(sha "$fitlive/outputs/937cc86a_000.png")" = "$fitsha" ] && [ "$(find "$fitlive/raw" -type f | wc -l | tr -d ' ')" = 1 ] \
   && [ "$(sha "$fitlive/raw/937cc86a_000.png")" = "$(sha "$FX/svc-fit.png")" ] \
+  && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
+  && jq -e '.fitted | length == 1' "$TMP/fit.json" >/dev/null \
   && ok "fit: second finalize skips fitting and preserves output and raw" || no "fit repeat rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitsmall="$RUNS/fit-small-001"; finrun fit-small-001 icon svc-small.png
+AG finalize --run "$fitsmall" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitsmall/raw" ] \
+  && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit") | .results[] | select(.state == "skipped" and (.reason | contains("fails the size floors")))] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "FAIL")] | length == 1' "$fitsmall/qa.json" >/dev/null \
+  && ok "fit: undersized output is not padded and fails QA" || no "fit small rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitlegacy="$RUNS/fit-legacy-001"; finrun fit-legacy-001 icon svc-fit.png
+AG defringe --run "$fitlegacy" > /dev/null 2>"$TMP/err"; legacysha=$(sha "$fitlegacy/outputs-raw/prop.png")
+AG finalize --run "$fitlegacy" --force --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitlegacy/raw" ] && [ "$(sha "$fitlegacy/outputs-raw/prop.png")" = "$legacysha" ] \
+  && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit") | .results[] | select(.state == "skipped" and .reason == "already defringed before fit (outputs-raw/prop.png): not padded; start a new attempt")] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && ok "fit: legacy defringed output is not padded" || no "fit legacy rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
 
 fitsquare="$RUNS/fit-square-001"; finrun fit-square-001 icon icon-ok.png
 AG finalize --run "$fitsquare" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?

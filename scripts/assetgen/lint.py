@@ -181,7 +181,9 @@ def fit_errors(qa):
         errs.append("qa.size.fit pad needs qa.size.mode orientation")
     if "orientation" in size and size["orientation"] != "auto":
         errs.append("qa.size.fit pad needs qa.size.orientation auto (the expected aspect comes from qa.size.expect)")
-    return errs
+    if size.get("allow_swap") is True:
+        errs.append("qa.size.fit pad needs qa.size.allow_swap false (pad would square a swapped output qa accepts)")
+    return [err + "; or set qa.size.fit none" for err in errs]
 
 
 def purpose_errors(data, ident, authoring):

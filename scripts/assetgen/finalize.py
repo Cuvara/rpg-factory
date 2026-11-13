@@ -160,6 +160,15 @@ def fit_step(ag, run_dir, spec, force):
         if have == want:
             row["reason"] = "%dx%d is %s, as expected: untouched" % (img.width, img.height, have)
             continue
+        floor_ok, detail = ag.qa.floor_detail(img, size)
+        if not floor_ok:
+            row["reason"] = "%dx%d fails the size floors (%s): not padded (qa grades it)" % (
+                img.width, img.height, ", ".join(detail))
+            continue
+        legacy = "outputs-raw/" + os.path.basename(path)
+        if os.path.exists(os.path.join(run_dir, *legacy.split("/"))):
+            row["reason"] = "already defringed before fit (%s): not padded; start a new attempt" % legacy
+            continue
         row["reason"] = "%dx%d is %s, expected %s: not yet padded" % (img.width, img.height, have, want)
         todo.append((path, source, img, have, row))
     if not todo:
@@ -302,6 +311,28 @@ def run(ag, run_dir, force=False, as_json=False):
         summary += " at %s: %s" % (failed, steps[-1]["reason"])
     obj = {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "steps": steps, "failed_at": failed,
            "stale": stale, "state": state, "exit": code}
+    fields = ("output", "raw", "original_size", "fitted_size", "offset", "before_sha256", "after_sha256")
+    fitted = [{key: row[key] for key in fields} for step in steps if step["step"] == "fit"
+              for row in step["results"] if row["state"] == "padded"]
+    padded_outputs = {row["output"] for row in fitted}
+    try:
+        with open(os.path.join(run_dir, "finalize.json"), encoding="utf-8") as f:
+            previous = json.load(f)
+        previous = previous.get("fitted", []) if isinstance(previous, dict) else []
+        if not isinstance(previous, list):
+            previous = []
+        for row in previous:
+            if not isinstance(row, dict) or not all(key in row for key in fields):
+                continue
+            output, raw = row["output"], row["raw"]
+            if (isinstance(output, str) and output not in padded_outputs and isinstance(raw, str)
+                    and raw.startswith("raw/") and os.path.basename(raw) == raw[4:]
+                    and os.path.isfile(os.path.join(run_dir, *raw.split("/")))):
+                fitted.append({key: row[key] for key in fields})
+    except (OSError, ValueError, UnicodeError):
+        pass
+    obj["fitted"] = fitted
+    ag.write_json(os.path.join(run_dir, "finalize.json"), obj)
     lines = []
     for step in steps:
         lines += step_lines(step)
@@ -309,6 +340,9 @@ def run(ag, run_dir, force=False, as_json=False):
             lines.append(qa_text)
     if stale:
         lines.append("stale now (re-run them): " + ", ".join(stale))
+    if fitted:
+        lines.append("fitted (originals in raw/, finalize.json): " + ", ".join(
+            "%s %s -> %s" % (row["output"], row["original_size"], row["fitted_size"]) for row in fitted))
     lines.append(summary)
     print(json.dumps(obj, indent=1, sort_keys=True) if as_json else "\n".join(lines))
     return code

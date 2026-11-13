@@ -105,9 +105,9 @@ lead's workflow asks for in a run directory or the game layer.
 
 - **The returned size can differ from the requested one, or ignore it entirely** (known issue): a 1536x1024 turnaround
   came back as a 2172x724 strip; the live style-lock e2e of 2026-11-08 got 1672x941 for both a 1536x1024 and a 1024x1024
-  request, 1322x1190 for a square sprite, 1024x1536 for 1536x1024; the batch probe of 2026-11-12
-  (`docs/plans/assetgen-batch/probe.md`) got 1254x1254 for 1024x1024 and, in its one call (model `cx/gpt-5.6-sol-image`),
-  one image for `n=2`, so batch variants are separate calls. Image QA reads the real size from the file; no core
+  request; the batch probe (`docs/plans/assetgen-batch/probe.md`) got 1254x1254 for 1024x1024 and one image for `n=2`,
+  so batch variants are separate calls. `review-cmd --phase image` states each output's true size and QA's verdict;
+  the reviewer does not grade size again. Image QA reads the real size from the file; no core
   purpose grades the exact size (`exact` is opt-in) but orientation, aspect or area and a minimum area and short side
   real outputs meet (square `icon`, `sprite-2d`, `texture-tileable`: `square_tolerance` 0.15, so 1322x1190 is square;
   `qa.size.allow_swap`, default false, false in `ref-3d-turnaround`, accepts the swapped orientation), per purpose in data
