@@ -165,6 +165,25 @@ def template_errors(data, ident):
     return errs, warns
 
 
+def fit_errors(qa):
+    if not isinstance(qa, dict) or not isinstance(qa.get("size"), dict):
+        return []
+    size = qa["size"]
+    fit = size.get("fit", "none")
+    if fit not in ("none", "pad"):
+        return ["qa.size.fit must be one of ['none', 'pad']"]
+    if fit != "pad":
+        return []
+    errs = []
+    if qa.get("alpha") != "required":
+        errs.append("qa.size.fit pad needs qa.alpha required (pad adds transparent pixels)")
+    if size.get("mode") != "orientation":
+        errs.append("qa.size.fit pad needs qa.size.mode orientation")
+    if "orientation" in size and size["orientation"] != "auto":
+        errs.append("qa.size.fit pad needs qa.size.orientation auto (the expected aspect comes from qa.size.expect)")
+    return errs
+
+
 def purpose_errors(data, ident, authoring):
     errs = []
     doms = domains()
@@ -218,7 +237,7 @@ def purpose_errors(data, ident, authoring):
                             % (field, ", ".join(sorted(k for k, v in rules.items() if v == "purpose"))))
             elif not isinstance(text, str) or not text:
                 errs.append("constraints.%s must be a non-empty string" % field)
-    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa"))
+    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa")) + fit_errors(data.get("qa"))
 
 
 def style_errors(data):
