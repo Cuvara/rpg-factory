@@ -48,6 +48,9 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest).
                        UNTESTED on RTX 5060: local generation records must match the workflow; unverified model
                        hashes WARN, and each sampler seed must be an integer rendered from a template param.
+                       An IPAdapterUnifiedLoader preset names no model file, so it always stays unverified and WARNs;
+                       the approver weighs it. verified and sha256 are checked for consistency only, never against
+                       the machine-local cache (CI has none).
   gen-run-style        the style lock (spec.style_lock, resolve with project.json, anchors and rejections): the style ref
                        is well formed, names the run's style and resolves (a newer version or another hash is a WARN:
                        anchors of the recorded version stay valid), run.md equals spec.json, an override carries a

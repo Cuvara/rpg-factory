@@ -2865,29 +2865,44 @@ done < "$TMP/local-unit"
 [ "$(grep -c '^ok ' "$TMP/local-unit")" -eq 5 ] || no "local unit cases stopped early" "$(cat "$TMP/local-unit")"
 
 localrun="$RUNS/local-hybrid-001"
+local_step() { # Report setup failures so a refused render or manifest cannot make a case vacuous.
+  local label="$1" out rc; shift
+  out=$("$@" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || no "$label" "$out"
+}
 mkrun local-hybrid-001 sprite-2d --style stylized-painterly --template hybrid-provenance --authoring "$AUTH"
-AG render --run "$localrun" --param seed=123 >/dev/null; cp "$FX/icon-ok.png" "$localrun/outputs/local.png"; AG qa --run "$localrun" >/dev/null
+local_step 'local hybrid render' AG render --run "$localrun" --param seed=123
+cp "$FX/icon-ok.png" "$localrun/outputs/local.png"; local_step 'local hybrid qa' AG qa --run "$localrun"
 bound "$localrun" prompt PASS codex > "$localrun/review-prompt.json"; bound "$localrun" image PASS codex > "$localrun/review-image.json"
 bound "$localrun" image PASS claude > "$localrun/review-image-claude.json"
-ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$localrun" >/dev/null
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local hybrid unverified manifest' AG manifest --run "$localrun"
 cp "$localrun/run.md" "$TMP/local-unverified.md"
-ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" AG manifest --run "$localrun" >/dev/null
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" local_step 'local hybrid verified manifest' AG manifest --run "$localrun"
 cp "$localrun/run.md" "$TMP/local-verified.md"
 # Preserve independent variants for each plugin check.
 for id in local-cached-001 local-prompt-001 local-cfg-001 local-missing-001 local-hash-001 local-stale-001; do
-  cp -R "$localrun" "$RUNS/$id"; rm "$RUNS/$id/run.md"; ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$RUNS/$id" >/dev/null
+  cp -R "$localrun" "$RUNS/$id"; rm "$RUNS/$id/run.md"
+  python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + sys.argv[2]; json.dump(s, open(p, "w"))' "$RUNS/$id/spec.json" "$id"
+  ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step "$id manifest" AG manifest --run "$RUNS/$id"
 done
-ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" AG manifest --run "$RUNS/local-cached-001" >/dev/null
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" local_step 'local cached manifest' AG manifest --run "$RUNS/local-cached-001"
 jq ' .["11"] = {"class_type":"PrimitiveString", "inputs":{"value":"another prompt"}} | .["6"].inputs.text = ["11",0]' "$RUNS/local-prompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/local-prompt-001/workflow.json"
 fmset "$RUNS/local-cfg-001" 'obj["spec"]["generation"]["local"]["samplers"][0]["cfg"] = 99'
 fmset "$RUNS/local-missing-001" 'del obj["spec"]["generation"]["local"]'
 fmset "$RUNS/local-hash-001" 'obj["spec"]["generation"]["local"]["models"][0]["verified"] = True'
-AG render --run "$RUNS/local-stale-001" --param seed=456 >/dev/null
-ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$RUNS/local-stale-001" >/dev/null
+stale="$RUNS/local-stale-001"
+local_step 'local stale initial render' AG render --run "$stale" --param seed=123
+local_step 'local stale qa' AG qa --run "$stale"
+bound "$stale" prompt PASS codex > "$stale/review-prompt.json" || no 'local stale prompt binding'
+bound "$stale" image PASS codex > "$stale/review-image.json" || no 'local stale image binding'
+bound "$stale" image PASS claude > "$stale/review-image-claude.json" || no 'local stale Claude binding'
+local_step 'local stale changed render' AG render --run "$stale" --param seed=456
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local stale manifest' AG manifest --run "$stale"
 literal="$RUNS/local-literal-001"; mkrun local-literal-001 sprite-2d --style stylized-painterly --template literal-seed --authoring "$AUTH"
-AG render --run "$literal" --param seed=123 >/dev/null; cp "$FX/icon-ok.png" "$literal/outputs/local.png"; AG qa --run "$literal" >/dev/null
+local_step 'local literal render' AG render --run "$literal" --param seed=123
+cp "$FX/icon-ok.png" "$literal/outputs/local.png"; local_step 'local literal qa' AG qa --run "$literal"
 bound "$literal" prompt PASS codex > "$literal/review-prompt.json"; bound "$literal" image PASS codex > "$literal/review-image.json"
-ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$literal" >/dev/null
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local literal manifest' AG manifest --run "$literal"
 cp "$TMP/local-unverified.md" "$localrun/run.md"
 python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2> "$TMP/err" <<'EOF'
 import importlib.util, json, re, sys
