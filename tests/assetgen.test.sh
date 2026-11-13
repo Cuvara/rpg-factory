@@ -48,7 +48,8 @@
 # moves the PreviewImage files fetch_outputs downloads into outputs/ to previews/, classified by fetch.json or job state
 # under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
 # preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
-# recorded previews/ path), and no endpoints or credentials in templates/assetgen or scripts/assetgen.
+# recorded previews/ path), finalize size fitting (transparent bands, original preservation, skips and refusals),
+# and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -73,7 +74,7 @@ has_pil() { python3 -c "import PIL" 2>/dev/null; }
 AUTH="$TMP/game-authoring"; GL="$AUTH/assetgen"
 mkdir -p "$GL/purposes" "$GL/styles" "$GL/templates" "$GL/runs"
 cat > "$GL/purposes/icon.json" <<'EOF'
-{"extends": "icon", "title": "RPG item icon", "params": {"quality": "medium"}, "qa": {"size": {"mode": "exact"}}}
+{"extends": "icon", "title": "RPG item icon", "params": {"quality": "medium"}, "qa": {"size": {"mode": "exact", "fit": "none"}}}
 EOF
 cat > "$GL/styles/pixel-art.json" <<'EOF'
 {"schema": "rpg-factory.assetgen-style/1", "title": "RPG pixel art", "prefix": "16-bit RPG pixel art,", "params": {"quality": "low"}}
@@ -858,6 +859,10 @@ mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "defa
 mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}}'
 mal mal-orient '{"extends": "icon", "qa": {"size": {"mode": "orientation", "orientation": "wide"}}}'
 mal mal-pixels '{"extends": "concept-2d", "qa": {"size": {"mode": "area", "min_pixels": 0}}}'
+mal mal-fit-forbidden '{"extends": "icon", "qa": {"alpha": "forbidden", "size": {"fit": "pad"}}}'
+mal mal-fit-any '{"extends": "icon", "qa": {"alpha": "any", "size": {"fit": "pad"}}}'
+mal mal-fit-swap '{"extends": "icon", "qa": {"size": {"allow_swap": true}}}'
+mal mal-fit-crop '{"extends": "icon", "qa": {"size": {"fit": "crop"}}}'
 mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
@@ -866,6 +871,10 @@ expect_mal() { # expect_mal ID TEXT LABEL
     *) no "lint $3 rc=$rc" "$got
 $(cat "$TMP/err")" ;; esac
 }
+expect_mal mal-fit-forbidden "qa.size.fit pad needs qa.alpha required" "fit pad rejects forbidden alpha"
+expect_mal mal-fit-any "qa.size.fit pad needs qa.alpha required" "fit pad rejects any alpha"
+expect_mal mal-fit-swap "qa.size.fit pad needs qa.size.allow_swap false" "fit pad rejects allow_swap"
+expect_mal mal-fit-crop "qa.size.fit must be one of" "unknown fit value"
 expect_mal mal-size "qa.size must be an object" "malformed purpose: qa.size a list -> FAIL row, exit 1, no traceback"
 expect_mal mal-qa "qa must be an object" "malformed purpose: qa not an object -> FAIL row"
 expect_mal mal-params "params must be an object" "malformed purpose: params not an object -> FAIL row"
@@ -1035,6 +1044,8 @@ row16 = bytes(b for x in range(512) for b in (x % 256, 0, 255 - x % 256, 0, 60, 
 def disc_rows(w, h):
     return [bytes(c for x in range(w) for c in ((200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.3) ** 2 else (0, 0, 0, 0)))
             for y in range(h)]
+open(os.path.join(out, "svc-small.png"), "wb").write(png.encode_raw(600, 300, 8, 6, disc_rows(600, 300)))
+open(os.path.join(out, "svc-fit.png"), "wb").write(png.encode_raw(1536, 1024, 8, 6, disc_rows(1536, 1024)))  # landscape SaveImage
 open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row16] * 512))
 # e2e3: real near-square 9router size, a portrait answer to a landscape request, and a prop whose low-alpha edge pixels
@@ -1993,14 +2004,14 @@ cp "$FX/icon-ok.png" "$ar/outputs/prop.png"; AG manifest --run "$ar" > "$TMP/o" 
   && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = proposed ] \
   && ok "manifest after the approved outputs changed: proposed, names what the approval no longer binds" || no "manifest reset rc=$rc" "$(cat "$TMP/o")"
 
-echo "-- finalize: defringe (alpha purposes only), embed, qa in one fixed order"
+echo "-- finalize: filter, fit, defringe (alpha purposes only), embed, qa in one fixed order"
 # finrun NAME PURPOSE PNG [render args...]: a rendered run with the fixture PNG as its only output
 finrun() {
   local name="$1" p="$2" f="$3"; shift 3
   mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
-steps() { grep -E '^(filter|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
 # Live fetch_outputs names encode the prompt and index, not the source type. Each run gets its own rendered prefix.
 filter_run() {
   local name="$1"
@@ -2085,10 +2096,96 @@ for malformed in invalid missing-urls; do
     && [ -f "$fmrun/outputs/937cc86a_000.png" ] && [ -f "$fmrun/outputs/937cc86a_001.png" ] && filter_files_intact "$fmrun" "$count" \
     && ok "filter ignores malformed fetch evidence ($malformed), retaining both files" || no "filter malformed $malformed rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
 done
-# alpha purpose: defringe, embed, qa in that order; the run ends embedded, defringed and graded
+# A live-shaped staged SaveImage output is fitted before embedding and QA.
+fitlive="$RUNS/fit-live-icon-001"
+mkrun fit-live-icon-001 icon --style stylized-painterly --template staged-icon && AG render --run "$fitlive" >/dev/null 2>"$TMP/err" \
+  && cp "$FX/svc-fit.png" "$fitlive/outputs/937cc86a_000.png" || no "fit live setup" "$(cat "$TMP/err")"
+fitprefix=$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix][0]' "$fitlive/workflow.json")
+fitbase=${fitprefix##*/}; fitdir=${fitprefix%/*}
+jq -n --arg save "http://127.0.0.1:8188/view?filename=${fitbase}_00001_.png&subfolder=${fitdir}&type=output" \
+  '{prompt_id: "937cc86a-b67c-4a32-ad68-2652a5ef3425", urls: [$save]}' > "$fitlive/fetch.json"
+AG finalize --run "$fitlive" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$FX/svc-fit.png" "$fitlive/outputs/937cc86a_000.png" > "$TMP/fit-pixels" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+original, fitted = map(png.decode, sys.argv[2:])
+assert (original.width, original.height) == (1536, 1024)
+assert (fitted.width, fitted.height) == (1536, 1536)
+stride = 1536 * 4
+assert fitted.rgba[256 * stride:1280 * stride] == original.rgba
+assert not any(fitted.rgba[:256 * stride][3::4])
+assert not any(fitted.rgba[1280 * stride:][3::4])
+EOF
+pixels_rc=$?
+[ $rc -eq 0 ] && [ $pixels_rc -eq 0 ] \
+  && jq -e '[.steps[] | select(.step == "fit") | select(.state == "fitted") | .results[] | select(.state == "padded" and .output == "outputs/937cc86a_000.png" and .raw == "raw/937cc86a_000.png" and .original_size == "1536x1024" and .fitted_size == "1536x1536" and .offset == [0,256])] | length == 1' "$TMP/fit.json" >/dev/null \
+  && [ "$(sha "$fitlive/raw/937cc86a_000.png")" = "$(sha "$FX/svc-fit.png")" ] \
+  && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "PASS")] | length == 1' "$fitlive/qa.json" >/dev/null \
+  && ok "fit: staged landscape icon is centered on transparent bands, original preserved and png-size PASS" \
+  || no "fit live rc=$rc pixels=$pixels_rc" "$(cat "$TMP/err" "$TMP/fit-pixels" "$TMP/fit.json")"
+fitsha=$(sha "$fitlive/outputs/937cc86a_000.png")
+AG finalize --run "$fitlive" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped")] | length == 1' "$TMP/fit.json" >/dev/null \
+  && [ "$(sha "$fitlive/outputs/937cc86a_000.png")" = "$fitsha" ] && [ "$(find "$fitlive/raw" -type f | wc -l | tr -d ' ')" = 1 ] \
+  && [ "$(sha "$fitlive/raw/937cc86a_000.png")" = "$(sha "$FX/svc-fit.png")" ] \
+  && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
+  && jq -e '.fitted | length == 1' "$TMP/fit.json" >/dev/null \
+  && ok "fit: second finalize skips fitting and preserves output and raw" || no "fit repeat rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitsmall="$RUNS/fit-small-001"; finrun fit-small-001 icon svc-small.png
+AG finalize --run "$fitsmall" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitsmall/raw" ] \
+  && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit") | .results[] | select(.state == "skipped" and (.reason | contains("fails the size floors")))] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "FAIL")] | length == 1' "$fitsmall/qa.json" >/dev/null \
+  && ok "fit: undersized output is not padded and fails QA" || no "fit small rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitlegacy="$RUNS/fit-legacy-001"; finrun fit-legacy-001 icon svc-fit.png
+AG defringe --run "$fitlegacy" > /dev/null 2>"$TMP/err"; legacysha=$(sha "$fitlegacy/outputs-raw/prop.png")
+AG finalize --run "$fitlegacy" --force --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitlegacy/raw" ] && [ "$(sha "$fitlegacy/outputs-raw/prop.png")" = "$legacysha" ] \
+  && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit") | .results[] | select(.state == "skipped" and .reason == "already defringed before fit (outputs-raw/prop.png): not padded; start a new attempt")] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && ok "fit: legacy defringed output is not padded" || no "fit legacy rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitsquare="$RUNS/fit-square-001"; finrun fit-square-001 icon icon-ok.png
+AG finalize --run "$fitsquare" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$FX/icon-ok.png" "$fitsquare/outputs/prop.png" > "$TMP/fit-pixels" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+a, b = map(png.decode, sys.argv[2:])
+assert (a.width, a.height, a.rgba) == (b.width, b.height, b.rgba)
+EOF
+pixels_rc=$?
+[ $rc -eq 0 ] && [ $pixels_rc -eq 0 ] && [ ! -e "$fitsquare/raw" ] \
+  && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped") | .results[] | select(.state == "skipped" and (.reason | contains("as expected: untouched")))] | length == 1' "$TMP/fit.json" >/dev/null \
+  && ok "fit: matching square icon pixels stay unchanged and no raw copy is made" || no "fit square rc=$rc pixels=$pixels_rc" "$(cat "$TMP/err" "$TMP/fit-pixels" "$TMP/fit.json")"
+
+fittile="$RUNS/fit-tile-001"; finrun fit-tile-001 texture-tileable big.png
+AG finalize --run "$fittile" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit" and .state == "skipped" and .reason == "qa.size.fit is none")] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "FAIL" and (any(.reasons[]; contains("landscape") and contains("square"))))] | length == 1' "$fittile/qa.json" >/dev/null \
+  && ok "fit: landscape texture stays unpadded and fails square size QA" || no "fit texture rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json" "$fittile/qa.json")"
+
+fitbound="$RUNS/fit-bound-001"; finrun fit-bound-001 icon svc-fit.png
+AG qa --run "$fitbound" >/dev/null 2>"$TMP/err"
+fitbefore=$(sha "$fitbound/outputs/prop.png"); fitqa=$(sha "$fitbound/qa.json")
+AG finalize --run "$fitbound" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "fit" and ([.steps[] | select(.step == "fit" and .state == "FAIL" and (.reason | contains("qa.json")))] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && [ "$(sha "$fitbound/outputs/prop.png")" = "$fitbefore" ] && [ "$(sha "$fitbound/qa.json")" = "$fitqa" ] && [ ! -e "$fitbound/raw" ] \
+  && ok "fit: bound QA prevents padding without force and leaves files untouched" || no "fit bound rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitrgb="$RUNS/fit-rgb-001"; finrun fit-rgb-001 icon big.png
+AG finalize --run "$fitrgb" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitrgb/raw" ] \
+  && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped") | .results[] | select(.state == "skipped" and (.reason | contains("no alpha channel")))] | length == 1' "$TMP/fit.json" >/dev/null \
+  && ok "fit: RGB output is not padded and QA grades the missing alpha" || no "fit RGB rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+# alpha purpose: filter, fit, defringe, embed, qa in that order; the run ends embedded, defringed and graded
 fz="$RUNS/fin-icon-001"; finrun fin-icon-001 icon fringe.png
 AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] && grep -q "^defringe defringed: 1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] && grep -q "^defringe defringed: 1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
   && grep -q "^embed done: 1 embedded, 0 replaced, 0 kept, 0 FAIL" "$TMP/o" && grep -qx "assetgen finalize: PASS" "$TMP/o" \
   && [ "$(jq -r .state "$fz/qa.json")" = PASS ] && [ -f "$fz/defringe.json" ] && [ -f "$fz/outputs-raw/prop.png" ] \
   && [ "$(sha "$fz/outputs-raw/prop.png")" = "$(sha "$FX/fringe.png")" ] && grep -qa "workflow" "$fz/outputs/prop.png" \
@@ -2099,9 +2196,9 @@ AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
 b1=$(sha "$fz/outputs/prop.png"); d1=$(sha "$fz/defringe.json")
 AG finalize --run "$fz" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.schema + " " + .state + " " + (.exit | tostring) + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" \
-  = "rpg-factory.assetgen-finalize/1 PASS 0 filter:skipped,defringe:skipped,embed:done,qa:PASS" ] \
+  = "rpg-factory.assetgen-finalize/1 PASS 0 filter:skipped,fit:skipped,defringe:skipped,embed:done,qa:PASS" ] \
   && [ "$(jq -r '.steps[0].reason' "$TMP/f.json")" = "no preview file in outputs/" ] \
-  && jq -r '.steps[1].reason' "$TMP/f.json" | grep -q "^already defringed" && jq -r '.steps[2].reason' "$TMP/f.json" | grep -q "0 embedded, 0 replaced, 1 kept" \
+  && jq -r '.steps[] | select(.step == "defringe") | .reason' "$TMP/f.json" | grep -q "^already defringed" && jq -r '.steps[] | select(.step == "embed") | .reason' "$TMP/f.json" | grep -q "0 embedded, 0 replaced, 1 kept" \
   && [ "$(jq -c '[.stale, .failed_at]' "$TMP/f.json")" = '[[],null]' ] \
   && [ "$(sha "$fz/outputs/prop.png")" = "$b1" ] && [ "$(sha "$fz/defringe.json")" = "$d1" ] && [ "$(jq -r .state "$fz/qa.json")" = PASS ] \
   && ok "finalize again on an unchanged run: filter skipped (no preview), defringe skipped (already defringed), embed kept, qa PASS, bytes unchanged, --json object" \
@@ -2111,7 +2208,7 @@ ft="$RUNS/fin-tile-001"; finrun fin-tile-001 texture-tileable tile-ok.png
 AG qa --run "$ft" > /dev/null 2>&1
 bound "$ft" image PASS codex > "$ft/review-image.json"; bound "$ft" image PASS claude > "$ft/review-image-claude.json"
 AG finalize --run "$ft" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] && grep -q "^defringe skipped: not an alpha purpose" "$TMP/o" \
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] && grep -q "^defringe skipped: not an alpha purpose" "$TMP/o" \
   && [ ! -e "$ft/defringe.json" ] && [ ! -e "$ft/outputs-raw" ] && grep -q "^embed done: 1 embedded" "$TMP/o" \
   && grep -qx "stale now (re-run them): review-image.json, review-image-claude.json" "$TMP/o" \
   && ok "finalize on a non-alpha purpose: defringe skipped (nothing written), embed, qa PASS; the image reviews it made stale are named, not qa.json" \
@@ -2123,29 +2220,29 @@ bound "$fb" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orang
 bound "$fb" image FAIL claude '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fb/review-image-claude.json"
 fb0=$(sha "$fb/outputs/prop.png"); q0=$(sha "$fb/qa.json")
 AG finalize --run "$fb" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: .*qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: .*qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
   && grep -q "pass --force" "$TMP/o" && ! grep -q "^stale now" "$TMP/o" \
   && [ "$(sha "$fb/outputs/prop.png")" = "$fb0" ] && [ "$(sha "$fb/qa.json")" = "$q0" ] && [ ! -e "$fb/outputs-raw" ] && [ ! -e "$fb/defringe.json" ] \
   && ok "finalize: outputs the records bind stop at FAIL at defringe without --force (exit 1, nothing written, embed and qa not run)" \
   || no "finalize bound rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 AG finalize --run "$fb" --force --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.stale | join(","))' "$TMP/f.json")" = "PASS review-image.json,review-image-claude.json" ] \
-  && [ "$(jq -r '.steps[1].step + ":" + .steps[1].state' "$TMP/f.json")" = defringe:defringed ] && [ "$(sha "$fb/outputs/prop.png")" != "$fb0" ] && [ "$(sha "$fb/outputs-raw/prop.png")" = "$fb0" ] \
+  && [ "$(jq -r '.steps[] | select(.step == "defringe") | .step + ":" + .state' "$TMP/f.json")" = defringe:defringed ] && [ "$(sha "$fb/outputs/prop.png")" != "$fb0" ] && [ "$(sha "$fb/outputs-raw/prop.png")" = "$fb0" ] \
   && [ "$(jq -r .state "$fb/qa.json")" = PASS ] \
   && ok "finalize --force: defringe runs, embed and qa PASS, both image reviews listed stale (qa.json is rewritten, not listed)" \
   || no "finalize force rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
 # stops at the first FAIL, naming the step: defringe (an unreadable output of an alpha purpose), embed, qa
 fd="$RUNS/fin-fail-def-001"; finrun fin-fail-def-001 icon not-a-png.png
 AG finalize --run "$fd" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: " "$TMP/o" && [ ! -e "$fd/qa.json" ] && [ "$(sha "$fd/outputs/prop.png")" = "$(sha "$FX/not-a-png.png")" ] \
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: " "$TMP/o" && [ ! -e "$fd/qa.json" ] && [ "$(sha "$fd/outputs/prop.png")" = "$(sha "$FX/not-a-png.png")" ] \
   && ok "finalize: a FAIL at defringe stops there (exit 1, embed and qa not run, output untouched)" || no "finalize fail defringe rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 fe="$RUNS/fin-fail-emb-001"; finrun fin-fail-emb-001 texture-tileable not-a-png.png
 AG finalize --run "$fe" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(jq -r '.failed_at + " " + .state + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" = "embed FAIL filter:skipped,defringe:skipped,embed:FAIL" ] && [ ! -e "$fe/qa.json" ] \
+[ $rc -eq 1 ] && [ "$(jq -r '.failed_at + " " + .state + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" = "embed FAIL filter:skipped,fit:skipped,defringe:skipped,embed:FAIL" ] && [ ! -e "$fe/qa.json" ] \
   && ok "finalize: a FAIL at embed stops there (exit 1, qa not run, failed_at embed)" || no "finalize fail embed rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
 fq="$RUNS/fin-fail-qa-001"; finrun fin-fail-qa-001 icon icon-opaque.png
 AG finalize --run "$fq" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] && grep -q "^defringe skipped: no output needs it" "$TMP/o" && grep -q "^assetgen finalize: FAIL at qa: " "$TMP/o" \
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] && grep -q "^defringe skipped: no output needs it" "$TMP/o" && grep -q "^assetgen finalize: FAIL at qa: " "$TMP/o" \
   && [ "$(jq -r .state "$fq/qa.json")" = FAIL ] \
   && ok "finalize: a qa FAIL is FAIL at qa, exit 1 (an opaque output needs no defringe)" || no "finalize fail qa rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 # NOT_AVAILABLE (a 16-bit output without Pillow) exits 3 like qa
@@ -2262,7 +2359,7 @@ bf="$RUNS/bud-tile-001"; { mkrun bud-tile-001 texture-tileable --style stylized-
   && cp "$FX/tile-ok.png" "$bf/outputs/a.png"; } || no "budget: finalize run bud-tile-001"
 AG finalize --run "$bf" > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: .*1 used.*of 4 allowed" \
-  && [ "$(lf "$TMP/o" | grep -c "^budget ")" -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] \
+  && [ "$(lf "$TMP/o" | grep -c "^budget ")" -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] \
   && ok "finalize text: one 'budget ok' line right before the last 'assetgen finalize: PASS' line, exit 0" || no "finalize budget text rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 AG finalize --run "$bf" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
 AG budget --run "$bf" --json > "$TMP/b.json" 2>>"$TMP/err"

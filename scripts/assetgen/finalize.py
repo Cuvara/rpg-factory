@@ -1,4 +1,4 @@
-"""assetgen finalize: filter, defringe (alpha purposes only), embed and qa in one fixed order, after fetch_outputs.
+"""assetgen finalize: filter, fit, defringe (alpha purposes only), embed and qa in order, after fetch_outputs.
 
 filter comes first: fetch_outputs also downloads PreviewImage files into outputs/, so every outputs/*.png that
 runfiles.output_origins classifies as a preview (not written by a SaveImage node of the rendered workflow.json) is moved
@@ -6,7 +6,8 @@ to <run>/previews/ (never overwritten, never deleted); a file with no SaveImage 
 The primary source evidence is fetch.json; the comfy-cli job state is the fallback.
 filter FAILs, moving nothing, when every output is a preview. Runs whose outputs are all SaveImage files are untouched.
 
-The three verbs keep their own contracts; this module only sequences them so embed can never be skipped before qa.
+fit pads orientation mismatches for opted-in alpha purposes, preserving originals under raw/ without overwriting or
+deleting them. The other verbs keep their own contracts; embed can never be skipped before qa.
 It never imports assetgen: assetgen.py passes its own module (`ag`), so there is no import cycle.
 
 ag.fail() exits the process, so every condition a callee would fail() on is checked here first (precheck), before
@@ -15,10 +16,13 @@ anything is written; after that a step ends in a state, never in an exit. Steps 
 Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE.
 """
 import glob
+import hashlib
 import json
 import os
+import shutil
 
 SCHEMA = "rpg-factory.assetgen-finalize/1"
+RAW_DIR = "raw"
 
 
 def outputs_of(ag, run_dir):
@@ -111,6 +115,97 @@ def wants_alpha(spec):
     return qa.get("alpha") == "required"
 
 
+def fit_step(ag, run_dir, spec, force):
+    """Pad mismatched outputs, preserving their originals and respecting bound records."""
+    step = {"step": "fit", "state": "skipped", "reason": "", "results": []}
+    purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
+    data = purpose.get("data") if isinstance(purpose.get("data"), dict) else {}
+    qa = data.get("qa") if isinstance(data.get("qa"), dict) else {}
+    size = qa.get("size") if isinstance(qa.get("size"), dict) else {}
+    if size.get("fit") != "pad":
+        step["reason"] = "qa.size.fit is none"
+        return step
+    if qa.get("alpha") != "required":
+        step["reason"] = "qa.size.fit pad needs qa.alpha required: not padded"
+        return step
+    expected = size.get("expect")
+    if expected is None or expected == "auto":
+        expected = ag.requested_size(run_dir, spec)
+    expect = ag.qa.parse_size(expected)
+    if expect is None:
+        step["reason"] = "no expected size to fit to"
+        return step
+    ew, eh = expect
+    tol = size.get("square_tolerance", 0.05)
+    want = ag.qa.orientation_of(ew, eh, tol)
+    todo = []
+    for path in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png"))):
+        row = {"output": "outputs/" + os.path.basename(path), "state": "skipped"}
+        step["results"].append(row)
+        try:
+            with open(path, "rb") as f:
+                source = f.read()
+            refusal = ag.depth_refusal(source, "padded")
+            if refusal:
+                row["reason"] = refusal + ": not fitted (later steps grade it)"
+                continue
+            img = ag.png.decode(path)
+        except (ag.png.Invalid, ag.png.Unsupported, OSError) as exc:
+            row["reason"] = str(exc) + ": not fitted (later steps grade it)"
+            continue
+        if not img.has_alpha:
+            row["reason"] = "no alpha channel: not padded (qa grades alpha)"
+            continue
+        have = ag.qa.orientation_of(img.width, img.height, tol)
+        if have == want:
+            row["reason"] = "%dx%d is %s, as expected: untouched" % (img.width, img.height, have)
+            continue
+        floor_ok, detail = ag.qa.floor_detail(img, size)
+        if not floor_ok:
+            row["reason"] = "%dx%d fails the size floors (%s): not padded (qa grades it)" % (
+                img.width, img.height, ", ".join(detail))
+            continue
+        legacy = "outputs-raw/" + os.path.basename(path)
+        if os.path.exists(os.path.join(run_dir, *legacy.split("/"))):
+            row["reason"] = "already defringed before fit (%s): not padded; start a new attempt" % legacy
+            continue
+        row["reason"] = "%dx%d is %s, expected %s: not yet padded" % (img.width, img.height, have, want)
+        todo.append((path, source, img, have, row))
+    if not todo:
+        step["reason"] = "%d skipped: no output to pad" % len(step["results"])
+        return step
+    bound = ag.bound_records(run_dir, outputs_of(ag, run_dir))
+    if bound and not force:
+        step.update(state="FAIL", reason="%s already bind(s) the current outputs and fit would change them; "
+                    "pass --force to fit anyway (then those records are stale: re-run them)" % ", ".join(bound))
+        return step
+    for path, source, img, have, row in todo:
+        width, height = ag.imaging.fit_box(img.width, img.height, ew, eh)
+        rgba, left, top = ag.imaging.pad(img, width, height)
+        if ag.png.gray_type(ag.png.header(source)[3]) and ag.png.is_gray(rgba):
+            new = ag.png.encode_gray(width, height, rgba)
+        else:
+            new = ag.png.encode(width, height, rgba)
+        new = ag.rebuild(ag.after_ihdr(new, ag.colour_chunks(source, ag.png.header(new)[3])),
+                         lambda t, b: True, ag.text_chunks(source))
+        raw_dir = os.path.join(run_dir, RAW_DIR)
+        os.makedirs(raw_dir, exist_ok=True)
+        raw = free_target(raw_dir, os.path.basename(path))
+        shutil.copyfile(path, raw)
+        ag.write_atomic(path, new, ".fit.tmp")
+        raw_rel = RAW_DIR + "/" + os.path.basename(raw)
+        original_size = "%dx%d" % (img.width, img.height)
+        fitted_size = "%dx%d" % (width, height)
+        fitted_orientation = ag.qa.orientation_of(width, height, tol)
+        row.update(state="padded", raw=raw_rel, original_size=original_size, fitted_size=fitted_size,
+                   offset=[left, top], before_sha256=hashlib.sha256(source).hexdigest(),
+                   after_sha256=hashlib.sha256(new).hexdigest(),
+                   reason="%s %s -> %s %s: centered on transparent bands, original in %s" % (
+                       original_size, have, fitted_size, fitted_orientation, raw_rel))
+    step.update(state="fitted", reason="%d padded, %d skipped" % (len(todo), len(step["results"]) - len(todo)))
+    return step
+
+
 def needs_defringe(ag, path):
     """True unless defringe itself would skip the output (not 8-bit, or no transparent pixels). An unreadable output
     counts as needing it: defringe reports it as a FAIL row."""
@@ -190,6 +285,10 @@ def run(ag, run_dir, force=False, as_json=False):
     if steps[-1]["state"] == "FAIL":
         failed = "filter"
     if not failed:
+        steps.append(fit_step(ag, run_dir, spec, force))
+        if steps[-1]["state"] == "FAIL":
+            failed = "fit"
+    if not failed:
         steps.append(defringe_step(ag, run_dir, spec, record, force))
         if steps[-1]["state"] == "FAIL":
             failed = "defringe"
@@ -212,6 +311,28 @@ def run(ag, run_dir, force=False, as_json=False):
         summary += " at %s: %s" % (failed, steps[-1]["reason"])
     obj = {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "steps": steps, "failed_at": failed,
            "stale": stale, "state": state, "exit": code}
+    fields = ("output", "raw", "original_size", "fitted_size", "offset", "before_sha256", "after_sha256")
+    fitted = [{key: row[key] for key in fields} for step in steps if step["step"] == "fit"
+              for row in step["results"] if row["state"] == "padded"]
+    padded_outputs = {row["output"] for row in fitted}
+    try:
+        with open(os.path.join(run_dir, "finalize.json"), encoding="utf-8") as f:
+            previous = json.load(f)
+        previous = previous.get("fitted", []) if isinstance(previous, dict) else []
+        if not isinstance(previous, list):
+            previous = []
+        for row in previous:
+            if not isinstance(row, dict) or not all(key in row for key in fields):
+                continue
+            output, raw = row["output"], row["raw"]
+            if (isinstance(output, str) and output not in padded_outputs and isinstance(raw, str)
+                    and raw.startswith("raw/") and os.path.basename(raw) == raw[4:]
+                    and os.path.isfile(os.path.join(run_dir, *raw.split("/")))):
+                fitted.append({key: row[key] for key in fields})
+    except (OSError, ValueError, UnicodeError):
+        pass
+    obj["fitted"] = fitted
+    ag.write_json(os.path.join(run_dir, "finalize.json"), obj)
     lines = []
     for step in steps:
         lines += step_lines(step)
@@ -219,6 +340,9 @@ def run(ag, run_dir, force=False, as_json=False):
             lines.append(qa_text)
     if stale:
         lines.append("stale now (re-run them): " + ", ".join(stale))
+    if fitted:
+        lines.append("fitted (originals in raw/, finalize.json): " + ", ".join(
+            "%s %s -> %s" % (row["output"], row["original_size"], row["fitted_size"]) for row in fitted))
     lines.append(summary)
     print(json.dumps(obj, indent=1, sort_keys=True) if as_json else "\n".join(lines))
     return code

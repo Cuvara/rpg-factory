@@ -364,6 +364,41 @@
         "the domain doc states the observed PreviewImage behaviour and the previews/ rule, no longer 'unverified'",
         "asset-gen and comfyui SKILL.md tell the agent to save the url_only result as <run>/fetch.json and stay at most 160 lines"
       ]
+    },
+    {
+      "id": "size-fit",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the size FAIL the live e2e hit (docs/plans/assetgen-workflows/e2e.md, Findings 2): the 9router gateway often ignores the requested size (1536x1024 or 1254x1254 for a 1024x1024 request), so every square purpose whose qa.size grades orientation fails QA on a service-caused size, and a regeneration may fail again. Add an optional purpose field qa.size.fit with values pad or none (default none) and a finalize step 'fit' between filter and defringe: for a purpose with fit pad whose output's orientation does not match expect within square_tolerance, pad the image centered with fully transparent pixels (alpha required purposes only; lint refuses pad on a purpose whose alpha is not required) to the expected aspect, keep the untouched original under <run>/raw/ (never delete or overwrite it), and record the step with the original and fitted sizes in finalize.json; QA, the manifest and the embed then see the fitted file. Set fit pad for icon and sprite-2d. texture-tileable stays none and the docs say why: cropping breaks the seamless tiling and scaling distorts it, so a wrong-size texture still FAILs and is regenerated. Pure Python like scripts/assetgen/imaging.py (no new dependency). Update the comfyui skill's size pitfall and the asset-gen skill's finalize step (both skills stay within their line caps) and the domain doc's Limits.",
+      "paths": [
+        "scripts/assetgen/finalize.py",
+        "scripts/assetgen/imaging.py",
+        "scripts/assetgen/lint.py",
+        "scripts/assetgen/qa.py",
+        "templates/assetgen/purposes/icon.json",
+        "templates/assetgen/purposes/sprite-2d.json",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "skills/comfyui/SKILL.md",
+        "skills/asset-gen/SKILL.md",
+        "docs/architecture/domains/assetgen.md",
+        "changelog.d/assetgen-size-fit.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/workflows/"
+      ],
+      "deps": [
+        "output-filter"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a staged-icon run whose SaveImage output is 1536x1024 RGBA (fixture shaped like the live run 937cc86a) finalizes with fit PASS, a 1536x1536 output with the original pixels centered and transparent bands, the original kept byte-identical under raw/, and QA png-size PASS",
+        "an output that already matches is not touched (fit SKIP, file bytes unchanged)",
+        "texture-tileable with a 1536x1024 output still FAILs at qa with the size reason; lint refuses fit pad on a purpose whose alpha is not required and an unknown fit value",
+        "existing finalize, budget and output-filter cases pass; goldens unchanged"
+      ]
     }
   ]
 }
