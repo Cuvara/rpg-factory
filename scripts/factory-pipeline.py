@@ -2820,8 +2820,10 @@ def qa_covers_head(plan, info, qa_sha, head):
     if rc != 0:
         return False
     changed, rc = git(info["path"], "diff", "--name-only", "--no-renames", qa_sha, head)
-    return (rc == 0 and bool(changed) and
-            all(norm_path(path) in run_lead_files(plan, info["path"]) for path in changed.splitlines()))
+    if rc != 0 or changed is None:
+        return False
+    lead_files = run_lead_files(plan, info["path"])
+    return all(norm_path(path) in lead_files for path in changed.splitlines())
 
 
 def xs_diff_above(plan, reg, pipe, task, info, sha):
@@ -2856,14 +2858,11 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: integration branch {plan['topic']} does not exist")
             continue
         heads[key] = head
-        for path in sorted(run_lead_files(plan, info["path"])):
-            _, exists_rc = git(info["path"], "cat-file", "-e", f"{head}:{path}")
-            if exists_rc != 0:
-                # cat-file also fails for a missing path; ls-tree distinguishes that from a git failure.
-                entry, rc = git(info["path"], "ls-tree", head, "--", path)
-                if rc != 0 or entry is None or entry:
-                    blockers.append(f"{key}: cannot inspect run lead file {path} on integration HEAD")
-                continue
+        entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
+        if rc != 0 or entries is None:
+            blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
+        lead_files = run_lead_files(plan, info["path"])
+        for path in sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files):
             content, rc = git(info["path"], "show", f"{head}:{path}")
             if rc != 0 or content is None:
                 blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
@@ -3769,7 +3768,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     # Keep the lead's QA visible above, but current integration QA also proves
     # completion in repos where the gate does not require per-task QA.
     if (not per_task_qa and integration_qa and integration_qa.get("state") == "PASS"
-            and integration_qa["sha"] == topic_head):
+            and qa_covers_head(plan, info, integration_qa.get("sha"), topic_head)):
         qa = integration_qa
     if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
         row["phase"] = "qa"
@@ -3806,7 +3805,7 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
             return first
         row = rows[xs_task["id"]]
         row["phase"] = "integrated"
-        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} is not at the integration HEAD "
+        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} does not cover the integration HEAD "
                             f"{(topic_head or '?')[:10]}: the gate needs it there")
         xs_qa_next(reg, plan, xs_task, info, row, topic_head, me, pf)
         return first

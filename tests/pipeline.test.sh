@@ -3660,6 +3660,14 @@ assert not errors, errors
 PY
 then pass=$((pass + 1)); echo "PASS  status --json matches docs/schemas/pipeline-status.schema.json"
 else fail=$((fail + 1)); echo "FAIL  status --json schema"; head -c 800 "$TMP/status.json"; fi
+# A failed task QA remains visible, but current integration QA proves completion even after a report-only commit.
+sv --task b --phase qa --sha "$SI" --by codex --state FAIL
+mkdir -p "$TMP/st-int/docs/plans/st"; echo report > "$TMP/st-int/docs/plans/st/report.md"
+gi "$TMP/st-int" add docs/plans/st/report.md; gi "$TMP/st-int" commit -qm "docs: update run report"
+SI=$(git -C "$S" rev-parse feat/core/st)
+st_phase "integration QA covers a report-only commit despite task QA FAIL" b qa
+refute "report-only commit leaves integration QA current in status" "integration QA.*STALE" status "$ST"
+rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/b__qa.json"
 sed -i 's/"objective":"o","paths":\["sa\/"\]/"objective":"changed","paths":["sa\/"]/' "$ST"
 st_phase "a changed task in the plan: its review is no longer counted; review the integration HEAD" a candidate "--task a --phase verify --sha $SI"
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
@@ -4002,9 +4010,18 @@ refute "gate-merge: no stray line for docs/plans" "changes outside every task's 
 echo update >> "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: update report"
 expect "gate-merge: report-only commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 expect "gate-merge: gate notes the QA exemption" 0 "NOTE +r: QA at .* covers HEAD .*only run lead files changed since" gate "$GP" --no-run-checks
+refute "gate-merge: status does not mark report-only QA stale" "integration QA.*STALE" status "$GP"
+refute "gate-merge: status does not request QA after report-only commit" "--task integration:r --phase qa" status "$GP"
+gmqa
+gi "$GM" commit --allow-empty -qm "chore: empty commit"
+expect "gate-merge: empty commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+expect "gate-merge: empty commit notes QA covers HEAD" 0 "NOTE +r: QA at .* covers HEAD" gate "$GP" --no-run-checks
 echo code >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: later code"
 expect "gate-merge: code after QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
-gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+expect "gate-merge: status asks for integration QA after a code commit" 0 "--task integration:r --phase qa --sha $(git -C "$GM" rev-parse HEAD)" status "$GP"
+refute "gate-merge: code commit is not covered by QA" "covers HEAD" gate "$GP" --no-run-checks
+gmqa
 echo unrelated > "$TMP/gm-main/unrelated.txt"; gi "$TMP/gm-main" add unrelated.txt; gi "$TMP/gm-main" commit -qm "unrelated commit"
 gmv --task integration:r --phase qa --sha "$(git -C "$TMP/gm-main" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: non-ancestor QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
@@ -4018,14 +4035,17 @@ expect "gate-merge: the run lead's docs/plans/backlog.md is not stray" 0 "^Gate:
 refute "gate-merge: no stray line for docs/plans/backlog.md" "changes outside every task's owned paths" gate "$GP" --no-run-checks
 # a plan file inside the repo under another name: its own path, its sibling directory's report.md and the backlog.md
 # next to it
-mkdir -p "$GM/runlead/other"
-python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]=".."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/runlead/other.json"
-echo r > "$GM/runlead/other/report.md"
+mkdir -p "$GM/runlead/Other"
+python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]=".."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/runlead/Other.json"
+echo r > "$GM/runlead/Other/report.md"
 echo b > "$GM/runlead/backlog.md"
 gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): in-repo plan"; gmqa
-GP2="$GM/runlead/other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
+GP2="$GM/runlead/Other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
 refute "gate-merge: a plan file inside the repo is not stray" "changes outside every task's owned paths: .*runlead" gate "$GP2" --no-run-checks
+echo 'C:/Users/example/project' >> "$GM/runlead/Other/report.md"; gi "$GM" commit -qam "docs: nonportable capitalized report"
+expect "gate-merge: machine path in capitalized report blocks gate" 1 'BLOCKER r: run lead file runlead/Other/report.md has machine-specific path text' gate "$GP2" --no-run-checks
+echo r > "$GM/runlead/Other/report.md"; gi "$GM" commit -qam "docs: portable capitalized report"; gmqa
 echo o > "$GM/other.txt"; gi "$GM" add other.txt; gi "$GM" commit -qm "chore: stray"
 expect "gate-merge: another unowned file is still stray" 1 "BLOCKER r: changes outside every task's owned paths: other.txt$" gate "$GP2" --no-run-checks
 git -C "$GM" worktree remove --force "$TMP/gm-main"
