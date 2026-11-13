@@ -143,6 +143,11 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest()). A re-run keeps
                       an approved status while nothing the approval binds changed (approval.keep_status: the same
                       run.md bytes, so the record's rev still matches), else resets to proposed and names the change
+                      Local stages are UNTESTED on RTX 5060: spec.generation.local records models, LoRAs, sampler
+                      settings and the requires hash. Model sha256 values come only from the read-only JSON cache
+                      <persistent state dir>/comfy/model-hashes.json (or ASSETGEN_MODEL_HASHES when set): schema
+                      rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256; missing entries are
+                      unverified. This record makes no measured or quality claim.
   approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
                       (approval.approve_record: refuses an agent or model name and names the run records as agents or
                       reviewers; sets run.md status approved; rev = the git blob id of that run.md). An agent runs it
@@ -205,6 +210,8 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))  # fstate; engine modules win
+import fstate  # noqa: E402
 import approval  # noqa: E402
 import budget  # noqa: E402
 import finalize  # noqa: E402
@@ -528,10 +535,35 @@ def review_requirements_sha256(run_dir, spec, phase, params=None):
 def workflow_model(run_dir, spec):
     wf = os.path.join(run_dir, "workflow.json")
     if os.path.isfile(wf):
-        for node in read_json(wf, "workflow").values():
+        workflow = read_json(wf, "workflow")
+        for node in workflow.values():
             if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
                 return node.get("inputs", {}).get("model")
+        for node_id in sorted(workflow, key=lambda n: (0, int(n), n) if str(n).isdigit() else (1, str(n))):
+            node = workflow[node_id]
+            if isinstance(node, dict) and node.get("class_type") == "CheckpointLoaderSimple":
+                inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+                model = inputs.get("ckpt_name")
+                return model if isinstance(model, str) else spec.get("params", {}).get("model")
     return spec.get("params", {}).get("model")
+
+
+def model_hashes():
+    """Read verified model hashes from the optional comfy-desktop-setup cache; ignore malformed entries."""
+    path = os.environ.get("ASSETGEN_MODEL_HASHES") or os.path.join(fstate.persistent(), "comfy", "model-hashes.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    if not isinstance(cache, dict) or cache.get("schema") != "rpg-factory.comfy-model-hashes/1":
+        return {}
+    rows = cache.get("models")
+    if not isinstance(rows, list):
+        return {}
+    return {row["kind"] + "/" + row["name"]: row["sha256"] for row in rows
+            if isinstance(row, dict) and isinstance(row.get("kind"), str) and isinstance(row.get("name"), str)
+            and isinstance(row.get("sha256"), str) and runfiles.SHA256.fullmatch(row["sha256"])}
 
 
 # -- review-cmd ------------------------------------------------------------------------------------------------
@@ -1211,6 +1243,11 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
             "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
+    wf_path = os.path.join(run_dir, "workflow.json")
+    workflow = read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None
+    local = runfiles.local_generation(workflow, spec, model_hashes())
+    if local is not None:
+        front["spec"]["generation"]["local"] = local
     if isinstance(spec.get("style_lock"), dict):  # a spec from before the style lock keeps its run.md shape
         front["spec"]["style_lock"] = spec["style_lock"]
     front["status"] = approval.keep_status(old, front)
@@ -1257,6 +1294,19 @@ def manifest_text(front, run_dir=None, newline="\n"):
             "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
                                                      ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
             "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none")]
+    local = s["generation"].get("local")
+    if local is not None:
+        models = local["models"]
+        loras = local["loras"]
+        rows = models + loras
+        model_text = ", ".join("`%s/%s`" % (r["kind"], r["name"]) for r in models) or "none"
+        lora_text = ", ".join("`%s` %s/%s" % (r["name"], r["strength_model"], r["strength_clip"]) for r in loras) or "none"
+        sampler_text = "; ".join("`%s`/`%s` steps %s cfg %s denoise %s seed %s (%s)" % (
+            r["sampler_name"], r["scheduler"], r["steps"], r["cfg"], r["denoise"], r["seed"],
+            "param " + r["seed_param"] if r["seed_param"] is not None else "not a rendered param")
+            for r in local["samplers"]) or "none"
+        body.insert(5, "- Local stage (UNTESTED on RTX 5060): models %s (%d of %d sha256 unverified), LoRAs %s, sampler %s"
+                    % (model_text, sum(not r["verified"] for r in rows), len(rows), lora_text, sampler_text))
     fringe = defringe_line(run_dir, s["outputs"]) if run_dir else None
     if fringe:
         body.append(fringe)
