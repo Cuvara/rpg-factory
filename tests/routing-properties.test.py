@@ -22,7 +22,10 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WS = os.environ.get("RPG_FACTORY_WORKSPACE", "/mnt/c/Workspaces/UnityIndie")
+sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+from workspace import default_workspace
+
+WS = default_workspace()
 REG = json.load(open(os.path.join(ROOT, "registry.json"), encoding="utf-8"))
 N = int(sys.argv[sys.argv.index("--commits") + 1]) if "--commits" in sys.argv else 120
 
