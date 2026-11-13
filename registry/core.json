@@ -9,7 +9,14 @@
       "rpg-mmo-server/backend/TEAM.md",
       "IndieRPGMMOAdventure/ProjectSettings/ProjectVersion.txt"
     ],
-    "note": "The workspace root is NOT a git repo. Each repo below is independent."
+    "note": "The workspace root is NOT a git repo. Each repo below is independent.",
+    "report_language": "Vietnamese",
+    "language_allow": [
+      "**/Localization/**",
+      "**/Locales/**",
+      "**/i18n/**",
+      "**/*.po"
+    ]
   },
   "tiers": {
     "fast": "Always required for every touched module and every module that depends on it. Cheap, local, deterministic.",
@@ -597,7 +604,7 @@
   "global_rules": [
     {
       "id": "english-only",
-      "rule": "All code, comments, docs, changelogs and commit messages in English.",
+      "rule": "Everything written is English: code, comments, docs, changelogs, commit messages, PR and issue text, plan files (including the harness plan-mode plan file), briefs and specs for agents, inter-agent messages, artifacts and memory files. Only the report addressed to the owner (chat replies, status updates, questions, the final report) is written in workspace.report_language.",
       "source": "CLAUDE.md (workspace root)"
     },
     {

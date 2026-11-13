@@ -7,6 +7,7 @@ import sys
 from .common import MAX_COMMAND, load_registry
 from .gates import human_gate_hits, skill_read_hits
 from .git import evaluate
+from .language import AGENT_TOOLS, agent_prompt_hits, language_hits
 from .mode import _needs_mode, mode_hits
 from .process import process_kill_hits
 
@@ -18,14 +19,30 @@ def main():
         payload = json.load(stream)
     except (json.JSONDecodeError, ValueError, OSError):
         return 0
-    if not isinstance(payload, dict) or payload.get("tool_name") not in (None, "Bash", "PowerShell"):
+    if not isinstance(payload, dict) or payload.get("tool_name") not in (None, "Bash", "PowerShell", *AGENT_TOOLS):
         return 0  # `[]`, `null`, `42`: not a hook payload
+    if payload.get("tool_name") in AGENT_TOOLS:  # the Agent tool: only its prompt is checked (english-only advisory)
+        return agent_main(payload)
     if not isinstance(payload.get("tool_input") or {}, dict) or not isinstance((payload.get("tool_input") or {}).get("command") or "", str):
         return 0
     registry = load_registry()
     if not registry:
         return 0
     reasons = collect(payload, registry)
+    if reasons:
+        json.dump(advisory("rpg-factory guard", reasons), sys.stdout)
+    return 0
+
+
+def agent_main(payload):
+    """The Agent tool hook: the prompt is a brief for a subagent, so it is English. No prompt, or an ASCII one,
+    returns before the registry is loaded."""
+    tool_input = payload.get("tool_input")
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if not isinstance(prompt, str) or prompt.isascii():
+        return 0
+    registry = load_registry()
+    reasons = agent_prompt_hits(payload, registry) if registry else []
     if reasons:
         json.dump(advisory("rpg-factory guard", reasons), sys.stdout)
     return 0
@@ -43,7 +60,8 @@ def collect(payload, registry, skill_tool=True):
         need_mode = _needs_mode(payload)
     except Exception:
         need_mode = True  # cannot tell cheaply: do the full checks
-    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits) if need_mode else (evaluate, human_gate_hits, process_kill_hits)
+    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits, language_hits) if need_mode \
+        else (evaluate, human_gate_hits, process_kill_hits, language_hits)
     if skill_tool:
         parts += (skill_read_hits,)
     for part in parts:  # isolated: a failure in one never drops the others
