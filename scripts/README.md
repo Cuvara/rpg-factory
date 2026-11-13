@@ -17,7 +17,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `factory-status.py` - pending cross-repo work derived from git (rollout, READY_TO_TAG, pin drift, STALE). `tests/factory-status.test.sh`
 - `run-checks.py` - runs and grades registry checks, writes evidence; `--status` regrades. `tests/run-checks.test.sh`
 - `factory-cmd.py` - entry point behind the slash commands (`status`, `route`, `check`, `doctor`, `ui*`, `assetgen`). `tests/commands.test.sh`, `tests/ui-commands.test.sh`
-- `assetgen/assetgen.py` - asset-gen engine: list, show, resolve, render, lint, review-cmd (prints the Codex command), qa, manifest; writes only into the given run directory. `tests/assetgen.test.sh`
+- `assetgen/assetgen.py` - asset-gen engine: list, show, resolve, render (`workflow.json` and `workflow.ui.json`), lint, graph-lint (workflow style guide check of templates or a run's `workflow.ui.json`; exit 0 PASS/WARN, 1 FAIL, 2 usage), review-cmd (prints the Codex command), defringe, embed, qa, finalize (defringe for alpha purposes, embed and qa in that order, stops at the first FAIL), budget (read-only spend guard: used versus `spec.budget`), manifest, publish (uploads `workflow.ui.json` to a ComfyUI's Workflows > assetgen; exit 3 NOT_AVAILABLE when unreachable), approve-record (the approval record a person asked for), promote-anchor (an output as a style-lock anchor), reject (records an asset or direction rejection), drift (read-only: records on an older style version); writes into the given run directory, except approve-record (also `approvals/AGEN-<run-id>/`), promote-anchor and reject (`assetgen/styles/<style>/` in the authoring repo); publish is the only network call and writes nothing locally. `tests/assetgen.test.sh`
+- `comfy-desktop-setup.py` - machine setup for asset-gen: Comfy Desktop local instance, the vendored 9router node (`templates/assetgen/comfy-node/`), a comfy-mcp venv and its registration for Claude and Codex. `--check` (default) is read-only, `--apply` writes only on the person's machine (custom_nodes, venv, `claude`/`codex mcp add`), `--generate-test` spends one low-quality image; exit 0 READY, 1 FAIL, 2 usage, 3 ACTION_NEEDED; never prints the provider key. Not under `assetgen/` (that engine is scanned for URLs) nor `checks/` (read-only). `tests/comfy-desktop-setup.test.sh`
 - `factory-workflow.py` - plan, status, dispatch and report registry-routed artifact workflows. `tests/workflow.test.sh`
 - `orca-wait.sh` - the run lead's single waiter for one Orca Run: loops `orca orchestration check --wait` for worker_done, escalation or question, acks heartbeats, prints the first real message (left unacked for the caller); one instance per Run through a lock under the state dir. `tests/orca-wait.test.sh`
 
@@ -28,7 +29,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `artifact-review.py` - git identity and SSH signature helpers for the artifact checks. `tests/artifact-quality.test.sh`
 - `artifact-quality.py` - aggregates artifact checks and the domain plugins. `tests/artifact-quality.test.sh`
 - `domains/*.py` - per-domain quality plugins (`_api.py` contract; design, ui, art2d, art3d, vfx, assetgen, noop). `tests/artifact-quality.test.sh`, `tests/<domain>-workflow.test.sh`
-- `domains/assetgen.py` - gen-run quality plugin: reviewer model differs from the prompt author (`SAME_MODEL:<model>` fallback grades WARN), review files bound to the current prompt and outputs, `qa.json` PASS with every required check, output hashes, provenance, refs. `tests/assetgen.test.sh`
+- `domains/assetgen.py` - gen-run quality plugin: reviewer model differs from the prompt author (`SAME_MODEL:<model>` fallback grades WARN), review files bound to the current prompt and outputs, `qa.json` PASS with every required check, output hashes, provenance, refs; the workflow-style check of the run's `workflow.ui.json` (WARN only, never FAIL); the light review tier (`assetgen/data/review-tiers.json`: icon, ui-element, texture-tileable without selected anchors) makes Claude's own image review optional, the Codex reviews stay required. `tests/assetgen.test.sh`
 - `asset-manifest.py` - asset manifest records against registered repos. `tests/asset-manifest.test.sh`
 - `registry-ownership.py` - cross-domain ownership and handoff invariants. `tests/handoff-e2e.test.sh`
 - `english-only.py` - English-only content policy (`--enforce`). `tests/english-only.test.sh`, `tests/skills-lint.sh`
@@ -71,7 +72,11 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh`, `tests/ui-figma-env.test.sh`
 - `assetgen/` - asset-gen engine modules: `layers.py` (core and game layers, override and extends), `lint.py` (offline data
   and workflow lint against `data/known-nodes.json`), `qa.py` and `png.py` (deterministic image QA, stdlib PNG decoder), `runfiles.py` (review verdict
-  binding and required QA checks, shared with `checks/domains/assetgen.py`).
+  binding and required QA checks, shared with `checks/domains/assetgen.py`), `finalize.py` (sequences defringe, embed and qa),
+  `budget.py` (advisory spend guard, read-only), `graphstyle.py` (workflow style guide rules, used by lint, graph-lint and
+  the check), `uiworkflow.py` (the ComfyUI frontend graph with groups, notes and colours from a template's ui block),
+  `nodesync.py` (offline, no network: `data/known-nodes.json` entries from a saved object_info JSON; prints them, `--write`
+  merges them, `--check` exits 1 naming the entries a merge would change); review tiers are data in `data/review-tiers.json`.
   `tests/assetgen.test.sh`
 - `adapters/` - optional domain tool adapters (`art2d/provider.py`, `art3d/blender-stats.py` run inside Blender,
   `vfx/unity.py`). `tests/art2d-workflow.test.sh`, `tests/art3d-workflow.test.sh`, `tests/vfx-workflow.test.sh`

@@ -78,6 +78,18 @@
         "vfx"
       ],
       "summary": "How asset-gen's ComfyUI side works: the comfy-template format and game-layer overrides, the comfy-mcp tool sequence, the 9router image node's behaviour and pitfalls, ComfyUI ports, and how to add a purpose, style or template."
+    },
+    "comfy-desktop-setup": {
+      "kind": "tech",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 102,
+      "used_by": [
+        "asset-gen"
+      ],
+      "summary": "How to set up Comfy Desktop, the 9router image node and comfy-mcp for Claude and Codex on a machine, and the traps of that setup."
     }
   },
   "contracts": [

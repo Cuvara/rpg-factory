@@ -3,7 +3,7 @@
  "title": "2D concept image",
  "description": "Exploration image for a character, prop or environment; feeds art2d concept artifacts.",
  "handoff_domain": "art2d",
- "default_template": "image-generate",
+ "default_template": "staged-environment",
  "default_family": "characters",
  "dimensions": [
   "palette",

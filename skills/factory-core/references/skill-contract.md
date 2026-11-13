@@ -19,7 +19,7 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
                    │
                    └── tech skills - dotnet-gameserver, go-backend, unity-client-tech, unity-dots, netcode-client;
                             UI: ui-orchestrator, ui-component-selection, ui-figma-import, ui-toolkit-screen, ui-validation;
-                            asset generation: comfyui
+                            asset generation: comfyui, comfy-desktop-setup
                             own: how a technology works in this workspace (never routed, loaded by
                             the skills in their used_by when the work needs it)
 ```

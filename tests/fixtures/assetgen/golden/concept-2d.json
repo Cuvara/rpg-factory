@@ -1,7 +1,16 @@
 {
  "1": {
   "_meta": {
-   "title": "Generate image"
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for concept-2d: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate wide image"
   },
   "class_type": "NineRouterImage",
   "inputs": {
@@ -10,19 +19,6 @@
    "quality": "high",
    "size": "1536x1024",
    "user_prompt": [
-    "3",
-    0
-   ]
-  }
- },
- "2": {
-  "_meta": {
-   "title": "Save image"
-  },
-  "class_type": "SaveImage",
-  "inputs": {
-   "filename_prefix": "assetgen/golden-concept-2d-001",
-   "images": [
     "1",
     0
    ]
@@ -30,11 +26,43 @@
  },
  "3": {
   "_meta": {
-   "title": "Prompt (Claude, Codex review NOT_RUN)"
+   "title": "Thumbnail for the readability check"
   },
-  "class_type": "PrimitiveStringMultiline",
+  "class_type": "ImageScale",
   "inputs": {
-   "value": "Test prompt for concept-2d: one subject, centered."
+   "crop": "disabled",
+   "height": 256,
+   "image": [
+    "2",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 0
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Preview thumbnail (silhouette at small size)"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "3",
+    0
+   ]
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Save full-size image"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-concept-2d-001-final",
+   "images": [
+    "2",
+    0
+   ]
   }
  }
 }

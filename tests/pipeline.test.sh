@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # factory-pipeline.py on a throwaway workspace (a server repo and a Unity client project): tiers, plan validation
 # (ownership, cycles, cross-model review, the no-worktree rule for Unity projects, exclusive resources), dispatch
-# commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate. Never touches the real workspace.
+# commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate, and run-all's --affected python3 guard
+# and suite timings (runall-preflight). Never touches the real workspace.
 # case-map: dogfood tests/dogfood.sh tests/dogfood/*
 # case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
@@ -10,11 +11,13 @@
 # case-map: status docs/schemas/pipeline-status.schema.json
 # case-map: cleanup docs/schemas/pipeline-status.schema.json
 # case-map: settled-workers docs/schemas/pipeline-status.schema.json
+# case-map: runall-preflight tests/run-all.sh
+# case-map: qa-tiers tests/run-all.sh
 # Measured with sys.monitoring and an audit hook over a full run: factory-pipeline.py, registry.json, the plan schema,
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs cli-selftest'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -91,7 +94,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs cli-selftest'
+UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -321,8 +324,8 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
-ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path"
+ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -357,8 +360,10 @@ for sole in ('claude', 'codex'):
     binary = bindir / (pipe['agents'][sole]['bin'] + ('.exe' if os.name == 'nt' else ''))
     binary.write_text('fixture')
     binary.chmod(0o755)
-    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD',
-                                'CODEX_HOME': tmp + '/empty-codex-home'}, clear=True):
+    configdir = pathlib.Path(tmp) / ('config-' + sole)
+    configdir.mkdir(exist_ok=True)
+    (configdir / 'config.toml').write_text('model_provider = "fixture"\n[model_providers.fixture.http_headers]\nAuthorization = "fixture"\n')
+    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD', 'CODEX_HOME': str(configdir)}, clear=True):
         avail = r.available(pipe, plan)
         assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
 if case == 'marks-and-empty':
@@ -374,15 +379,16 @@ for label, payload, down in (
     ('no-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}}), True),
     ('system-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': True}}}}), False),
     ('account-auth', json.dumps({'result': {'codex': {'accounts': [{}], 'systemDefault': {'hasAuth': False}}}}), False),
-    ('malformed', '{"result":null}', False),
+    ('malformed', '{"result":null}', True),
 ):
     if case != 'orca-' + label:
         continue
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
-                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state',
-                                'CODEX_HOME': tmp + '/empty-codex-home'}, clear=True), \
+                                'CODEX_HOME': tmp + '/missing-account-config',
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
-         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)):
+         patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+             args, 0 if args[0] == 'orca' else 1, payload if args[0] == 'orca' else '')):
         avail = r.available(pipe, {'id': 'account-' + label})
         assert avail['claude']['available']
         assert avail['codex']['available'] != down
@@ -414,30 +420,34 @@ if case in codex_cases:
     payload = json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}})
     with patch.dict(os.environ, env, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
-         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)) as probe:
+         patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+             args, 0 if args[0] == 'orca' else 1, payload if args[0] == 'orca' else '')) as probe:
+        # the codex login probe fails: only the API configuration can make codex available
         avail = r.available(pipe, {'id': 'account-' + case})
         assert avail['claude']['available'], avail
         if case == 'codex-provider':
-            assert avail['codex'] == {'available': True, 'why': 'codex API provider router in config.toml'}, avail
+            assert avail['codex'] == {'available': True, 'why': 'codex on PATH; api provider router in config.toml'}, avail
         elif case == 'codex-api-key':
-            assert avail['codex'] == {'available': True, 'why': 'OPENAI_API_KEY set'}, avail
+            assert avail['codex'] == {'available': True, 'why': 'codex on PATH; OPENAI_API_KEY set'}, avail
         elif case == 'codex-override':
             assert avail['codex'] == {'available': False, 'why': 'RPG_FACTORY_AGENTS override'}, avail
         else:
-            assert avail['codex'] == {'available': False, 'why': 'Orca account unavailable'}, avail
+            assert not avail['codex']['available'] and 'codex login missing' in avail['codex']['why'], avail
+        orca_calls = [c for c in probe.call_args_list if c.args and c.args[0][0] == 'orca']
         if case == 'codex-override':
             probe.assert_not_called()
         else:
-            probe.assert_called_once()
+            assert len(orca_calls) == 1, probe.call_args_list
         assert all(secret not in repr(avail) for secret in
                    ('secret-header-fixture', 'ROUTER_KEY', 'secret-api-key-fixture')), avail
 if case == 'orca-offline':
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
-                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state',
-                                'CODEX_HOME': tmp + '/empty-codex-home'}, clear=True), \
+                                'CODEX_HOME': tmp + '/missing-account-config',
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
          patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
-        assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
+        avail = r.available(pipe, {'id': 'account-offline'})
+        assert avail['claude']['available'] and not avail['codex']['available']
 spec = importlib.util.spec_from_file_location('routing_pipeline', root + '/scripts/factory-pipeline.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -518,6 +528,88 @@ plan['repos']['plugin']['base'] = 'main'
 planfile = pathlib.Path(tmp) / ('routing-command-plan-' + case + '.json')
 plan['tasks'][0].pop('implementer', None)
 planfile.write_text(json.dumps(plan))
+if case in ('codex-header', 'codex-no-auth', 'codex-login', 'codex-env-key', 'codex-openai-auth',
+            'codex-profile', 'codex-malformed', 'codex-secrets', 'codex-precedence'):
+    fixture = pathlib.Path(tmp) / ('auth-' + case)
+    bindir, home, codexhome = fixture / 'bin', fixture / 'home', fixture / 'codex'
+    for directory in (bindir, home, codexhome):
+        directory.mkdir(parents=True, exist_ok=True)
+    suffix = '.cmd' if os.name == 'nt' else ''
+    for binary, body in (('codex', 'exit /b 1\n' if os.name == 'nt' else '#!/bin/sh\nexit 1\n'),
+                         ('orca', '@echo {"result":{"codex":{"accounts":[],"systemDefault":{"hasAuth":false}}}}\n'
+                          if os.name == 'nt' else '#!/bin/sh\necho \'{"result":{"codex":{"accounts":[],"systemDefault":{"hasAuth":false}}}}\'\n')):
+        executable = bindir / (binary + suffix)
+        executable.write_text(body)
+        executable.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith('ORCA_') and k != 'RPG_FACTORY_AGENTS'}
+    env.update(PATH=str(bindir), PATHEXT='.CMD;.EXE', HOME=str(home), USERPROFILE=str(home),
+               CODEX_HOME=str(codexhome), ORCA_WORKTREE_ID='fixture', RPG_FACTORY_STATE_DIR=str(fixture / 'state'))
+    config = codexhome / 'config.toml'
+    secret = 'SENTINEL_PRIVATE_VALUE_8ab7'
+    header = 'model_provider = "proxy"\n[model_providers.proxy.http_headers]\nauthorization = "' + secret + '"\n'
+    no_auth = json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}})
+    def probe(content, login=False, extra=None):
+        config.write_text(content)
+        with patch.dict(os.environ, dict(env, **(extra or {})), clear=True), \
+             patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+                 args, 0 if args[0] == 'orca' or login else 1, no_auth if args[0] == 'orca' else '')):
+            return r.available(pipe, {'id': 'auth-' + case})['codex']
+    if case == 'codex-header':
+        result = probe(header)
+        assert result['available'] and 'api provider proxy' in result['why']
+    if case == 'codex-no-auth':
+        result = probe('')
+        assert not result['available'] and all(reason in result['why'] for reason in
+            ('no Orca account', 'codex login missing', 'no authenticated api provider'))
+    if case == 'codex-login':
+        result = probe('', login=True)
+        assert result['available'] and 'codex login' in result['why']
+    if case == 'codex-env-key':
+        content = 'model_provider = "proxy"\n[model_providers.proxy]\nenv_key = "FIXTURE_API_KEY"\n'
+        assert not probe(content)['available']
+        result = probe(content, extra={'FIXTURE_API_KEY': secret})
+        assert result['available'] and 'api provider proxy' in result['why'] and secret not in str(result)
+        assert not probe(content, extra={'FIXTURE_API_KEY': ''})['available']
+    if case == 'codex-openai-auth':
+        content = 'model_provider = "proxy"\n[model_providers.proxy]\nrequires_openai_auth = true\n'
+        assert not probe(content)['available']
+        r._cache.clear()  # A changed login status starts a new CLI invocation.
+        assert probe(content, login=True)['available']
+    if case == 'codex-profile':
+        content = ('profile = "work"\nmodel_provider = "other"\n[profiles.work]\nmodel_provider = "proxy"\n'
+                   '[model_providers.proxy.http_headers]\nAuthorization = "fixture"\n')
+        assert 'api provider proxy' in probe(content)['why']
+        # CODEX_HOME absent uses HOME/.codex.
+        (home / '.codex').mkdir(exist_ok=True)
+        (home / '.codex/config.toml').write_text(content)
+        fallback_env = dict(env)
+        fallback_env.pop('CODEX_HOME')
+        with patch.dict(os.environ, fallback_env, clear=True), \
+             patch('pipeline_route.subprocess.run', side_effect=lambda args, **kw: subprocess.CompletedProcess(
+                 args, 0 if args[0] == 'orca' else 1, no_auth if args[0] == 'orca' else '')):
+            assert 'api provider proxy' in r.available(pipe, {'id': 'home-fallback'})['codex']['why']
+    if case == 'codex-malformed':
+        assert not probe('invalid = [')['available']
+    if case == 'codex-secrets':
+        assert secret not in str(probe(header))
+        key_config = 'model_provider = "proxy"\n[model_providers.proxy]\nenv_key = "FIXTURE_API_KEY"\n'
+        for content in (header, key_config):
+            config.write_text(content)
+            for flags in ([], ['--json']):
+                result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py',
+                                         'agents', str(planfile)] + flags, capture_output=True, text=True,
+                                        env=dict(env, FIXTURE_API_KEY=secret))
+                assert result.returncode == 0 and secret not in result.stdout + result.stderr
+                assert 'api provider proxy' in result.stdout
+        assert all(secret not in p.read_text(errors='replace') for p in (fixture / 'state').rglob('*') if p.is_file())
+    if case == 'codex-precedence':
+        config.write_text(header)
+        with patch.dict(os.environ, dict(env, RPG_FACTORY_AGENTS='claude'), clear=True):
+            assert not r.available(pipe, {'id': 'override'})['codex']['available']
+        result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py',
+                                 'agents', str(planfile), '--down', 'codex', '--json'],
+                                capture_output=True, text=True, env=env)
+        assert result.returncode == 0 and 'MODEL_UNAVAILABLE' in result.stdout and secret not in result.stdout + result.stderr
 if case == 'followup-preview':
     state = tmp + '/preview-state'
     env = dict(os.environ, RPG_FACTORY_AGENTS='claude,codex', RPG_FACTORY_STATE_DIR=state)
@@ -594,13 +686,16 @@ if case == 'no-probe':
         if isinstance(args, (list, tuple)) and list(args[:1]) == ['orca']:
             started.append(args)
             return subprocess.CompletedProcess(args, 0, '{}')
+        if isinstance(args, (list, tuple)) and list(args[:1]) == ['codex']:
+            return subprocess.CompletedProcess(args, 1, '')
         return orig_run(args, *k, **kw)
     env = {k: v for k, v in os.environ.items() if k != 'RPG_FACTORY_AGENTS'}
     env['ORCA_WORKTREE_ID'] = 'fixture'
+    env['CODEX_HOME'] = tmp + '/no-probe-empty-codex-home'
     sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
            {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'kind': 'code'}]}
     with patch.dict(os.environ, env, clear=True), patch('subprocess.run', spy), \
-         patch('shutil.which', lambda n, *a, **k: '/fake' if n == 'orca' else orig_which(n, *a, **k)):
+         patch('shutil.which', lambda n, *a, **k: '/fake' if n in ('orca', 'codex') else orig_which(n, *a, **k)):
         m.validate(plan, reg)
         m.validate_subplan(sub, plan, reg)
         assert not started, started
@@ -681,7 +776,8 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
 work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
 repo = work / 'repo'
-variant = 'serial' if case.startswith('serial-') else 'subtask' if case.startswith('subtask-') else 'base'
+variant = ('serial' if case.startswith('serial-') or case == 'stack-no-worktree'
+           else 'subtask' if case.startswith('subtask-') else 'base')
 shutil.copytree(pathlib.Path(tmp) / 'templates' / variant, repo, ignore=shutil.ignore_patterns('*.lock'))
 os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
 def git(*args):
@@ -761,6 +857,49 @@ def stale_a(expected):
     if expected:
         assert 'shared.txt' in blockers[0] and 'shared.txt' in stale[0]
     return g, row
+import contextlib, re, shlex
+@contextlib.contextmanager
+def no_orca():
+    """shutil.which finds no orca (in-process CLI): no real Orca is called."""
+    real_which = shutil.which
+    def which(cmd, *args, **kw):
+        if os.path.splitext(os.path.basename(str(cmd)))[0].lower() == 'orca':
+            return None
+        return real_which(cmd, *args, **kw)
+    shutil.which = which
+    try:
+        yield
+    finally:
+        shutil.which = real_which
+def argv_lines(out):
+    """Each printed line split back into its argv (orca_cmd.quote is shell quoting); [] for a line that is no command."""
+    rows = []
+    for line in out.splitlines():
+        try:
+            rows.append(shlex.split(line))
+        except ValueError:
+            rows.append([])
+    return rows
+def arg_of(argv, name):
+    return argv[argv.index(name) + 1]
+def same_path(p, q):
+    return m.norm_wt(os.path.realpath(str(p))) == m.norm_wt(os.path.realpath(str(q)))
+def spec_of(out):
+    """The text of the spec file a printed launch prompt points at, or None."""
+    for argv in argv_lines(out):
+        for x in argv:
+            hit = re.match(r'Read your task spec at (.+?\.md) and follow it\.', x)
+            if hit:
+                return pathlib.Path(hit.group(1)).read_text(encoding='utf-8')
+    return None
+def assert_unstacked_lead(tid='b'):
+    """`dispatch --phase lead --runner orca` of a task that never stacks: the unchanged handoff, no stack record."""
+    with no_orca():
+        r = cli('dispatch', str(pf), '--task', tid, '--phase', 'lead', '--runner', 'orca')
+    assert 'worktree add' not in r.stdout and 'stacks on' not in r.stderr, (r.stdout, r.stderr)
+    for text in (r.stdout, spec_of(r.stdout) or ''):
+        assert 'Implement now' not in text and 'run no verify' not in text, text
+    assert m.stack_record(plan, tid) is None, m.stack_record(plan, tid)
 if case.startswith('serial-'):
     a = commit('a')
     verdict('a', 'review', a); verdict('a', 'qa', a)
@@ -777,8 +916,540 @@ if case.startswith('serial-'):
         assert any(x.startswith('a: QA is STALE') for x in g['blockers']), g
     print(case + ' assertions passed')
     sys.exit(0)
+if case == 'stack-no-worktree':
+    # a no-worktree repo (Unity marker): tasks share plan.topic one at a time, nothing stacks
+    a = commit('a')
+    info = m.repo_info(plan, reg, 'fixture')
+    assert not info['worktrees'], info
+    assert m.stackable(plan, reg, info, plan['tasks'][1]) is None
+    assert m.start_base(plan, info, plan['tasks'][1], reg) == (info['base_sha'] or info['base'])
+    assert_unstacked_lead()
+    print(case + ' assertions passed')
+    sys.exit(0)
 git('switch', '--no-track', '-c', 'topic-a')
 a = commit('a')
+if case.startswith('stack-'):
+    # stacked dispatch: a dependent task starts on its one in-flight dependency's tip, recorded by SHA
+    info = m.repo_info(plan, reg, 'fixture')
+    tb = plan['tasks'][1]
+    def status_row(tid):
+        return next(r for r in m.status(plan, reg)['tasks'] if r['id'] == tid)
+    if case == 'stack-xs':
+        plan['tier'] = 'XS'; save()
+        assert m.stackable(plan, reg, info, tb) is None
+        assert m.start_base(plan, info, tb, reg) == m.start_base(plan, info, tb) == plan['topic']
+        # a two-task plan is no tier XS plan: the lead dispatch of the dependent is refused (invalid plan, exit 1),
+        # nothing printed or stacked
+        with no_orca():
+            r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'orca', rc=1)
+        assert not r.stdout and 'plan is invalid' in r.stderr and 'tier XS' in r.stderr, (r.stdout, r.stderr)
+        assert 'worktree add' not in r.stdout + r.stderr and 'stacks on' not in r.stdout + r.stderr, (r.stdout, r.stderr)
+        assert m.stack_record(plan, 'b') is None, m.stack_record(plan, 'b')
+        # a valid tier XS plan (one prose task): the XS lead steps, unchanged
+        plan['tasks'] = [{'id': 'x', 'repo': 'fixture', 'kind': 'docs', 'objective': 'note',
+                          'paths': ['notes.md'], 'acceptance': ['ok']}]
+        save()
+        assert_unstacked_lead('x')
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case in ('stack-two-deps', 'stack-one-integrated'):
+        plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                              'paths': ['c.txt'], 'acceptance': ['reviewed']})
+        tb['deps'] = ['a', 'c']; save()
+        git('switch', 'topic'); git('switch', '--no-track', '-c', 'topic-c')
+        c = commit('c', 'c.txt')
+        if case == 'stack-two-deps':
+            # two in-flight dependencies (a and c candidates): the dependent keeps waiting
+            assert m.stackable(plan, reg, info, tb) is None
+            assert m.start_base(plan, info, tb, reg) not in (a, c)
+            row = status_row('b')
+            assert row['phase'] == 'pending' and any(n.startswith('waits for') for n in row['notes']), row
+            assert not any('stackable' in n or 'stacked' in n for n in row['notes']), row
+        else:
+            # c reviewed and merged into plan.topic (integrated), a still a candidate: b stacks on a
+            verdict('c', 'review', c)
+            git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge c', 'topic-c')
+            assert status_row('c')['phase'] == 'integrated'
+            assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case.startswith(('stack-gate-', 'stack-sync-')):
+        # stacked dispatch, part 2: the stack gate keeps unverified dependency code out; a owns shared.txt, b owns b.txt
+        tb['paths'] = ['b.txt']; save()
+        def stacked_b(review_a):
+            """b's stack record on a (a candidate, or reviewed at a), then topic-b cut at a with b's own commit."""
+            if review_a:
+                verdict('a', 'review', a)
+            cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'print')
+            rec = m.stack_record(plan, 'b')
+            assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, rec
+            git('switch', '--no-track', '-c', 'topic-b', a)
+            return commit('b', 'b.txt')
+        def b_dispatch(phase, sha, rc=0):
+            return cli('dispatch', str(pf), '--task', 'b', '--phase', phase, '--sha', sha, '--runner', 'print', rc=rc)
+        def b_verdict(phase, sha, state='PASS', rc=0):
+            return cli('verdict', str(pf), '--task', 'b', '--phase', phase, '--sha', sha, '--by', 'claude',
+                       '--state', state, rc=rc)
+        def fix_a():
+            """a fixes shared.txt in a2 on topic-a and passes review there; back on topic-b."""
+            git('switch', 'topic-a')
+            a2 = commit('a2')
+            verdict('a', 'review', a2)
+            git('switch', 'topic-b')
+            return a2
+        def integrate(*branches):
+            git('switch', 'topic')
+            for branch in branches:
+                git('merge', '--no-ff', '-m', 'merge ' + branch, branch)
+            return git('rev-parse', 'HEAD')
+        def blockers():
+            return m.gate(plan, reg)['blockers']
+        if case == 'stack-gate-dispatch':
+            bh = stacked_b(False)
+            # a has no review: verify, review and QA of b wait, and a PASS of b is refused (a FAIL is not)
+            for phase in ('verify', 'review', 'qa'):
+                r = b_dispatch(phase, bh, rc=2)
+                assert 'has no current review PASS' in r.stderr and not r.stdout, (phase, r.stdout, r.stderr)
+            g = m.stack_gate(plan, reg, info, tb, bh)
+            assert g and g['dep'] == 'a' and g['merge'] is None and 'has no current review PASS' in g['reason'], g
+            row = status_row('b')
+            assert row['phase'] == 'candidate', row
+            assert any(n.startswith('verify waits:') and 'has no current review PASS' in n for n in row['notes']), row
+            assert row['next'] is None, row
+            for phase in ('review', 'qa'):
+                r = b_verdict(phase, bh, rc=2)
+                assert 'refused:' in r.stderr and 'has no current review PASS' in r.stderr, (phase, r.stderr)
+                assert m.verdict_of(plan, reg, 'b', phase)[0] is None, phase
+            b_verdict('review', bh, state='FAIL')
+            assert record('b', 'review')['state'] == 'FAIL' and record('b', 'review')['sha'] == bh
+            pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()  # back to an unreviewed candidate
+            # a passes review at a fix a2 that b's HEAD lacks: the gate names the merge of a's branch, never a rebase
+            a2 = fix_a()
+            r = b_dispatch('verify', bh, rc=2)
+            assert 'is not in' in r.stderr and 'git merge topic-a' in r.stderr and not r.stdout, (r.stdout, r.stderr)
+            g = m.stack_gate(plan, reg, info, tb, bh)
+            assert g and g['dep'] == 'a' and g['merge'] == 'topic-a' and a2[:10] in g['reason'], g
+            r = b_verdict('review', bh, rc=2)
+            assert 'refused:' in r.stderr and 'is not in' in r.stderr, r.stderr
+            assert m.verdict_of(plan, reg, 'b', 'review')[0] is None
+            row = status_row('b')
+            assert row['phase'] == 'candidate', row
+            assert any(n.startswith('verify waits:') and 'is not in' in n for n in row['notes']), row
+            assert row['next'] and 'merge' in row['next'] and 'topic-a' in row['next'], row
+            # after the merge of a's PASS into b, verify runs and b's review PASS is recorded
+            git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+            merged = git('rev-parse', 'HEAD')
+            assert m.stack_gate(plan, reg, info, tb, merged) is None
+            b_dispatch('verify', merged)
+            b_verdict('review', merged)
+            assert record('b', 'review')['state'] == 'PASS' and record('b', 'review')['sha'] == merged
+            assert not any(n.startswith('verify waits:') for n in status_row('b')['notes'])
+        elif case in ('stack-gate-order', 'stack-gate-correct'):
+            bh = stacked_b(True)
+            assert m.stack_gate(plan, reg, info, tb, bh) is None
+            b_verdict('review', bh)
+            # b reviewed while a is not integrated: the dependency integrates first
+            row = status_row('b')
+            assert row['phase'] == 'reviewed', row
+            assert any(n.startswith('integrate a first') and 'git merge --no-ff' in n for n in row['notes']), row
+            assert row['next'] is None, row
+            if case == 'stack-gate-order':
+                integrate('topic-b')  # the dependent first: it carries a in, unintegrated on its own
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+            else:
+                integrate('topic-a', 'topic-b')
+                g = blockers()
+                assert not any('integrated before its dependency' in x or "lacks a's review PASS" in x for x in g), g
+                assert not any(x.startswith(('a: review is STALE', 'b: review is STALE')) for x in g), g
+        elif case == 'stack-sync-verb':
+            # stacked dispatch, part 3: `sync --task a` tells each stacked dependent whose HEAD lacks a's tip
+            import re
+            plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                                  'paths': ['c.txt'], 'acceptance': ['reviewed'], 'deps': ['a']})
+            tb['orca_run'] = 'run_B'; save()
+            leads = {}
+            for tid in ('c', 'b'):  # a is a candidate, topic-b and topic-c do not exist yet: both stack on a
+                leads[tid] = cli('dispatch', str(pf), '--task', tid, '--phase', 'lead', '--runner', 'print').stdout
+                rec = m.stack_record(plan, tid)
+                assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, (tid, rec)
+            leads['a'] = cli('dispatch', str(pf), '--task', 'a', '--phase', 'lead', '--runner', 'print').stdout
+            # the stacked lead merges its dependency's moves at each subtask boundary, never rebases;
+            # every lead in a worktree repo tells its own dependents with `sync --send`
+            lb = leads['b']
+            assert 'at each subtask boundary' in lb and '`git merge topic-a`' in lb and 'never rebase' in lb, lb
+            for tid, out in leads.items():
+                assert re.search(r'sync <plan> --task (' + tid + r'|<id>) --send', out), (tid, out)
+            # b in the main checkout, c in a worktree of its own, each with its own commit on a
+            git('switch', '--no-track', '-c', 'topic-b', a)
+            bh = commit('b', 'b.txt')
+            wtc = work / 'wt-c'
+            git('worktree', 'add', '-b', 'topic-c', str(wtc), a)
+            def gitc(*args):
+                r = subprocess.run(['git', '-C', str(wtc), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                                   capture_output=True, text=True)
+                assert r.returncode == 0, (args, r.stderr)
+                return r.stdout.strip()
+            (wtc / 'c.txt').write_text('c')
+            gitc('add', 'c.txt'); gitc('commit', '-qm', 'c')
+            a2 = fix_a()  # a moves to a2 on topic-a; b's HEAD lacks it
+            gitc('merge', '--no-ff', '-m', 'sync a', 'topic-a')  # c is up to date
+            ch = gitc('rev-parse', 'HEAD')
+            # the fake orca answers `worktree list` with git's own worktree paths (8.3 short paths stay comparable)
+            wt_rows, cur = [], None
+            for line in git('worktree', 'list', '--porcelain').splitlines():
+                if line.startswith('worktree '):
+                    cur = line[len('worktree '):]
+                elif line.startswith('branch ') and line.endswith(('/topic-b', '/topic-c')):
+                    wt_rows.append({'id': 'wt_' + line[-1], 'path': cur})
+            assert sorted(r['id'] for r in wt_rows) == ['wt_b', 'wt_c'], wt_rows
+            fb = work / 'fakebin'; fb.mkdir()
+            orca_log = work / 'orca.log'
+            (fb / 'fake_orca.py').write_text(
+                'import json, os, sys\n'
+                'with open(' + repr(str(orca_log)) + ', "a", encoding="utf-8") as fh:\n'
+                '    fh.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+                'if sys.argv[1:3] == ["worktree", "list"]:\n'
+                '    print(json.dumps({"ok": True, "result": {"worktrees": ' + json.dumps(wt_rows) + '}})); sys.exit(0)\n'
+                'if sys.argv[1:3] == ["orchestration", "send"] and not os.environ.get("FAKE_ORCA_SEND_FAIL"):\n'
+                '    print(json.dumps({"ok": True, "result": {}})); sys.exit(0)\n'
+                'print("error: run not found", file=sys.stderr); sys.exit(1)\n', encoding='utf-8')
+            if os.name == 'nt':
+                (fb / 'orca.cmd').write_text('@"' + sys.executable + '" "%~dp0fake_orca.py" %*\r\n', newline='')
+            else:
+                (fb / 'orca').write_text('#!/bin/sh\nexec "' + sys.executable + '" "$(dirname "$0")/fake_orca.py" "$@"\n')
+                (fb / 'orca').chmod(0o755)
+            old_path = os.environ['PATH']
+            os.environ['PATH'] = str(fb) + os.pathsep + old_path
+            def sends():
+                calls = ([json.loads(x) for x in orca_log.read_text(encoding='utf-8').splitlines()]
+                         if orca_log.exists() else [])
+                return [c for c in calls if c[:2] == ['orchestration', 'send']]
+            def opt(call, name):
+                return call[call.index(name) + 1]
+            def sync(*extra, rc=0):
+                return cli('sync', str(pf), '--task', 'a', *extra, rc=rc).stdout
+            try:
+                # without --send: b's merge command and its send command, c up to date, nothing sent
+                out = sync()
+                lines = out.splitlines()
+                assert lines and lines[0].startswith('sync: a at ' + a2[:10] + ' (topic-a)'), out
+                bl = [x for x in lines if x.startswith('b: a moved to ' + a2[:10] + ', not in HEAD ' + bh[:10])]
+                assert len(bl) == 1 and 'merge topic-a' in bl[0] and 'rebase' not in bl[0], out
+                assert any(x.startswith('  send: orca orchestration send --to run:run_B --type status') for x in lines), out
+                assert 'c: up to date (HEAD ' + ch[:10] + ' contains a@' + a2[:10] + ')' in out, out
+                assert not any(x.startswith('c: a moved') for x in lines) and 'sent to' not in out, out
+                assert sends() == [], sends()
+                rec = m.sync_record(plan, 'b')
+                assert rec and rec['dep'] == 'a' and rec['ref'] == 'topic-a' and rec['sha'] == a2, rec
+                assert 'merge topic-a' in rec['command'] and rec['to'] == 'run:run_B' and not rec['sent'] and rec['at'], rec
+                assert pathlib.Path(m.sync_file(plan, 'b')).is_file()
+                assert m.sync_record(plan, 'c') is None and not pathlib.Path(m.sync_file(plan, 'c')).exists()
+                # with --send: exactly one status message, to b's lead Run
+                out = sync('--send')
+                assert '  sent to run:run_B' in out.splitlines(), out
+                s = sends()
+                assert len(s) == 1, s
+                assert opt(s[0], '--to') == 'run:run_B' and opt(s[0], '--type') == 'status', s
+                assert opt(s[0], '--subject') == 'sync: a moved to ' + a2[:10], s
+                assert 'merge topic-a' in opt(s[0], '--body'), s
+                assert m.sync_record(plan, 'b')['sent'], m.sync_record(plan, 'b')
+                # a failing send is an error (exit 1), never hidden
+                os.environ['FAKE_ORCA_SEND_FAIL'] = '1'
+                try:
+                    r = pipeline_cli('sync', str(pf), '--task', 'a', '--send')
+                finally:
+                    del os.environ['FAKE_ORCA_SEND_FAIL']
+                assert r.returncode == 1 and '  send FAILED (run:run_B): ' in r.stdout + r.stderr, (r.stdout, r.stderr)
+                # without orca_run: b's lead is addressed by its worktree, from orca's worktree list
+                del tb['orca_run']; save()
+                orca_log.unlink()
+                out = sync('--send')
+                assert '  sent to @worktree:wt_b' in out.splitlines(), out
+                s = sends()
+                assert len(s) == 1 and opt(s[0], '--to') == '@worktree:wt_b', s
+                assert m.sync_record(plan, 'b')['to'] == '@worktree:wt_b', m.sync_record(plan, 'b')
+            finally:
+                os.environ['PATH'] = old_path
+            # status shows the sync note on b until b's HEAD contains a2, never on c
+            note = [n for n in status_row('b')['notes'] if n.startswith('sync:')]
+            assert len(note) == 1 and note[0].startswith('sync: a moved to ' + a2[:10]), note
+            assert 'merge topic-a' in note[0] and 'never rebase' in note[0], note
+            assert not any(n.startswith('sync:') for n in status_row('c')['notes'])
+            git('merge', '--no-ff', '-m', 'sync a', 'topic-a')
+            merged = git('rev-parse', 'HEAD')
+            assert not any(n.startswith('sync:') for n in status_row('b')['notes']), status_row('b')
+            out = sync()
+            assert 'b: up to date (HEAD ' + merged[:10] + ' contains a@' + a2[:10] + ')' in out, out
+            assert m.sync_record(plan, 'b') is None and not pathlib.Path(m.sync_file(plan, 'b')).exists()
+        elif case == 'stack-sync-no-orca':
+            # without Orca the verb still prints every command and exits 0; an unknown task is a usage error
+            tb['orca_run'] = 'run_B'; save()
+            bh = stacked_b(False)
+            a2 = fix_a()
+            real_which = shutil.which
+            def which(cmd, *args, **kw):
+                if os.path.splitext(os.path.basename(str(cmd)))[0].lower() == 'orca':
+                    return None
+                return real_which(cmd, *args, **kw)
+            shutil.which = which
+            try:
+                out = cli('sync', str(pf), '--task', 'a', '--send').stdout
+            finally:
+                shutil.which = real_which
+            lines = out.splitlines()
+            assert any(x.startswith('b: a moved to ' + a2[:10] + ', not in HEAD ' + bh[:10]) and 'merge topic-a' in x
+                       for x in lines), out
+            assert any(x.startswith('  send: orca orchestration send') for x in lines), out
+            assert '  not sent: orca is not on PATH' in lines, out
+            rec = m.sync_record(plan, 'b')
+            assert rec and rec['sha'] == a2 and not rec['sent'], rec
+            r = cli('sync', str(pf), '--task', 'zz', rc=2)
+            assert 'unknown task zz' in r.stderr, (r.stdout, r.stderr)
+        elif case == 'stack-gate-missing':
+            bh = stacked_b(True)
+            b_verdict('review', bh)
+            a2 = fix_a()  # a's current PASS moves to a2, which b's reviewed commit lacks
+            g = blockers()
+            assert any(x.startswith('b: stacked on a: review ' + bh[:10]) and "lacks a's review PASS" in x
+                       and a2[:10] in x for x in g), g
+        else:
+            # b syncs a's fix a2 into topic-b: a clean merge is a sync merge, a resolution in a's file is not
+            bh = stacked_b(False)
+            a2 = fix_a()
+            if case == 'stack-sync-merge':
+                git('merge', '--no-ff', '-m', 'sync a', 'topic-a')
+            else:
+                assert case == 'stack-sync-evil', case
+                git('merge', '--no-ff', '--no-commit', 'topic-a')
+                (repo / 'shared.txt').write_text('evil sync resolution')
+                git('add', 'shared.txt'); git('commit', '-qm', 'evil sync a')
+            sync = git('rev-parse', 'HEAD')
+            b_verdict('review', sync)
+            head = integrate('topic-a', 'topic-b')
+            g = blockers()
+            stale = [x for x in g if x.startswith('a: review is STALE')]
+            if case == 'stack-sync-merge':
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == []
+                assert not stale, g
+                # c (after b) edits a's file: the net diff since a2 is no longer empty, so only the sync-merge
+                # credit keeps the clean sync merge in topic-b (before c's start, b does not own shared.txt) off a
+                plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                                      'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['b']})
+                save()
+                git('switch', 'topic'); git('switch', '--no-track', '-c', 'topic-c')
+                c = commit('c')
+                verdict('c', 'review', c)
+                head = integrate('topic-c')
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == []
+                g = blockers()
+                assert not any(x.startswith('a: review is STALE') for x in g), g
+            else:
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == ['shared.txt']
+                assert stale and 'shared.txt' in stale[0], g
+        print(case + ' assertions passed')
+        sys.exit(0)
+    def trees():
+        """(main checkout, {branch: path}) from git's own `worktree list --porcelain` (8.3 short paths stay comparable)."""
+        main, rows, cur = None, {}, None
+        for line in git('worktree', 'list', '--porcelain').splitlines():
+            if line.startswith('worktree '):
+                cur = line[len('worktree '):]
+                main = main or cur
+            elif line.startswith('branch refs/heads/'):
+                rows[line[len('branch refs/heads/'):]] = cur
+        return main, rows
+    if case == 'stack-dispatch-handoff':
+        # stacked dispatch, part 4: the Orca handoff of a stacked lead cuts a sibling worktree at the dependency's tip
+        tb['paths'] = ['b.txt']; save()
+        sibling = ("task b stacks on a@" + a[:10] + " (topic-a): a sibling worktree beside the integration checkout, "
+                   "not a child of a's worktree")
+        def lead_b():
+            r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'orca')
+            rows = argv_lines(r.stdout)
+            def find(pred):
+                hits = [i for i, x in enumerate(rows) if pred(x)]
+                assert len(hits) == 1, (hits, r.stdout)
+                return hits[0]
+            i_add = find(lambda x: x[:2] == ['git', '-C'] and x[3:5] == ['worktree', 'add'])
+            i_set = find(lambda x: x[:3] == ['orca', 'worktree', 'set'])
+            i_launch = find(lambda x: x[:3] == ['orca', 'agent', 'launch'])
+            assert i_add < i_set < i_launch, r.stdout
+            add, wset, launch = rows[i_add], rows[i_set], rows[i_launch]
+            assert add[5:8] == ['--no-track', '-b', 'topic-b'] and len(add) == 10 and add[-1] == a, add
+            assert os.path.basename(add[8].replace('\\', '/').rstrip('/')) == 'topic-b', add
+            assert same_path(arg_of(wset, '--worktree').removeprefix('path:'), add[8]), (wset, add)
+            assert arg_of(wset, '--display-name') == 'topic-b', wset
+            assert arg_of(wset, '--workspace-status') == 'in-progress', wset
+            assert same_path(arg_of(launch, '--worktree').removeprefix('path:'), add[8]), (launch, add)
+            assert 'topic-a--' not in r.stdout + r.stderr, (r.stdout, r.stderr)
+            assert sibling in r.stderr, r.stderr
+            rec = m.stack_record(plan, 'b')
+            assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, rec
+            return r, add, arg_of(wset, '--parent-worktree').removeprefix('path:'), launch
+        with no_orca():
+            # no integration checkout (the main checkout is on topic-a): beside the repo checkout, parent the main checkout
+            main, rows = trees()
+            assert 'topic' not in rows, rows
+            r, add, parent, launch = lead_b()
+            assert same_path(add[8], os.path.join(os.path.dirname(main.rstrip('/\\')), 'topic-b')), (add, main)
+            assert same_path(parent, main), (parent, main)
+            # an integration checkout (topic): the sibling goes beside it and Orca's parent is it, never topic-a's worktree
+            git('worktree', 'add', str(work / 'int'), 'topic')
+            main, rows = trees()
+            integ = rows['topic']
+            assert same_path(integ, work / 'int') and same_path(rows['topic-a'], main), rows
+            leftover = m.sync_file(plan, 'b')  # a sync record of an earlier, removed task branch
+            m.fstate.write_json(leftover, {'dep': 'a', 'ref': 'topic-a', 'sha': a, 'command': 'git merge topic-a',
+                                           'at': 't'})
+            assert pathlib.Path(leftover).is_file()
+            r, add, parent, launch = lead_b()
+            assert not pathlib.Path(leftover).exists(), leftover
+            assert m.sync_record(plan, 'b') is None
+            assert same_path(add[8], os.path.join(os.path.dirname(integ.rstrip('/\\')), 'topic-b')), (add, integ)
+            assert same_path(parent, integ), (parent, integ)
+            assert not same_path(parent, rows['topic-a']), (parent, rows)
+            # the stacked lead implements at once and runs no verify before status clears it
+            text = spec_of(r.stdout)
+            assert text is not None, r.stdout
+            assert ("Stacked on a: your worktree is a sibling cut from a@" + a[:10] + ", not a child of its worktree. "
+                    "Implement now, in parallel with a's verify; run no verify, review or QA dispatch before "
+                    "`<pipeline> status <plan>` clears it") in text, text
+            # an unstacked lead (a) has none of it
+            ra = cli('dispatch', str(pf), '--task', 'a', '--phase', 'lead', '--runner', 'print')
+            assert 'Implement now' not in ra.stdout and 'run no verify' not in ra.stdout, ra.stdout
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case == 'stack-dispatch-order':
+        # stacked siblings b and c on a: status and cleanup name the merge order, never a child of a's worktree
+        plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                              'paths': ['c.txt'], 'acceptance': ['reviewed'], 'deps': ['a']})
+        tb['paths'] = ['b.txt']; save()
+        order = ['topic-a', 'topic-b', 'topic-c']
+        note = ("stacked siblings b, c on a: sibling worktrees, not children of a's worktree; merge order "
+                "topic-a, then topic-b, then topic-c into topic (dependency first, git merge --no-ff); "
+                "git branch -d a branch only after its merge")
+        def gitw(path, *args):
+            r = subprocess.run(['git', '-C', str(path), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, (args, r.stderr)
+            return r.stdout.strip()
+        with no_orca():
+            for tid in ('b', 'c'):  # a is a candidate, topic-b and topic-c do not exist yet: both stack on a
+                cli('dispatch', str(pf), '--task', tid, '--phase', 'lead', '--runner', 'print')
+                rec = m.stack_record(plan, tid)
+                assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, (tid, rec)
+            heads = {}
+            for tid in ('b', 'c'):
+                wt = work / ('wt-' + tid)
+                git('worktree', 'add', '-b', 'topic-' + tid, str(wt), a)
+                (wt / (tid + '.txt')).write_text(tid)
+                gitw(wt, 'add', tid + '.txt'); gitw(wt, 'commit', '-qm', tid)
+                heads[tid] = gitw(wt, 'rev-parse', 'HEAD')
+            for tid in ('a', 'b', 'c'):
+                row = status_row(tid)
+                assert note in row['notes'], (tid, row)
+            groups = m.stack_groups(plan, reg)
+            assert len(groups) == 1, groups
+            g = groups[0]
+            assert g['repo'] == 'fixture' and g['dep'] == 'a' and g['dependents'] == ['b', 'c'], g
+            assert g['order'] == order and g['text'] == note, g
+            out = cli('cleanup', str(pf), rc=1).stdout
+            lines = out.splitlines()
+            assert any(x.startswith("  STACK fixture: stacked siblings b, c on a: ") for x in lines), out
+            assert '  STACK fixture: ' + note in lines, out
+            assert not any('child of a' in x for x in lines), out
+            assert m.cleanup(plan, reg)['stacked'][0]['order'] == order
+            # a sync record naming another dependency (c) than b's stack dependency (a) shows no sync note
+            m.fstate.write_json(m.sync_file(plan, 'b'), {'dep': 'c', 'ref': 'topic-c', 'sha': heads['c'],
+                                                         'command': 'git merge topic-c', 'at': 't'})
+            assert not any(n.startswith('sync:') for n in status_row('b')['notes']), status_row('b')
+            os.remove(m.sync_file(plan, 'b'))
+            # review a, b and c, then integrate in the merge order (dependency first), as the run lead does
+            verdict('a', 'review', a); verdict('b', 'review', heads['b']); verdict('c', 'review', heads['c'])
+            git('switch', 'topic')
+            for branch in order:
+                git('merge', '--no-ff', '-m', 'merge ' + branch, branch)
+            for tid in ('a', 'b', 'c'):
+                row = status_row(tid)
+                assert row['phase'] in ('integrated', 'qa'), (tid, row)
+                assert not any('stacked siblings' in n for n in row['notes']), (tid, row)
+            cl = m.cleanup(plan, reg)
+            assert len(cl['stacked']) == 1 and cl['stacked'][0]['order'] == order, cl['stacked']
+            merged = 'topic-a (merged), then topic-b (merged), then topic-c (merged)'
+            assert merged in cl['stacked'][0]['text'], cl['stacked']
+            assert any(' branch -d topic-a' in x for x in cl['commands']), cl['commands']
+            out = cli('cleanup', str(pf), rc=1).stdout
+            assert any(x.startswith('  STACK fixture: ') and merged in x for x in out.splitlines()), out
+            assert not any('child of a' in x for x in out.splitlines()), out
+            # worktrees removed and branches deleted after their merges: no stack group left
+            for tid in ('b', 'c'):
+                git('worktree', 'remove', str(work / ('wt-' + tid)))
+            git('branch', '-d', *order)
+            assert m.stack_groups(plan, reg) == [], m.stack_groups(plan, reg)
+            r = pipeline_cli('cleanup', str(pf))
+            assert not any(x.startswith('  STACK') for x in r.stdout.splitlines()), r.stdout
+        print(case + ' assertions passed')
+        sys.exit(0)
+    assert case == 'stack-base', case
+    # a is a candidate (no review): b is stackable on a's tip and its spec base is that tip
+    assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
+    assert m.start_base(plan, info, tb, reg) == a
+    row = status_row('b')
+    assert row['phase'] == 'pending' and any('stackable on a@' + a[:10] in n for n in row['notes']), row
+    assert row['next'] and '--phase lead' in row['next'], row
+    assert m.stack_record(plan, 'b') is None
+    # the stack record lives outside task_fingerprint: a verdict recorded on b before it stays current
+    verdict('b', 'review', a)
+    fingerprint = m.scope_fingerprint(plan, reg, 'b')
+    lead = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'print')
+    assert '"base": ' + json.dumps(a) in lead.stdout, lead.stdout
+    rec = m.stack_record(plan, 'b')
+    assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a and rec.get('at'), rec
+    assert len(rec['sha']) == 40 and all(ch in '0123456789abcdef' for ch in rec['sha']), rec
+    assert pathlib.Path(m.stack_file(plan, 'b')).is_file()
+    assert m.scope_fingerprint(plan, reg, 'b') == fingerprint
+    kept, stale = m.verdict_of(plan, reg, 'b', 'review')
+    assert kept and kept['sha'] == a and stale is False, (kept, stale)
+    pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()  # b's own review comes later, at its own commit
+    verdict('a', 'review', a)  # the stack gate: b's verify and QA dispatch wait for a's review PASS in b's HEAD
+    # a stand-in run-all (untracked, excluded) so verify prints the QA tier command with its --affected --base
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/x.test.sh\\n"; exit 0 ;; esac\n'
+                                              'exit 1\n', newline='\n')
+    (repo / '.git' / 'info').mkdir(exist_ok=True)
+    with open(repo / '.git' / 'info' / 'exclude', 'a') as f:
+        f.write('\ntests/\n')
+    git('switch', '--no-track', '-c', 'topic-b', a)
+    bh = commit('b')
+    assert m.own_start(plan, reg, info, tb, bh) == a
+    def verify_out(sha):
+        return cli('dispatch', str(pf), '--task', 'b', '--phase', 'verify', '--sha', sha, '--runner', 'print').stdout
+    out = verify_out(bh)
+    assert '--affected --base ' + a in out and 'git diff ' + a + '...' + bh in out, out
+    for other in (base, 'main ', 'topic '):
+        assert '--affected --base ' + other not in out, (other, out)
+    # per-task QA of the stacked task: the same own-delta base past the dependency
+    qa = cli('dispatch', str(pf), '--task', 'b', '--phase', 'qa', '--sha', bh, '--runner', 'print').stdout
+    assert '--affected --base ' + a in qa, qa
+    # a moves on: status of b names the stack and the dependency's new tip, with the merge as next command
+    git('switch', 'topic-a')
+    a2 = commit('a2', 'a-extra.txt')
+    git('switch', 'topic-b')
+    row = status_row('b')
+    assert row['phase'] == 'candidate', row
+    assert any('stacked on a@' + a[:10] in n for n in row['notes']), row
+    assert any('a now at ' + a2[:10] + ' not in HEAD' in n for n in row['notes']), row
+    assert row['next'] and 'merge' in row['next'] and 'topic-a' in row['next'], row
+    # after merging a's new tip into b, the moved note is gone and the verify base is that tip
+    git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+    merged = git('rev-parse', 'HEAD')
+    row = status_row('b')
+    assert not any('now at' in n for n in row['notes']), row
+    out = verify_out(merged)
+    assert '--affected --base ' + a2 in out and '--affected --base ' + a + ' ' not in out, out
+    print(case + ' assertions passed')
+    sys.exit(0)
 if case.startswith('subtask-'):
     m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
     m.pr.record(plan, 'a', None, 'implementer', {'agent': 'codex'})  # the task-level implement dispatch the explicit --implementer codex below matches
@@ -1223,17 +1894,67 @@ out = dispatch('qa', first)
 assert TASK_QA in out, out
 assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
 assert 'tier command already passes these cases' not in out, out
+# selection pre-flight (stderr only, advisory): verify and qa print `selected N of M suites` (N: the Affected cases
+# suites, M: the stand-in run-all's --list-suites) and warn when N > --suite-warn (default 40); stdout and the exit
+# code do not change. Without a selection they say why and never warn.
+def dispatch_p(phase, sha, *extra):
+    p = pipeline_cli('dispatch', str(pf), '--task', 'a', '--phase', phase, '--sha', sha, '--runner', 'print', *extra)
+    assert p.returncode == 0, (phase, extra, p.returncode, p.stdout, p.stderr)
+    return p
+SUITE_WARN = 'factory-pipeline: warning: '
+SELECTED_RE = re.compile(r'factory-pipeline: selected \d+ of \d+ suites')
+for phase in ('verify', 'qa'):
+    for extra in ((), ('--suite-warn', '1')):
+        missing = dispatch_p(phase, first, *extra)
+        assert 'factory-pipeline: selected suites: not computed (tests/affected.py missing)\n' in missing.stderr, (phase, extra, missing.stderr)
+        assert SUITE_WARN not in missing.stderr and not SELECTED_RE.search(missing.stderr), (phase, extra, missing.stderr)
+        assert 'not computed (tests/affected.py missing)' in missing.stdout and 'factory-pipeline: selected' not in missing.stdout, missing.stdout
+# --suite-warn below 1 or not an integer is a usage error (exit 2), for both phases, before any prompt
+for phase in ('verify', 'qa'):
+    for bad in ('0', '-1', 'x', ''):
+        p = pipeline_cli('dispatch', str(pf), '--task', 'a', '--phase', phase, '--sha', first, '--runner', 'print',
+                         '--suite-warn', bad)
+        assert p.returncode == 2 and '--suite-warn' in p.stderr and not p.stdout, (phase, bad, p.returncode, p.stdout, p.stderr)
+        assert not SELECTED_RE.search(p.stderr) and 'not computed' not in p.stderr, (phase, bad, p.stderr)
 affected = work / 'task' / 'tests' / 'affected.py'
-affected.write_text('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
-                    'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
-                    'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
-                    'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
+stand_in_affected = ('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
+                     'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
+                     'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
+                     'print("tests/routing.test.sh\\tselection")\n')
+affected.write_text(stand_in_affected, encoding='utf-8')
 case_out = dispatch('qa', first)
 assert ('Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh ALL\n'
         'tests/routing-properties.test.py ALL\ntests/routing.test.sh --case selection') in case_out, case_out
 assert 'tier command already passes these cases' in case_out, case_out
+# the three Affected cases suites of the three run-all lists: 3 of 3; no warning at the default (40) nor at
+# --suite-warn 3 (warns only above it), the warning line at --suite-warn 1 and 2; the prompt is the same every time
+SELECTED_3 = 'factory-pipeline: selected 3 of 3 suites (tests/affected.py)\n'
+for phase in ('verify', 'qa'):
+    quiet = dispatch_p(phase, first)
+    assert SELECTED_3 in quiet.stderr and SUITE_WARN not in quiet.stderr and 'not computed' not in quiet.stderr, (phase, quiet.stderr)
+    assert 'Affected cases (tests/affected.py cases):\n' in quiet.stdout and 'factory-pipeline: selected' not in quiet.stdout, (phase, quiet.stdout)
+    assert quiet.stderr.count(SELECTED_3) == 1, (phase, quiet.stderr)
+    at = dispatch_p(phase, first, '--suite-warn', '3')
+    assert SELECTED_3 in at.stderr and SUITE_WARN not in at.stderr, (phase, at.stderr)
+    for threshold in ('1', '2'):
+        loud = dispatch_p(phase, first, '--suite-warn', threshold)
+        want = (SELECTED_3 + SUITE_WARN + f'3 of 3 suites selected (threshold {threshold}): narrow the task paths or '
+                'its checks before QA\n')
+        assert want in loud.stderr and loud.stderr.count(SUITE_WARN) == 1, (phase, threshold, loud.stderr)
+        assert loud.stdout == quiet.stdout == at.stdout, (phase, threshold)
+        assert SUITE_WARN not in loud.stdout, (phase, loud.stdout)
+# N counts the selection, not the list: affected.py naming no suite leaves the two explicit task suites, 2 of 3
+affected.write_text('import sys\nassert sys.argv[1] == "cases"\n', encoding='utf-8')
+for phase in ('verify', 'qa'):
+    two = dispatch_p(phase, first, '--suite-warn', '2')
+    assert 'factory-pipeline: selected 2 of 3 suites (tests/affected.py)\n' in two.stderr and SUITE_WARN not in two.stderr, (phase, two.stderr)
+    two = dispatch_p(phase, first, '--suite-warn', '1')
+    assert SUITE_WARN + '2 of 3 suites selected (threshold 1)' in two.stderr, (phase, two.stderr)
+affected.write_text(stand_in_affected, encoding='utf-8')
 bad_out = dispatch('qa', 'bad-sha')
 assert 'Affected cases: not computed (git diff failed)' in bad_out and 'tier command already passes these cases' not in bad_out, bad_out
+bad_p = dispatch_p('qa', 'bad-sha', '--suite-warn', '1')
+assert 'factory-pipeline: selected suites: not computed (git diff failed)\n' in bad_p.stderr and SUITE_WARN not in bad_p.stderr, bad_p.stderr
 affected.unlink()
 command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
@@ -3414,6 +4135,7 @@ expect "the first Unity task is ready, the second waits for its QA" 0 "note: wai
 expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
 git -C "$S" worktree add -q "$TMP/st-a" -b feat/core/st-a develop 2>/dev/null
 st_phase "task branch and worktree without commits: implementing" a implementing '^$'
+expect "a dependency without commits (implementing) is not stackable: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
 expect "implementing names the worker's worktree" 0 "implementation worker on feat/core/st-a in .*st-a" status "$ST"
 mkdir -p "$TMP/st-a/sa"; echo a > "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" add sa; gi "$TMP/st-a" commit -qm "feat: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase verify --sha $SA --runner orca"
@@ -3430,7 +4152,9 @@ st_note "stale review with a lead report at HEAD: READY_FOR_PR: no names the sta
 rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
-expect "no integration branch yet: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
+# a reviewed (PASS), not integrated: its one in-flight dependency makes b stackable on a's tip, recorded by SHA
+expect "a reviewed dependency: the later-wave task lead stacks on its tip" 0 "worktree add --no-track -b feat/core/st-b .* $SA" dispatch "$ST" --task b --phase lead --runner orca
+expect "the stacked dispatch names the dependency and its SHA" 0 "task b stacks on a@${SA:0:10}" dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
@@ -4144,6 +4868,207 @@ bg_report "tier XS: dispatch lead prints the run lead's steps, no implement sess
 bg_report "tier XS: gate READY_FOR_PR with review PASS and lead QA; an oversize, non-prose, contract or generated diff blocks" tier-xs-gate
 bg_report "tier XS: status shows the run lead's review dispatch and QA record, then the gate, as the gate sees it" tier-xs-status
 case_end tier-xs
+fi
+
+if has_case runall-preflight; then
+case_start
+echo "-- run-all: --affected needs a python3 that runs; per-suite timings"
+rp_ok() { pass=$((pass + 1)); echo "PASS  $1"; }
+rp_no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -z "${2:-}" ] || sed 's/^/      /' <<<"$2" | head -30; }
+# A python3 that cannot run, first on PATH: the Microsoft Store stub Git Bash finds on Windows prints this hint and
+# exits 9009; a silent one only has its exit status. --affected exits 2 with the reason before any suite, lock or slot
+# (its own state dir stays empty); --no-wait keeps a regression from queueing behind another session's run.
+RP="$TMP/runall-preflight"; mkdir -p "$RP/stub" "$RP/silent" "$RP/state"
+printf '#!/bin/sh\necho "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases."\nexit 9009\n' > "$RP/stub/python3"
+printf '#!/bin/sh\nexit 1\n' > "$RP/silent/python3"
+chmod +x "$RP/stub/python3" "$RP/silent/python3"
+for kind in stub silent; do
+  rp_out=$(cd "$ROOT" && PATH="$(path_entry "$RP/$kind"):$PATH" RPG_FACTORY_STATE_DIR="$RP/state" \
+    bash tests/run-all.sh --affected --base HEAD --no-wait 2>"$RP/$kind.err"); rp_rc=$?
+  rp_err=$(cat "$RP/$kind.err")
+  if [ "$kind" = stub ]; then rp_why='Python was not found; run without arguments to install from the Microsoft Store'
+  else rp_why='exit status 1'; fi
+  if [ "$rp_rc" = 2 ] && [[ $rp_err == *"run-all: --affected needs python3 to select suites, and python3 cannot run: $rp_why"* ]] \
+      && ! grep -qE '^(PASS|FAIL|SKIP)  |^affected mode:|^run-all: [0-9]+ checks' <<<"$rp_out"$'\n'"$rp_err" \
+      && [ -z "$(ls -A "$RP/state")" ]; then
+    rp_ok "run-all --affected with a $kind python3 exits 2 naming the reason ($rp_why), runs no suite and takes no lock or slot"
+  else rp_no "run-all --affected with a $kind python3: rc=$rp_rc (want 2), state: $(ls -A "$RP/state" | head -c 100)" "$rp_out"$'\n'"$rp_err"; fi
+done
+# without --affected run-all never probes: the stub may break what it runs, but never as the --affected exit 2
+rp_out=$(cd "$ROOT" && PATH="$(path_entry "$RP/stub"):$PATH" RPG_FACTORY_STATE_DIR="$RP/state" bash tests/run-all.sh --list-suites 2>&1); rp_rc=$?
+if [ "$rp_rc" != 2 ] && [[ $rp_out != *"needs python3"* ]]; then rp_ok "run-all --list-suites with the stub python3 does not probe (rc=$rp_rc, not the probe's 2)"
+else rp_no "run-all --list-suites with the stub python3 probed: rc=$rp_rc" "$rp_out"; fi
+
+# Timings: run-all sourced (no checks of its own, like tests/run-all-parallel.test.sh) on stand-in suites - one passing
+# (a case subset), one failing (exit ZZ_FAIL_RC), one graded by a runp handler, and a syntax line that is not timed -
+# at -j 1 and -j 2, then runall_finish, which writes <STATE>/run-all/timings.json. No assertion reads a wall time:
+# seconds are only checked to be integers >= 0, and the [Ns] of the result lines is removed before comparing.
+RT="$RP/timings"; mkdir -p "$RT/fix/tests"
+printf '#!/usr/bin/env bash\necho pass-out\n' > "$RT/fix/tests/zz-pass.sh"
+printf '#!/usr/bin/env bash\necho fail-out\nexit "${ZZ_FAIL_RC:-3}"\n' > "$RT/fix/tests/zz-fail.sh"
+printf '#!/usr/bin/env bash\necho post-out\n' > "$RT/fix/tests/zz-post.sh"
+printf '#!/usr/bin/env bash\necho ran >> "$ZZ_LOG"\n' > "$RT/fix/tests/zz-reuse.sh"
+cat > "$RT/plan.sh" <<'PLAN'
+fixture=$1; state=$2; shift 2
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+STATE=$state; HEAD_SHA=fixture-head; full_run=false
+CASE_SUITES=(tests/zz-pass.sh); CASE_LISTS=(alpha)
+zz_post() { if [ "$1" -eq 0 ] && grep -q post-out <<<"$2"; then _ok "graded by zz_post"; else _bad "graded by zz_post" "$2"; fi; }
+if [ -n "${ZZ_REUSE_HASH:-}" ]; then   # a recorded suite PASS: reused, so never run and never timed
+  HASH_SUITES=(tests/zz-reuse.sh); HASHES=("$ZZ_REUSE_HASH")
+  suite_cache_file tests/zz-reuse.sh && mkdir -p "${cache_file%/*}" && echo PASS > "$cache_file"
+  run reused bash tests/zz-reuse.sh
+fi
+run pass bash tests/zz-pass.sh
+run fails bash tests/zz-fail.sh
+runp graded zz_post bash tests/zz-post.sh
+run "bash -n: tests/zz-fail.sh" bash -n tests/zz-fail.sh
+drain
+runall_finish
+echo "counts $pass $fail $skip"
+[ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
+PLAN
+# check.py <timings.json> <want JSON>: want maps each suite to [rc, cases] (a line this run wrote) or to the exact
+# object (a line it must keep); exactly those suites, one valid JSON line each, sorted, LF only
+cat > "$RT/check.py" <<'PY'
+import json, sys
+path, want = sys.argv[1], json.loads(sys.argv[2])
+with open(path, encoding='utf-8', newline='') as f:
+    text = f.read()
+assert text.endswith('\n') and '\r' not in text, repr(text[-120:])
+rows = [json.loads(line) for line in text.split('\n')[:-1]]
+assert [r['suite'] for r in rows] == sorted(want), ([r['suite'] for r in rows], sorted(want))
+for r in rows:
+    w = want[r['suite']]
+    if isinstance(w, dict):
+        assert r == w, (r, w)
+        continue
+    assert set(r) == {'suite', 'seconds', 'rc', 'cases', 'head', 'date'}, r
+    assert type(r['seconds']) is int and r['seconds'] >= 0, r
+    assert r['rc'] == w[0] and r['cases'] == w[1] and r['head'] == 'fixture-head', (r, w)
+    assert isinstance(r['date'], str) and r['date'], r
+PY
+# rp_plan <state> <jobs> [VAR=value...]: RP_OUT (the [Ns] times removed) and RP_RC of the stand-in plan
+rp_plan() {
+  local st="$1" j="$2"; shift 2
+  RP_OUT=$(env "$@" ROOT_UNDER_TEST="$ROOT" ZZ_LOG="$RT/ran" bash "$RT/plan.sh" "$RT/fix" "$st" -j "$j" 2>&1); RP_RC=$?
+  RP_OUT=$(sed -E 's/ \[[0-9]+s\]$//' <<<"$RP_OUT")
+}
+rp_check() { # <name> <timings.json> <want JSON>
+  local o; if o=$(python3 -B "$RT/check.py" "$2" "$3" 2>&1); then rp_ok "$1"; else rp_no "$1" "$o$(printf '\n'; cat "$2" 2>/dev/null)"; fi
+}
+rp_want="PASS  pass (cases alpha)
+FAIL  fails
+      fail-out
+PASS  graded by zz_post
+PASS  bash -n: tests/zz-fail.sh
+counts 3 1 0"
+OTHER='{"suite": "tests/other.sh", "seconds": 7, "rc": 0, "cases": null, "head": "old", "date": "2026-01-01T00:00:00Z"}'
+S1="$RT/state"; mkdir -p "$S1/run-all"
+printf '%s\nnot json\n' "$OTHER" > "$S1/run-all/timings.json"
+rp_plan "$S1" 1
+if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ]; then rp_ok "timings -j 1: result lines, counts (3 1 0) and exit status 1 as without timings"
+else rp_no "timings -j 1: rc=$RP_RC" "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+rp_check "timings -j 1: one JSON line per suite that ran (seconds >= 0, rc, cases), the other suite's line kept, a malformed line dropped" \
+  "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [3, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+[ "$(ls -A "$S1/run-all")" = timings.json ] && rp_ok "timings: the state dir's run-all/ holds only timings.json (no temp file, no suite record)" \
+  || rp_no "timings: run-all/ holds $(ls -A "$S1/run-all" | tr '\n' ' ')"
+# a second run (-j 2) replaces the lines of the suites it ran (zz-fail now exits 4) and adds none
+rp_plan "$S1" 2 ZZ_FAIL_RC=4
+if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ]; then rp_ok "timings -j 2: the same lines, counts and exit status as -j 1"
+else rp_no "timings -j 2: rc=$RP_RC" "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+rp_check "timings -j 2: a suite run again replaces its line (rc 3 -> 4) instead of adding one; the other suite's line stays" \
+  "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [4, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+# an unwritable state dir (its parent is a file) and no state dir at all: the same lines, counts and exit status
+echo blocker > "$RT/blocker"
+for j in 1 2; do
+  for st in "$RT/blocker/state" ""; do
+    rp_plan "$st" "$j"
+    if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ]; then rp_ok "timings -j $j, state '${st:+unwritable}': result lines, counts and exit status unchanged, no timings error shown"
+    else rp_no "timings -j $j, state '$st': rc=$RP_RC" "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+  done
+done
+[ "$(cat "$RT/blocker")" = blocker ] && rp_ok "timings: an unwritable state dir is left as it was" || rp_no "timings: the blocker file changed"
+# suite reuse is unchanged: a recorded PASS is reused (the suite does not run) and gets no timings line
+rp_hash=$(printf '%064d' 0 | tr 0 a)
+rm -f "$RT/ran"; rp_plan "$S1" 2 ZZ_REUSE_HASH="$rp_hash"
+if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "PASS  reused (reused tests/zz-reuse.sh inputs $rp_hash)"$'\n'"${rp_want%counts*}counts 4 1 0" ] && [ ! -e "$RT/ran" ]; then
+  rp_ok "timings: a reused suite still passes from its record without running"
+else rp_no "timings reuse: rc=$RP_RC, ran: $(cat "$RT/ran" 2>/dev/null)" "$RP_OUT"; fi
+rp_check "timings: a reused suite gets no line; the suites that ran replace theirs" \
+  "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [3, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+[ ! -e "$S1/locks/run-all-timings" ] && rp_ok "timings: the lock dir locks/run-all-timings is gone after every write" \
+  || rp_no "timings: the lock dir is left behind: $(ls -A "$S1/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+
+# Concurrent writers serialize on <STATE>/locks/run-all-timings. writer.sh <state> <suite secs rc cases>...: one
+# timings_write of run-all sourced. The test-only barrier RUNALL_TIMINGS_BARRIER orders it without timing: writer A
+# holds the lock after its read (read.<pid>) until go exists; writer B starts then and must find the lock held
+# (waiting.<pid>). Without the lock B would write first and A's stale snapshot would drop B's row. Waits are bounded
+# polls on file existence (600 x 0.1 s), never an assertion on elapsed time.
+cat > "$RT/writer.sh" <<'W'
+state=$1; shift; rows=("$@"); set --
+. "$ROOT_UNDER_TEST/tests/run-all.sh"
+STATE=$state; HEAD_SHA=fixture-head; TIMINGS=("${rows[@]}")
+timings_write
+W
+rp_write() { ROOT_UNDER_TEST="$ROOT" bash "$RT/writer.sh" "$@"; }
+rp_waitfor() { # <path glob>: 0 once a file matches it, 1 after the bounded poll
+  local i; for ((i = 0; i < 600; i++)); do compgen -G "$1" > /dev/null && return 0; sleep 0.1; done; return 1
+}
+S2="$RT/state2"; RB="$RT/barrier"; mkdir -p "$S2" "$RB"
+RUNALL_TIMINGS_BARRIER="$RB" rp_write "$S2" tests/zz-a.sh 5 0 "" & rp_a=$!
+rp_b=""; rp_seen="A never read"
+if rp_waitfor "$RB/read.*"; then
+  RUNALL_TIMINGS_BARRIER="$RB" rp_write "$S2" tests/zz-b.sh 6 1 beta & rp_b=$!
+  if rp_waitfor "$RB/waiting.*"; then rp_seen=""; else rp_seen="B never found the lock held"; fi
+fi
+rp_reads=$(compgen -G "$RB/read.*" | wc -l | tr -d ' ')
+touch "$RB/go"; wait "$rp_a"; [ -z "$rp_b" ] || wait "$rp_b"
+if [ -z "$rp_seen" ] && [ "$rp_reads" = 1 ]; then rp_ok "timings lock: writer B waited while writer A held the lock after its read"
+else rp_no "timings lock barrier: ${rp_seen:-$rp_reads writers read before go (want 1)}" "$(ls -A "$RB" | tr '\n' ' ')"; fi
+rp_check "timings lock: two concurrent writers keep both runs' rows (A's snapshot does not drop B's line)" \
+  "$S2/run-all/timings.json" '{"tests/zz-a.sh": [0, null], "tests/zz-b.sh": [1, "beta"]}'
+[ ! -e "$S2/locks/run-all-timings" ] && rp_ok "timings lock: released after both writes" \
+  || rp_no "timings lock: left behind after both writes: $(ls -A "$S2/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+# a stale lock is taken over once and the write lands: one held by a dead pid (a python3 that has exited), one older
+# than 60 s with no pid file
+S3="$RT/state3"; mkdir -p "$S3/locks/run-all-timings"
+python3 -B -c 'import os; print(os.getpid())' | tr -d '\r' > "$S3/locks/run-all-timings/pid"
+rp_write "$S3" tests/zz-a.sh 2 0 ""
+rp_check "timings lock: a lock dir whose pid is dead is taken over and the write lands" \
+  "$S3/run-all/timings.json" '{"tests/zz-a.sh": [0, null]}'
+[ ! -e "$S3/locks/run-all-timings" ] && rp_ok "timings lock: the taken-over lock is released after the write" \
+  || rp_no "timings lock: the taken-over lock is left: $(ls -A "$S3/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+mkdir -p "$S3/locks/run-all-timings"
+python3 -B -c 'import os, sys, time; t = time.time() - 120; os.utime(sys.argv[1], (t, t))' "$S3/locks/run-all-timings"
+rp_write "$S3" tests/zz-b.sh 3 0 ""
+rp_check "timings lock: a lock dir older than 60 s without a pid is taken over and the write lands" \
+  "$S3/run-all/timings.json" '{"tests/zz-a.sh": [0, null], "tests/zz-b.sh": [0, null]}'
+[ ! -e "$S3/locks/run-all-timings" ] && rp_ok "timings lock: the aged lock is released after the write" \
+  || rp_no "timings lock: the aged lock is left: $(ls -A "$S3/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+# a lock held by a live process: the run waits the bounded 10 s, skips the write and keeps its lines, counts and exit
+# status; the holder's lock and the timings file are left as they were. The holder is a python3 that writes its pid and
+# exits once <stop> exists (bounded), so no process is killed.
+S4="$RT/state4"; mkdir -p "$S4/locks"
+python3 -B -c 'import os, sys, time
+os.mkdir(sys.argv[1])
+with open(os.path.join(sys.argv[1], "pid"), "w") as f: f.write(f"{os.getpid()}\n")
+open(sys.argv[2], "w").close()
+for _ in range(1800):
+    if os.path.exists(sys.argv[3]): break
+    time.sleep(0.1)' "$S4/locks/run-all-timings" "$RT/holder.up" "$RT/holder.stop" & rp_h=$!
+if rp_waitfor "$RT/holder.up"; then
+  rp_held=$(cat "$S4/locks/run-all-timings/pid")
+  rp_plan "$S4" 1
+  if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ] && [ ! -e "$S4/run-all/timings.json" ] \
+      && [ "$(cat "$S4/locks/run-all-timings/pid" 2>/dev/null)" = "$rp_held" ]; then
+    rp_ok "timings lock: a lock held by a live process skips the write after the bounded wait; lines, counts and exit status unchanged, the holder's lock kept"
+  else rp_no "timings lock held: rc=$RP_RC, timings: $(ls -A "$S4/run-all" 2>&1 | tr '\n' ' '), pid: $(cat "$S4/locks/run-all-timings/pid" 2>&1)" \
+    "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+else rp_no "timings lock held: the holder never started"; fi
+touch "$RT/holder.stop"; wait "$rp_h"
+case_end runall-preflight
 fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"

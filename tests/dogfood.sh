@@ -164,6 +164,9 @@ EXPECT[ui-not-ui]="factory-core server-services"; HANDOFF[ui-not-ui]=""; NOTEXPE
 # asset generation: routes to asset-gen, loads comfyui for the ComfyUI side; plan only (no generation, no credits)
 PROMPT[asset-gen]="Plan only, do not generate or edit anything: how would you generate a transparent iron sword item icon in a pixel-art style for the game with ComfyUI, get it reviewed and hand it to 2D art?"
 EXPECT[asset-gen]="factory-core asset-gen comfyui"; HANDOFF[asset-gen]="art-2d"; SHOWS[asset-gen]="review-cmd|SAME_MODEL|assetgen-approval"
+# machine setup for asset-gen: routes to asset-gen, loads comfy-desktop-setup; plan only (changes nothing)
+PROMPT[comfy-setup]="Plan only, do not run or edit anything: this is a new Windows machine with Comfy Desktop installed and Claude and Codex set up. I want asset-gen to generate images through ComfyUI and the 9router image node. Which steps do you take, which of them can only I do, and what could go wrong?"
+EXPECT[comfy-setup]="factory-core asset-gen comfy-desktop-setup"; HANDOFF[comfy-setup]=""; SHOWS[comfy-setup]="New Instance"
 
 # WRITE scenarios use an isolated game-authoring repository per session. The helper creates
 # registry-routed folders, commits the empty layout, and grades disk state plus transcript.
@@ -238,7 +241,7 @@ if $write_mode; then
   scenarios=()
 fi
 
-[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui asset-gen)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui asset-gen comfy-setup)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")

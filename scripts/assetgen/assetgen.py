@@ -5,13 +5,16 @@ Usage:
   assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
   assetgen.py show ID [--kind K] [--authoring DIR] [--json]
   assetgen.py resolve --purpose P [--style S] [--template T] [--family F] [--style-override REASON] [--authoring DIR]
-                      [--out FILE] [--verbose] [--json]
+                      [--max-outputs N] [--out FILE] [--verbose] [--json]
   assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
+  assetgen.py graph-lint [PATH...] [--run RUN] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
+  assetgen.py finalize --run RUN [--force] [--authoring DIR] [--json]
+  assetgen.py budget --run RUN [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
   assetgen.py promote-anchor --run RUN --output N|PATH --family F --dimensions a,b --strength S [--id ID]
@@ -27,6 +30,18 @@ directory (resolve_run); when neither exists the error names the tried paths (ex
 resolve prints a short summary (purpose, style and template, params, hints, style lock, references, rejections,
 warnings: a selected anchor of another family than the run's, or the anchors anchor_family_fallback: false left out,
 also recorded as spec.warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
+
+Workflow style guide (scripts/assetgen/graphstyle.py): every API node has a title and sits in exactly one group;
+group titles come from Prompt, References, Generate, Post-process, Preview, Output, left to right in that order, each
+with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt (in a
+template that node holds {{prompt}}); exactly one NineRouterImage; every SaveImage sits in Output with an inline
+filename suffix (intermediates use PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row
+per template (a legacy template without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer
+or standalone) or a ComfyUI frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json);
+--run RUN adds <run>/workflow.ui.json with SaveImage suffixes checked against assetgen/<run directory name> (a frontend
+PATH uses its extra.assetgen.run_id; without one each SaveImage FAILs as unchecked); neither: every core and game
+template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
+2 for usage (a PATH missing, not JSON or neither kind, a --run without workflow.ui.json).
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
@@ -63,7 +78,12 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       render --run refuses a spec.json whose filename_prefix is not assetgen/<run-id> and a
                       --param filename_prefix
   workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
-                      (uiworkflow.py); written next to workflow.json (render --out X.json: X.ui.json)
+                      (uiworkflow.py); optional template ui supplies groups, ui_only Note nodes, node colors and row
+                      hints, never included in workflow.json; written next to workflow.json (render --out X.json: X.ui.json).
+                      With a grouped template ui, the style-lock nodes render adds (LoadImage "Anchor <id> (<strength>)",
+                      ImageBatch "Reference batch N") join the References group, or a new References group with one
+                      Note placed after Prompt (graphstyle.STAGES order) when the template has none
+                      (ui_with_references); a template without a ui block or without groups lays them out as before
   outputs/*.png       comfy-mcp fetch_outputs out_dir; for a purpose with alpha defringe rewrites them (below); embed
                       then adds a `workflow` tEXt chunk (workflow.ui.json, compact JSON) before IEND of each PNG (prompt
                       chunk kept; a PNG whose chunk is the current workflow.ui.json is kept byte for byte, a stale
@@ -129,13 +149,32 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       only on the person's explicit word; the person commits run.md and the record in one SSH-signed
                       commit whose signer principal is NAME (until then: present but not committed/signed)
 
+finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. It runs defringe (only for a purpose with qa.alpha
+required), embed and qa in that fixed order, so embed can never be skipped before qa, and stops at the first FAIL naming
+the step. Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. It refuses (exit 1, nothing written) a run without
+spec.json, outputs/*.png or a readable workflow.ui.json, and an approved run (rewriting approved bytes would fail
+gen-run-outputs). A second finalize on an unchanged run is idempotent: defringe is skipped while defringe.json's
+after_pixels_sha256 still equals every output that needs it (or no output needs it), embed keeps every output, qa is
+rewritten. Outputs that qa.json or an image review already bind and that still need defringe stop it with FAIL at
+defringe (defringe's own refusal) unless --force; --force is passed to defringe only. It prints which image reviews
+(review-image.json, review-image-claude.json) it made stale ("stale now (re-run them): ..."; qa.json is rewritten, so
+never listed). --json: one object, schema rpg-factory.assetgen-finalize/1 (steps, stale, state, exit, budget).
+
+Spend guard (scripts/assetgen/budget.py): resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default
+4; not a whole number >= 1: exit 2). budget --run prints used (the run's outputs/*.png + the failed attempts of its
+series), allowed and remaining; it exits 1 only when used exceeds allowed or spec.budget is malformed. A spec.json
+without budget (resolved before the spend guard) is unlimited, never a failure. The limit is advisory: the engine cannot
+stop comfy-mcp, so the asset-gen skill runs budget before each run_workflow. finalize prints the budget line before its
+summary line (--json: key "budget") and keeps its own exit code.
+
 Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
 Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
-these). The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json, references/anchor-*.png),
-defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json), manifest (run.md) and
+these), graph-lint and budget. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
+references/anchor-*.png), defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json),
+finalize (all of those), manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
 the given run dir, approve-record (run.md and <authoring>/approvals/AGEN-<run-id>/), promote-anchor
 (assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and reject
@@ -145,12 +184,15 @@ a tile or composite: it uses each only when it holds the current pixels, else ex
 API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
 sidebar under assetgen; it writes nothing locally (unreachable ComfyUI: NOT_AVAILABLE, exit 3). This script never
 runs agents or ComfyUI. Model ids, sizes and other values live in template params data, not here.
-Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa, publish). Options are never abbreviated (--ou
+Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa, finalize, publish). Options are never abbreviated (--ou
 is not --out): allow_abbrev=False on every parser.
 """
 import argparse
+import contextlib
+import copy
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -164,6 +206,9 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import approval  # noqa: E402
+import budget  # noqa: E402
+import finalize  # noqa: E402
+import graphstyle  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
 import lint  # noqa: E402
@@ -386,6 +431,35 @@ def wire_references(workflow, picks):
                     "_meta": {"title": "Reference batch %d" % i}})
     inputs["reference_images"] = link
     return []
+
+
+REFERENCES = "References"
+REFERENCES_NOTE = ("Style-lock anchors added by render: references/anchor-<id>.png, batched into the image node "
+                   "reference_images.")
+
+
+def ui_with_references(ui, workflow, template_workflow):
+    """The template ui block for to_ui with the nodes render added to the template workflow (wire_references: style-lock
+    anchors and their ImageBatch chain) in the References group: the existing group of that title, else a new one
+    (palette color cyan, one Note) inserted at its graphstyle.STAGES position. A copy; spec and template data are never
+    changed. A ui that is not a dict with a non-empty groups list (legacy: no ui block, no groups) comes back as is."""
+    if not isinstance(ui, dict) or not isinstance(ui.get("groups"), list) or not ui["groups"]:
+        return ui
+    added = sorted((nid for nid in workflow if nid not in (template_workflow or {})), key=lambda n: (len(n), n))
+    if not added:
+        return ui
+    ui = copy.deepcopy(ui)
+    groups = ui["groups"]
+    for group in groups:
+        if isinstance(group, dict) and group.get("title") == REFERENCES:
+            group["nodes"] = list(group.get("nodes") or []) + added
+            return ui
+    rank = graphstyle.STAGES.index(REFERENCES)
+    at = next((i for i, g in enumerate(groups) if isinstance(g, dict) and g.get("title") in graphstyle.STAGES
+               and graphstyle.STAGES.index(g["title"]) > rank), len(groups))
+    groups.insert(at, {"title": REFERENCES, "color": "cyan", "nodes": added})
+    ui["notes"] = list(ui.get("notes") or []) + [{"text": REFERENCES_NOTE, "group": REFERENCES}]
+    return ui
 
 
 def copy_anchors(run_dir, spec):
@@ -983,6 +1057,28 @@ def defringe_line(run_dir, outputs):
         "; STALE, the outputs changed since: " + ", ".join(stale) if stale else "")
 
 
+# -- qa --------------------------------------------------------------------------------------------------------
+
+def qa_run(run_dir):
+    """(report, text, code) of the qa verb: grades every output of the run, writes qa.json (rpg-factory.validation/1),
+    text is the verb's human output, code 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. qa and finalize both call it."""
+    spec = load_spec(os.path.join(run_dir, "spec.json"))
+    size = requested_size(run_dir, spec)
+    results, outputs = qa.run_qa(run_dir, spec, size)
+    purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
+    state = qa.overall(results)
+    counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")}
+    report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(run_dir)),
+              "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size,
+              "style_binding": runfiles.qa_style_binding(spec, lambda rel: os.path.join(run_dir, *rel.split("/"))),
+              "state": state, "results": results, "outputs": outputs, "summary": counts}
+    write_json(os.path.join(run_dir, "qa.json"), report)
+    text = ("\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
+            + "\nassetgen qa: %s (%d PASS, %s%d FAIL, %d NOT_AVAILABLE)" % (
+                state, counts["PASS"], "%d WARN, " % counts["WARN"] if counts["WARN"] else "", counts["FAIL"], counts["NOT_AVAILABLE"]))
+    return report, text, {"PASS": 0, "FAIL": 1}.get(state, 3)
+
+
 # -- publish ---------------------------------------------------------------------------------------------------
 
 def publish(run_dir, comfy_url, timeout=15):
@@ -1036,6 +1132,36 @@ def failed_attempts(run_dir):
         if RUN_ID.match(other) and o_slug == slug and int(o_num) < int(num)                 and os.path.isdir(os.path.join(parent, other)) and not os.path.isfile(os.path.join(parent, other, "run.md")):
             out.append(other)
     return out
+
+
+def run_budget(run_dir, spec):
+    """budget.state of a run: its outputs plus the failed attempts of its series (none for a dir not <slug>-NNN)."""
+    name = os.path.basename(os.path.normpath(run_dir))
+    return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
+
+
+def finalize_with_budget(run_dir, force, as_json):
+    """finalize.run plus the budget state (text: a line before the summary line; --json: key "budget"). The exit code
+    stays finalize's; a refusal (SystemExit from its precheck) prints what it printed and is re-raised unchanged."""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = finalize.run(sys.modules[__name__], run_dir, force, as_json)
+    except BaseException:
+        sys.stdout.write(buf.getvalue())
+        sys.stdout.flush()
+        raise
+    out = buf.getvalue()
+    st = run_budget(run_dir, load_spec(os.path.join(run_dir, "spec.json")))
+    if as_json:
+        obj = json.loads(out)
+        obj["budget"] = st
+        print(json.dumps(obj, indent=1, sort_keys=True))
+    else:
+        lines = out.rstrip("\n").split("\n")
+        lines.insert(len(lines) - 1, budget.line(st))
+        print("\n".join(lines))
+    return code
 
 
 def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude"):
@@ -1381,8 +1507,71 @@ def resolve_text(spec, verbose):
         warnings.append("filename_prefix %s is not bound to a run: resolve --out <authoring>/assetgen/runs/<run-id>/spec.json"
                         % spec["params"]["filename_prefix"])
     lines += ["warning: " + w for w in warnings]
+    if isinstance(spec.get("budget"), dict) and "max_outputs" in spec["budget"]:
+        lines.append("budget: at most %s outputs per run series (advisory; assetgen.py budget --run)"
+                     % spec["budget"]["max_outputs"])
     lines.append("(sources of every param, hint and field: --verbose or --json)")
     return "\n".join(lines)
+
+
+def validation_report(results, tool, verb, as_json):
+    """Print rpg-factory.validation/1 rows (lint, graph-lint) and return the exit code: 1 when a row FAILs, else 0."""
+    counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL")}
+    emit({"schema": "rpg-factory.validation/1", "tool": tool, "results": results, "summary": counts}, as_json,
+         "\n".join("%s %s%s" % (r["state"], r["path"], (": " + "; ".join(r["reasons"])) if r["reasons"] else "") for r in results)
+         + "\nassetgen %s: %d PASS, %d WARN, %d FAIL" % (verb, counts["PASS"], counts["WARN"], counts["FAIL"]))
+    return 1 if counts["FAIL"] else 0
+
+
+def read_graph_json(path, what):
+    """Parsed JSON of a graph-lint input; exits 2 (usage) when it is missing or not readable JSON."""
+    if not os.path.isfile(path):
+        fail("graph-lint: %s %s is not a file" % (what, path), 2)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as exc:
+        fail("graph-lint: %s %s is not readable JSON (%s)" % (what, path, exc), 2)
+
+
+def graph_lint_rows(paths, run, authoring):
+    """assetgen-graph-style rows of graph-lint: each PATH (a template file or a ComfyUI frontend workflow), the run's
+    workflow.ui.json, or with neither every core and game template. Exits 2 for a PATH that is missing, not JSON or
+    neither kind, and for a --run without workflow.ui.json. The --run row checks SaveImage suffixes against the run's
+    own prefix (runfiles.run_filename_prefix of the run directory name), not the file's extra.assetgen.run_id."""
+    known, rows = lint.known_nodes(), []
+
+    def template(path):
+        data, err = lint.template_data(path, authoring)
+        shown = lint.display(path, authoring)
+        if err is not None:  # a layer template that does not load: no graph to lint
+            return {"path": shown, "check": graphstyle.CHECK, "state": "FAIL", "reasons": ["layout: " + err]}
+        return graphstyle.template_row(data, known, shown) if isinstance(data, dict) else None
+
+    def frontend(path, raw, prefix=None):
+        if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
+            return graphstyle.ui_row(raw, known, lint.display(path, authoring), prefix)
+        return None
+
+    for path in paths:
+        raw = read_graph_json(path, "PATH")
+        row = template(path) or frontend(path, raw)
+        if row is None:
+            fail("graph-lint: %s is neither a workflow template nor a ComfyUI frontend workflow (a JSON object with a "
+                 "\"nodes\" list)" % path, 2)
+        rows.append(row)
+    if run:
+        path = os.path.join(run, "workflow.ui.json")
+        prefix = runfiles.run_filename_prefix(os.path.basename(os.path.normpath(run)))
+        row = frontend(path, read_graph_json(path, "--run workflow.ui.json"), prefix)
+        if row is None:
+            fail("graph-lint: %s is not a ComfyUI frontend workflow (a JSON object with a \"nodes\" list)" % path, 2)
+        rows.append(row)
+    if not paths and not run:
+        files = layers.layer_files("template", authoring)
+        rows += [row for row in (template(p) for p in list(files["core"].values()) + list(files["game"].values()))
+                 if row is not None]
+    return rows
 
 
 def main(argv=None):
@@ -1396,6 +1585,8 @@ def main(argv=None):
     c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
     c.add_argument("--family"); c.add_argument("--style-override", metavar="REASON")
     c.add_argument("--authoring"); c.add_argument("--out")
+    c.add_argument("--max-outputs", metavar="N", help="advisory limit of generations per run series, recorded as "
+                   "spec.budget.max_outputs (default %d)" % budget.DEFAULT_MAX_OUTPUTS)
     c.add_argument("--verbose", action="store_true", help="also print the source of every param, hint and field")
     c.add_argument("--json", action="store_true")
     run_help = ("run directory, or run id <slug>-NNN resolved under <authoring>/assetgen/runs/ (--authoring, else the "
@@ -1408,6 +1599,7 @@ def main(argv=None):
     c = sp("render"); run_arg(c, False); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
     c.add_argument("--param", action="append", default=[])
     c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sp("graph-lint"); c.add_argument("paths", nargs="*"); run_arg(c, False); c.add_argument("--json", action="store_true")
     c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); run_arg(c)
     c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
     c = sp("embed"); run_arg(c); c.add_argument("--json", action="store_true")
@@ -1421,6 +1613,11 @@ def main(argv=None):
     c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("budget"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("finalize"); run_arg(c)
+    c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
+                   "already bind (they are stale afterwards: re-run them)")
+    c.add_argument("--json", action="store_true")
     c = sp("promote-anchor"); run_arg(c); c.add_argument("--output", required=True)
     c.add_argument("--family", required=True); c.add_argument("--dimensions", required=True)
     c.add_argument("--strength", required=True, choices=list(stylelock.STRENGTHS)); c.add_argument("--id"); c.add_argument("--json", action="store_true")
@@ -1451,7 +1648,14 @@ def main(argv=None):
         if a.cmd == "resolve":
             if a.family is not None and not stylelock.ID.match(a.family):
                 fail("--family %r must be a lowercase id (characters, environment, props, ui, vfx, ...)" % a.family, 2)
+            max_outputs = budget.DEFAULT_MAX_OUTPUTS
+            if a.max_outputs is not None:
+                try:
+                    max_outputs = budget.parse_max(a.max_outputs)
+                except ValueError as exc:
+                    fail("--max-outputs %s: %s" % (a.max_outputs, exc), 2)
             spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override)
+            spec["budget"] = {"max_outputs": max_outputs}
             run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
             if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
                 spec = bind_run(spec, os.path.basename(run_dir))
@@ -1478,8 +1682,10 @@ def main(argv=None):
             ui = None
             if not errors:
                 try:
+                    tmpl = spec["template"]["data"]
                     ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
-                                          {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}})
+                                          {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}},
+                                          ui_with_references(tmpl.get("ui"), workflow, tmpl.get("workflow")))
                 except ValueError as exc:
                     errors.append("workflow.ui.json: %s" % exc)
             if errors:
@@ -1490,12 +1696,10 @@ def main(argv=None):
             print("rendered %s (%d nodes) and %s" % (out, len(workflow), ui_path(out)))
             return 0
         if a.cmd == "lint":
-            results = [lint.lint_file(p, authoring) for p in (a.paths or lint.default_paths(authoring))]
-            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL")}
-            emit({"schema": "rpg-factory.validation/1", "tool": "assetgen-lint", "results": results, "summary": counts}, a.json,
-                 "\n".join("%s %s%s" % (r["state"], r["path"], (": " + "; ".join(r["reasons"])) if r["reasons"] else "") for r in results)
-                 + "\nassetgen lint: %(PASS)d PASS, %(WARN)d WARN, %(FAIL)d FAIL" % counts)
-            return 1 if counts["FAIL"] else 0
+            results = [row for p in (a.paths or lint.default_paths(authoring)) for row in lint.lint_rows(p, authoring)]
+            return validation_report(results, "assetgen-lint", "lint", a.json)
+        if a.cmd == "graph-lint":
+            return validation_report(graph_lint_rows(a.paths, a.run, authoring), "assetgen-graph-lint", "graph-lint", a.json)
         if a.cmd == "review-cmd":
             cmd = review_cmd(a.run, a.phase, a.codex, not a.no_write)
             emit(cmd, a.json, cmd["shell"])
@@ -1542,21 +1746,17 @@ def main(argv=None):
             emit(res, a.json, "assetgen publish: %s %s (%s)" % (res["state"], res["workflow"], res["reason"]))
             return {"PASS": 0, "FAIL": 1}.get(res["state"], 3)
         if a.cmd == "qa":
-            spec = load_spec(os.path.join(a.run, "spec.json"))
-            size = requested_size(a.run, spec)
-            results, outputs = qa.run_qa(a.run, spec, size)
-            purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
-            state = qa.overall(results)
-            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")}
-            report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
-                      "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size,
-                      "style_binding": runfiles.qa_style_binding(spec, lambda rel: os.path.join(a.run, *rel.split("/"))),
-                      "state": state, "results": results, "outputs": outputs, "summary": counts}
-            write_json(os.path.join(a.run, "qa.json"), report)
-            emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
-                 + "\nassetgen qa: %s (%d PASS, %s%d FAIL, %d NOT_AVAILABLE)" % (
-                     state, counts["PASS"], "%d WARN, " % counts["WARN"] if counts["WARN"] else "", counts["FAIL"], counts["NOT_AVAILABLE"]))
-            return {"PASS": 0, "FAIL": 1}.get(state, 3)
+            report, text, code = qa_run(a.run)
+            emit(report, a.json, text)
+            return code
+        if a.cmd == "budget":
+            if not os.path.isfile(os.path.join(a.run, "spec.json")):
+                fail("budget needs <run>/spec.json (resolve --out first)")
+            st = run_budget(a.run, load_spec(os.path.join(a.run, "spec.json")))
+            emit(st, a.json, budget.line(st))
+            return st["exit"]
+        if a.cmd == "finalize":
+            return finalize_with_budget(a.run, a.force, a.json)
         if a.cmd == "promote-anchor":
             rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)
             emit(rec, a.json, "wrote %s: anchor %s proposed (a person approves it: status active, approved_by, approved_on)"

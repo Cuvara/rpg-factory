@@ -37,6 +37,7 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
    10 step 4; tier S or prose-only: "QA tiers");
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
 6. records the verify verdict (`verdict --phase verify`) and its report (`factory-pipeline.py report`), then sends the status message to the run lead (section 3).
+In a worktree repo it runs `sync --send` after each new candidate (`docs/pipeline-cli.md`, "sync").
 It never pushes, merges, tags or removes its worktree.
 
 <!-- policy:task-lead-claude -->
@@ -118,7 +119,8 @@ Either level may place a session in an Orca child worktree when that is faster o
 | shared (default) | small subtasks with disjoint files and narrow tests; review or QA while nothing else edits | the task worktree (run lead: the integration checkout); `placement: "shared"` |
 | child | parallel subtasks that both run full suites or write generated or build output; risky or experimental work; QA that needs a clean frozen checkout while others still edit | `orca orchestration worker-start --worktree new-child` (a session) or `orca worktree create --parent-worktree <selector>` (a worktree); `placement: "child"` + `reason` |
 
-- **Run lead.** Integration QA (`--placement child`) or a quick fix may run in a child of the integration checkout.
+- **Run lead.** `dispatch --phase lead` creates, registers and launches the task worktree as in "Orca visibility".
+  Integration QA (`--placement child`) or a quick fix may run in a child of the integration checkout.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child` + `reason`); `dispatch --subtask`
   prints the matching `--worktree` (`${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`, "dispatch").
 - A child session commits on its own child branch (`<task branch>--<subtask or phase>`) with explicit paths. Review
@@ -133,6 +135,16 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged: remove a child
   only after its branch is merged.
 
+### Stacked dependents
+
+<!-- policy:stacked-dispatch -->
+A dependent task with exactly one in-flight dependency starts from that dependency's tip as a sibling <topic>-<id> worktree, implements in parallel, never verifies before the dependency's review PASS SHA is in its HEAD, merges (never rebases) the dependency branch when told, and is integrated after the dependency.
+
+- It stacks when `status` notes `stackable on <dep>@<sha>`; tier XS and no-worktree repos never stack.
+- Sibling beside the integration checkout, never a child of the dependency's worktree.
+- Verify waits for the dependency's PASS; on a `sync:` note the lead runs `git merge <dep branch>`, never a rebase.
+- Forms and notes: `docs/pipeline-cli.md`, "dispatch", "sync", "gate" and "status and cleanup".
+
 ## 5. Orca (preferred coordinator when available)
 
 - Detect: `orca status --json`; usable when `result.runtime.reachable` is `true`. Before the first dispatch load
@@ -145,7 +157,7 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
   - Only a dispatched Orca worker can send `--type escalation` or `worker_done` (else "No active Dispatch belongs to
     this message sender"): a task lead reports with `--type status` (asks with `--type question`).
   - `orca orchestration check --wait --types <types>` still returns heartbeats: `orca-wait.sh` consumes them and keeps
-    waiting. The run lead's single waiter is `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (one per Run;
+    waiting. The run lead's single waiter is `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (its
     default types include `status`, so a filter without the sender's type drops its messages).
   - A multi-line `--prompt` through `cmd.exe` (Windows) is cut at the first newline: send a one-line prompt naming a
     spec file (`dispatch` does this).
@@ -187,7 +199,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - [ ] Diff contains only the task's scope; base and target are the recorded ones.
 - [ ] Diff reviewed by the lead; required checks and QA passed; no open blocking finding.
 - [ ] No baseline or user files touched; shared-package impact named; file ownership clear.
-- [ ] Integrate in dependency order (section 10 step 5), then run the checks on the result.
+- [ ] Integrate in dependency order with `git merge --no-ff` (section 10 step 5), then run the checks on the result.
+      A stacked dependent goes after its dependency; the gate blocks the other order.
 - [ ] On a conflict or regression: stop that contribution, diagnose it and dispatch a scoped fix. Never discard
       work or resolve a conflict by blindly taking one side.
 
@@ -300,12 +313,12 @@ A no-worktree repo (registry `worktrees: false` or a configured no-worktree mark
 - **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; QA runs go
   to Codex when Claude implemented, and on the implementer's model only as the one-model fallback, in a fresh QA
   session. An explicit `implementer` against the table needs a `reason` (`validate` warns).
-- **Availability never stops a task.** Agents are detected on PATH and Orca's account list (`RPG_FACTORY_AGENTS`
-  overrides); a runtime MODEL_UNAVAILABLE holds for the run (`agents --down <agent>`). Every role falls back to the
-  available model, which then implements, reviews, runs QA and, for Codex, leads; no command fails because a model is
-  missing (step 4).
-- **Recorded implementer.** `dispatch --phase implement` records the model it started, per task and subtask; review,
-  QA, `verdict` and the gate pair against it, never current availability; no subtask needs a review of its own.
+- **Availability never stops a task.** An agent needs its bin on PATH, Codex also one auth source (pipeline-cli.md
+  "agents"; `RPG_FACTORY_AGENTS` overrides); a runtime MODEL_UNAVAILABLE holds for the run (`agents --down <agent>`).
+  Every role falls back to the available model, which then implements, reviews, runs QA and, for Codex, leads;
+  no command fails because a model is missing (step 4).
+- **Recorded implementer.** Review, QA and the gate pair against the model `dispatch --phase implement` recorded,
+  never current availability.
 
 <!-- policy:single-verify -->
 One verify session reviews the whole task diff: a prose subtask written by the verifier's model is covered, and a code subtask written by the verifier's model is listed by the gate as `SAME_MODEL (single verify)`, never blocking.
@@ -313,19 +326,19 @@ One verify session reviews the whole task diff: a prose subtask written by the v
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints XS, S, M or L.
    XS (every owned path prose, within `pipeline.tiers.XS`): the run lead writes a one-task plan with tier XS, itself
    edits and commits the files (explicit paths) on the `topic` branch, runs `dispatch --phase review --sha <sha>`
-   (implementer: its own model), then the QA tiers XS row; no task lead, task worktree or implement session. The gate
-   blocks an XS diff over the thresholds.
+   (implementer: its own model), then the QA tiers XS row; no task lead, task worktree or implement session.
    S: the run lead writes a one-task `plan.json` and dispatches its task lead (step 3); steps 4-8 follow.
    M: the run lead writes `plan.json`. L: a read-only planner worker writes it (`planner --request <text>`).
 2. **Plan.** `validate plan.json` must print OK.
 3. **Task lead.** Per ready task the run lead runs
    `dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca` (the section 5
    handoff). The task lead (section 1) gets `subplan validate` OK, records each subtask's `placement` (section 4,
-   "Child worktrees") and dispatches each with `--phase implement --subtask <sid>`.
-4. **Verify (cross-model review, then QA, one session).** On the stable candidate the task lead runs
-   `dispatch ... --phase verify --sha <sha>` once (section 6) and records `verdict --phase verify`; a FAIL gets a
-   scoped fix in a fresh session and one fresh `--phase verify` on the new candidate. `--phase review` or
-   `--phase qa` alone: integration QA (step 6), tier XS.
+   "Child worktrees"), dispatches each with `--phase implement --subtask <sid>`, reviews each diff and commits it
+   with explicit paths, or merges and removes a child.
+4. **Verify (cross-model review, then QA, one session).** Each model's code is reviewed by the other
+   (`review_pairing`): on the stable candidate the task lead runs `dispatch ... --phase verify --sha <sha>` once
+   (section 6) and records `verdict --phase verify`; a FAIL gets a scoped fix in a fresh session and one fresh
+   `--phase verify` on the new candidate. `--phase review` or `--phase qa` alone: integration QA (step 6), tier XS.
    `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
    `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
    merges and removes the child. Without the paired model a fresh same-model session verifies, carrying
@@ -362,11 +375,13 @@ run-checks fast tier). Re-verify flags: `docs/pipeline-cli.md`, "verdict".
 - **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide test slots
   and, when all are busy, waits instead of slowing every suite 2-4x; a full run keeps its own lock (section 4). The
   slot belongs to the run, not the session: stop a QA worker's test run before abandoning it.
+- **Pre-flight.** Read the suite count `dispatch --phase verify|qa` prints (`docs/pipeline-cli.md`, "dispatch").
 - **Cases.** A slow suite with cases runs only the cases the change touches (the case list `--phase verify` or
   `--phase qa` prints). Frozen suite copies go under a temp dir, never into its folder.
 - **CI is the merge gate.** CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
   `--no-workspace --no-claude`) and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single
-  required check; fix a red check before merging. Only a release runs a full local suite.
+  required check. No full local run before a PR; while CI runs, start the next task, then fix a red check before
+  merging. Only a release runs a full local suite.
 - **Tier S.** `dispatch --phase verify` (and `--phase qa`) marks a task tier S when the plan or the task says so or
   every owned path is prose (`docs/pipeline-cli.md`, "dispatch"). The gate accepts a lead's own QA verdict only for
   the tier its note starts with (`tier S`, `tier XS`) and a fresh QA session's PASS for every tier (model: "Token rule").

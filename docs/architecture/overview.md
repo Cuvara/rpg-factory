@@ -31,9 +31,9 @@ How the rpg-factory plugin fits together and where things live. Moved from `.cla
   `assetgen` forwards the read-only verbs of `scripts/assetgen/assetgen.py` (asset-gen engine, `tests/assetgen.test.sh`).
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work, engineering, workflows) routes to
   14 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
-  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d, vfx and asset-gen. 11 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
+  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d, vfx and asset-gen. 12 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
   unity-client-tech, unity-dots, netcode-client, the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
-  ui-toolkit-screen, ui-validation, and comfyui) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
+  ui-toolkit-screen, ui-validation, comfyui, and comfy-desktop-setup) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
   a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders; comfyui: `assetgen/`), and the
   snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
   (`docs/architecture/ui-skills.md`). `delivery` (kind `core`, generic: the two-level delivery flow, agent routing, review,

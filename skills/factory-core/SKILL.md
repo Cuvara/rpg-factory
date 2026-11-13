@@ -98,7 +98,7 @@ this touch", "is it validated", "is Factory healthy", "where does this domain st
 
 ## Skills
 
-Generic: `delivery` (kind `core`, any repository: the two-level flow, agent routing, review, QA tiers, plan/verdict/gate pipeline; steps 6, 7, 11, 12 load it). Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`.
+Generic: `delivery` (kind `core`, any repository: the two-level flow, agent routing, review, QA tiers, plan/verdict/gate pipeline; steps 6, 7, 11, 12 load it). Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`, `comfy-desktop-setup`.
 
 | Situation | Lead skill |
 |---|---|

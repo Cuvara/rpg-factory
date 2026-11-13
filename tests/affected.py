@@ -19,7 +19,8 @@ A suite runs when one of these holds (anything unsure runs):
     suite that itself names the file (exact path in its text or an EXTRA pattern), not the ~19 suites its import
     closure reaches; only selection is narrowed, hashes (suite reuse) keep the conservative closure;
   - a library or Python module change reaches a named script or suite through static imports, followed through
-    every tracked Python module on the way (unresolved/dynamic libraries, unnamed leaves run all);
+    every tracked Python module on the way (unresolved/dynamic libraries and unnamed leaves run all; a leaf a
+    suite's EXTRA patterns cover counts as named by that suite, e.g. tests/fixtures/assetgen/* for the assetgen suite);
   - the suite file itself changed;
   - a changed file is a path the suite's own text names (scripts/..., skills/..., commands/..., docs/..., ...);
   - a changed file matches one of the suite's EXTRA patterns (indirect inputs the text does not name);
@@ -289,13 +290,20 @@ def dynamic(path):
     return raw is None or re.search(rb"\b(importlib|__import__)\b|sys\.path", code) is not None
 
 
+def extra_covered(path):
+    """A suite's EXTRA patterns cover the path: the suite reads it without naming the file (a computed name), so
+    that is a mention by the suite. Only suites under tests/ count, not the '*' of scripts/checks/english-only.py."""
+    return any(suite.startswith("tests/") and hit(path, patterns) for suite, patterns in EXTRA.items())
+
+
 @lru_cache(None)
 def reaches(path):
     """Every file a change to path can reach through static edges, path included; None when unsure.
 
     Library modules and the code files they reach are followed to their importers and callers. A dynamic
     library, a library nobody imports, and a reached code file that has no importer and that no other file
-    names (loaded or run by a computed path) are unsure; a suite directly in tests/ has no caller (run-all runs it)."""
+    names (loaded or run by a computed path) are unsure, unless a suite's EXTRA patterns cover it (that suite
+    mentions it: selects() then picks the suite); a suite directly in tests/ has no caller (run-all runs it)."""
     graph, mentioned = library_graph()[:2]
     if path not in graph:
         return frozenset([path])
@@ -309,7 +317,7 @@ def reaches(path):
             return None
         importers = graph.get(current, ())
         if (current != path and current.endswith(SCANNED) and not importers and tree(current) != ("tests/", False)
-                and not mentioned.get(current.rsplit("/", 1)[-1], set()) - {current}):
+                and not mentioned.get(current.rsplit("/", 1)[-1], set()) - {current} and not extra_covered(current)):
             return None
         todo.extend(importers)
     if path.startswith("scripts/lib/") and not any(not p.startswith("scripts/lib/") for p in seen):

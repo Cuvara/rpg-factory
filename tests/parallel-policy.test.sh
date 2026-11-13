@@ -209,7 +209,7 @@ if has_case policy-markers; then
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
-  child-merge-remove child-no-run-all which-model subagents-read-only single-verify)
+  child-merge-remove child-no-run-all which-model subagents-read-only single-verify stacked-dispatch)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files, except in a tier XS task (section 10 step 1); an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
@@ -222,6 +222,7 @@ declare -A POLICY_SENTENCE=(
   [which-model]='| Role or kind | Model | Registry |'
   [subagents-read-only]='In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.'
   [single-verify]='One verify session reviews the whole task diff: a prose subtask written by the verifier'"'"'s model is covered, and a code subtask written by the verifier'"'"'s model is listed by the gate as `SAME_MODEL (single verify)`, never blocking.'
+  [stacked-dispatch]="A dependent task with exactly one in-flight dependency starts from that dependency's tip as a sibling <topic>-<id> worktree, implements in parallel, never verifies before the dependency's review PASS SHA is in its HEAD, merges (never rebases) the dependency branch when told, and is integrated after the dependency."
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
 PLACEMENT_ROWS=('| shared (default) |' '| child |')
@@ -315,6 +316,8 @@ s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence change
   'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
 s_mutate "canonical sentence changed (single verify blocks on a code subtask)" "sentence changed under policy:single-verify" \
   'sed -i "s/, never blocking\.\$/, blocking until its own review passes./" "$F"'
+s_mutate "canonical sentence changed (stacked dependent may rebase)" "sentence changed under policy:stacked-dispatch" \
+  'sed -i "s/, merges (never rebases) the dependency branch when told,/, rebases onto the dependency branch when told,/" "$F"'
 s_mutate "canonical sentence changed (subagents may write)" "sentence changed under policy:subagents-read-only" \
   'sed -i "s/^In-session subagents are read-only scouts;/In-session subagents are scouts;/" "$F"'
 s_mutate "placement table removed" "marker missing: policy:placement-table" \
