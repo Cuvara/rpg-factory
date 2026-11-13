@@ -4,7 +4,7 @@
   main_checkout(top)               the main checkout of a work tree (parent of its common .git directory)
   linked_worktree(d)               (toplevel, main checkout) of a linked worktree, read from its `.git` file (no git call)
   native_path(p) / native_abs(p)   a path written in another shell's drive form as this platform resolves it
-  default_workspace(env, nt)      the configured workspace or the platform's default path
+  default_workspace(env, nt)       the configured workspace or the platform's default path
 
 Stdlib only and cheap to import: the file guard loads it on every Read.
 """

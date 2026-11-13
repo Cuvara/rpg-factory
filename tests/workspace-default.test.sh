@@ -33,9 +33,7 @@ for platform in MINGW64_NT Linux; do
   [ "$got" = 'custom workspace' ] && ok "shell explicit value wins on $platform" || no "shell explicit value on $platform: $got"
 done
 
-# Pass the actual shell results to Python for parity checks without OS argument conversion.
-export RPGF_TEST_MINGW="$(shell_default MINGW64_NT)" RPGF_TEST_MSYS="$(shell_default MSYS_NT)"
-export RPGF_TEST_CYGWIN="$(shell_default CYGWIN_NT)" RPGF_TEST_LINUX="$(shell_default Linux)"
+# On Git Bash ROOT is in drive form, safe from MSYS path conversion.
 export RPGF_TEST_ROOT="$ROOT"
 python_out=$(python3 -B - <<'PY'
 import json
@@ -63,22 +61,33 @@ check('Python env=None falls back for empty environment value',
 with open(os.path.join(root, 'registry.json'), encoding='utf-8') as registry:
     check('WSL constant matches registry', workspace.WSL_WORKSPACE_DEFAULT == json.load(registry)['workspace']['root_default'])
 
-for platform, nt in (('MINGW', True), ('MSYS', True), ('CYGWIN', True), ('LINUX', False)):
-    shell = os.environ['RPGF_TEST_' + platform]
-    if shell.startswith('/c/'):
-        shell = 'C:/' + shell[3:]
-    check('shell and Python parity ' + platform, shell == workspace.default_workspace({}, nt))
+print('DEFAULT_NT ' + workspace.default_workspace({}, True))
+print('DEFAULT_POSIX ' + workspace.default_workspace({}, False))
 PY
 )
 python_status=$?
 while IFS= read -r line; do
+  line=${line%$'\r'}
   case "$line" in
     'PASS  '*) ok "${line#PASS  }" ;;
     'FAIL  '*) no "${line#FAIL  }" ;;
+    'DEFAULT_NT '*) python_nt=${line#DEFAULT_NT } ;;
+    'DEFAULT_POSIX '*) python_posix=${line#DEFAULT_POSIX } ;;
     *) no "unexpected Python output: $line" ;;
   esac
 done <<< "$python_out"
 [ "$python_status" -eq 0 ] || no "Python checks exited $python_status"
+for platform in MINGW MSYS CYGWIN LINUX; do
+  case "$platform" in
+    MINGW) shell=$(shell_default MINGW64_NT); python=${python_nt-} ;;
+    MSYS) shell=$(shell_default MSYS_NT); python=${python_nt-} ;;
+    CYGWIN) shell=$(shell_default CYGWIN_NT); python=${python_nt-} ;;
+    LINUX) shell=$(shell_default Linux); python=${python_posix-} ;;
+  esac
+  case "$shell" in /c/*) shell="C:/${shell#/c/}" ;; esac
+  case "$python" in /c/*) python="C:/${python#/c/}" ;; esac
+  [ "$shell" = "$python" ] && ok "shell and Python parity $platform" || no "shell and Python parity $platform"
+done
 
 echo "workspace default tests: $((pass + fail)) run, $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
