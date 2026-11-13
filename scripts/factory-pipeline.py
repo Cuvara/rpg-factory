@@ -3805,7 +3805,7 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
             return first
         row = rows[xs_task["id"]]
         row["phase"] = "integrated"
-        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} is not at the integration HEAD "
+        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} does not cover the integration HEAD "
                             f"{(topic_head or '?')[:10]}: the gate needs it there")
         xs_qa_next(reg, plan, xs_task, info, row, topic_head, me, pf)
         return first
