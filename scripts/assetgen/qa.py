@@ -16,6 +16,7 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       (workflow.json, else spec params); "auto" = any (orientation auto with expect auto too).
                       The 9router image service ignores the requested size (e2e: 1672x941 returned for 1536x1024
                       and 1024x1024 requests), so the core purposes grade orientation or area plus these floors.
+                      For qa.size.fit pad, grades the file finalize fitted; fit is not a QA row and QA never pads.
   png-alpha           qa.alpha: required (alpha channel and some transparent pixels), forbidden (fully opaque), any
   png-corners         qa.transparent_corners: the four corner pixels have alpha <= 8
   png-tileable        qa.tileable.max_seam_error: wrap-around edge difference minus the interior

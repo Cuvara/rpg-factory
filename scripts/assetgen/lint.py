@@ -1,8 +1,9 @@
 """Offline lint of asset-gen data and rendered workflows.
 
-Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types, input
-names, required inputs, link targets and types, combo values against data/known-nodes.json (a snapshot; the live
-check is comfy-mcp validate_workflow), extends targets, and that no file carries a URL, host address or credential.
+Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types (a ui_only
+node such as Note is never part of workflow), input names, required inputs, link targets and types, combo values
+against data/known-nodes.json (a snapshot; the live check is comfy-mcp validate_workflow), extends targets, and that
+no file carries a URL, host address or credential.
 Purpose constraints are checked against data/precedence.json. A core file is linted as core data only (no game
 layer merged in), so a bad game value is reported on the game file that holds it.
 Style lock (stylelock.py): style version, status and structured fields, purpose default_family/dimensions/
@@ -12,12 +13,19 @@ authoring repo and no project.json, lint adds a WARN row for assetgen/project.js
 style without a usable structured style field (palette.colors, tone, canvas, outline.edge_darkness; absent, empty or
 malformed per consistency.field_states, the parsing the style checks use) is a WARN: no style-* QA row can grade.
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
+lint_rows adds one {path, check: "assetgen-graph-style", ...} row per template (a core or game layer template, merged
+as lint_data merges it, or a standalone file with the template schema): the workflow style guide (graphstyle.py:
+titles, one stage group per node, the group vocabulary and order, a Note per group, the reviewed prompt linked
+directly into the one NineRouterImage, SaveImage only in Output with a filename suffix, no static LoadImage file).
+A legacy template without a ui block is a WARN, never a FAIL. An unreadable file or a layer load error gets no extra
+row (its assetgen-lint row already FAILs).
 """
 import json
 import os
 import re
 
 import consistency
+import graphstyle
 import layers
 import runfiles
 import stylelock
@@ -74,6 +82,9 @@ def check_graph(graph, params=None):
         ctype, spec = node["class_type"], nodes.get(node["class_type"])
         if spec is None:
             errs.append("node %s: unknown node type %s (not in data/known-nodes.json; live check: comfy-mcp validate_workflow)" % (nid, ctype))
+            continue
+        if spec.get("ui_only"):
+            errs.append("node %s: %s is a UI-only node (frontend canvas only, no API form); it cannot be part of workflow" % (nid, ctype))
             continue
         for name, decl in spec["inputs"].items():
             if decl.get("required") and name not in node["inputs"]:
@@ -154,6 +165,27 @@ def template_errors(data, ident):
     return errs, warns
 
 
+def fit_errors(qa):
+    if not isinstance(qa, dict) or not isinstance(qa.get("size"), dict):
+        return []
+    size = qa["size"]
+    fit = size.get("fit", "none")
+    if fit not in ("none", "pad"):
+        return ["qa.size.fit must be one of ['none', 'pad']"]
+    if fit != "pad":
+        return []
+    errs = []
+    if qa.get("alpha") != "required":
+        errs.append("qa.size.fit pad needs qa.alpha required (pad adds transparent pixels)")
+    if size.get("mode") != "orientation":
+        errs.append("qa.size.fit pad needs qa.size.mode orientation")
+    if "orientation" in size and size["orientation"] != "auto":
+        errs.append("qa.size.fit pad needs qa.size.orientation auto (the expected aspect comes from qa.size.expect)")
+    if size.get("allow_swap") is True:
+        errs.append("qa.size.fit pad needs qa.size.allow_swap false (pad would square a swapped output qa accepts)")
+    return [err + "; or set qa.size.fit none" for err in errs]
+
+
 def purpose_errors(data, ident, authoring):
     errs = []
     doms = domains()
@@ -207,7 +239,7 @@ def purpose_errors(data, ident, authoring):
                             % (field, ", ".join(sorted(k for k, v in rules.items() if v == "purpose"))))
             elif not isinstance(text, str) or not text:
                 errs.append("constraints.%s must be a non-empty string" % field)
-    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa"))
+    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa")) + fit_errors(data.get("qa"))
 
 
 def style_errors(data):
@@ -334,6 +366,41 @@ def lint_file(path, authoring=None):
         errs.append("malformed data (%s: %s)" % (type(exc).__name__, exc))
     state = "FAIL" if errs else ("WARN" if warns else "PASS")
     return {"path": shown, "check": "assetgen-lint", "state": state, "reasons": errs + warns}
+
+
+def template_data(path, authoring=None):
+    """(data, error) of a template file for the graph style rows: a core or game layer template merged as lint_data
+    merges it (a core file as core only), or a standalone file whose schema is the template schema. (None, None) for
+    any other file or an unreadable one; (None, message) when a layer template does not load."""
+    if stylelock.classify(path, authoring)[0]:
+        return None, None
+    kind, ident, layer = classify(path, authoring)
+    if kind:
+        if kind != "template":
+            return None, None
+        try:
+            if layer == "core":
+                return layers.load(kind, ident, None, _layer="core")["data"], None
+            return layers.load(kind, ident, authoring)["data"], None
+        except layers.SpecError as exc:
+            return None, str(exc)
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return None, None
+    if isinstance(raw, dict) and raw.get("schema") == layers.KINDS["template"]["schema"]:
+        return raw, None
+    return None, None
+
+
+def lint_rows(path, authoring=None):
+    """[lint_file(path)] plus one assetgen-graph-style row (graphstyle.template_row) when path is a template."""
+    rows = [lint_file(path, authoring)]
+    data, _ = template_data(path, authoring)
+    if isinstance(data, dict):
+        rows.append(graphstyle.template_row(data, known_nodes(), display(path, authoring)))
+    return rows
 
 
 def default_paths(authoring=None):

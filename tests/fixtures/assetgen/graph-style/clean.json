@@ -1,0 +1,39 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Graph style clean fixture",
+  "description": "A template that follows the workflow style guide: staged groups left to right, one Note per group, titled nodes, the reviewed prompt linked straight into the one image node, a preview intermediate and one suffixed SaveImage in Output. Credentials are read by the node at run time, never stored here.",
+  "params": {
+    "prompt": {"type": "string", "required": true, "description": "Final reviewed prompt (filled from --prompt-file)."},
+    "model": {"type": "string", "default": "cx/gpt-5.6-sol-image", "description": "Image model id served through the NineRouterImage node."},
+    "size": {"type": "enum", "options": ["auto", "1024x1024", "1536x1024", "1024x1536"], "default": "1024x1024", "description": "Requested size."},
+    "quality": {"type": "enum", "options": ["auto", "low", "medium", "high"], "default": "auto", "description": "Image quality."},
+    "background": {"type": "enum", "options": ["auto", "opaque", "transparent"], "default": "auto", "description": "Background mode."},
+    "filename_prefix": {"type": "string", "default": "assetgen/run", "description": "SaveImage filename prefix in the ComfyUI output folder."},
+    "reference_image": {"type": "string", "required": true, "description": "Name of the reference image in the ComfyUI input folder."}
+  },
+  "output_node": "6",
+  "workflow": {
+    "1": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "{{prompt}}"}, "_meta": {"title": "Prompt (Claude, Codex review <state>)"}},
+    "2": {"class_type": "LoadImage", "inputs": {"image": "{{reference_image}}"}, "_meta": {"title": "Reference image"}},
+    "3": {"class_type": "NineRouterImage", "inputs": {"user_prompt": ["1", 0], "model": "{{model}}", "size": "{{size}}", "quality": "{{quality}}", "background": "{{background}}", "reference_images": ["2", 0]}, "_meta": {"title": "Generate image"}},
+    "4": {"class_type": "ImageScale", "inputs": {"image": ["3", 0], "upscale_method": "lanczos", "width": 1024, "height": 1024, "crop": "center"}, "_meta": {"title": "Resize to target"}},
+    "5": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}, "_meta": {"title": "Preview raw image"}},
+    "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}-final", "images": ["4", 0]}, "_meta": {"title": "Save final image"}}
+  },
+  "ui": {
+    "groups": [
+      {"title": "Prompt", "color": "pale_blue", "nodes": ["1"]},
+      {"title": "References", "color": "cyan", "nodes": ["2"]},
+      {"title": "Generate", "color": "green", "nodes": ["3"]},
+      {"title": "Post-process", "color": "yellow", "nodes": ["4", "5"]},
+      {"title": "Output", "color": "purple", "nodes": ["6"]}
+    ],
+    "notes": [
+      {"text": "The reviewed prompt; render fills it from prompt.md.", "group": "Prompt"},
+      {"text": "The reference image render names with --param reference_image.", "group": "References"},
+      {"text": "The one image node; its user_prompt is linked from the prompt node.", "group": "Generate"},
+      {"text": "Resize to the target size; the preview shows the raw image.", "group": "Post-process"},
+      {"text": "The only saved file: the run prefix plus the -final suffix.", "group": "Output"}
+    ]
+  }
+}

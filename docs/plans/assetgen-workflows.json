@@ -1,0 +1,404 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "assetgen-workflows",
+  "title": "asset-gen staged, grouped ComfyUI workflow templates per purpose, with a graph style guide and MCP authoring rule",
+  "topic": "feat/assetgen/workflows",
+  "goal": "Make every workflow Claude builds or runs through comfy-mcp a dense, organised ComfyUI graph (framed groups, titled nodes, notes, left to right) derived from a per-purpose template, enforced by a lint, using API nodes and core image nodes only.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "feat/assetgen/v2-core"
+    }
+  },
+  "tasks": [
+    {
+      "id": "test-data-driven",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Refactor tests/assetgen.test.sh so adding a core purpose or template touches only new files: compute the core entry count instead of the hard-coded 15 (line ~67), glob templates/assetgen/purposes/*.json instead of the hard-coded purpose loops (~161, ~301) and workflows/*.json instead of the template list (~205), replace the sorted id string (~69) by a check that every file basename is listed, make style_selftest core purposes data-driven, golden path golden/<purpose>.json for the default template and golden/<purpose>--<template>.json for variants, and an optional per-purpose cases file tests/fixtures/assetgen/cases/<purpose>.json holding extra render params (image-edit reference_image). No behaviour change: same assertions, same pass count.",
+      "paths": [
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-test-data-driven.md"
+      ],
+      "exclusions": [
+        "scripts/",
+        "templates/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "the suite passes with the same number of assertions as before",
+        "a new templates/assetgen/workflows/<id>.json or purposes/<id>.json no longer needs an edit of tests/assetgen.test.sh",
+        "image-edit still renders through a cases file, not a special case in the loop",
+        "no change under scripts/ or templates/"
+      ]
+    },
+    {
+      "id": "node-registry",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Register the nodes the staged templates need. Add scripts/assetgen/nodesync.py (offline, reads a saved ComfyUI object_info JSON file, no network) that writes ordered known-nodes.json entries (required then optional inputs, exact combo options, outputs, ui.size, output_node flag); add entries for core image nodes ImageScale, ImageSharpen, ImageBlur, ImageInvert, ImageCrop, PreviewImage, SplitImageWithAlpha, JoinImageWithAlpha, ImageQuantize and PrimitiveString, and Note and MarkdownNote as ui_only nodes. lint.py keeps ui_only nodes out of the API graph and rejects them in a workflow. Use a saved object_info if one exists (comfy-mcp or a running ComfyUI), otherwise the documented core node signatures, and say which in the changelog. Fixture object_info for the offline test.",
+      "paths": [
+        "scripts/assetgen/nodesync.py",
+        "scripts/assetgen/data/known-nodes.json",
+        "scripts/assetgen/lint.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-node-registry.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "test-data-driven"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/comfy-desktop-setup.test.sh"
+      ],
+      "acceptance": [
+        "nodesync output for the fixture object_info equals the committed entries",
+        "lint accepts the new core nodes in a template and rejects Note or MarkdownNote inside workflow",
+        "an unknown node or input is still a lint error",
+        "no network access in the engine or its test"
+      ]
+    },
+    {
+      "id": "ui-layout-groups",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Make the ComfyUI-frontend graph organised like the reference image. Template gets an optional ui block, separate from workflow and never part of the API graph: groups (title, color, member node ids), notes (text, group), node colors, optional row hints. uiworkflow.to_ui computes each group's bounding from its member nodes' positions and sizes plus padding, orders columns by stage, emits groups, notes as ui_only Note nodes (ids above the API ids, last_node_id updated) and node color and bgcolor. The API graph and workflow.json do not change. Extend the inline UI-to-API converter in the test to skip ui_only nodes.",
+      "paths": [
+        "scripts/assetgen/uiworkflow.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-ui-layout-groups.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "node-registry"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a fixture template with a ui block renders groups whose bounding contains all member nodes and notes inside their group",
+        "the UI graph converts back to exactly the API graph (notes skipped)",
+        "templates without a ui block render as before (existing goldens unchanged)",
+        "workflow.json is identical with and without the ui block"
+      ]
+    },
+    {
+      "id": "graph-style-lint",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Enforce the workflow style guide. Add graph-lint (assetgen.py verb, plus rows in lint for templates and an optional check on a run's workflow.ui.json): every node has a title; every node belongs to exactly one group; group titles come from the vocabulary Prompt, References, Generate, Post-process, Preview, Output and appear left to right in that order; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt; exactly one NineRouterImage; every SaveImage has an inline filename suffix and PreviewImage is used for intermediates; no static LoadImage file name; each group has a Note. The quality plugin check workflow-style is a WARN first. Logic in a new scripts/assetgen/graphstyle.py with thin hookups.",
+      "paths": [
+        "scripts/assetgen/graphstyle.py",
+        "scripts/assetgen/lint.py",
+        "scripts/assetgen/assetgen.py",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-graph-style-lint.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "ui-layout-groups"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "each rule has a passing and a failing fixture and the message names the node",
+        "the legacy image-generate and image-edit templates are reported WARN, never FAIL",
+        "graph-lint exits 0 for a clean template, 1 for a violation, 2 for usage",
+        "the quality plugin check is WARN and unchanged for runs without workflow.ui.json"
+      ]
+    },
+    {
+      "id": "tpl-icon-ui",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add the staged templates staged-icon and staged-ui-element and switch the icon and ui-element purposes to them. Follow the stage blueprint: groups left to right Prompt, References (only when the purpose takes a reference), Generate, Post-process, Preview, Output; every node titled and in exactly one group with a Note per group; the reviewed prompt wired straight from PrimitiveStringMultiline into NineRouterImage.user_prompt; exactly one NineRouterImage; SaveImage only for the real deliverable with an inline filename suffix, intermediates as PreviewImage; no static LoadImage file name; no URL, IP or credential-shaped key anywhere including Note text; only API nodes plus core image nodes registered in known-nodes.json. The old image-generate and image-edit templates stay unchanged. Keep a golden for the legacy template render of icon (golden/icon--image-generate.json) as the proof it is unchanged. Changelog fragment changelog.d/tpl-icon-ui.md. Also own tests/assetgen.test.sh for one purpose: pin every assertion that depends on a purpose's default template to an explicit --template (image-generate for the icon cases such as the 3-node workflow.ui.json layout check and qp-icon-001, image-edit for the golden-image-edit-001 cases, and any other legacy-shape assertion you find), and let the filename_prefix check accept the staged inline suffix, so the other three tpl tasks never need to edit this file.",
+      "paths": [
+        "templates/assetgen/workflows/staged-icon.json",
+        "templates/assetgen/workflows/staged-ui-element.json",
+        "templates/assetgen/purposes/icon.json",
+        "templates/assetgen/purposes/ui-element.json",
+        "tests/fixtures/assetgen/golden/icon.json",
+        "tests/fixtures/assetgen/golden/ui-element.json",
+        "tests/fixtures/assetgen/golden/icon--image-generate.json",
+        "tests/fixtures/assetgen/cases/icon.json",
+        "tests/fixtures/assetgen/cases/ui-element.json",
+        "changelog.d/tpl-icon-ui.md",
+        "tests/assetgen.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-style-lint"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every new template passes assetgen.py lint and graph-lint with 0 FAIL",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "each purpose's default_template points to its staged template and its qa and params still lint clean",
+        "no file outside the task's paths changes",
+        "tests/assetgen.test.sh passes with the legacy templates pinned and no other tpl task needs to edit it"
+      ]
+    },
+    {
+      "id": "tpl-character-prop",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add staged-turnaround for the 3D character and turnaround references, switch ref-3d-turnaround to it, and add two purposes: ref-3d-character (handoff art3d, default_family characters, 1536x1024, orientation qa like ref-3d-turnaround, guidance for A or T pose, face and hands detail, neutral lighting) and prop-2d (item or prop, handoff art2d, default_family props, qa like icon with area size mode). Follow the stage blueprint: groups left to right Prompt, References (only when the purpose takes a reference), Generate, Post-process, Preview, Output; every node titled and in exactly one group with a Note per group; the reviewed prompt wired straight from PrimitiveStringMultiline into NineRouterImage.user_prompt; exactly one NineRouterImage; SaveImage only for the real deliverable with an inline filename suffix, intermediates as PreviewImage; no static LoadImage file name; no URL, IP or credential-shaped key anywhere including Note text; only API nodes plus core image nodes registered in known-nodes.json. The old image-generate and image-edit templates stay unchanged. Changelog fragment changelog.d/tpl-character-prop.md.",
+      "paths": [
+        "templates/assetgen/workflows/staged-turnaround.json",
+        "templates/assetgen/purposes/ref-3d-turnaround.json",
+        "templates/assetgen/purposes/ref-3d-character.json",
+        "templates/assetgen/purposes/prop-2d.json",
+        "tests/fixtures/assetgen/golden/ref-3d-turnaround.json",
+        "tests/fixtures/assetgen/golden/ref-3d-character.json",
+        "tests/fixtures/assetgen/golden/prop-2d.json",
+        "tests/fixtures/assetgen/cases/ref-3d-character.json",
+        "tests/fixtures/assetgen/cases/prop-2d.json",
+        "changelog.d/tpl-character-prop.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-style-lint",
+        "tpl-icon-ui"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every new template passes assetgen.py lint and graph-lint with 0 FAIL",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "each purpose's default_template points to its staged template and its qa and params still lint clean",
+        "no file outside the task's paths changes"
+      ]
+    },
+    {
+      "id": "tpl-environment-texture",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add staged-environment and staged-texture, switch texture-tileable and concept-2d to the matching staged template, and add the purpose scene-2d (environment or scene, handoff art2d, default_family environment, 1536x1024, alpha forbidden, area size qa like concept-2d). Follow the stage blueprint: groups left to right Prompt, References (only when the purpose takes a reference), Generate, Post-process, Preview, Output; every node titled and in exactly one group with a Note per group; the reviewed prompt wired straight from PrimitiveStringMultiline into NineRouterImage.user_prompt; exactly one NineRouterImage; SaveImage only for the real deliverable with an inline filename suffix, intermediates as PreviewImage; no static LoadImage file name; no URL, IP or credential-shaped key anywhere including Note text; only API nodes plus core image nodes registered in known-nodes.json. The old image-generate and image-edit templates stay unchanged. Changelog fragment changelog.d/tpl-environment-texture.md.",
+      "paths": [
+        "templates/assetgen/workflows/staged-environment.json",
+        "templates/assetgen/workflows/staged-texture.json",
+        "templates/assetgen/purposes/scene-2d.json",
+        "templates/assetgen/purposes/texture-tileable.json",
+        "templates/assetgen/purposes/concept-2d.json",
+        "tests/fixtures/assetgen/golden/scene-2d.json",
+        "tests/fixtures/assetgen/golden/texture-tileable.json",
+        "tests/fixtures/assetgen/golden/concept-2d.json",
+        "tests/fixtures/assetgen/cases/scene-2d.json",
+        "changelog.d/tpl-environment-texture.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-style-lint",
+        "tpl-icon-ui"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every new template passes assetgen.py lint and graph-lint with 0 FAIL",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "each purpose's default_template points to its staged template and its qa and params still lint clean",
+        "no file outside the task's paths changes"
+      ]
+    },
+    {
+      "id": "tpl-edit-sprite",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add staged-edit (the image-edit flow with a References group: LoadImage fed by the reference_image param, reaching NineRouterImage.reference_images, anchors still wire as the next ImageBatch input) and staged-sprite, and switch the image-edit and sprite-2d purposes to them. Follow the stage blueprint: groups left to right Prompt, References (only when the purpose takes a reference), Generate, Post-process, Preview, Output; every node titled and in exactly one group with a Note per group; the reviewed prompt wired straight from PrimitiveStringMultiline into NineRouterImage.user_prompt; exactly one NineRouterImage; SaveImage only for the real deliverable with an inline filename suffix, intermediates as PreviewImage; no static LoadImage file name; no URL, IP or credential-shaped key anywhere including Note text; only API nodes plus core image nodes registered in known-nodes.json. The old image-generate and image-edit templates stay unchanged. Changelog fragment changelog.d/tpl-edit-sprite.md.",
+      "paths": [
+        "templates/assetgen/workflows/staged-edit.json",
+        "templates/assetgen/workflows/staged-sprite.json",
+        "templates/assetgen/purposes/image-edit.json",
+        "templates/assetgen/purposes/sprite-2d.json",
+        "tests/fixtures/assetgen/golden/image-edit.json",
+        "tests/fixtures/assetgen/golden/sprite-2d.json",
+        "tests/fixtures/assetgen/cases/image-edit.json",
+        "changelog.d/tpl-edit-sprite.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "graph-style-lint",
+        "tpl-icon-ui"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every new template passes assetgen.py lint and graph-lint with 0 FAIL",
+        "the rendered workflow.json equals its golden and the UI graph converts back to the same API graph",
+        "each purpose's default_template points to its staged template and its qa and params still lint clean",
+        "no file outside the task's paths changes"
+      ]
+    },
+    {
+      "id": "mcp-authoring-rules",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Write the rule for an agent that creates or changes a ComfyUI workflow through comfy-mcp. New skills/comfyui/references/workflow-style.md: the stage blueprint with groups, titles, notes and colors, the allowed node set, the limits (reviewed prompt wired directly, one NineRouterImage, SaveImage only for deliverables, no static LoadImage, no URLs). Rule in skills/comfyui/SKILL.md: start from the purpose's template (core or a game-layer extends), then lint, graph-lint and a live validate_workflow before any run_workflow; never run a graph edited through set_workflow_slot without rendering it again; no free-form graph. skills/asset-gen/SKILL.md names the rule within its 160-line cap. Cite code by anchor symbol and docs by section.",
+      "paths": [
+        "skills/comfyui/SKILL.md",
+        "skills/comfyui/references/workflow-style.md",
+        "skills/asset-gen/SKILL.md",
+        "changelog.d/assetgen-mcp-authoring-rules.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "tpl-icon-ui",
+        "tpl-character-prop",
+        "tpl-environment-texture",
+        "tpl-edit-sprite"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "comfyui SKILL.md and asset-gen SKILL.md stay at most 160 lines and comfyui has at most 3 references",
+        "skills-lint and skill-citations pass",
+        "no instruction allows running a graph that did not come from render, or approving a run"
+      ],
+      "grade": "light",
+      "grade_reason": "skill and reference prose; the verbs are tested in earlier tasks"
+    },
+    {
+      "id": "workflows-docs-eval",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Update docs/architecture/domains/assetgen.md (purposes and templates lists, the ui block, graph-lint, the node registry and nodesync, the style guide), scripts/README.md (new verbs), and evals/asset-gen-icon/graders/criteria.md for the staged template and graph-lint step. State the limits: API and core image nodes only, no quality gain from extra nodes, PreviewImage behaviour as found in live-e2e or unverified. Carry over from assetgen-v2-core (v2-core-docs could not own these): the eval criteria still say the images are checked with assetgen.py qa and require Claude's own image review; they must name finalize (after fetch_outputs), the budget check before run_workflow and the light review tier (icon, ui-element, texture-tileable: Claude's own review optional). In the domain doc, move the finalize bullet out of the record-field list and make the fringe repair say defringe --force then finalize, as the skills do.",
+      "paths": [
+        "docs/architecture/domains/assetgen.md",
+        "scripts/README.md",
+        "evals/asset-gen-icon/graders/criteria.md",
+        "changelog.d/assetgen-workflows-docs.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "mcp-authoring-rules"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "every new verb, template, purpose and rule is named in the domain doc",
+        "the doc states the limits honestly",
+        "english-only and changelog checks pass"
+      ],
+      "grade": "light",
+      "grade_reason": "documentation only"
+    },
+    {
+      "id": "live-e2e",
+      "repo": "plugin",
+      "kind": "test",
+      "objective": "Real run on a staged template with ComfyUI and comfy-mcp up (the user authorised real tests; one low-quality generation only). Render a run for the icon purpose, graph-lint it, validate_workflow, upload_file, run_workflow, job, fetch_outputs, record whether PreviewImage files come back, finalize, qa, then publish and take a screenshot of the laid-out graph in ComfyUI to compare with the reference look (groups, titles, notes, left-to-right flow). Write docs/plans/assetgen-workflows/e2e.md with the exact commands, results and the screenshot path. Print no credential. If ComfyUI or comfy-mcp is not reachable the result is NOT_RUN with the reason, never PASS.",
+      "paths": [
+        "docs/plans/assetgen-workflows/e2e.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "workflows-docs-eval"
+      ],
+      "checks": [
+        "python3 -B scripts/changelog.py check",
+        "env -u TMPDIR tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "e2e.md states PASS with evidence, FAIL with the evidence of what failed (no second generation to turn it into a PASS), or NOT_RUN with the reason",
+        "it records whether fetch_outputs returns PreviewImage files",
+        "it lists the generation count (at most 1) and any credential-free proof of the gateway call",
+        "no credential, URL with a host or key appears in the file"
+      ],
+      "grade": "light",
+      "grade_reason": "evidence document; the run itself is the check"
+    },
+    {
+      "id": "output-filter",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "Moved from plan assetgen-hybrid because this plan's staged-icon causes the bug and its integration QA failed on it. Start from the earlier attempt on branch feat/assetgen/hybrid-output-filter: cherry-pick its commits 6100774 (classify run outputs as SaveImage, preview or unknown; budget counts deliverables only) and d122721 (finalize moves PreviewImage files out of outputs/ first; gen-run-outputs requires outputs/ paths) onto this task branch; they touch only engine, check and test files of this plan. Its uncommitted tests/assetgen.test.sh change and tests/fixtures/assetgen/comfy-job-state.json in that worktree may be read and reused. Real bug from the plan D live e2e (one generation on staged-icon): comfy-mcp fetch_outputs also downloads the PreviewImage temp file into <run>/outputs/, so finalize and qa grade the 64 px preview as a second deliverable (png-size FAIL) and manifest would record it. Keep only the deliverables: after fetch, the engine moves every file in outputs/ that was not written by a SaveImage output node of the rendered workflow (match the run's filename_prefix and the SaveImage suffixes; PreviewImage files carry ComfyUI temp names) to <run>/previews/, before defringe, embed and qa; finalize does it as its first step and reports what it moved; nothing is deleted; the gen-run-outputs check ignores previews/. Runs whose outputs are all SaveImage files behave exactly as today. Facts from the live e2e: only staged-icon adds a 64 px PreviewImage today (staged-turnaround previews at full size, staged-sprite and staged-edit have none); fetched files are named <promptid8>_000.png and _001.png, so tell them apart by the SaveImage records of the rendered workflow, not by name alone. The budget counted the preview and an earlier failed attempt (3 of 4 used after one generation): previews/ files never count as outputs in budget. Also correct the domain doc: docs/architecture/domains/assetgen.md (around line 113) says PreviewImage fetching is unverified; the live e2e (docs/plans/assetgen-workflows/e2e.md) proved fetch_outputs brings PreviewImage files, and after this fix finalize moves them to previews/. The fetched files carry no type and the comfy-cli job state can stay 'queued' with no outputs, so the agent saves the free read-only fetch_outputs url_only result as <run>/fetch.json (type output or temp per file, in fetch order); finalize and budget read it first and the job state only as a fallback. Update the run sequence in skills/asset-gen/SKILL.md step 6 and skills/comfyui/SKILL.md to save fetch.json after fetch_outputs; both files are at their 160-line cap, so replace text, never add a line.",
+      "paths": [
+        "scripts/assetgen/budget.py",
+        "scripts/assetgen/finalize.py",
+        "scripts/assetgen/runfiles.py",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-output-filter.md",
+        "docs/architecture/domains/assetgen.md",
+        "skills/asset-gen/SKILL.md",
+        "skills/comfyui/SKILL.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/"
+      ],
+      "deps": [
+        "live-e2e"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a run with a SaveImage file and a ComfyUI temp preview file finalizes with only the SaveImage file in outputs/ and the preview in previews/",
+        "qa and manifest never see previews/ files; gen-run-outputs passes",
+        "a run with only SaveImage outputs is unchanged (existing tests pass)",
+        "no file is deleted",
+        "budget counts only deliverables: a run with one SaveImage output and one preview uses 1, not 2",
+        "the domain doc states the observed PreviewImage behaviour and the previews/ rule, no longer 'unverified'",
+        "asset-gen and comfyui SKILL.md tell the agent to save the url_only result as <run>/fetch.json and stay at most 160 lines"
+      ]
+    },
+    {
+      "id": "size-fit",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the size FAIL the live e2e hit (docs/plans/assetgen-workflows/e2e.md, Findings 2): the 9router gateway often ignores the requested size (1536x1024 or 1254x1254 for a 1024x1024 request), so every square purpose whose qa.size grades orientation fails QA on a service-caused size, and a regeneration may fail again. Add an optional purpose field qa.size.fit with values pad or none (default none) and a finalize step 'fit' between filter and defringe: for a purpose with fit pad whose output's orientation does not match expect within square_tolerance, pad the image centered with fully transparent pixels (alpha required purposes only; lint refuses pad on a purpose whose alpha is not required) to the expected aspect, keep the untouched original under <run>/raw/ (never delete or overwrite it), and record the step with the original and fitted sizes in finalize.json; QA, the manifest and the embed then see the fitted file. Set fit pad for icon and sprite-2d. texture-tileable stays none and the docs say why: cropping breaks the seamless tiling and scaling distorts it, so a wrong-size texture still FAILs and is regenerated. Pure Python like scripts/assetgen/imaging.py (no new dependency). Update the comfyui skill's size pitfall and the asset-gen skill's finalize step (both skills stay within their line caps) and the domain doc's Limits.",
+      "paths": [
+        "scripts/assetgen/finalize.py",
+        "scripts/assetgen/imaging.py",
+        "scripts/assetgen/lint.py",
+        "scripts/assetgen/qa.py",
+        "templates/assetgen/purposes/icon.json",
+        "templates/assetgen/purposes/sprite-2d.json",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "skills/comfyui/SKILL.md",
+        "skills/asset-gen/SKILL.md",
+        "docs/architecture/domains/assetgen.md",
+        "changelog.d/assetgen-size-fit.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/workflows/"
+      ],
+      "deps": [
+        "output-filter"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a staged-icon run whose SaveImage output is 1536x1024 RGBA (fixture shaped like the live run 937cc86a) finalizes with fit PASS, a 1536x1536 output with the original pixels centered and transparent bands, the original kept byte-identical under raw/, and QA png-size PASS",
+        "an output that already matches is not touched (fit SKIP, file bytes unchanged)",
+        "texture-tileable with a 1536x1024 output still FAILs at qa with the size reason; lint refuses fit pad on a purpose whose alpha is not required and an unknown fit value",
+        "existing finalize, budget and output-filter cases pass; goldens unchanged"
+      ]
+    }
+  ]
+}
