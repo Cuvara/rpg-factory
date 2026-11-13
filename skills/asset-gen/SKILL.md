@@ -64,8 +64,8 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    `resolve --max-outputs N`, default 4; exit 1 or `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) ->
    `run_workflow` (wait) -> `job` until done -> `fetch_outputs` with `out_dir` `<run>/outputs`, then with `url_only=true`
    (free, read-only, same `prompt_id`): save the result verbatim as `<run>/fetch.json` -> `assetgen.py finalize --run
-   <run>`: filter (PreviewImage files to `<run>/previews/`: never deliverables, never counted by budget), defringe (alpha
-   purposes, `defringe.json`), embed (the UI workflow into each PNG: QA and the reviews hash the final file) and qa, in that
+   <run>`: filter (PreviewImage files to `<run>/previews/`, excluded from budget), fit (`qa.size.fit` pad: pads to the
+   expected aspect, originals in `raw/`), defringe (alpha purposes, `defringe.json`), embed (UI workflow into each PNG) and qa, in that
    fixed order (never `qa` before `embed`); it stops at the first FAIL naming the step, exits like qa and prints the budget
    line. Optional: `assetgen.py publish --run <run> --comfy-url <URL>` uploads `workflow.ui.json` to Workflows > assetgen
    (`run_workflow` opens no tab; exit 3 if unreachable, blocks nothing). Tool not OK: render only, `NOT_RUN`; a person may
@@ -74,7 +74,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    (`WARN`: report it; a style `FAIL` fails QA). `png-edge-fringe` FAIL (coloured low-alpha edge pixels): `qa.json`
    binds the outputs, so `assetgen.py defringe --run <run> --force [--alpha-floor N]` (lists the records it made stale),
    then `finalize` (`embed`, `qa`), then both image reviews again (`review-cmd --phase image`,
-   `review-image-claude.json`); `finalize --force` only for bound outputs that were never defringed. `review-cmd --phase
+   `review-image-claude.json`); `finalize --force` for bound outputs needing fit or defringe. `review-cmd --phase
    image --run <run>`, run as printed -> `review-image.json` (SAME_MODEL fallback as step 4): its prompt states each
    output's true pixel size and attaches the anchors, the alpha composites `<run>/review/composite-dark.png` and
    `-light.png` (edges judged on both), a tileable purpose's `tile-2x2.png` (`/rpg-factory:assetgen review-cmd` adds
@@ -113,9 +113,9 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 ## Generated & protected paths
 
 - `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `references/anchor-*.png`, `outputs-raw/`,
-  `previews/`, `defringe.json`, `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
+  `raw/`, `previews/`, `defringe.json`, `finalize.json`, `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
 - `<run>/review-prompt.json`, `review-image.json`: the reviewer's (`-o` of the printed command); `review-image-claude.json`, `fetch.json`: yours.
-- `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `finalize` (filter to `previews/`, defringe, embed); the SHA-256 after it is the record.
+- `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `finalize` (filter to `previews/`, fit, defringe, embed); the SHA-256 after it is the record.
 - `approvals/AGEN-<run_id>/`: `approve-record` on a person's explicit word; the person commits and signs it.
 - `assetgen/styles/<style-id>/anchors/`: `promote-anchor` writes `proposed`; only a person sets `active`,
   `approved_by`, `approved_on`. `rejections/`: `reject`, on a person's word.
