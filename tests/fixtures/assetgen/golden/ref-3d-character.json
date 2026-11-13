@@ -1,0 +1,67 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for ref-3d-character: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate turnaround sheet"
+  },
+  "class_type": "NineRouterImage",
+  "inputs": {
+   "background": "opaque",
+   "model": "cx/gpt-5.6-sol-image",
+   "quality": "high",
+   "size": "1536x1024",
+   "user_prompt": [
+    "1",
+    0
+   ]
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Sharpen view edges"
+  },
+  "class_type": "ImageSharpen",
+  "inputs": {
+   "alpha": 0.5,
+   "image": [
+    "2",
+    0
+   ],
+   "sharpen_radius": 1,
+   "sigma": 1.0
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Preview raw sheet"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ]
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Save turnaround sheet"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-ref-3d-character-001-turnaround",
+   "images": [
+    "3",
+    0
+   ]
+  }
+ }
+}

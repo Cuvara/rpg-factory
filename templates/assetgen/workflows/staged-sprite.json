@@ -1,0 +1,134 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Staged 2D game sprite",
+ "description": "Generate a staged 2D game sprite on a transparent background.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file)."
+  },
+  "model": {
+   "type": "string",
+   "default": "cx/gpt-5.6-sol-image",
+   "description": "Image model id served through the NineRouterImage node."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536"
+   ],
+   "default": "1024x1024",
+   "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "auto",
+   "description": "Image quality."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "auto",
+   "description": "Background mode."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  }
+ },
+ "output_node": "3",
+ "workflow": {
+  "1": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
+   }
+  },
+  "2": {
+   "class_type": "NineRouterImage",
+   "inputs": {
+    "user_prompt": [
+     "1",
+     0
+    ],
+    "model": "{{model}}",
+    "size": "{{size}}",
+    "quality": "{{quality}}",
+    "background": "{{background}}"
+   },
+   "_meta": {
+    "title": "Generate sprite"
+   }
+  },
+  "3": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "filename_prefix": "{{filename_prefix}}-sprite",
+    "images": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Save sprite"
+   }
+  }
+ },
+ "ui": {
+  "groups": [
+   {
+    "title": "Prompt",
+    "color": "pale_blue",
+    "nodes": [
+     "1"
+    ]
+   },
+   {
+    "title": "Generate",
+    "color": "green",
+    "nodes": [
+     "2"
+    ]
+   },
+   {
+    "title": "Output",
+    "color": "purple",
+    "nodes": [
+     "3"
+    ]
+   }
+  ],
+  "notes": [
+   {
+    "text": "The reviewed prompt is filled from prompt.md by render and wired straight into the image node. It asks for one centered subject, the game's view and a transparent background.",
+    "group": "Prompt"
+   },
+   {
+    "text": "The one image node uses the transparent background from the purpose. Credentials are read by the node at run time and never stored in the graph.",
+    "group": "Generate"
+   },
+   {
+    "text": "The only saved file uses the run prefix plus the -sprite suffix. Finalize defringes it after fetch.",
+    "group": "Output"
+   }
+  ]
+ }
+}

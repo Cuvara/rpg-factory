@@ -1,0 +1,179 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Grouped UI layout fixture",
+  "description": "Text-to-image through the 9router image node; credentials are read by the node at run time, never stored here.",
+  "params": {
+    "prompt": {
+      "type": "string",
+      "required": true,
+      "description": "Final reviewed prompt (filled from --prompt-file)."
+    },
+    "model": {
+      "type": "string",
+      "default": "cx/gpt-5.6-sol-image",
+      "description": "Image model id served through the NineRouterImage node."
+    },
+    "size": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+      ],
+      "default": "1024x1024",
+      "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+    },
+    "quality": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "auto",
+      "description": "Image quality."
+    },
+    "background": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "opaque",
+        "transparent"
+      ],
+      "default": "auto",
+      "description": "Background mode."
+    },
+    "filename_prefix": {
+      "type": "string",
+      "default": "assetgen/run",
+      "description": "SaveImage filename prefix in the ComfyUI output folder."
+    }
+  },
+  "output_node": "2",
+  "workflow": {
+    "1": {
+      "class_type": "NineRouterImage",
+      "inputs": {
+        "user_prompt": [
+          "3",
+          0
+        ],
+        "model": "{{model}}",
+        "size": "{{size}}",
+        "quality": "{{quality}}",
+        "background": "{{background}}"
+      },
+      "_meta": {
+        "title": "Generate image"
+      }
+    },
+    "2": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "{{filename_prefix}}",
+        "images": [
+          "4",
+          0
+        ]
+      },
+      "_meta": {
+        "title": "Save image"
+      }
+    },
+    "3": {
+      "class_type": "PrimitiveStringMultiline",
+      "inputs": {
+        "value": "{{prompt}}"
+      },
+      "_meta": {
+        "title": "Prompt (Claude, Codex review <state>)"
+      }
+    },
+    "4": {
+      "class_type": "ImageScale",
+      "inputs": {
+        "image": [
+          "1",
+          0
+        ],
+        "upscale_method": "bilinear",
+        "width": 512,
+        "height": 256,
+        "crop": "center"
+      }
+    },
+    "5": {
+      "class_type": "PreviewImage",
+      "inputs": {
+        "images": [
+          "1",
+          0
+        ]
+      }
+    }
+  },
+  "ui": {
+    "groups": [
+      {
+        "title": "Prompt",
+        "color": "pale_blue",
+        "nodes": [
+          "3"
+        ]
+      },
+      {
+        "title": "Generate",
+        "color": "#abc",
+        "nodes": [
+          "1"
+        ]
+      },
+      {
+        "title": "Post-process",
+        "color": "green",
+        "nodes": [
+          "4",
+          "5"
+        ]
+      },
+      {
+        "title": "Output",
+        "color": "purple",
+        "nodes": [
+          "2"
+        ]
+      }
+    ],
+    "notes": [
+      {
+        "text": "Review the prompt.",
+        "group": "Prompt"
+      },
+      {
+        "text": "Generate the image.",
+        "group": "Generate"
+      },
+      {
+        "text": "Inspect and resize.",
+        "group": "Post-process"
+      },
+      {
+        "text": "Save the result.",
+        "group": "Output"
+      }
+    ],
+    "colors": {
+      "1": "green",
+      "4": {
+        "color": "#232",
+        "bgcolor": "#353"
+      }
+    },
+    "rows": {
+      "4": 1,
+      "5": 0
+    }
+  }
+}
