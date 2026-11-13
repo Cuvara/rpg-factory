@@ -164,6 +164,29 @@ From plan workspace-default (`docs/plans/workspace-default/report.md`):
 - `gate` checks run lead files for machine paths, but other docs checks on `docs/plans` (English only) are still caught
   only by CI.
 
+### language-policy-followups
+
+From plan language-policy (`docs/plans/language-policy/report.md`):
+
+- `changelog.d/language-policy.md` does not name the Agent-tool prompt check (`hooks/hooks.json` matcher `Agent|Task`).
+- `tests/installed-safety.sh` has no english-only case, and none for an Agent prompt.
+- The `--domain` and `--graph` views of the snapshot print no `Language:` line.
+- `skills/factory-core/references/plugin-review.md` still has the short "English only" bullet.
+- `scripts/file-guard.py` ignores `path:line` entries of the english-only allowlist (an Edit fragment has no file
+  line); only `path:*` works.
+- Git guard lows: the `orca` positional parse misses a global option that takes a value; the `Agent|Task` matcher
+  fires for any tool named Task; the plugin-checkout rule governs every plugin checkout.
+- `factory-pipeline.py status` and `cleanup` call `orca orchestration worker-list --full`, which Orca 1.4.244
+  rejects ("Unknown flag --full"), so the unreleased-worker check cannot run there.
+- `status` lists a sibling integration worktree of another plan as a "leftover child" of this plan's integration
+  checkout when its Orca parent is the main checkout (seen with `feat/skills/vfx-graph` while the main checkout held
+  `fix/core/language-policy`). Tell a child of the plan from a worktree of another topic.
+- A plan-scoped owner override cannot name a model outside `pipeline.models.scope` (the personal policy file may only
+  narrow it), so the run lead had to edit the printed launch command by hand. Decide whether a plan may widen the
+  scope for itself, with the owner's word recorded in the plan.
+- Codex stops at its "Hooks need review" trust prompt in a checkout whose hooks it has not seen; `agents` detection
+  still reports it available. Probe for the prompt, or document the one-time trust step in `docs/codex.md`.
+
 ## Covered
 
 - **workspace-default-by-platform**: shipped in plan workspace-default (`changelog.d/workspace-default.md`,

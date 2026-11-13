@@ -1959,6 +1959,14 @@ for phase in 'implement' 'implement --placement child' 'review --sha abc1234' 'v
     pass=$((pass + 1)); echo "PASS  $phase: no other delivery reference"
   else fail=$((fail + 1)); echo "FAIL  $phase: another delivery reference or missing spec"; fi
 done
+# the language policy: every spec kind carries the Language line (registry workspace.report_language, else the user's language)
+LANG_RULE="^Language: write everything in English \(files, plans, briefs, messages, commits, PR text\)\. Reports between sessions are English; only the run lead reports to the owner in [A-Za-z' ]+\.$"
+for phase in 'lead --report-to run:x' 'implement' 'implement --placement child' 'review --sha abc1234' 'verify --sha abc1234' 'qa --sha abc1234'; do
+  expect_spec "$phase: spec carries the Language line" "$LANG_RULE" dispatch "$OK" --task gw --phase $phase --runner orca
+done
+expect "planner: the prompt carries the Language line" 0 "$LANG_RULE" planner --request "add a thing"
+expect "the registry report language is named in the Language line" 0 "to the owner in Vietnamese\.$" planner --request "add a thing"
+expect "registry none: no report language means the user's language" 0 "to the owner in the user's language\.$" --registry none planner --request "add a thing"
 refute_spec "non-plugin review does not name plugin checklist" 'plugin-review\.md' dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
 expect_spec "non-plugin review retains routed checklist" "the routed lead skill's review checklist" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
 PLUGIN=$(plan plugin-prompt "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
@@ -2466,6 +2474,7 @@ expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "Y
 expect "integration QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner agent
 expect_spec "known_failing: the integration QA spec lists the checks" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA: spec carries the Language line" "$LANG_RULE" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA: spec is complete" "$SPEC_RULE" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA spec: the run lead's RPG_FACTORY_WORKSPACE for every test run" "^Test environment: set RPG_FACTORY_WORKSPACE=[^ ]*ws'? for every test run \(the run lead's environment sets it; a worker session may not inherit it\)\.$" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca

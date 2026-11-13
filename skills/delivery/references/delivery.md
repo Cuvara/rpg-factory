@@ -71,6 +71,9 @@ Objective; in-scope paths; exclusions (paths, repos, actions); base branch and S
 (fast tier, plus extended or external when named); acceptance criteria; report format. A task lead's spec adds the
 task-lead rules; a sub-session's narrows it to its paths. No step lists.
 
+A spec and every session report are English, as are briefs and messages between sessions. Only the run lead's report
+to the user follows the project's report language (the snapshot `Language:` line; unset means the user's language).
+
 A sub-session reports changed paths; each check with exact counts and log path (or NOT_RUN with command and reason);
 limitations; out-of-scope findings. The task lead's report adds outcome, worktree path, branch, base and HEAD SHA,
 each subtask with its commit, and the verify verdict (state, SHA, model).
