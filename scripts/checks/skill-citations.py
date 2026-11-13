@@ -32,6 +32,9 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
+from workspace import default_workspace
+
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(HERE))
 EXT = r"(?:cs|go|py|sh|yml|yaml|json|asmdef|asset|md|proto|sql|csproj|uxml|uss|mod|toml|txt|jq)"
 LINES = r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*"
@@ -217,7 +220,7 @@ def main():
         print(__doc__)
         return 0
     reg = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
-    ws = os.environ.get(reg["workspace"].get("root_env", ""), "") or reg["workspace"]["root_default"]
+    ws = default_workspace(registry=reg)
     skills, overrides = [], {}
     suggest, offline = "--suggest" in args, "--offline" in args
     strict, fix = "--strict" in args, "--fix" in args
