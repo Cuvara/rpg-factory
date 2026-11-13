@@ -2,9 +2,18 @@
 
 Date: 2026-11-13. Run id: `e2e-icon-002` (purpose `icon`, template `staged-icon`, style `stylized-painterly`).
 
-Result: PARTIAL - every step 1-12 ran and the one real generation succeeded, but finalize's QA is FAIL: the gateway
-returned a 1536x1024 image for a 1024x1024 request, and the 64 px PreviewImage that `fetch_outputs` also returned was
-graded as a second output.
+Result: FAIL at qa - the one real generation ran, but finalize's QA failed because the gateway returned a 1536x1024
+image for a 1024x1024 request and the 64 px PreviewImage fetched by `fetch_outputs` was graded as a second output.
+
+Neither PASS nor NOT_RUN is true: the run ran and its QA failed. Step by step:
+
+- Ran: steps 1-7, 9, 10a-10c, 12 and 13 (Steps table).
+- Ran with a FAIL: step 11 (`finalize`, exit 1, "FAIL at qa": `png-size` FAIL on both outputs).
+- Exercised only with a fixture: step 8 (`upload_file`, called once after the run with a credential-free
+  fixture outside the run dir; the workflow consumes no upload, so the References group and anchor wiring stay
+  unexercised).
+- Not exercised: image reviews (`review-cmd --phase image`, `review-image-claude.json`), `manifest` (no `run.md`),
+  the style rows of QA (NOT_AVAILABLE), anchors and the style lock (Limitations).
 
 ## Approval and budget
 
@@ -31,8 +40,8 @@ graded as a second output.
   `PreviewImage` "Preview at 64 px".
 - Style: `stylized-painterly` v1 (core) via `--style`: `icon` has no default style and there is no `project.json`.
 - Authoring: scratch dir `<state dir>/pipeline/assetgen-workflows/live-e2e/authoring`. The workspace has no
-  `game-authoring` checkout, so no `project.json` or `styles/` to copy: no style lock, no anchors, and `upload_file`
-  had nothing to upload.
+  `game-authoring` checkout, so no `project.json` or `styles/` to copy: no style lock, no anchors, and the run had
+  nothing to upload (`upload_file` was exercised separately with a fixture: Upload probe).
 - Run dir: `<state dir>/pipeline/assetgen-workflows/live-e2e/authoring/assetgen/runs/e2e-icon-002`.
 - Prompt reviewer: codex-cli 0.167.1 (model gpt-6.1-sol, reasoning medium); log
   `<state dir>/pipeline/assetgen-workflows/live-e2e/codex-prompt-review-002.log`.
@@ -49,7 +58,7 @@ graded as a second output.
 | 5 | `assetgen.py render --run <run> --param quality=low` (again, after the review) | exit 0; prompt node title "Prompt (Claude, Codex review PASS)" |
 | 6 | `assetgen.py graph-lint templates/assetgen/workflows/staged-icon.json`; `assetgen.py graph-lint --run <run>` | exit 0, 1 PASS 0 WARN 0 FAIL; exit 0, 1 PASS 0 WARN 0 FAIL |
 | 7 | comfy-mcp `validate_workflow` `<run>/workflow.json` | `valid: true`, 0 errors, 0 warnings, `partner_nodes` empty, `spends_credits: false` |
-| 8 | comfy-mcp `upload_file` | not called: `<run>/references/` does not exist (no anchors, no edit reference) |
+| 8 | comfy-mcp `upload_file` `paths=[<state dir>/pipeline/assetgen-workflows/live-e2e/upload-probe/e2e-icon-002-upload-probe.png]`, `overwrite=false` | fixture only, after the run: no error, 1 upload, stored as `e2e-icon-002-upload-probe.png` (type input, subfolder empty); not consumed by the workflow (Upload probe). The run itself had no `<run>/references/` (no anchors, no edit reference) |
 | 9 | `assetgen.py budget --run <run>` | exit 0, "1 used (0 outputs + 1 failed attempt) of 4 allowed, 3 remaining" |
 | 10a | comfy-mcp `run_workflow` `<run>/workflow.json`, `wait=False` (no `confirm_spend`) | `queued`, one prompt id (Gateway proof) |
 | 10b | comfy-mcp `job` action `wait`, timeout 300 | `completed`, error none; outputs by node: 2 (output folder), 5 (temp folder) |
@@ -78,6 +87,21 @@ and node 5 (`PreviewImage`, type temp, file `ComfyUI_temp_..._00001_.png`); `fet
 renamed them by prompt id and index: `937cc86a_000.png` (SaveImage, 1536x1024) and `937cc86a_001.png` (PreviewImage,
 64x64). The local names no longer say which node or type each came from. finalize treated the preview as a normal
 output: defringed it (204 of 204 soft pixels), embedded the workflow into it, and QA graded it and failed its size.
+
+## Upload probe
+
+`upload_file` was not part of the generation (the run has no `<run>/references/`), so it was exercised once on its
+own, after the run, with a harmless credential-free fixture outside the run dir. `<run>/references/` was not created.
+
+- Fixture: a copy of the run's 64 px PreviewImage as fetched, `<run>/outputs-raw/937cc86a_001.png`, at
+  `<state dir>/pipeline/assetgen-workflows/live-e2e/upload-probe/e2e-icon-002-upload-probe.png` (11172 bytes, sha256
+  prefix `db82bd23e0daf9bb`).
+- Tool and args: comfy-mcp `upload_file`, `paths` = [that absolute path], `overwrite` = false.
+- Returned: no error; `uploads` with 1 entry, stored name (`cloud_name`) `e2e-icon-002-upload-probe.png`, `subfolder`
+  empty, `type` input (ComfyUI's input folder, the name a `LoadImage` would take). No explicit state field is
+  returned; the call completing with the entry is the success signal.
+- Not consumed: no workflow references the file, no generation ran for it (generation count stays 1), and with no
+  anchors the References group and the anchor `LoadImage`/`ImageBatch` wiring stay unexercised.
 
 ## Gateway proof
 
@@ -125,7 +149,9 @@ workflow `e2e-icon-002`, zoom fit to the graph).
 
 ## Limitations
 
-- No style lock and no anchors (no `game-authoring` checkout), so `upload_file` and the style rows were not exercised.
+- No style lock and no anchors (no `game-authoring` checkout), so the style rows, the References group and the
+  anchor wiring were not exercised; the upload path was exercised with a fixture only (Upload probe), never feeding a
+  workflow.
 - No image reviews (`review-cmd --phase image`, `review-image-claude.json`) and no `manifest`: outside steps 1-12;
   the run stays without `run.md`.
 - The `comfyui_9router` pack version is not shown by `server_info` (`freshness.packs` empty): unverified.
