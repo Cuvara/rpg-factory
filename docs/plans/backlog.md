@@ -154,8 +154,11 @@ From plan workspace-default (`docs/plans/workspace-default/report.md`):
   `.claude/CLAUDE.md` "Commands".
 - No test stops a caller from hard-coding the workspace literal again: add a grep case to
   `tests/workspace-default.test.sh` (allowed: the two helpers, their suite, test fixtures).
-- `scripts/checks/netcode-headless.sh` uses the workspace for the Netcode source only when `RPG_FACTORY_WORKSPACE` is
-  exported, not the platform default.
+- Integration QA with `RPG_FACTORY_WORKSPACE` unset on Git Bash still fails 6 of 22 checks: `scripts/check-registry.sh`
+  ("registry paths exist in workspace") and `factory-context.sh` (four cases: markers not found) take the workspace
+  from the registry root default or the environment, not from the shared helper, and
+  `scripts/checks/netcode-headless.sh` uses the workspace for the Netcode source only when `RPG_FACTORY_WORKSPACE` is
+  exported. Route them through `scripts/lib/workspace.{sh,py}` too.
 - `scripts/lib/workspace.sh`: stock Cygwin mounts drives under a cygdrive prefix, not at the root; the helper assumes
   the Git Bash form there too.
 - `gate` checks run lead files for machine paths, but other docs checks on `docs/plans` (English only) are still caught
