@@ -1,4 +1,5 @@
 """Model routing and best-effort per-run availability for the delivery pipeline."""
+import hashlib
 import json
 import os
 import re
@@ -6,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
+import codexconfig
 import fstate
 
 with (Path(__file__).resolve().parents[2] / 'docs/schemas/pipeline-plan.schema.json').open(encoding='utf-8') as _schema:
@@ -114,12 +116,38 @@ def mark(plan, agent, reason=None):
 _cache = {}
 
 
+def _codex_provider(login):
+    """Return the active authenticated provider's name, without exposing credentials."""
+    try:
+        data = codexconfig.config()
+        profile = data.get('profiles', {}).get(data.get('profile'), {})
+        name = profile.get('model_provider', data.get('model_provider'))
+        if not isinstance(name, str) or not name:
+            return None
+        provider = data.get('model_providers', {}).get(name, {})
+        headers = provider.get('http_headers', {})
+        header = isinstance(headers, dict) and any(k.lower() == 'authorization' for k in headers)
+        env_key = provider.get('env_key')
+        if header or isinstance(env_key, str) and bool(os.environ.get(env_key)) or provider.get('requires_openai_auth') is True and login:
+            return name
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
 def available(pipe, plan):
     """plan None (the planner): no per-run marks."""
     path = marks_path(plan) if plan is not None else None
     # content, not mtime: two writes within the timer resolution (Windows) share an mtime
     stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
-    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'), os.environ.get('PATH'), stamp)
+    try:
+        # a digest, so the memo never holds the config's header or key values
+        config_digest = hashlib.sha256((Path(codexconfig.home()) / 'config.toml').read_bytes()).digest()
+    except OSError:
+        config_digest = None
+    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'),
+           os.environ.get('PATH'), os.environ.get('CODEX_HOME'), os.environ.get('HOME'),
+           os.environ.get('USERPROFILE'), stamp, config_digest, frozenset(k for k, v in os.environ.items() if v))
     if key in _cache:
         return _cache[key]
     override = os.environ.get('RPG_FACTORY_AGENTS')
@@ -133,7 +161,10 @@ def available(pipe, plan):
         yes = agent in chosen if chosen is not None else bool(shutil.which(cfg['bin']))
         out[agent] = {'available': yes, 'why': 'RPG_FACTORY_AGENTS override' if chosen is not None else
                       (cfg['bin'] + (' on PATH' if yes else ' missing from PATH'))}
+    codex_orca = False
+    orca_reason = 'Orca not running'
     if chosen is None and any(k.startswith('ORCA_') for k in os.environ) and shutil.which('orca'):
+        orca_reason = 'no Orca account'
         try:
             p = subprocess.run(['orca', 'account', 'list', '--json'], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=5)
@@ -141,12 +172,31 @@ def available(pipe, plan):
             accounts = data.get('result', {})
             for agent in candidates:
                 row = accounts.get(agent)
+                if agent == 'codex':
+                    codex_orca = (isinstance(row, dict) and
+                                  (bool(row.get('accounts')) or
+                                   isinstance(row.get('systemDefault'), dict) and
+                                   row['systemDefault'].get('hasAuth') is True))
+                    continue
                 if (isinstance(row, dict) and row.get('accounts') == []
                         and isinstance(row.get('systemDefault'), dict)
                         and row['systemDefault'].get('hasAuth') is False):
                     out[agent] = {'available': False, 'why': 'Orca account unavailable'}
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             pass
+    if chosen is None and out.get('codex', {}).get('available'):
+        codex_bin = pipe['agents']['codex']['bin']
+        source = 'orca account' if codex_orca else None
+        if not source:
+            try:
+                login = subprocess.run([shutil.which(codex_bin), 'login', 'status'], capture_output=True,
+                                       stdin=subprocess.DEVNULL, timeout=5).returncode == 0
+            except (OSError, TypeError, subprocess.TimeoutExpired):
+                login = False
+            provider = _codex_provider(login) if not login else None
+            source = 'codex login' if login else 'api provider ' + provider if provider else None
+        out['codex'] = {'available': bool(source), 'why': codex_bin + ' on PATH; ' +
+                        (source or orca_reason + ', codex login missing, no authenticated api provider')}
     for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
         if agent in out:
             out[agent] = {'available': False, 'why': 'MODEL_UNAVAILABLE' + (': ' + reason if reason else '')}

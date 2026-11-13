@@ -1,6 +1,7 @@
 """Orca and Claude Code agent dispatch commands, shared by factory-workflow.py and factory-pipeline.py.
 
-Nothing here runs Orca: it builds the exact argv the lead runs (or prints). Placement follows the worktree rule in
+Nothing here runs Orca: it builds the exact argv the lead runs (or prints); send_message() builds the argv of one
+`orca orchestration send` that factory-pipeline.py sync --send runs itself. Placement follows the worktree rule in
 skills/delivery/references/delivery.md section 4 (RPG specifics: skills/factory-core/references/parallel-work.md):
 a repo with registry `worktrees: false`, or whose root holds a
 `pipeline.no_worktree_markers` file (a Unity project), never gets a new worktree - the worker runs in the existing
@@ -113,6 +114,12 @@ def worker_start(spec, agent, place, title=None, model=None, effort=None):
     if title:
         argv += ["--task-title", title]
     return argv + model_flags(model, effort) + ["--json"]
+
+
+def send_message(to, subject, body, msg_type="status"):
+    """argv for `orca orchestration send` of one message (factory-pipeline.py sync runs it with --send)."""
+    return ["orca", "orchestration", "send", "--to", to, "--type", msg_type, "--subject", subject, "--body", body,
+            "--json"]
 
 
 def _toplevel(path):
