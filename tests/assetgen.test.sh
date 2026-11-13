@@ -43,14 +43,19 @@
 # embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
 # style_selftest.py), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
 # the read-only budget verb: outputs + failed attempts against the limit, ok/at-limit/exceeded/unlimited/invalid and
-# their exits; finalize's budget line and --json key with its exit unchanged), and no endpoints or credentials in
-# templates/assetgen or scripts/assetgen.
+# their exits; finalize's budget line and --json key with its exit unchanged), the output filter (finalize's first step
+# moves the PreviewImage files fetch_outputs downloads into outputs/ to previews/, classified by fetch.json or job state
+# under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
+# preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
+# recorded previews/ path), and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state" CLAUDE_PLUGIN_ROOT="$ROOT"
+# no case reads the machine's comfy-cli job state: the output filter cases write their own job files here
+export RPG_FACTORY_COMFY_JOBS_DIR="$TMP/comfy-jobs"; mkdir -p "$RPG_FACTORY_COMFY_JOBS_DIR"
 unset ASSETGEN_NO_PIL
 update_golden=false; [ "${1:-}" = "--update-golden" ] && update_golden=true
 pass=0; fail=0
@@ -1010,6 +1015,7 @@ save("icon-ok.png", 512, 512, disc(512, 512, (0, 0, 0, 0)))  # 512x512: the icon
 save("icon-small.png", 256, 256, disc(256, 256, (0, 0, 0, 0)))  # under every core purpose floor
 save("icon-opaque.png", 512, 512, disc(512, 512, (30, 30, 30, 255)), alpha=False)
 save("icon-wide.png", 384, 256, disc(384, 256, (0, 0, 0, 0)))
+save("preview-64.png", 64, 64, disc(64, 64, (0, 0, 0, 0)))  # the staged icon's 64 px PreviewImage
 save("empty.png", 256, 256, lambda x, y: (0, 0, 0, 0))
 save("flat.png", 256, 256, lambda x, y: (90, 90, 90, 255), alpha=False)
 def wave(x, y):
@@ -1993,11 +1999,95 @@ finrun() {
   mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
-steps() { grep -E '^(defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+steps() { grep -E '^(filter|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+# Live fetch_outputs names encode the prompt and index, not the source type. Each run gets its own rendered prefix.
+filter_run() {
+  local name="$1"
+  finrun "$name" icon icon-ok.png || return 1
+  FILTER_RUN="$RUNS/$name"
+  mv "$FILTER_RUN/outputs/prop.png" "$FILTER_RUN/outputs/937cc86a_000.png"
+  cp "$FX/preview-64.png" "$FILTER_RUN/outputs/937cc86a_001.png"
+  mkdir -p "$FILTER_RUN/previews"
+  local prefix base dir
+  prefix=$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix][0]' "$FILTER_RUN/workflow.json")
+  base=${prefix##*/}; dir=${prefix%/*}
+  jq -n --arg prompt '937cc86a-b67c-4a32-ad68-2652a5ef3425' \
+    --arg save "http://127.0.0.1:8188/view?filename=${base}_00001_.png&subfolder=${dir}&type=output" \
+    --arg temp 'http://127.0.0.1:8188/view?filename=ComfyUI_temp_abcde_00001_.png&subfolder=&type=temp' \
+    '{prompt_id: $prompt, urls: [$save, $temp]}' > "$FILTER_RUN/fetch.json"
+}
+filter_count() { find "$1/outputs" "$1/previews" -type f | wc -l | tr -d ' '; }
+filter_files_intact() { [ "$(filter_count "$1")" = "$2" ]; }
+
+filter_run filter-live-icon-001 || no "filter live setup"
+fl="$FILTER_RUN"; count=$(filter_count "$fl")
+AG budget --run "$fl" --json > "$TMP/filter-budget-before.json" 2>"$TMP/err"; brc=$?
+AG finalize --run "$fl" --json > "$TMP/filter-finalize.json" 2>>"$TMP/err"; rc=$?
+AG budget --run "$fl" --json > "$TMP/filter-budget-after.json" 2>>"$TMP/err"; arc=$?
+AG manifest --run "$fl" > "$TMP/o" 2>>"$TMP/err"; mrc=$?
+sed -n '/^---json$/,/^---$/p' "$fl/run.md" | sed '1d;$d' > "$TMP/filter-manifest.json"
+[ "$brc/$rc/$arc/$mrc" = 0/0/0/0 ] \
+  && jq -e '[.outputs,.previews,.used] == [1,1,1]' "$TMP/filter-budget-before.json" >/dev/null && jq -e '[.outputs,.previews,.used] == [1,1,1]' "$TMP/filter-budget-after.json" >/dev/null \
+  && jq -e '.steps[0].step == "filter" and .steps[0].state == "moved" and ([.steps[0].results[] | select(.state == "moved") | .output] == ["outputs/937cc86a_001.png"])' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fl/outputs/937cc86a_000.png" ] && [ ! -e "$fl/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fl/previews/937cc86a_001.png" && filter_files_intact "$fl" "$count" \
+  && jq -e '([.results[].output] | unique) == ["outputs/937cc86a_000.png"] and ([.outputs[].path] == ["outputs/937cc86a_000.png"])' "$fl/qa.json" >/dev/null \
+  && jq -e '[.spec.outputs[].path] == ["outputs/937cc86a_000.png"]' "$TMP/filter-manifest.json" >/dev/null \
+  && ok "filter fetch evidence: preview moved, QA and manifest see only the deliverable; budget counts one before and after" \
+  || no "filter live rc=$brc/$rc/$arc/$mrc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+filter_run filter-job-icon-001 || no "filter job setup"
+fj="$FILTER_RUN"; count=$(filter_count "$fj")
+jq --slurpfile fetch "$fj/fetch.json" '.prompt_id = $fetch[0].prompt_id | .outputs = $fetch[0].urls' "$ROOT/tests/fixtures/assetgen/comfy-job-state.json" > "$RPG_FACTORY_COMFY_JOBS_DIR/937cc86a-b67c-4a32-ad68-2652a5ef3425.json"
+rm "$fj/fetch.json"
+AG finalize --run "$fj" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 0 ] && jq -e '.steps[0].state == "moved"' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fj/outputs/937cc86a_000.png" ] && [ ! -e "$fj/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fj/previews/937cc86a_001.png" && filter_files_intact "$fj" "$count" \
+  && ok "filter falls back to job-state URLs when fetch.json is absent" || no "filter job rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+# An empty, queued-like job has no output evidence: retain both files with actionable reasons.
+filter_run filter-unknown-icon-001 || no "filter unknown setup"
+fu="$FILTER_RUN"; count=$(filter_count "$fu")
+rm "$fu/fetch.json"
+jq '.prompt_id = "937cc86a-b67c-4a32-ad68-2652a5ef3425" | .status = "queued"' "$ROOT/tests/fixtures/assetgen/comfy-job-state.json" > "$RPG_FACTORY_COMFY_JOBS_DIR/937cc86a-b67c-4a32-ad68-2652a5ef3425.json"
+AG finalize --run "$fu" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 1 ] && jq -e '.steps[0].state == "skipped" and ([.steps[0].results[] | select(.state == "kept" and (.reason | contains("save the fetch_outputs url_only=true result as <run>/fetch.json")))] | length == 2)' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fu/outputs/937cc86a_000.png" ] && [ -f "$fu/outputs/937cc86a_001.png" ] && filter_files_intact "$fu" "$count" \
+  && ok "filter keeps unknown files and explains how to save fetch evidence" || no "filter unknown rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+rm "$RPG_FACTORY_COMFY_JOBS_DIR/937cc86a-b67c-4a32-ad68-2652a5ef3425.json"
+
+filter_run filter-collision-icon-001 || no "filter collision setup"
+fc="$FILTER_RUN"; cp "$FX/icon-ok.png" "$fc/previews/937cc86a_001.png"; count=$(filter_count "$fc")
+AG finalize --run "$fc" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 0 ] && jq -e '.steps[0].state == "moved"' "$TMP/filter-finalize.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$fc/previews/937cc86a_001.png" && cmp -s "$FX/preview-64.png" "$fc/previews/937cc86a_001.1.png" \
+  && [ ! -e "$fc/outputs/937cc86a_001.png" ] && filter_files_intact "$fc" "$count" \
+  && ok "filter preserves a collision and moves the preview to a numbered name" || no "filter collision rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+filter_run filter-allpreview-icon-001 || no "filter all preview setup"
+fp="$FILTER_RUN"; cp "$FX/preview-64.png" "$fp/outputs/937cc86a_000.png"
+jq '.urls[0] = .urls[1]' "$fp/fetch.json" > "$TMP/filter-fetch.json" && mv "$TMP/filter-fetch.json" "$fp/fetch.json"
+count=$(filter_count "$fp")
+AG finalize --run "$fp" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 1 ] && jq -e '.failed_at == "filter" and .steps[0].state == "FAIL"' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fp/outputs/937cc86a_000.png" ] && [ -f "$fp/outputs/937cc86a_001.png" ] \
+  && [ ! -e "$fp/previews/937cc86a_000.png" ] && [ ! -e "$fp/previews/937cc86a_001.png" ] && filter_files_intact "$fp" "$count" \
+  && ok "filter fails before moving any file when all outputs are previews" || no "filter all preview rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+for malformed in invalid missing-urls; do
+  filter_run "filter-${malformed}-icon-001" || no "filter malformed setup: $malformed"
+  fmrun="$FILTER_RUN"; count=$(filter_count "$fmrun")
+  if [ "$malformed" = invalid ]; then printf 'not json\n' > "$fmrun/fetch.json"; else printf '{"prompt_id":"937cc86a-b67c-4a32-ad68-2652a5ef3425"}\n' > "$fmrun/fetch.json"; fi
+  AG finalize --run "$fmrun" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+  [ "$rc" -eq 1 ] && jq -e '.steps[0].state == "skipped" and ([.steps[0].results[] | select(.state == "kept")] | length == 2)' "$TMP/filter-finalize.json" >/dev/null \
+    && [ -f "$fmrun/outputs/937cc86a_000.png" ] && [ -f "$fmrun/outputs/937cc86a_001.png" ] && filter_files_intact "$fmrun" "$count" \
+    && ok "filter ignores malformed fetch evidence ($malformed), retaining both files" || no "filter malformed $malformed rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+done
 # alpha purpose: defringe, embed, qa in that order; the run ends embedded, defringed and graded
 fz="$RUNS/fin-icon-001"; finrun fin-icon-001 icon fringe.png
 AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] && grep -q "^defringe defringed: 1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] && grep -q "^defringe defringed: 1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
   && grep -q "^embed done: 1 embedded, 0 replaced, 0 kept, 0 FAIL" "$TMP/o" && grep -qx "assetgen finalize: PASS" "$TMP/o" \
   && [ "$(jq -r .state "$fz/qa.json")" = PASS ] && [ -f "$fz/defringe.json" ] && [ -f "$fz/outputs-raw/prop.png" ] \
   && [ "$(sha "$fz/outputs-raw/prop.png")" = "$(sha "$FX/fringe.png")" ] && grep -qa "workflow" "$fz/outputs/prop.png" \
@@ -2008,18 +2098,19 @@ AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
 b1=$(sha "$fz/outputs/prop.png"); d1=$(sha "$fz/defringe.json")
 AG finalize --run "$fz" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.schema + " " + .state + " " + (.exit | tostring) + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" \
-  = "rpg-factory.assetgen-finalize/1 PASS 0 defringe:skipped,embed:done,qa:PASS" ] \
-  && jq -r '.steps[0].reason' "$TMP/f.json" | grep -q "^already defringed" && jq -r '.steps[1].reason' "$TMP/f.json" | grep -q "0 embedded, 0 replaced, 1 kept" \
+  = "rpg-factory.assetgen-finalize/1 PASS 0 filter:skipped,defringe:skipped,embed:done,qa:PASS" ] \
+  && [ "$(jq -r '.steps[0].reason' "$TMP/f.json")" = "no preview file in outputs/" ] \
+  && jq -r '.steps[1].reason' "$TMP/f.json" | grep -q "^already defringed" && jq -r '.steps[2].reason' "$TMP/f.json" | grep -q "0 embedded, 0 replaced, 1 kept" \
   && [ "$(jq -c '[.stale, .failed_at]' "$TMP/f.json")" = '[[],null]' ] \
   && [ "$(sha "$fz/outputs/prop.png")" = "$b1" ] && [ "$(sha "$fz/defringe.json")" = "$d1" ] && [ "$(jq -r .state "$fz/qa.json")" = PASS ] \
-  && ok "finalize again on an unchanged run: defringe skipped (already defringed), embed kept, qa PASS, bytes unchanged, --json object" \
+  && ok "finalize again on an unchanged run: filter skipped (no preview), defringe skipped (already defringed), embed kept, qa PASS, bytes unchanged, --json object" \
   || no "finalize idempotent rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
 # a non-alpha purpose never defringes; embed changes the bytes, so the image reviews that bound them are stale; qa.json is not listed
 ft="$RUNS/fin-tile-001"; finrun fin-tile-001 texture-tileable tile-ok.png
 AG qa --run "$ft" > /dev/null 2>&1
 bound "$ft" image PASS codex > "$ft/review-image.json"; bound "$ft" image PASS claude > "$ft/review-image-claude.json"
 AG finalize --run "$ft" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] && grep -q "^defringe skipped: not an alpha purpose" "$TMP/o" \
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] && grep -q "^defringe skipped: not an alpha purpose" "$TMP/o" \
   && [ ! -e "$ft/defringe.json" ] && [ ! -e "$ft/outputs-raw" ] && grep -q "^embed done: 1 embedded" "$TMP/o" \
   && grep -qx "stale now (re-run them): review-image.json, review-image-claude.json" "$TMP/o" \
   && ok "finalize on a non-alpha purpose: defringe skipped (nothing written), embed, qa PASS; the image reviews it made stale are named, not qa.json" \
@@ -2031,29 +2122,29 @@ bound "$fb" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orang
 bound "$fb" image FAIL claude '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fb/review-image-claude.json"
 fb0=$(sha "$fb/outputs/prop.png"); q0=$(sha "$fb/qa.json")
 AG finalize --run "$fb" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: .*qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: .*qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
   && grep -q "pass --force" "$TMP/o" && ! grep -q "^stale now" "$TMP/o" \
   && [ "$(sha "$fb/outputs/prop.png")" = "$fb0" ] && [ "$(sha "$fb/qa.json")" = "$q0" ] && [ ! -e "$fb/outputs-raw" ] && [ ! -e "$fb/defringe.json" ] \
   && ok "finalize: outputs the records bind stop at FAIL at defringe without --force (exit 1, nothing written, embed and qa not run)" \
   || no "finalize bound rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 AG finalize --run "$fb" --force --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.stale | join(","))' "$TMP/f.json")" = "PASS review-image.json,review-image-claude.json" ] \
-  && [ "$(jq -r '.steps[0].state' "$TMP/f.json")" = defringed ] && [ "$(sha "$fb/outputs/prop.png")" != "$fb0" ] && [ "$(sha "$fb/outputs-raw/prop.png")" = "$fb0" ] \
+  && [ "$(jq -r '.steps[1].step + ":" + .steps[1].state' "$TMP/f.json")" = defringe:defringed ] && [ "$(sha "$fb/outputs/prop.png")" != "$fb0" ] && [ "$(sha "$fb/outputs-raw/prop.png")" = "$fb0" ] \
   && [ "$(jq -r .state "$fb/qa.json")" = PASS ] \
   && ok "finalize --force: defringe runs, embed and qa PASS, both image reviews listed stale (qa.json is rewritten, not listed)" \
   || no "finalize force rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
 # stops at the first FAIL, naming the step: defringe (an unreadable output of an alpha purpose), embed, qa
 fd="$RUNS/fin-fail-def-001"; finrun fin-fail-def-001 icon not-a-png.png
 AG finalize --run "$fd" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: " "$TMP/o" && [ ! -e "$fd/qa.json" ] && [ "$(sha "$fd/outputs/prop.png")" = "$(sha "$FX/not-a-png.png")" ] \
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: " "$TMP/o" && [ ! -e "$fd/qa.json" ] && [ "$(sha "$fd/outputs/prop.png")" = "$(sha "$FX/not-a-png.png")" ] \
   && ok "finalize: a FAIL at defringe stops there (exit 1, embed and qa not run, output untouched)" || no "finalize fail defringe rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 fe="$RUNS/fin-fail-emb-001"; finrun fin-fail-emb-001 texture-tileable not-a-png.png
 AG finalize --run "$fe" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(jq -r '.failed_at + " " + .state + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" = "embed FAIL defringe:skipped,embed:FAIL" ] && [ ! -e "$fe/qa.json" ] \
+[ $rc -eq 1 ] && [ "$(jq -r '.failed_at + " " + .state + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" = "embed FAIL filter:skipped,defringe:skipped,embed:FAIL" ] && [ ! -e "$fe/qa.json" ] \
   && ok "finalize: a FAIL at embed stops there (exit 1, qa not run, failed_at embed)" || no "finalize fail embed rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
 fq="$RUNS/fin-fail-qa-001"; finrun fin-fail-qa-001 icon icon-opaque.png
 AG finalize --run "$fq" > "$TMP/o" 2>"$TMP/err"; rc=$?
-[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] && grep -q "^defringe skipped: no output needs it" "$TMP/o" && grep -q "^assetgen finalize: FAIL at qa: " "$TMP/o" \
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] && grep -q "^defringe skipped: no output needs it" "$TMP/o" && grep -q "^assetgen finalize: FAIL at qa: " "$TMP/o" \
   && [ "$(jq -r .state "$fq/qa.json")" = FAIL ] \
   && ok "finalize: a qa FAIL is FAIL at qa, exit 1 (an opaque output needs no defringe)" || no "finalize fail qa rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 # NOT_AVAILABLE (a 16-bit output without Pillow) exits 3 like qa
@@ -2120,7 +2211,8 @@ AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
   && [ "$(jq -c '[.schema, .run, .outputs, .failed_attempts, .used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" \
      = '["rpg-factory.assetgen-budget/1","bud-icon-003",1,["bud-icon-001"],2,3,1,"ok",0]' ] \
   && [ "$(jq -r '.reason | type' "$TMP/b.json")" = string ] \
-  && [ "$(jq -c 'keys' "$TMP/b.json")" = '["allowed","exit","failed_attempts","outputs","reason","remaining","run","schema","state","used"]' ] \
+  && [ "$(jq -c 'keys' "$TMP/b.json")" = '["allowed","exit","failed_attempts","outputs","previews","reason","remaining","run","schema","state","used"]' ] \
+  && [ "$(jq -c .previews "$TMP/b.json")" = 0 ] && ! lf "$TMP/o" | grep -q "not counted" \
   && [ "$(lf "$TMP/o" | wc -l)" -eq 1 ] && lf "$TMP/o" | grep -q "^budget ok: .*2 used.*of 3 allowed" \
   && ok "budget ok: used 2 = 1 output + 1 failed attempt (bud-icon-001; not the finished 002, the later 009 or another slug), allowed 3, remaining 1, exit 0" \
   || no "budget ok rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
@@ -2169,7 +2261,7 @@ bf="$RUNS/bud-tile-001"; { mkrun bud-tile-001 texture-tileable --style stylized-
   && cp "$FX/tile-ok.png" "$bf/outputs/a.png"; } || no "budget: finalize run bud-tile-001"
 AG finalize --run "$bf" > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: .*1 used.*of 4 allowed" \
-  && [ "$(lf "$TMP/o" | grep -c "^budget ")" -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] \
+  && [ "$(lf "$TMP/o" | grep -c "^budget ")" -eq 1 ] && [ "$(steps "$TMP/o")" = "filter defringe embed qa " ] \
   && ok "finalize text: one 'budget ok' line right before the last 'assetgen finalize: PASS' line, exit 0" || no "finalize budget text rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
 AG finalize --run "$bf" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
 AG budget --run "$bf" --json > "$TMP/b.json" 2>>"$TMP/err"
@@ -2402,6 +2494,9 @@ variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha25
 variant qp-prompt-001; printf 'A different prompt.\n' > "$RUNS/qp-prompt-001/prompt.md"
 variant qp-where-001; fmset "$RUNS/qp-where-001" 'obj["id"] = "AGEN-somewhere-else-001"'
 variant qp-escape-001; fmset "$RUNS/qp-escape-001" 'obj["spec"]["outputs"][0]["path"] = "outputs/../../qp-icon-001/outputs/qp-icon.png"'
+# output filter: a previews/ file beside the recorded outputs is ignored; a recorded previews/ path is never a deliverable
+variant qp-preview-001; mkdir -p "$RUNS/qp-preview-001/previews" && cp "$FX/preview-64.png" "$RUNS/qp-preview-001/previews/qp-icon_001.png"
+variant qp-precord-001; mkdir -p "$RUNS/qp-precord-001/previews" && mv "$RUNS/qp-precord-001/outputs/qp-icon.png" "$RUNS/qp-precord-001/previews/qp-icon.png"   && fmset "$RUNS/qp-precord-001" 'obj["spec"]["outputs"][0]["path"] = "previews/qp-icon.png"'
 # reviews are bound to the requirements (review finding 1): a purpose re-resolved with a stricter rubric and qa, then
 # qa and manifest re-run, keeps the old review files -> stale; a render --param size change -> stale image review
 RUBA="$TMP/rubric-authoring"; mkdir -p "$RUBA/assetgen"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$RUBA/assetgen/"
@@ -2642,6 +2737,8 @@ case_ qp-prompt-001 gen-run-refs FAIL 'prompt.md differs' "prompt.md edited afte
 [ "$(st AGEN-somewhere-else-001 gen-run-location)" = FAIL ] && why AGEN-somewhere-else-001 gen-run-location | grep -qF 'id must be AGEN-qp-where-001' \
   && ok "id that does not match the run directory: FAIL" || no "location: $(why AGEN-somewhere-else-001 gen-run-location)"
 case_ qp-escape-001 gen-run-outputs FAIL 'not a path inside the run directory' "output path escaping the run directory: FAIL"
+case_ qp-preview-001 gen-run-outputs PASS '' "a preview file under previews/ is not an unrecorded output: PASS"
+case_ qp-precord-001 gen-run-outputs FAIL 'is not under outputs/' "a recorded previews/ path is never a deliverable: FAIL"
 case_ qp-rubric-001 gen-run-prompt-review FAIL 'bound to other requirements' "purpose re-resolved with a stricter rubric after the prompt review: FAIL"
 case_ qp-rubric-001 gen-run-image-review FAIL 'bound to other requirements' "purpose re-resolved with a stricter rubric after the image review: FAIL"
 [ "$(st AGEN-qp-rubric-001 gen-run-qa)/$(st AGEN-qp-rubric-001 gen-run-outputs)" = "PASS/PASS" ] \
