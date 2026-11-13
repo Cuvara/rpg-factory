@@ -51,7 +51,8 @@ qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid)
 requested_size(workflow, spec) -> the size the run asked for: the size input of the template's primary_node
   (NineRouterImage; a KSampler gives <w>x<h> of its EmptyLatentImage), else of the NineRouterImage with the lowest node
   id (never dict order), else the resolved spec's size param, else "auto". qa.json records it next to the purpose
-  content hash it graded with (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
+  content hash it graded with (purpose_sha256), so a QA report made before the size or the purpose qa block changed
+  is stale.
 qa_style_binding(spec, locate) -> what the style consistency rows of qa.py evaluate besides the purpose and the output
   bytes, or None for a spec without style_lock (no style rows): {"style": spec.style_lock.style (the style ref: id,
   version, sha256), "style_sha256": sha256 of the canonical JSON of the effective style data spec.style.data (what

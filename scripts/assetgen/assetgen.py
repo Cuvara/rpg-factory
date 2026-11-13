@@ -34,11 +34,10 @@ also recorded as spec.warnings); --verbose adds the source of every param, hint 
 Workflow style guide (scripts/assetgen/graphstyle.py): every API node has a title and sits in exactly one group;
 group titles come from Prompt, References, Generate, Post-process, Preview, Output, left to right in that order, each
 with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt (in a
-template that node holds {{prompt}}); more than one NineRouterImage needs primary_node; anchor_target may select
-NineRouterImage.reference_images or IPAdapterAdvanced.image (the local IPAdapter path is UNTESTED on RTX 5060); every
-SaveImage sits in Output with an inline filename suffix (intermediates use PreviewImage); no static LoadImage file
-name. lint adds one assetgen-graph-style row per template (a legacy template without a ui block WARNs). graph-lint
-checks only that: each PATH is a template (layer or standalone) or a ComfyUI frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json);
+template that node holds {{prompt}}); exactly one NineRouterImage; every SaveImage sits in Output with an inline
+filename suffix (intermediates use PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row
+per template (a legacy template without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer
+or standalone) or a ComfyUI frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json);
 --run RUN adds <run>/workflow.ui.json with SaveImage suffixes checked against assetgen/<run directory name> (a frontend
 PATH uses its extra.assetgen.run_id; without one each SaveImage FAILs as unchecked); neither: every core and game
 template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
@@ -61,10 +60,14 @@ family_source, style: {style_id, version, sha256}, override, max_references, ref
 active anchors of that style version, deterministic order, capped) with reason[] per pick, rejections: the relevant
 ones}. render wires each selected anchor as a LoadImage (anchor-<id>.png) and a chain of ImageBatch nodes into
 the template's anchor_target (NineRouterImage.reference_images by default, or IPAdapterAdvanced.image); an existing
-image link stays first (an image-edit reference). primary_node names the generation node whose size the run requests
-(requested_size). promote-anchor writes a proposed anchor from a manifested run output (a person approves it); reject records a rejected asset or direction; drift lists gen-runs,
-anchors and rejections recorded on an older style version or another style hash, and with project.json those under a
-style id that is neither the project style nor a family style (style-id-mismatch, naming the project style).
+image link stays first (an image-edit reference); the local IPAdapter path is UNTESTED on RTX 5060. render refuses an
+anchor_target or primary_node that names no such node or input (template_target_errors). primary_node names the
+generation node whose size the run requests (requested_size); render requires it when the graph has more than one
+NineRouterImage (graph-lint one-image-node still wants exactly one in a staged template). promote-anchor writes a
+proposed anchor from a manifested run output (a person approves it); reject records a rejected asset or direction;
+drift lists gen-runs, anchors and rejections recorded on an older style version or another style hash, and with
+project.json those under a style id that is neither the project style nor a family style (style-id-mismatch, naming
+the project style).
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
@@ -107,8 +110,8 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   references/anchor-<id>.png  render --run: a copy of each style-lock anchor spec.style_lock.references selected
                       for the anchor_target input (refused when the anchor's image no longer has the sha256 resolve
-                      selected); the agent uploads
-                      every references/* file with comfy-mcp upload_file under its name before running
+                      selected); the agent uploads every references/* file with comfy-mcp upload_file under its name
+                      before running
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
