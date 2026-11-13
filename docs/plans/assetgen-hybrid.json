@@ -171,7 +171,7 @@
       "id": "graph-lint-profile",
       "repo": "plugin",
       "kind": "code",
-      "objective": "Extend graph-lint for hybrid graphs: vocabulary gains Refine (local) and Models between Generate and Post-process; per profile the declared requires.peak_vram_gb must fit, no two checkpoints loaded at once without a declared offload, at most one ControlNet applied in a path, batch size 1, tiled VAE for images above 1024 px, no Flux fp16 model name under local-8gb. A hybrid template must keep the reviewed prompt a single node feeding every text input. Violations name the node and the profile. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "objective": "Extend graph-lint for hybrid graphs: vocabulary gains Refine (local) and Models between Generate and Post-process; per profile the declared requires.peak_vram_gb must fit, no two checkpoints loaded at once without a declared offload, at most one ControlNet applied in a path, batch size 1, tiled VAE for images above 1024 px, no Flux fp16 model name under local-8gb. A hybrid template must keep the reviewed prompt a single node feeding every text input. Violations name the node and the profile. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch. Also run the render-time anchor_target and primary_node checks (template_target_errors, from task anchor-target) in template lint, so a template with a bad anchor_target or primary_node fails lint instead of only at render.",
       "paths": [
         "scripts/assetgen/graphstyle.py",
         "scripts/assetgen/lint.py",
@@ -190,7 +190,8 @@
       "acceptance": [
         "each new rule has a passing and failing fixture whose message names node and profile",
         "API-only staged templates keep their result",
-        "graph-lint exits 0, 1, 2 as before"
+        "graph-lint exits 0, 1, 2 as before",
+        "a template with an anchor_target naming a missing node or input, or a bad primary_node, fails assetgen.py lint"
       ]
     },
     {
