@@ -1,0 +1,248 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "vfx-graph-production",
+  "title": "VFX Graph production: the com.cuvara.vfx package (UnityVFX) and the Factory workflow that reads a style profile, generates textures, builds effects from recipes and play-tests them",
+  "goal": "Agents author game effects with VFX Graph through a new Unity package and a Factory workflow: read the project's vfx-style profile, generate textures through asset-gen and ComfyUI, build the effect from a recipe in the agent-owned Sandbox project, capture and lint it, then a person reviews it in Play mode. Design contract of the package: UnityVFX Documentation~/DESIGN.md (the agent interface there is binding for the plugin tasks). Owner decisions: realistic base style; CC0 rigged test characters; repo Cuvara/UnityVFX public, created only after the owner accepted the play-test; no tag. Model override for this plan only (owner, 2026-11-13): task leads run on Claude Fable 5.2 or Claude Opus 5.5; the run lead swaps the lead model in the printed launch command where Fable is used, because Fable is outside registry pipeline.models.scope. Remove this sentence in the cleanup step; the registry model policy is unchanged. Planning: done in plan mode with scout and Plan agents instead of a dispatched planner worker (named in the run report).",
+  "tier": "L",
+  "topic": "feat/skills/vfx-graph",
+  "deliver": "pr",
+  "no_worktree_markers": [
+    "ProjectSettings/ProjectVersion.txt",
+    "Sandbox~/ProjectSettings/ProjectVersion.txt"
+  ],
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    },
+    "unityvfx": {
+      "path": "../../../UnityVFX",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pkg-core",
+      "repo": "unityvfx",
+      "kind": "code",
+      "implementer": "claude",
+      "reason": "the work drives the Unity editor through Unity-MCP tools and needs visual checks of rendered frames; those tools and skills are wired for Claude sessions on this machine",
+      "grade": "heavy",
+      "grade_reason": "new package on Unity-internal VFX Graph APIs with no public documentation; a wrong guess is costly to find",
+      "resources": ["unity-test"],
+      "objective": "Create the com.cuvara.vfx package core exactly as Documentation~/DESIGN.md describes (read it first; it is the contract). Deliver: package.json (0.1.0, unity 6000.6, dependencies com.unity.visualeffectgraph 17.6.0 and com.unity.render-pipelines.universal 17.6.0), README.md, CHANGELOG.md with [Unreleased], MIT LICENSE, .gitignore, .gitattributes; Runtime assembly Cuvara.VFX (VfxLibrary, VfxPlayer, VfxSocket, ChainLightningBinder); the bridge assembly Unity.Testing.VisualEffectGraph.Editor with VfxGraphBridge only; Editor assembly Cuvara.VFX.Editor with VfxCli (Run and Batch) and the verbs catalog, describe, build, apply, import-texture, inspect and capture; the JSON Schemas in Schemas~/ for the recipe, the capture stats and the describe output; Tools~/vfxcli.py and Tools~/setup-sandbox.py; the Sandbox~ Unity project (6000.6.9f1, URP with HDR, Forward+, depth and opaque textures, VFX Graph, com.ivanmurzak.unity.mcp 1.7.0 from OpenUPM, test framework, Input System, package referenced as file:../..) with its gitignore rules; EditMode and PlayMode tests; .github/workflows/ci.yml with a validate job that needs no Unity licence (package.json fields, CHANGELOG heading, .meta coverage, schema validation of committed recipes) and game-ci jobs that are skipped when the licence secret is absent; Documentation~/AUTHORING.md, CAPTURE.md and CI.md. Follow the conventions of the sibling repos C:/Workspaces/UnityIndie/UIToolkit and UnityDots (package.json fields, check_metas.py, CI shape, asmdef and test-assembly rules). Verify the internals against the installed package source at C:/Program Files/Unity/Hub/Editor/6000.6.9f1/Editor/Data/Resources/PackageManager/BuiltInPackages/com.unity.visualeffectgraph before writing bridge code; read Unity's sample graphs there with describe to learn real graph structure, and never copy their assets. Prove the pipeline end to end with one small fixture recipe under Tests/ (a burst of additive quads with a colour over life): build it, describe it, capture it. The Sandbox is agent-owned: open it with unity-mcp-cli open --unity 6000.6.9f1 and close it when the task is done; only one editor may have it open. Never open, drive or modify any other Unity project: the editor that has C:/Workspaces/UnityIndie/IndieRPGMMOAdventure open belongs to the user. No remote, no push, no tag: the GitHub repository is created by the run lead after the owner's acceptance. Record every verified failure of the VFX Graph internals or the editor automation (symptom, cause, fix, file) in Documentation~/AUTHORING.md under a Pitfalls heading; the plugin skill cites them later.",
+      "paths": [
+        "package.json", "package.json.meta", "README.md", "README.md.meta", "CHANGELOG.md", "CHANGELOG.md.meta",
+        "LICENSE", "LICENSE.meta", ".gitignore", ".gitattributes", ".github/",
+        "Runtime/", "Runtime.meta", "Editor/", "Editor.meta", "Library/", "Library.meta",
+        "Tests/", "Tests.meta", "Schemas~/", "Tools~/", "Sandbox~/", "Documentation~/"
+      ],
+      "exclusions": ["Samples~/", "Effects/"],
+      "deps": [],
+      "checks": [
+        "python3 .github/scripts/check_metas.py (every Unity-visible file and folder has a .meta)",
+        "python3 Tools~/vfxcli.py catalog --project Sandbox~ (ok true, more than 0 blocks, vfx_graph 17.6.x)",
+        "Unity Test Runner in the Sandbox, EditMode and PlayMode, through unity-mcp-cli run-tool tests-run: counted passes, 0 failed, 0 tests is a FAIL",
+        "build, describe and capture of the fixture recipe: describe output round-trips, two captures with one seed report the same alive.peak"
+      ],
+      "acceptance": [
+        "the Sandbox project opens in 6000.6.9f1 and compiles with no error in the console",
+        "catalog lists contexts, blocks and operators with their settings and slots",
+        "build creates a .vfx from a recipe without touching YAML as text; a recipe with an unknown name fails with the list of valid names and leaves the previous asset untouched",
+        "capture writes contact-sheet.png, per-sample frames and stats.json matching Schemas~/vfx-capture.schema.json; the same seed twice gives the same alive.peak; no -1 counts",
+        "tests exist for the internals guard, recipe round-trip, texture import determinism, capture determinism and ChainLightningBinder, and they pass with counts reported",
+        "the formats and CLI verbs match Documentation~/DESIGN.md, or each difference is listed in the report for the run lead"
+      ]
+    },
+    {
+      "id": "assetgen-vfx-purposes",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "four data files plus two QA checks that follow the existing tileable-seam check pattern",
+      "objective": "Add four asset-gen purposes for effect textures under templates/assetgen/purposes/, each with handoff_domain vfx, default_family vfx, the image-generate template and an opaque pure-black background: vfx-flipbook (frames in a declared columns x rows grid), vfx-noise-tileable (tileable on both axes, uses the existing png-tileable QA), vfx-trail (landscape, tileable on the x axis only: extend the tileable QA with an axis option), vfx-sprite (one centred glow, flare, puff or debris shape). New QA checks in the engine: png-flipbook-grid (declared columns and rows, dark gutters, no blank cell) and png-black-background (border luminance below a threshold). Alpha extraction, channel packing and power-of-two resize are not asset-gen's job: the gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool; say so in the purpose constraints and in docs/architecture/domains/assetgen.md. Model the files on templates/assetgen/purposes/texture-tileable.json and the engine on scripts/assetgen/ (qa.py, imaging.py, runfiles.py, lint.py). Tests in tests/assetgen.test.sh with small generated fixtures: each new QA check passes on a good image and fails on a bad one; assetgen list and resolve show the four purposes; a style resolve with realistic-pbr works. One fragment changelog.d/assetgen-vfx-purposes.md (### Added).",
+      "paths": [
+        "templates/assetgen/purposes/vfx-flipbook.json",
+        "templates/assetgen/purposes/vfx-noise-tileable.json",
+        "templates/assetgen/purposes/vfx-trail.json",
+        "templates/assetgen/purposes/vfx-sprite.json",
+        "scripts/assetgen/",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "docs/architecture/domains/assetgen.md",
+        "changelog.d/assetgen-vfx-purposes.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": ["tests/assetgen.test.sh"],
+      "acceptance": [
+        "assetgen list shows vfx-flipbook, vfx-noise-tileable, vfx-trail and vfx-sprite with handoff domain vfx",
+        "png-flipbook-grid, png-black-background and x-axis tiling each have a passing and a failing test case",
+        "existing purposes and their QA behave as before"
+      ]
+    },
+    {
+      "id": "pkg-showcase",
+      "repo": "unityvfx",
+      "kind": "design",
+      "implementer": "claude",
+      "grade": "heavy",
+      "grade_reason": "scene, lighting and character setup judged by rendered frames; no existing pattern in the workspace",
+      "resources": ["unity-test"],
+      "objective": "Build the Showcase sample of Documentation~/DESIGN.md in Samples~/Showcase (edited through the Sandbox junction created by Tools~/setup-sandbox.py): the grey grid room with a procedural grid shader of this package (copy no Unity sample asset: Unity Companion License); the four stations (chain-lightning lane with one caster and three targets in a row about 3 to 4 metres apart, single-target station, ground area station, empty pedestal), each a VfxStation component with a label, an effect slot, targets and a trigger (loop interval or key); CC0 rigged humanoid test characters with realistic proportions and an idle animation (first choice Quaternius Universal Base Characters; verify the licence text at download, keep the pack small, record source, author, licence and date in THIRD-PARTY.md, and stop and report if no CC0 pack with a rig can be verified), each with VfxSocket components on head, chest, both hands and feet; lighting for a realistic style (soft directional key, fill, low ambient, Volume with Bloom, ACES tonemapping and a light vignette) with the presets day, dusk and night shared with the capture stage of the Editor assembly; an overlay to pick an effect from a VfxLibrary, replay, change time scale, lighting preset and camera preset (gameplay about 45 degrees at MMO distance, close, side). Register the sample in package.json samples[], give it its own asmdef Cuvara.VFX.Samples.Showcase and a README. Until real effects exist, wire the fixture effect of pkg-core into one station so the scene shows something. Evidence: Game View screenshots of the scene in each lighting preset and each camera preset, looked at by the session and saved under Sandbox~/Captures (gitignored); name what you judged in the report. Document the scene in Documentation~/SHOWCASE.md and add the CHANGELOG entry. Same editor rules as pkg-core: only the Sandbox editor, never another Unity project, no push, no tag.",
+      "paths": [
+        "Samples~/Showcase/", "THIRD-PARTY.md", "THIRD-PARTY.md.meta", "package.json", "CHANGELOG.md",
+        "Documentation~/SHOWCASE.md", "Sandbox~/Assets/", "Sandbox~/ProjectSettings/", "Sandbox~/Packages/",
+        "Editor/Capture/", "Runtime/Showcase/", "Runtime/Showcase.meta"
+      ],
+      "exclusions": ["Effects/"],
+      "deps": ["pkg-core"],
+      "checks": [
+        "python3 .github/scripts/check_metas.py",
+        "Unity Test Runner in the Sandbox, EditMode and PlayMode: counted passes, 0 failed",
+        "the Showcase scene enters Play mode with no error in the console; screenshots exist for 3 lighting presets and 3 camera presets"
+      ],
+      "acceptance": [
+        "the Showcase scene opens from the Sandbox, enters Play mode cleanly and shows the four stations with the test characters",
+        "every third-party asset has a verified CC0 licence entry in THIRD-PARTY.md",
+        "the three lighting presets and the three camera presets work from the overlay and match the capture stage presets",
+        "the sample is listed in package.json samples[] and has its own asmdef"
+      ]
+    },
+    {
+      "id": "repo-unityvfx",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "heavy",
+      "grade_reason": "registry fragments and the generated registry.json, three hard-coded package maps and a lead skill's ownership",
+      "objective": "Register the UnityVFX repo in the Factory. registry/core.json: repos.unityvfx (path UnityVFX, remote https://github.com/Cuvara/UnityVFX.git, default_branch main, protected main, branch pattern and merge text like uitoolkit, instructions README.md and the Documentation~ pages, a note that the repo is untagged and unpublished until the owner tags); domains.engineering.repos; pipeline.exclusive_resources unity-test repos; repos.client.embedded_clones gains Packages/com.cuvara.vfx; pipeline no_worktree_markers gains Sandbox~/ProjectSettings/ProjectVersion.txt; dev tool unity-mcp-cli (binary probe; fallback: the capture check is NOT_RUN with the exact command) and unity-mcp used_by; facts for the Sandbox editor version, the VFX Graph version and the Sandbox Unity-MCP version, each with a probe that reads a file under UnityVFX; known_issues vfx-graph-internal-api (the bridge depends on internal types reached through a friend assembly name; cite UnityVFX Documentation~/DESIGN.md) and unityvfx-untagged. New fragment registry/engineering/unityvfx.json with the modules runtime, editor, library, effects, samples, sandbox, tests, package and a fallback root, each with paths that exist in UnityVFX main, docs, changelog, rules, checks (fast: .meta coverage and recipe schema lint without Unity; external: sandbox-capture and Unity tests, NOT_RUN or HUMAN_REQUIRED without an editor) and obligations (a recipe change rebuilds the .vfx and its capture). registry/engineering/skills.json: unity-package and unity-client-tech repos gain unityvfx; unity-package owns the unityvfx modules. skills/unity-package: one scope row and one row in references/packages.md, inside the line budget. Add unityvfx to the package maps in scripts/factory-status.py, scripts/checks/pin-plan.py and scripts/checks/package-ready.py so that a package with no tag and no client pin is reported, not a crash or a false READY; tests for that in tests/factory-status.test.sh. Do not add unityvfx to the package-pins contract upstream or to pin-bump repos: write that as a backlog line for the run lead in the report (it cannot be verified before a tag exists). Rebuild registry.json with scripts/build-registry.py; scripts/check-registry.sh and tests/check-registry.test.sh pass; update the golden fixtures the registry change moves. One fragment changelog.d/unityvfx-repo.md.",
+      "paths": [
+        "registry/core.json", "registry/engineering/unityvfx.json", "registry/engineering/skills.json", "registry.json",
+        "docs/registry.schema.json",
+        "scripts/factory-status.py", "scripts/checks/pin-plan.py", "scripts/checks/package-ready.py",
+        "skills/unity-package/",
+        "tests/factory-status.test.sh", "tests/check-registry.test.sh", "tests/fixtures/routing-golden.json",
+        "changelog.d/unityvfx-repo.md"
+      ],
+      "exclusions": [],
+      "deps": ["pkg-core"],
+      "checks": ["tests/check-registry.test.sh", "tests/factory-status.test.sh", "tests/routing-golden.test.sh", "tests/skills-lint.sh", "tests/registry-fragments.test.sh"],
+      "acceptance": [
+        "factory-context.sh --repo unityvfx --paths <a file of each module> routes to unity-package and lists the module's checks",
+        "factory-status.py lists unityvfx as untagged and unpinned without an error",
+        "registry.json is the build of the fragments; check-registry passes"
+      ]
+    },
+    {
+      "id": "vfx-engine",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "new deterministic scripts modelled on scripts/ui and scripts/assetgen, with fixtures",
+      "objective": "Add the deterministic VFX helpers, written against the formats in UnityVFX Documentation~/DESIGN.md and Schemas~/ (recipe, capture stats, inspect output). (1) The style profile format: docs/schemas/kinds/vfx-style.schema.json and the skeleton templates/vfx/vfx-style.md. A vfx-style artifact is one per project and binding: palette and colour ramps per element, HDR intensity bands per importance tier (primary, secondary, ambient), timing ratios (anticipation, impact, dissipation, each a min and max share of the duration), texture conventions (max size, allowed flipbook grids, channel packing, colour space), allowed output types, blend modes and shaders, per-platform budgets (max alive particles, max systems, max texture memory), the capture viewing conditions (camera, lighting, seed) and the asset-gen style id it maps to. (2) scripts/vfx/vfx_style.py: show (print the resolved profile) and lint --style <profile> --recipe <file> [--inspect <file>] [--stats <file>] [--spec <file>], output schema rpg-factory.vfx-lint/1 with one row per rule (id, state PASS, FAIL, WARN or NOT_AVAILABLE when its input is absent, evidence): recipe schema id and VFX Graph version, phase timing sums and ratios, HDR colour values inside the band of the effect's tier, palette membership within a hue tolerance, texture size, grid and colour space, allowed output, blend and shader, capacity and alive.peak against the budget of each platform, capture viewing conditions equal to the profile's, recipe hash in the stats equal to the recipe. Exit 0 no FAIL, 1 a FAIL, 3 a required input missing, 2 usage. (3) scripts/vfx/vfx_plan.py with data in scripts/vfx/data/: output schema rpg-factory.vfx-plan/1; for an effect id it reports the state of the five production steps (style profile present and approved, texture gen-runs and their approval, recipe and built asset, capture and lint, vfx-asset record), the missing inputs and the lead route; it writes nothing; exit 0 PLAN or NOT_VFX, 3 NEEDS_CONTEXT, 2 usage. (4) scripts/adapters/vfx/vfxgraph.py: text-only reader of a .vfx file and its .meta (asset GUID, system capacities, referenced GUIDs) plus a stats.json, for the quality plugin; scripts/adapters/vfx/unity.py stays for Shuriken prefabs. (5) docs/schemas/vfx-capture.schema.json mirroring the package's capture schema id cuvara.vfx-capture/1 (the fields lint reads). (6) tests/vfx-production.test.sh with fixtures under tests/fixtures/vfx/ (a good and a bad recipe, inspect and stats files, a profile): every lint rule has a PASS and a FAIL case; the plan states are covered; the adapter reads a fixture .vfx. Read-only scripts: no fetch, no writes into repos, state through scripts/lib/fstate.py. One fragment changelog.d/vfx-engine.md.",
+      "paths": [
+        "scripts/vfx/", "scripts/adapters/vfx/vfxgraph.py",
+        "docs/schemas/kinds/vfx-style.schema.json", "docs/schemas/vfx-capture.schema.json", "templates/vfx/vfx-style.md",
+        "tests/vfx-production.test.sh", "tests/fixtures/vfx/",
+        "changelog.d/vfx-engine.md"
+      ],
+      "exclusions": [],
+      "deps": ["pkg-core"],
+      "checks": ["tests/vfx-production.test.sh"],
+      "acceptance": [
+        "vfx_style.py lint grades a fixture effect against a fixture profile and each rule has a PASS and a FAIL case in the suite",
+        "vfx_plan.py reports the five steps and writes nothing",
+        "the scripts need no Unity and no network"
+      ]
+    },
+    {
+      "id": "vfx-style-kind",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "heavy",
+      "grade_reason": "registry domain, artifact lifecycle, two human gates reworded and the generated registry.json",
+      "objective": "Wire the style profile and the production evidence into the vfx domain. registry/domains/vfx.json: module authoring.vfx-style (vfx/style/), artifact kind vfx-style with its kind schema and the shared lifecycle, domains.vfx.human_gates gains vfx-visual-review, vfx-spec-to-impl gains the unityvfx copy (the Effects directory), engineering_event_ids gains vfx.showcase.chain-lightning and vfx.showcase.ground-slam (showcase triggers, not gameplay bindings; say so in their description). registry/core.json: new human gate vfx-visual-review (a person judges look, readability, overdraw and frame time of an effect in Play mode; agents never record it); reword unity-asset-edit and unity-batch so they cover the user's Unity projects and name the agent-owned UnityVFX Sandbox~ project as exempt, without changing their match regexes (owner approved this policy change on 2026-11-13). docs/schemas/kinds/vfx-asset.schema.json gains optional capture (stats hash, seed, alive peak, contact sheet hash), style (profile id and blob revision), textures (gen-run id, output hash, named transform, game texture hash) and lint (state, report hash). scripts/checks/domains/vfx.py gains the checks vfx-style-profile, vfx-spec-style (spec budgets within the profile), vfx-asset-capture, vfx-asset-style-lint (bound to the profile blob and the stats hash, using scripts/vfx/vfx_style.py) and vfx-asset-textures (every game texture traces to an approved gen-run, else FAIL past draft); a .vfx asset without capture evidence stays HUMAN_REQUIRED, and look, readability, overdraw and frame time always stay HUMAN_REQUIRED. Update the vfx templates under templates/vfx/ (not vfx-style.md), tests/vfx-workflow.test.sh (keep its existing HUMAN_REQUIRED assertion) and docs/architecture/domains/vfx.md. Rebuild registry.json. One fragment changelog.d/vfx-style-kind.md.",
+      "paths": [
+        "registry/domains/vfx.json", "registry/core.json", "registry.json", "docs/registry.schema.json",
+        "docs/schemas/kinds/vfx-asset.schema.json", "docs/schemas/kinds/vfx-spec.schema.json",
+        "templates/vfx/vfx-asset.md", "templates/vfx/vfx-spec.md", "templates/vfx/vfx-direction.md",
+        "scripts/checks/domains/vfx.py",
+        "tests/vfx-workflow.test.sh", "tests/fixtures/routing-golden.json", "tests/git-guard.test.sh",
+        "docs/architecture/domains/vfx.md",
+        "changelog.d/vfx-style-kind.md"
+      ],
+      "exclusions": ["templates/vfx/vfx-style.md"],
+      "deps": ["repo-unityvfx", "vfx-engine"],
+      "checks": ["tests/vfx-workflow.test.sh", "tests/check-registry.test.sh", "tests/domains.test.sh", "tests/artifacts.test.sh", "tests/git-guard.test.sh", "tests/routing-golden.test.sh"],
+      "acceptance": [
+        "a vfx-style artifact validates, lints and traces like the other vfx kinds",
+        "a vfx-asset with capture, style, textures and lint evidence is graded by the new checks; a missing approved gen-run is a FAIL past draft",
+        "the two gates keep their regexes; their text names the Sandbox exemption; git-guard tests pass"
+      ]
+    },
+    {
+      "id": "vfx-commands",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two read-only verbs copied from the ui and assetgen command pattern",
+      "objective": "Add the read-only verbs vfx-plan and vfx-lint to scripts/factory-cmd.py (a VFX_VERBS group like UI_VERBS, calling scripts/vfx/vfx_plan.py and scripts/vfx/vfx_style.py lint; --json for agents; vfx-lint adds the authoring repo path like cmd_assetgen and refuses any writing option) with commands/vfx-plan.md and commands/vfx-lint.md, help text and examples. Update tests/commands.test.sh (verb and command counts), register tests/vfx-production.test.sh in tests/run-all.sh, tests/affected.py and tests/ci-windows-suites.txt, and list the scripts and commands in scripts/README.md. One fragment changelog.d/vfx-commands.md.",
+      "paths": [
+        "scripts/factory-cmd.py", "commands/vfx-plan.md", "commands/vfx-lint.md",
+        "tests/commands.test.sh", "tests/run-all.sh", "tests/affected.py", "tests/ci-windows-suites.txt",
+        "scripts/README.md", "changelog.d/vfx-commands.md"
+      ],
+      "exclusions": [],
+      "deps": ["vfx-engine"],
+      "checks": ["tests/commands.test.sh", "tests/vfx-production.test.sh", "tests/affected.test.sh"],
+      "acceptance": [
+        "factory-cmd.py vfx-plan and vfx-lint run, print help with an example and support --json",
+        "the new suite is selected by tests/affected.py for its inputs and listed for CI"
+      ]
+    },
+    {
+      "id": "skill-vfx-graph",
+      "repo": "plugin",
+      "kind": "policy",
+      "grade": "heavy",
+      "grade_reason": "a new tech skill and a rewritten domain lead workflow that every later VFX session follows",
+      "objective": "Follow .claude/skills/skill-author. Create the tech skill vfx-graph with scripts/new-skill.py (kind tech, domain vfx, repos unityvfx and authoring, used_by unity-package and vfx, paths for .vfx files, recipes, the package Editor, Sandbox~, Samples~/Showcase and authoring vfx/assets): how an effect is authored with the package - the recipe format and ops, catalog before writing, describe to learn from existing graphs, build and apply, texture import, the Sandbox project and the unity-mcp-cli sequence through Tools~/vfxcli.py, deterministic capture, reading a contact sheet and stats.json, and a review checklist for a VFX Graph effect. References: recipe-format.md, capture.md, vfxgraph-review.md. Every Pitfall cites a verified failure recorded in UnityVFX Documentation~/AUTHORING.md (path and section); an uncited pitfall is not written. Rewrite skills/vfx/SKILL.md so its workflow is the production loop: (1) read the approved vfx-style profile, (2) textures through rpg-factory:asset-gen with the vfx purposes and stop at assetgen-approval, (3) hand off through vfx-spec-to-impl to the unity-package leg with rpg-factory:vfx-graph, (4) consume the capture evidence, run vfx-lint and stop at the human Play-mode review (gate vfx-visual-review), (5) record the vfx-asset with capture, style, textures and lint evidence; keep its artifact rules, add the references style-profile.md and production-loop.md, fix the handoff name gameplay-event-to-vfx, and reword the Tools line: the vfx lead and the scripts still never launch Unity; only the unity-package leg drives the agent-owned Sandbox through vfx-graph. Add one line to skills/asset-gen/SKILL.md naming the vfx purposes and the handoff to rpg-factory:vfx. Registry skill entries through the fragments; rebuild registry.json. Run scripts/skill-touchpoints.py vfx-graph and list what remains for the touchpoints task. Size limits and citations: tests/skills-lint.sh and scripts/checks/skill-citations.py pass. One fragment changelog.d/skill-vfx-graph.md.",
+      "paths": [
+        "skills/vfx-graph/", "skills/vfx/", "skills/asset-gen/SKILL.md",
+        "registry/domains/vfx.json", "registry/domains/assetgen.json", "registry.json",
+        "changelog.d/skill-vfx-graph.md"
+      ],
+      "exclusions": [],
+      "deps": ["vfx-style-kind", "vfx-commands", "pkg-showcase", "assetgen-vfx-purposes"],
+      "checks": ["tests/skills-lint.sh", "tests/skill-citations.test.sh", "tests/check-registry.test.sh", "tests/new-skill.test.sh"],
+      "acceptance": [
+        "the vfx-graph skill passes the lint, the size limits and the citation check, and every pitfall cites a recorded failure",
+        "skills/vfx/SKILL.md states the five-step production loop and both human gates",
+        "a route for a recipe or .vfx path in unityvfx prints lead unity-package and tech vfx-graph"
+      ]
+    },
+    {
+      "id": "touchpoints",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "standard",
+      "grade_reason": "shared docs, counts, routing scenario, dogfood and eval entries listed by skill-touchpoints.py",
+      "objective": "Finish every touchpoint scripts/skill-touchpoints.py vfx-graph still lists and the shared docs: the factory-core Skills section and skill table, the skill-contract diagram, README diagram, tables and counts, docs/architecture/overview.md counts, a new docs/architecture/vfx-production.md (the chain style profile, textures, recipe, capture, lint, human review, record; which repo owns what; what stays HUMAN_REQUIRED), a routing scenario for vfx-graph in tests/routing.test.sh, the golden fixture, a dogfood EXPECT entry for an effect task, evals/vfx-graph-effect with its grader, and docs/plans/backlog.md lines the run lead names in the spec notes. One fragment changelog.d/vfx-touchpoints.md.",
+      "paths": [
+        "README.md", "docs/architecture/overview.md", "docs/architecture/vfx-production.md", "docs/architecture/README.md",
+        "skills/factory-core/SKILL.md", "skills/factory-core/references/skill-contract.md",
+        "tests/routing.test.sh", "tests/fixtures/routing-golden.json", "tests/dogfood.sh", "tests/dogfood/",
+        "evals/vfx-graph-effect/", "docs/plans/backlog.md", ".claude-plugin/", ".codex-plugin/",
+        "changelog.d/vfx-touchpoints.md"
+      ],
+      "exclusions": [],
+      "deps": ["skill-vfx-graph", "vfx-style-kind", "repo-unityvfx"],
+      "checks": ["tests/skills-lint.sh", "tests/routing.test.sh", "tests/routing-golden.test.sh", "tests/english-only.test.sh"],
+      "acceptance": [
+        "scripts/skill-touchpoints.py vfx-graph prints OK",
+        "the routing scenario and the golden fixture pass",
+        "docs name the new skill, verbs, artifact kind and gate with correct counts"
+      ]
+    }
+  ]
+}
