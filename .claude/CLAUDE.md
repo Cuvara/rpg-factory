@@ -34,7 +34,11 @@ Architecture and layout: `docs/architecture/overview.md`. Release procedure: `do
   required check. Before a PR, integration QA runs `tests/run-all.sh --workspace-only` with 0 failed; CI
   (`gh pr checks <pr> --watch`) must be green before merging, and while it runs start the next task. Full `--release` and `tests/dogfood.sh --installed` run only for releases.
   Report the pass count. Tiers: `delivery.md` section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
-- English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
+- English only for everything written: code, comments, docs, changelog fragments, commit messages, PR and issue text,
+  plan files (including the harness plan-mode file), briefs and specs for agents, messages between sessions, artifacts and
+  memory files. Only the report to the owner (chat replies, status, questions, the final report) uses the registry
+  `workspace.report_language`. Advisories from `scripts/file-guard.py` and the git guard flag a breach
+  (`scripts/lib/english.py`). Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - Skills follow `skills/factory-core/references/skill-contract.md` (`tests/skills-lint.sh` enforces the mechanical
   part). Routing changes need a scenario in `tests/routing.test.sh`. New skills start from `scripts/new-skill.py` and
   are done when `scripts/skill-touchpoints.py <s>` is OK (`.claude/skills/skill-author`).
@@ -71,6 +75,7 @@ Each lesson names its reason. Delivery-flow lessons (Orca, Codex, sessions, load
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file:** backticks inside a double-quoted argument (an `orca orchestration send --body`) are command substitution and the message loses the example.
 - **Never stop a process by pattern (`pkill -f <name>`):** a worker that did so to stop its own duplicate skills-lint run may have killed other sessions' runs; stop only the PID you started.
+- **The language policy needs an advisory, not only prose:** sessions wrote plans, briefs and inter-agent messages in the owner's language because the rule was English-only prose with no signal at write time, and a long session drifts to the language it is spoken to in. Text the owner never reads is English; `workspace.report_language` covers only the report to the owner. `file-guard.py` and the git guard now warn (rule `english-only`) on a write or command that carries non-English text; tests in `tests/file-guard.test.sh` and `tests/git-guard.test.sh`.
 - **Learning loop:** a new lesson goes here or into its policy file (`parallel-work.md`, `docs/dogfood.md`, `git-safety.md`) with its reason and a test when possible. Private agent memory only points here: Codex, other machines and new sessions never see it.
 
 ## Commands
