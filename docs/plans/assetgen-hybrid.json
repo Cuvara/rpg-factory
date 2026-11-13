@@ -295,7 +295,8 @@
         "tests/fixtures/assetgen/cases/image-edit--local-variation.json",
         "changelog.d/tpl-local-variation.md",
         "tests/assetgen.test.sh",
-        "tests/fixtures/assetgen/cases/README.md"
+        "tests/fixtures/assetgen/cases/README.md",
+        "tests/fixtures/assetgen/graphstyle_selftest.py"
       ],
       "exclusions": [],
       "deps": [
