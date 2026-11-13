@@ -321,7 +321,7 @@
         "env -u TMPDIR tests/parallel-policy.test.sh"
       ],
       "acceptance": [
-        "e2e.md states PASS with evidence or NOT_RUN with the reason",
+        "e2e.md states PASS with evidence, FAIL with the evidence of what failed (no second generation to turn it into a PASS), or NOT_RUN with the reason",
         "it records whether fetch_outputs returns PreviewImage files",
         "it lists the generation count (at most 1) and any credential-free proof of the gateway call",
         "no credential, URL with a host or key appears in the file"
