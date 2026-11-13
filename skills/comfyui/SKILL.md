@@ -68,11 +68,11 @@ lead's workflow asks for in a run directory or the game layer.
 
 - **Run sequence:** `server_info` (version, nodes present) -> `assetgen.py graph-lint --run <run>` (exit 0) ->
   `validate_workflow` (`<run>/workflow.json` against the live node list) -> `upload_file` (every `<run>/references/*`
-  file under its own name: the image-edit reference and each `anchor-<id>.png`; returns the input-folder name) ->
-  `assetgen.py budget --run <run>` (exit 1 or `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) ->
-  `run_workflow` (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs` (`prompt_id`, `out_dir`
-  `<run>/outputs`) -> `assetgen.py finalize --run <run>` (defringe for a purpose with `qa.alpha` required, then embed,
-  then qa, in that fixed order; never `qa` alone). `nodes` and `list_workflow_slots` only inspect.
+  file under its own name; returns the input-folder name) -> `assetgen.py budget --run <run>` (exit 1 or `remaining 0`
+  (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (`workflow_path`, `wait`) -> `job` (status) ->
+  `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`), again with `url_only=true` (free, read-only): save the result
+  verbatim as `<run>/fetch.json` -> `assetgen.py finalize --run <run>` (filter: PreviewImage files to `<run>/previews/`;
+  defringe if `qa.alpha` required; embed; qa; fixed order, never `qa` alone). `nodes`, `list_workflow_slots` only inspect.
 - **Authoring rule (comfy-mcp):** comfy-mcp runs only a graph from `assetgen.py render` of the purpose's template (core
   or a game-layer one that `extends` it), laid out per [references/workflow-style.md](references/workflow-style.md).
   Before any `run_workflow`, `assetgen.py lint`, `assetgen.py graph-lint` (the template, and `--run <run>`) and a live
