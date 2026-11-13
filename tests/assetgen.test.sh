@@ -32,7 +32,8 @@
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
 # manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
-# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060), style lock QA rows
+# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060),
+# profile routing (resolve --profile: route, fallback, refusal above the profile, auto; UNTESTED on RTX 5060), style lock QA rows
 # through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs the run's anchor copies, edges, canvas; older specs
 # without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
@@ -3695,6 +3696,139 @@ EOF
 grep -qx ok "$TMP/anchor-size" && ok "requested_size: declared primary, numeric fallback, latent dimensions, malformed specs and golden graphs" \
   || no "requested_size cases" "$(cat "$TMP/anchor-size")"
 rm -f "$SG/templates/hybrid-anchor.json" "$SG/purposes/icon-two.json"
+
+echo "-- profile routing: resolve --profile (UNTESTED on RTX 5060)"
+# Nothing here generates or measures anything: routing picks a template id and refuses one above the chosen profile.
+PR="$TMP/profile-authoring"; PF="$TMP/profile-fallback"; PB="$TMP/profile-badroutes"
+mkdir -p "$PR/assetgen/templates" "$PR/assetgen/runs" "$PF/assetgen" "$PB/assetgen"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$PR/assetgen/templates/hybrid-icon-ui.json"
+echo '{"schema": "rpg-factory.assetgen-template-profiles/1", "routes": {"icon": {"local-8gb": "no-such-template"}}}' > "$PF/assetgen/template-profiles.json"
+echo '{"schema": "rpg-factory.assetgen-template-profiles/1", "routes": {"icon": {"gpu-99": "x"}}}' > "$PB/assetgen/template-profiles.json"
+# AGS STATE-DIR ARGS...: assetgen with its own state dir (auto cases never read or write the suite's $TMP/state)
+AGS() { local s="$1"; shift; RPG_FACTORY_STATE_DIR="$s" python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+pq() { jq -r "$1" "$TMP/prof.json"; }
+
+# 1. the data file
+python3 -B - "$ROOT" > "$TMP/prof-data" 2>&1 <<'EOF'
+import json, os, sys
+root = sys.argv[1]
+data = json.load(open(os.path.join(root, 'scripts', 'assetgen', 'data', 'template-profiles.json'), encoding='utf-8'))
+hw = json.load(open(os.path.join(root, 'scripts', 'assetgen', 'data', 'hardware.json'), encoding='utf-8'))
+ids = {p['id'] for p in hw['profiles']}
+assert data['schema'] == 'rpg-factory.assetgen-template-profiles/1', data.get('schema')
+assert data['description'].startswith('UNTESTED on RTX 5060:'), data.get('description')
+assert isinstance(data['routes'], dict) and data['routes']
+for purpose, routes in data['routes'].items():
+    assert os.path.isfile(os.path.join(root, 'templates', 'assetgen', 'purposes', purpose + '.json')), purpose
+    for profile, template in routes.items():
+        assert profile in ids, (purpose, profile)
+        assert isinstance(template, str) and template, (purpose, profile)
+print('ok')
+EOF
+grep -qx ok "$TMP/prof-data" && ok "template-profiles.json: schema, UNTESTED description, core purposes, hardware profile ids" \
+  || no "template-profiles.json data file" "$(cat "$TMP/prof-data")"
+
+# 2. local-8gb on icon picks the hybrid template
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+cp "$TMP/prof.json" "$TMP/prof-8gb.json"
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = hybrid-icon-ui ] && [ "$(pq .profile.id)" = local-8gb ] && [ "$(pq .profile.source)" = --profile ] \
+  && [ "$(pq .profile.requires)" = local-8gb ] && jq -e '.profile.template_from | endswith("routes.icon.local-8gb")' "$TMP/prof.json" >/dev/null \
+  && ok "resolve --profile local-8gb on icon picks hybrid-icon-ui from routes.icon.local-8gb" \
+  || no "profile local-8gb rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 3. api-only keeps the staged API template
+AG resolve --purpose icon --style pixel-art --profile api-only --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+cp "$TMP/prof.json" "$TMP/prof-api.json"
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.template_from)" = "purpose default_template" ] \
+  && [ "$(pq .profile.requires)" = api-only ] && ok "resolve --profile api-only on icon keeps staged-icon (purpose default_template)" \
+  || no "profile api-only rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 4. a 4 GB machine is never handed the local-8gb template
+AG resolve --purpose icon --style pixel-art --profile local-4gb --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.id)" = local-4gb ] \
+  && ok "resolve --profile local-4gb on icon falls back to staged-icon, never the local-8gb template" \
+  || no "profile local-4gb rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 5. --template above the chosen profile is refused with the VRAM reason
+AG resolve --purpose icon --style pixel-art --profile local-4gb --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF VRAM "$TMP/err" && grep -qF "requires profile local-8gb" "$TMP/err" && grep -qF "chosen profile local-4gb" "$TMP/err" \
+  && ok "--profile local-4gb --template hybrid-icon-ui: refused with the VRAM reason (exit 1)" || no "local-4gb refusal rc=$rc" "$(cat "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --profile api-only --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF "chosen profile api-only" "$TMP/err" \
+  && ok "--profile api-only --template hybrid-icon-ui: refused (exit 1)" || no "api-only refusal rc=$rc" "$(cat "$TMP/err")"
+
+# 6. without --profile nothing changes
+AG resolve --purpose icon --style pixel-art --authoring "$PR" --json > "$TMP/prof-none.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e 'has("profile") | not' "$TMP/prof-none.json" >/dev/null && [ "$(jq -r .template.id "$TMP/prof-none.json")" = staged-icon ] \
+  && diff <(jq -S . "$TMP/prof-none.json") <(jq -S 'del(.profile)' "$TMP/prof-api.json") > "$TMP/prof-diff" 2>&1 \
+  && ok "without --profile: no profile key, staged-icon, equal to the --profile api-only spec minus .profile" \
+  || no "no --profile spec rc=$rc" "$(cat "$TMP/err" "$TMP/prof-diff" 2>&1)"
+AG resolve --purpose icon --style pixel-art --authoring "$PR" > "$TMP/prof-none.txt" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ! grep -q '^profile ' "$TMP/prof-none.txt" && ok "without --profile: no profile line in the text output" \
+  || no "no --profile text rc=$rc" "$(cat "$TMP/prof-none.txt" "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "without --profile: --template hybrid-icon-ui still resolves (today's behaviour)" || no "no --profile --template rc=$rc" "$(cat "$TMP/err")"
+
+# 7. purpose files unchanged: the same purpose hash with and without --profile
+[ -n "$(jq -r .purpose.sha256 "$TMP/prof-none.json")" ] && [ "$(jq -r .purpose.sha256 "$TMP/prof-8gb.json")" = "$(jq -r .purpose.sha256 "$TMP/prof-none.json")" ] \
+  && ok "--profile local-8gb keeps the purpose sha256 (no purpose file change)" \
+  || no "purpose sha256 $(jq -r .purpose.sha256 "$TMP/prof-8gb.json") vs $(jq -r .purpose.sha256 "$TMP/prof-none.json")"
+
+# 8. --template still overrides the route
+AG resolve --purpose icon --style pixel-art --profile local-8gb --template staged-icon --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.template_from)" = --template ] \
+  && ok "--profile local-8gb --template staged-icon: --template overrides the route" || no "template override rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 9. a route naming a template no layer has falls back with a warning
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PF" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] \
+  && jq -e 'any(.warnings[]; contains("no-such-template") and contains("falling back"))' "$TMP/prof.json" >/dev/null \
+  && ok "route to a missing template falls back to staged-icon with a warning" || no "fallback rc=$rc" "$(cat "$TMP/err"; jq -c .warnings "$TMP/prof.json" 2>&1)"
+
+# 10. auto: no recorded file, a recorded local-8gb, a recorded unknown profile (each with its own state dir)
+AGS "$TMP/pstate-10a" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .profile.id)" = api-only ] && [ "$(pq .profile.requested)" = auto ] \
+  && jq -e '.profile.source | startswith("auto: no recorded profile")' "$TMP/prof.json" >/dev/null \
+  && ok "auto without a recorded profile: api-only (requested auto)" || no "auto no file rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+mkdir -p "$TMP/pstate-10b/assetgen" "$TMP/pstate-10c/assetgen"
+echo '{"profile": {"id": "local-8gb"}}' > "$TMP/pstate-10b/assetgen/hardware-profile.json"
+echo '{"profile": {"id": "gpu-99"}}' > "$TMP/pstate-10c/assetgen/hardware-profile.json"
+AGS "$TMP/pstate-10b" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = hybrid-icon-ui ] && [ "$(pq .profile.id)" = local-8gb ] \
+  && jq -e '.profile.source | startswith("recorded ")' "$TMP/prof.json" >/dev/null \
+  && ok "auto with a recorded local-8gb profile picks hybrid-icon-ui" || no "auto recorded rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+AGS "$TMP/pstate-10c" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .profile.id)" = api-only ] && jq -e 'any(.warnings[]; contains("gpu-99"))' "$TMP/prof.json" >/dev/null \
+  && ok "auto with a recorded unknown profile: api-only and a warning" || no "auto unknown rc=$rc" "$(cat "$TMP/err"; jq -c '.profile, .warnings' "$TMP/prof.json" 2>&1)"
+[ ! -e "$TMP/state/assetgen/hardware-profile.json" ] && ok "auto cases leave the suite's state dir untouched" \
+  || no "suite state dir has assetgen/hardware-profile.json"
+
+# 11. an unknown profile value
+AG resolve --purpose icon --style pixel-art --profile bogus >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "api-only, local-4gb, local-8gb, auto" "$TMP/err" && ok "--profile bogus: exit 2 naming the profiles" \
+  || no "--profile bogus rc=$rc" "$(cat "$TMP/err")"
+
+# 12. a malformed game routes file is blamed on the game file
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PB" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF "game:assetgen/template-profiles.json" "$TMP/err" && grep -qF gpu-99 "$TMP/err" \
+  && ok "malformed game template-profiles.json: exit 1 naming the file and the bad profile" || no "bad routes rc=$rc" "$(cat "$TMP/err")"
+
+# 13. --out keeps spec.profile
+mkdir -p "$PR/assetgen/runs/prof-001"
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" --out "$PR/assetgen/runs/prof-001/spec.json" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .profile.id "$PR/assetgen/runs/prof-001/spec.json")" = local-8gb ] \
+  && [ "$(jq -r .profile.template "$PR/assetgen/runs/prof-001/spec.json")" = hybrid-icon-ui ] \
+  && ok "resolve --out writes spec.profile (local-8gb, hybrid-icon-ui)" || no "--out profile rc=$rc" "$(cat "$TMP/err")"
+
+# 14. the text output names the profile; local profiles are marked UNTESTED
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" > "$TMP/prof.txt" 2>"$TMP/err"; rc=$?
+line=$(awk 'index($0, "profile local-8gb [--profile], template hybrid-icon-ui") == 1' "$TMP/prof.txt")
+[ $rc -eq 0 ] && [ -n "$line" ] && printf '%s\n' "$line" | grep -qF "UNTESTED on RTX 5060" \
+  && ok "text output: profile local-8gb line marked UNTESTED on RTX 5060" || no "local-8gb text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --profile api-only --authoring "$PR" > "$TMP/prof.txt" 2>"$TMP/err"; rc=$?
+line=$(grep '^profile api-only ' "$TMP/prof.txt")
+[ $rc -eq 0 ] && [ -n "$line" ] && ! printf '%s\n' "$line" | grep -qF UNTESTED \
+  && ok "text output: profile api-only line without UNTESTED" || no "api-only text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
 
 echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
 # fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc
