@@ -30,9 +30,9 @@
 # manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
-# anchor_target and primary_node validation, hybrid anchor wiring, deterministic render and requested size,
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
-# manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
+# manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
+# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
 # the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
 # by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
