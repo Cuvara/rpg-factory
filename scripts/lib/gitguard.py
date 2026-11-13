@@ -16,8 +16,10 @@ level warn - neither is a permission decision:
             filter-branch, any push, add -A, commit -a/--amend, commit/merge/cherry-pick/
             revert/am/pull --rebase/reset <commit> on a protected branch, submodule update,
             git -c alias.*), commands whose git use cannot be seen (interpreters with inline
-            code or a heredoc, $VAR / $(...) as the program, encoded PowerShell), and registry
-            human_gates[].match
+            code or a heredoc, $VAR / $(...) as the program, encoded PowerShell), registry
+            human_gates[].match, and non-English message text (rule english-only, lib/rpgf_guard/language.py:
+            git commit -m/--message, gh pr|issue create/edit/comment text, orca orchestration send, orca agent
+            launch --prompt, and the prompt of the Agent tool)
 Wrappers peeled: VAR=x, env, command, builtin, exec, sudo, doas, timeout, nohup, nice, time,
 stdbuf, ionice, setsid, xargs, find -exec/-execdir, and leading shell reserved words ({ ! if then
 else elif do while until, `name()` / `function name` headers; PowerShell script-block braces).
@@ -145,6 +147,16 @@ from rpgf_guard.process import (
     process_findings,
     process_kill_hits,
 )
+from rpgf_guard.language import (
+    AGENT_TOOLS,
+    GH_TEXT,
+    option_values,
+    targets,
+    finding,
+    in_scope,
+    language_hits,
+    agent_prompt_hits,
+)
 from rpgf_guard.gates import (
     human_gate_hits,
     skill_read_hits,
@@ -157,6 +169,7 @@ from rpgf_guard.mode import (
 )
 from rpgf_guard.runtime import (
     main,
+    agent_main,
     collect,
     advisory,
     run,

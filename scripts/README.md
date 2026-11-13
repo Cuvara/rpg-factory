@@ -47,6 +47,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `build-registry.py` - builds `registry.json` from `registry/` fragments (`--check`, `--split`). `tests/registry-fragments.test.sh`
 - `check-registry.sh` - registry structure and that every named path exists. `tests/check-registry.test.sh`
 - `changelog.py` - `changelog.d/` fragments: check, preview, release assembly. `tests/changelog.test.sh`
+- `ci-plan.py` - plans the CI suites from `tests/affected.py`, one matrix row per `{suite, os}` (anything unsure plans every suite).
+  `tests/ci-plan.test.sh`
 - `release-check.py` - read-only release gate (versions, changelog, tag, clean tree). `tests/release-check.test.sh`
 - `new-skill.py` - scaffolds a skill and its registry entry. `tests/new-skill.test.sh`
 - `skill-touchpoints.py` - every place a skill must appear. `tests/new-skill.test.sh`, `tests/skills-lint.sh`
@@ -54,7 +56,9 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 ## Libraries
 
 - `lib/` - `context.py` + `resolve.jq` (routing engine), `snapshot_render.py` (snapshot text, domain views, Next line),
-  `workspace.py` (workspace and checkout path helpers shared by the hooks and routing), `gitguard.py` (git guard
+  `workspace.py` (workspace and checkout path helpers shared by the hooks and routing; `default_workspace`), `workspace.sh`
+  (`rpgf_default_workspace`: the same platform default for shell callers), `english.py` (shared english-only detection
+  used by `checks/english-only.py`, `file-guard.py` and the git guard), `gitguard.py` (git guard
   facade; loads the `rpgf_guard/` package by path as `rpgf_guard`: `common`, `shell`, `git`, `process`, `gates`, `mode`,
   `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
   pollution fingerprints), `runchecks_grade.py` (check parser choice and result grading for `run-checks.py`),
@@ -63,7 +67,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   section 10 "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
   `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
   `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
-  `tests/hook-perf.test.sh`
+  `tests/hook-perf.test.sh`, `tests/workspace-default.test.sh`
 - `ui/` - UI plan engine (`ui_plan.py`, data in `ui/data/`), `ui_catalog.py`, `ui_select.py`, `figma_env.py`.
   `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh`, `tests/ui-figma-env.test.sh`
 - `assetgen/` - asset-gen engine modules: `layers.py` (core and game layers, override and extends), `lint.py` (offline data
@@ -91,6 +95,8 @@ tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base
 tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected; task QA: the task's checks);
                                     # with --affected or --only-suites, live blocks and script checks (skill-citations,
                                     # factory-context, pin-plan, package-ready, netcode-headless...) are gated like suites
+tests/run-all.sh --inline-only      # only the inline checks, no suite; CI runs it on both OSes
+python3 -B scripts/ci-plan.py --base REF   # print the CI plan (suites and OS matrix) as JSON
 tests/run-all.sh --list-suites      # print the suite names --only-suites accepts (read-only, runs no checks)
 tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree and coverage (integration QA)
 tests/run-all.sh --no-wait          # exit 3 instead of waiting when another full run holds the per-machine lock

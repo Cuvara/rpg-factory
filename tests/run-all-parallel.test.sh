@@ -172,6 +172,8 @@ cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
 printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
 cat > "$TMP/repo/tests/b.sh" <<'SUITE'
 #!/usr/bin/env bash
+# case-map: alpha scripts/alpha.py
+# case-map: beta scripts/beta.py
 printf 'b\n' >> "$RUN_LOG"
 [ -z "${CASE_LOG:-}" ] || printf '%s\n' "$*" >> "$CASE_LOG"
 [ "${BREAK_CASE:-0}" = 0 ]
@@ -400,7 +402,37 @@ for j in 1 3; do
   [ "$rc" = 0 ] && [ -z "$(cat "$TMP/case-args")" ] && ! grep -q '(cases ' <<<"$out" \
     && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l)" -eq 1 ] \
     && good "case map ALL runs and records the full suite (-j $j)" || no "case map ALL (-j $j)" "$out"
+  # --only-cases gives the one --only-suites suite a subset (CI passes scripts/ci-plan.py's planned cases): the same
+  # --case argument and result name as an affected subset, and no suite PASS record
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" cache_plan --only-suites tests/b.sh --only-cases alpha,beta -j "$j"); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$TMP/case-args")" = '--case alpha,beta' ] && [ "$(cat "$RUN_LOG")" = b ] \
+    && grep -q '^PASS  b (cases alpha,beta)' <<<"$out" && [ -z "$(find "$TMP/state/run-all/suites" -type f 2>/dev/null)" ] \
+    && good "--only-cases subset reaches the suite as --case, named, no suite PASS record (-j $j)" || no "--only-cases subset (-j $j)" "$out"
+  for arg in '--only-cases ALL' '--only-cases='; do
+    reset_cache; : > "$TMP/case-args"
+    # shellcheck disable=SC2086   # the option and its value are two words, or one with =
+    out=$(CASE_LOG="$TMP/case-args" cache_plan --only-suites tests/b.sh $arg -j "$j"); rc=$?
+    [ "$rc" = 0 ] && [ "$(wc -l < "$TMP/case-args" | tr -d ' ')" = 1 ] && [ -z "$(cat "$TMP/case-args")" ] \
+      && ! grep -q '(cases ' <<<"$out" && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l | tr -d ' ')" = 1 ] \
+      && good "'$arg' runs every case and records the full suite (-j $j)" || no "'$arg' (-j $j)" "$out"
+  done
 done
+# --only-cases misuse exits 2 with a message naming the problem, before any suite runs or a lock is taken
+only_cases_misuse() { # message args...
+  local want=$1; shift
+  reset_cache
+  out=$(cache_plan "$@" 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q "^run-all: .*$want" <<<"$out" && [ ! -s "$RUN_LOG" ] && ! grep -q '^PASS ' <<<"$out" \
+    && [ ! -d "$TMP/state/locks/run-all-full" ] \
+    && good "--only-cases misuse exits 2: $*" || no "--only-cases misuse (rc=$rc): $*" "$out"
+}
+only_cases_misuse '--only-cases needs --only-suites' --only-cases alpha
+only_cases_misuse "exactly one --only-suites name, got 'tests/a.sh,tests/b.sh'" --only-suites tests/a.sh,tests/b.sh --only-cases alpha
+only_cases_misuse "suite 'tests/a.sh' has no case map" --only-suites tests/a.sh --only-cases alpha
+only_cases_misuse "unknown case(s) 'gamma' in 'tests/b.sh'" --only-suites tests/b.sh --only-cases alpha,gamma
+only_cases_misuse '--only-cases conflicts with --release' --only-suites tests/b.sh --only-cases alpha --release
+only_cases_misuse '--inline-only conflicts with --only-cases' --inline-only --only-cases alpha
 reset_cache
 cache_plan --only-suites tests/a.sh >/dev/null
 out=$(cache_plan --only-suites tests/a.sh -j 3); rc=$?
@@ -666,6 +698,32 @@ out=$(AFF_CALLS="$TMP/aff-calls" CASES_FAIL=1 cache_plan --no-reuse --affected);
 calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
 [ "$rc" = 0 ] && [[ "$calls" == 'cases select '* ]] && [ "$log" = 'b ' ] \
   && good "--affected falls back to per-suite select when the cases call fails" || no "--affected cases fallback: '$calls' log '$log'" "$out"
+# --inline-only: --affected with an empty changed list. No suite and no gated script runs (each counts as not
+# affected, affected.py is never asked), the inline checks still print, and it is a targeted run (no full-run record).
+for j in 1 3; do
+  reset_cache; : > "$TMP/aff-calls"
+  out=$(AFF_CALLS="$TMP/aff-calls" NO_BASE=1 SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh WITH_LIVE=1 WITH_WS=1 cache_plan --no-reuse -j "$j" --inline-only); rc=$?
+  calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(cat "$RUN_LOG")
+  [ "$rc" = 0 ] && [ -z "$log" ] && [ -z "$calls" ] && grep -q '^inline-only mode' <<<"$out" && ! grep -q 'no base' <<<"$out" \
+    && grep -q '^PASS  block cheap' <<<"$out" && grep -qx 'counts 1 0 7' <<<"$out" && ! grep -q '^PASS  a\b' <<<"$out" \
+    && [ ! -f "$TMP/state/run-all/$tree.json" ] && [ ! -d "$TMP/state/locks/run-all-full" ] && [ -z "$(ls -A "$SL")" ] \
+    && good "--inline-only runs no suite, counts every suite and gated script as not affected, prints inline checks (-j $j)" \
+    || no "--inline-only (-j $j): rc $rc log '$log' calls '$calls'" "$out"
+done
+conflicts_ok=true
+for a in '--affected' '--base main' '--only-suites tests/a.sh' '--only-suites=tests/a.sh' '--release' '--workspace-only' '--list-suites' '--base main --affected'; do
+  for order in 'before' 'after'; do
+    # shellcheck disable=SC2086
+    if [ "$order" = before ]; then out=$(cache_plan --inline-only $a 2>&1); rc=$?; else out=$(cache_plan $a --inline-only 2>&1); rc=$?; fi
+    [ "$rc" = 2 ] && grep -q 'run-all: --inline-only conflicts with ' <<<"$out" && ! grep -q '^PASS' <<<"$out" || { conflicts_ok=false; no "--inline-only $a ($order) exits 2 (rc $rc)" "$out"; }
+  done
+done
+$conflicts_ok && good '--inline-only conflicts with --affected, --base, --only-suites, --release, --workspace-only and --list-suites (exit 2, either order)'
+mkdir -p "$SL/1"; printf '%s\n' "$$" > "$SL/1/pid"; printf 'another checkout\n' > "$SL/1/checkout"
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --inline-only --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (1 in use:' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good '--inline-only takes a test slot (busy slot: exit 3 with --no-wait) and no full-run lock' || no '--inline-only test slot' "$out"
+rm -rf "$SL/1"
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh

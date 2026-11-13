@@ -6,7 +6,8 @@
 # a passing suite printed (a flaky step it retried) are shown under its PASS line; they are no failure.
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
-#                         [--only-suites L] [--reuse] [--no-reuse] [--no-wait] [--list-suites]
+#                         [--inline-only] [--only-suites L [--only-cases C]] [--reuse] [--no-reuse] [--no-wait]
+#                         [--list-suites]
 #   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
 #                   same count and exit code. Read-only live-workspace checks (runl, block) run one at a time
 #                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
@@ -21,13 +22,28 @@
 #                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
 #                   like a suite by that script path, else it counts as not affected.
 #                   Suites with a case map receive --case A,B for only the affected cases (shown in results).
-#                   An explicit --only-suites name runs all its cases. Case subsets never publish suite PASS records.
+#                   An explicit --only-suites name runs all its cases unless --only-cases gives it a subset. Case
+#                   subsets never publish suite PASS records (a full-suite PASS record still satisfies one).
+#                   Selection needs python3: when it cannot run (not on PATH, or the Microsoft Store stub that Git Bash
+#                   finds on Windows), --affected prints the reason and exits 2 before any suite, lock or slot instead
+#                   of widening to every suite. A full run never probes python3.
+#   --inline-only   run only the inline checks (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest
+#                   and wording greps, resolver and fixture checks): exactly --affected with an empty changed list,
+#                   so every suite and gated script counts as not affected and affected.py is never asked. A targeted
+#                   run (no full-run lock or record, takes a test slot). For a PR that selects no suite (scripts/ci-plan.py).
+#                   Conflicts (exit 2) with --affected, --base, --only-suites, --release, --workspace-only, --list-suites.
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when the full-run lock or every targeted test slot is busy
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
 #                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
 #                   so does a release-only suite (tests/installed-safety.sh) without --release.
+#   --only-cases C  (also --only-cases=C) give the one --only-suites suite the comma-separated case subset C: the suite
+#                   gets --case C as --affected passes it (results show "(cases C)", no suite PASS record). ALL or an
+#                   empty C runs every case (a normal run and record). For CI (scripts/ci-plan.py plans the cases).
+#                   Exits 2 before any check without exactly one --only-suites name, for a suite without a case map
+#                   ('# case-map:' header lines, tests/affected.py case_map), for a case the map does not name, and
+#                   with --release or --inline-only.
 #   --list-suites   print every suite and gated script path the current flags can select (one per line, exactly
 #                   the names --only-suites accepts, in run order; release-only suites only with --release) and
 #                   exit 0; runs no check, takes no lock
@@ -37,11 +53,19 @@
 #   --workspace-only run only checks requiring the live workspace or Claude; conflicts with --no-workspace and --release
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
-#   Targeted runs (--affected / --only-suites) share RPG_FACTORY_TEST_SLOTS machine-wide slots (default 2;
+#   Targeted runs (--affected / --only-suites / --inline-only) share RPG_FACTORY_TEST_SLOTS machine-wide slots (default 2;
 #                   0 disables the cap), under the persistent state directory's locks/run-all-slots/<n>.
 #                   Busy slots queue with a wait message; dead holders are reclaimed. Full runs keep their own lock.
+#   Timings: every suite that ran (not a reused PASS record, a syntax line, or a block and the run lines inside it)
+#                   records its wall seconds in <persistent state dir>/run-all/timings.json, JSON Lines, one object
+#                   per suite path ({"suite", "seconds", "rc", "cases": "A,B" or null, "head", "date"}, sorted by
+#                   suite); a suite run again replaces its line, the other suites' lines stay. Estimates only: it never
+#                   changes a count, a line, the exit code or suite reuse, and a timings error is ignored. Concurrent
+#                   runs merge under the lock dir <persistent state dir>/locks/run-all-timings (waited for at most
+#                   10 s, then the write is skipped; a lock older than 60 s or held by a dead pid is taken over).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -49,24 +73,59 @@ cd "$ROOT" || exit 1
 RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stand-in plans set RUNALL_SUITES_FROM)
 RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-suites omits them, --only-suites rejects them without it
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
-list_only=false; workspace_only=false
+list_only=false; workspace_only=false; inline_only=false; base_given=false; affected_given=false
+only_cases=""; only_cases_given=false
 while [ $# -gt 0 ]; do
   case "$1" in --workspace-only) workspace_only=true ;; -h|--help) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF"; exit 0 ;; --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
     --reuse) reuse=true ;; --no-wait) no_wait=true ;; --no-reuse) suite_reuse=false ;;
     --only-suites) only_suites="${2:-}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; }; shift ;;
     --only-suites=*) only_suites="${1#--only-suites=}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; } ;;
+    --only-cases) only_cases="${2:-}"; only_cases_given=true; [ $# -lt 2 ] || shift ;;
+    --only-cases=*) only_cases="${1#--only-cases=}"; only_cases_given=true ;;
     --list-suites) list_only=true ;;
-    --affected) affected=true ;; --base) base="${2:-}"; shift ;;
+    --affected) affected=true; affected_given=true ;; --base) base="${2:-}"; base_given=true; shift ;;
+    --inline-only) inline_only=true ;;
     -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; *) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF" >&2; exit 2 ;; esac
   shift
 done
 if $workspace_only && { ! $use_ws || $release; }; then
   echo "run-all: --workspace-only conflicts with --no-workspace and --release" >&2; exit 2
 fi
+if $inline_only; then   # --inline-only is --affected with an empty changed list: a targeted run of the inline checks only
+  conflicts=""
+  $affected_given && conflicts+=", --affected"; $base_given && conflicts+=", --base"; [ -z "$only_suites" ] || conflicts+=", --only-suites"
+  $only_cases_given && conflicts+=", --only-cases"
+  $release && conflicts+=", --release"; $workspace_only && conflicts+=", --workspace-only"; $list_only && conflicts+=", --list-suites"
+  [ -z "$conflicts" ] || { echo "run-all: --inline-only conflicts with ${conflicts#, }" >&2; exit 2; }
+  affected=true
+fi
+if $only_cases_given; then   # a case subset for the one --only-suites suite (its case map is checked in runall_prepare)
+  if $release; then echo "run-all: --only-cases conflicts with --release (a release runs every case)" >&2; exit 2; fi
+  [ -n "$only_suites" ] || { echo "run-all: --only-cases needs --only-suites with exactly one suite" >&2; exit 2; }
+  case "$only_suites" in *,*) echo "run-all: --only-cases needs exactly one --only-suites name, got '$only_suites'" >&2; exit 2 ;; esac
+  [ "$only_cases" != ALL ] || only_cases=""   # ALL or empty: every case, no --case argument
+fi
 case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive integer, got '$jobs'" >&2; exit 2 ;; esac
 t_start=$(date +%s)
 AFF=""
-if $affected && ! $release; then
+if $inline_only; then
+  AFF=$(mktemp_win)/changed.txt; : > "$AFF"
+  echo "inline-only mode: inline checks only, no suite and no gated script runs"
+elif $affected && ! $release; then
+  # Without a working python3 affected.py cannot select, and the fallback below would widen the run to every suite:
+  # fail loudly instead (Git Bash on Windows may find the Microsoft Store stub, which prints a hint and exits 9009).
+  py_why=""
+  if ! command -v python3 >/dev/null 2>&1; then py_why="not found on PATH"
+  else
+    py_out=$(python3 -B -c 'import sys' 2>&1 < /dev/null); py_rc=$?
+    if [ "$py_rc" -ne 0 ]; then
+      py_why=$(printf '%s\n' "$py_out" | sed -n '/[^[:space:]]/{s/\r$//;p;q;}')
+      [ -n "$py_why" ] || py_why="exit status $py_rc"
+    fi
+  fi
+  if [ -n "$py_why" ]; then
+    echo "run-all: --affected needs python3 to select suites, and python3 cannot run: $py_why" >&2; exit 2
+  fi
   AFF=$(mktemp_win)/changed.txt
   if python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" changed ${base:+"$base"} > "$AFF"; then echo "affected mode: $(wc -l < "$AFF" | tr -d ' ') changed file(s)"
   elif [ -n "$only_suites" ]; then echo "affected mode: no base, running only --only-suites $only_suites"; rm -rf "${AFF%/*}"; AFF=""
@@ -97,7 +156,10 @@ retry_lines() {
 # queued and started in the background (at most N at a time: live-lane suites first, one at a time, one slot for the
 # earliest queued suite, then the SLOW ones, then the rest in order; output buffered in $QD). Every line - suite results and inline checks alike - waits
 # in the queue until the lines before it are out, so the output order, the count and the exit code are those of -j 1.
-QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QN=(); QL=(); QA=(); QP=(); PEND=()
+QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QN=(); QL=(); QA=(); QP=(); QT=(); QTC=(); PEND=()
+# timing_add <suite path> <seconds> <rc> [<case list>]: one suite that ran, for timings_write (four fields per suite)
+TIMINGS=()
+timing_add() { TIMINGS+=("$1" "$2" "$3" "${4:-}"); }
 # the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
 SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
@@ -149,6 +211,7 @@ flush() { # print the queue up to the first suite still running
       worker_result "$i"
       [ -f "$QD/$i.res" ] || return 0
       read -r st secs < "$QD/$i.res"
+      [ -z "${QT[i]:-}" ] || timing_add "${QT[i]}" "$secs" "$st" "${QTC[i]:-}"
       if [ "$st" = 137 ] && grep -q 'suite worker died without a result' "$QD/$i.out"; then _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"
       elif [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
       elif [ "$st" = 0 ]; then
@@ -156,7 +219,7 @@ flush() { # print the queue up to the first suite still running
       else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
       rm -f "$QD/$i.res" "$QD/$i.out"
     else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
-    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QN[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
+    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QN[i]' 'QL[i]' 'QA[i]' 'QP[i]' 'QT[i]' 'QTC[i]'; qnext=$((i + 1))
   done
 }
 running() { # sets nrun (started, not ended), nlive (of them in the live lane), nord (started as the in-order one)
@@ -224,9 +287,11 @@ _run() {
   suite_of "$@"
   if [ -n "$s" ] && ! suite_selected "$s"; then not_affected; return; fi
   # Postprocessors can turn rc=0 into SKIP/FAIL, so they always grade fresh output.
-  local cache_suite="$s"
+  local cache_suite="$s" timed="$s"
   suite_cases_for "$s"; case_list=$suite_cases
-  case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite=""; case_list="" ;; esac
+  case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite=""; case_list=""; timed="" ;; esac
+  # timings: a block (replay) and the run lines inside one are not timed suites (in a -j N block job they could not be)
+  [ "$post" != replay ] && [ -z "$LIVE_BLOCK" ] || timed=""
   # never reused: graded by a handler, live lane (runl, block), inside a block, or reading a workspace
   [ -z "$post$lane$LIVE_BLOCK" ] || cache_suite=""
   case " $* " in *" --no-history "*|*" RPG_FACTORY_WORKSPACE="*) cache_suite="" ;; esac
@@ -236,12 +301,18 @@ _run() {
   local publish=$cache_suite
   if [ -n "$case_list" ]; then set -- "$@" --case "$case_list"; publish=""; fi
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
-    if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
+    if [ -n "$post" ]; then
+      t0=$(date +%s); out=$("$@" 2>&1 < /dev/null); rc=$?; t1=$(date +%s)
+      [ -z "$timed" ] || timing_add "$timed" "$((t1 - t0))" "$rc" "$case_list"
+      "$post" "$rc" "$out"; return
+    fi
     t0=$(date +%s)
-    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; retry_lines note "$out"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+    if out=$("$@" 2>&1 < /dev/null); then rc=0; else rc=$?; fi; t1=$(date +%s)
+    [ -z "$timed" ] || timing_add "$timed" "$((t1 - t0))" "$rc" "$case_list"
+    if [ "$rc" -eq 0 ]; then suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; retry_lines note "$out"; else bad "$name [$((t1 - t0))s]" "$out"; fi
     return
   fi
-  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QN[n]=$publish; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
+  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QN[n]=$publish; QA[n]=$lane; QT[n]=$timed; QTC[n]=$case_list; PEND+=("$n"); qn=$((qn + 1))
   pump; flush
 }
 # Classify conservatively: existing bytes must stay intact, and insertions must be whole new sections.
@@ -386,16 +457,44 @@ CASE_SUITES=(); CASE_LISTS=()
 suite_cases_for() {
   local i; suite_cases=""
   $release && return 0
-  case ",$only_suites," in *",$1,"*) return 0 ;; esac
+  # an explicit --only-suites name runs all its cases, or the --only-cases subset (one name, checked in runall_prepare)
+  case ",$only_suites," in *",$1,"*) suite_cases=$only_cases; return 0 ;; esac
   for i in "${!CASE_SUITES[@]}"; do
     [ "${CASE_SUITES[i]}" = "$1" ] && { suite_cases=${CASE_LISTS[i]}; break; }
   done
   return 0
 }
+# only_cases_check <suite> <cases>: the suite has a case map and it names every case of the comma list (an empty list:
+# every case). The map is read by tests/affected.py's own case_map() (the affected.py next to this script, its ROOT
+# set to the current root), never a second parser; RUNALL_AFFECTED_PY stand-ins have no case map. One line on stderr.
+only_cases_check() {
+  python3 -B - "${RUNALL_SELF%/*}/affected.py" "$1" "$2" <<'PY'
+import importlib.util, os, sys
+path, suite, wanted = sys.argv[1:]
+try:
+    spec = importlib.util.spec_from_file_location("runall_affected", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+except Exception as exc:   # one line, never a traceback: exit 2 like every other misuse
+    print(f"run-all: --only-cases: cannot load the case-map parser {path}: {exc}", file=sys.stderr)
+    sys.exit(2)
+mod.ROOT = os.getcwd()
+mapping = mod.case_map(suite)
+if not mapping:
+    print(f"run-all: --only-cases: suite '{suite}' has no case map (no '# case-map:' header lines)", file=sys.stderr)
+    sys.exit(2)
+unknown = [c for c in wanted.split(",") if c not in mapping] if wanted else []
+if unknown:
+    print(f"run-all: --only-cases: unknown case(s) {', '.join(repr(c) for c in unknown)} in '{suite}'"
+          f" (its case map names: {', '.join(sorted(mapping))})", file=sys.stderr)
+    sys.exit(2)
+PY
+}
 suite_selected() {
   local target=$1
   $release && return 0
   case ",$only_suites," in *",$target,"*) return 0 ;; esac
+  $inline_only && return 1   # an empty changed list: nothing is affected, affected.py is never asked
   if [ -n "$AFF" ]; then
     case "$AFF_ASKED" in *$'\n'"$target"$'\n'*)
       case "$AFF_PICKED" in *$'\n'"$target"$'\n'*) return 0 ;; esac; return 1 ;; esac
@@ -613,9 +712,10 @@ runall_prepare() {
       echo "run-all: unknown suite '$candidate' (not a suite run-all runs; see --list-suites)" >&2; bad=true
     done
     $bad && return 2
+    if $only_cases_given; then only_cases_check "$only_suites" "$only_cases" || return 2; fi
   fi
   if ! $full_run && { $affected || [ -n "$only_suites" ]; }; then test_slot || return $?; fi
-  [ -z "$AFF" ] || affected_select "${suites[@]}"
+  [ -z "$AFF" ] || $inline_only || affected_select "${suites[@]}"
   if $suite_reuse && ! $release; then
     hash_output=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" hashes "${suites[@]}" 2>/dev/null) || hash_output=""
     while read -r suite hash; do
@@ -629,8 +729,163 @@ runall_prepare() {
   # early exit and once the full-run lock is held: what other sessions change while this run waits is not this run's.
   gitcfg_snapshot "$ROOT"
 }
+# timings_write: merge this run's suite timings into $STATE/run-all/timings.json (JSON Lines, one object per suite,
+# sorted by suite; a suite run again replaces its line, an unreadable or malformed line is dropped). Estimates only:
+# every error is swallowed and nothing is printed, so counts, lines, the exit code and reuse never depend on it.
+# Two targeted runs (the two test slots) may finish together: the read, merge and replace hold the lock directory
+# $STATE/locks/run-all-timings (os.mkdir, the holder's pid in its pid file), or the last writer would drop the other
+# run's rows. A busy lock is retried every 0.1 s for at most 10 s, then the write is given up silently; a lock dir older
+# than 60 s, or whose pid names a dead process, is stale and removed once before retrying; the holder always releases.
+# Test hook RUNALL_TIMINGS_BARRIER=<dir>: the holder touches <dir>/read.<pid> after its read and waits (at most 60 s)
+# for <dir>/go; a writer that finds the lock held touches <dir>/waiting.<pid> once (its lock wait is then 60 s).
+timings_write() {
+  [ -n "$STATE" ] && [ "${#TIMINGS[@]}" -gt 0 ] || return 0
+  python3 -B - "$STATE" "$HEAD_SHA" "${TIMINGS[@]}" > /dev/null 2>&1 <<'PY' || :
+import datetime, json, os, sys, time
+state, head, *flat = sys.argv[1:]
+p = os.path.join(state, 'run-all', 'timings.json')
+lock = os.path.join(state, 'locks', 'run-all-timings')
+lock_pid = os.path.join(lock, 'pid')
+barrier = os.environ.get('RUNALL_TIMINGS_BARRIER', '')
+me = str(os.getpid())
+
+def touch(name):
+    if barrier:
+        try:
+            open(os.path.join(barrier, f'{name}.{me}'), 'a').close()
+        except OSError:
+            pass
+
+def holder():
+    try:
+        with open(lock_pid, encoding='utf-8') as f:
+            return f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return ''
+
+def alive(pid):
+    if os.name == 'nt':   # never os.kill here: on Windows it terminates the process
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL('kernel32', use_last_error=True)
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = k.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() != 87   # 87: no such process; any other error counts as alive
+        try:
+            code = wintypes.DWORD()
+            return not k.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+def stale(pid):
+    try:
+        if time.time() - os.stat(lock).st_mtime > 60:
+            return True
+    except OSError:
+        return False   # gone: the next mkdir takes it
+    # no pid yet: the holder writes it right after its mkdir, so only the age can make it stale
+    return pid.isdigit() and not alive(int(pid))
+
+def acquire():
+    deadline = time.monotonic() + (60 if barrier else 10)
+    waiting = reclaimed = False
+    while True:
+        try:
+            os.mkdir(lock)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                with open(lock_pid, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(me + '\n')
+            except OSError:
+                release()
+                raise
+            return True
+        if not waiting:
+            touch('waiting')
+            waiting = True
+        if not reclaimed:
+            pid = holder()
+            if stale(pid):
+                reclaimed = True
+                if holder() == pid:   # still the holder judged stale, not a new one
+                    try:
+                        if pid:
+                            os.remove(lock_pid)
+                        os.rmdir(lock)
+                    except OSError:
+                        pass
+                continue
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+def release():
+    try:
+        if holder() in (me, ''):   # never remove a lock another writer took over
+            if os.path.exists(lock_pid):
+                os.remove(lock_pid)
+            os.rmdir(lock)
+    except OSError:
+        pass
+
+os.makedirs(os.path.dirname(lock), exist_ok=True)
+if not acquire():
+    sys.exit(0)   # an estimate is not worth blocking a run: give up silently
+try:
+    rows = {}
+    try:
+        with open(p, encoding='utf-8') as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and isinstance(r.get('suite'), str) and r['suite']:
+                    rows[r['suite']] = r
+    except (OSError, UnicodeDecodeError):
+        pass
+    touch('read')
+    if barrier:
+        until = time.monotonic() + 60
+        while not os.path.exists(os.path.join(barrier, 'go')) and time.monotonic() < until:
+            time.sleep(0.05)
+    date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for i in range(0, len(flat) - 3, 4):
+        suite, secs, rc, cases = flat[i:i + 4]
+        try:
+            rows[suite] = dict(suite=suite, seconds=int(secs), rc=int(rc), cases=cases or None, head=head or None, date=date)
+        except ValueError:
+            continue
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + f'.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            for suite in sorted(rows):
+                f.write(json.dumps(rows[suite], sort_keys=False) + '\n')
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+finally:
+    release()
+PY
+}
 runall_finish() {
   local path after
+  timings_write
   if [ -n "$CACHE_BEFORE" ]; then
     after=$(input_snapshot) || after=""
     if [ "$after" = "$CACHE_BEFORE" ]; then
@@ -797,6 +1052,7 @@ run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests
 run "delivery pipeline (tier, plan, dispatch, verdicts, gate)" env -u TMPDIR tests/pipeline.test.sh
 run "generic delivery (pipeline on a plain repo, no registry)" env -u TMPDIR tests/delivery-generic.test.sh
 run "run-all --affected suite selection" tests/affected.test.sh
+run "CI matrix plan (scripts/ci-plan.py: affected suites, fail-safe full, Windows list)" env -u TMPDIR tests/ci-plan.test.sh
 run "run-all -j scheduler (order, counts, concurrency cap, live lane, run1 alone)" tests/run-all-parallel.test.sh
 run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
 run "registry fragments (registry/ -> registry.json build, placement, merge)" tests/registry-fragments.test.sh
@@ -825,6 +1081,7 @@ run "Comfy Desktop setup script and the vendored 9router node (fake Desktop dir,
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+run "workspace default by platform (shell + Python helper, stubbed uname)" env -u TMPDIR tests/workspace-default.test.sh
 # plan paths (task checks-lows): skipped while the suite is absent; the run line stays visible to list_suites
 if [ -f tests/plan-paths.test.sh ]; then run "plan paths (portable plan path validation)" env -u TMPDIR tests/plan-paths.test.sh; fi
 fi
@@ -951,12 +1208,13 @@ fi
 # ---- Factory check scripts against the live workspace (read-only)
 live_checks() {
   local wsr cl pin_files out hout ph r p rc
+  wsr="$(rpgf_default_workspace)"
   run "sgl-determinism on Shared.GameLogic" python3 -B scripts/checks/sgl-determinism.py \
-    "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
+    "$wsr/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
   # pin-status reads the client's working tree. When the user has uncommitted pin files (the local file:
   # toggle is a human gate and their state), a live FAIL says nothing about this plugin: then verify the
   # committed HEAD through a read-only export and report SKIP with the reason - never PASS.
-  wsr="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"; cl="$wsr/IndieRPGMMOAdventure"
+  cl="$wsr/IndieRPGMMOAdventure"
   pin_files=(Packages/manifest.json Packages/packages-lock.json "Assets/Samples/Netcode/DOTS Sample/.sample-source")
   if ! gated scripts/checks/pin-status.py; then :
   elif out=$(python3 -B scripts/checks/pin-status.py 2>&1); then ok "pin-status (client pins vs upstream tags)"
@@ -981,7 +1239,7 @@ live_checks() {
   fi
   for p in Netcode UnityDots UIToolkit; do
     gated scripts/checks/package-ready.py || continue
-    out=$(python3 -B scripts/checks/package-ready.py "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/$p" 2>&1); rc=$?
+    out=$(python3 -B scripts/checks/package-ready.py "$wsr/$p" 2>&1); rc=$?
     { [ $rc -eq 0 ] && grep -q "READY to tag" <<<"$out"; } || { [ $rc -eq 1 ] && grep -q "NOT READY" <<<"$out"; } \
       && ok "package-ready $p -> $(grep -m1 -oE 'NOT READY|READY to tag v[0-9.]+' <<<"$out")" || bad "package-ready $p" "$out"
   done

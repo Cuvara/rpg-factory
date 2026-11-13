@@ -11,7 +11,8 @@
 # Exit 0 = both hold; 1 = a mismatch (printed); 2 = a file is missing.
 set -uo pipefail
 
-ws="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/workspace.sh"
+ws="$(rpgf_default_workspace)"
 server=""
 netcode=""
 while [ $# -gt 0 ]; do

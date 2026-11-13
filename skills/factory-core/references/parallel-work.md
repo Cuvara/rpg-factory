@@ -47,9 +47,34 @@ exclusive resources, QA tiers and model policy. `plan.json` `repos.<key>` names 
 ## Tier commands of this plugin repo (delivery.md section 10, "QA tiers")
 
 The QA tiers table of delivery.md carries this repo's commands (registry `pipeline.qa_tiers`); the single-verify rule
-(`policy:single-verify`) is there too. The rules behind them are in `tests/README.md`: the run-all lock (one full run per machine; CI is the full-suite gate and
-`tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
+(`policy:single-verify`) is there too. The rules behind them are in `tests/README.md`: the run-all lock (one full run per machine; CI runs the affected suites per change, `ci-ok` must be
+green before merging and `tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
 slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for a release.
+
+## Stacked dispatch and test selection in this repo (delivery.md sections 4 and 10)
+
+The stacked-dependent rule is delivery.md section 4, "Stacked dependents" (`policy:stacked-dispatch`); these are the
+lessons of this repo behind it, each with its reason.
+
+- **Any edit under `scripts/assetgen/*.py` selected every suite:** a leaf file that only an EXTRA pattern of
+  `tests/assetgen.test.sh` covered was unsure, and unsure runs all. The fix is plan assetgen-v2-core task
+  affected-leaf-fix (`tests/affected.py` counts a leaf an EXTRA pattern covers as named). A verify that selects most
+  suites costs about an hour.
+- **`scripts/factory-cmd.py` widens the selection:** it reaches a wide import closure and selects many suites, while
+  `scripts/factory-pipeline.py` is narrowed by `tests/affected.py` `PIPELINE_SUITES`. Keep a task that touches it
+  small; the live number is the pre-flight `selected N of M suites` that `dispatch --phase verify` prints (a warning
+  above `--suite-warn`, default 40): read it before starting the session.
+- **On Windows Git Bash `python3` can be the Microsoft Store stub:** `tests/run-all.sh --affected` now exits 2
+  instead of silently running every suite (seen in the finalize-verb verify).
+- **A stacked verify waits for the dependency's review PASS:** verifying earlier tests code that may still change, so
+  dispatch exits 2 until the PASS SHA is in HEAD.
+- **Merge, never rebase, the dependency branch:** a rebase rewrites the dependent's own commits, so the SHAs that its
+  recorded verdicts and the shared worktree name are gone; a clean merge keeps them, and the gate credits it as a
+  sync merge.
+- **One in-flight dependency only:** two would need two moving bases and an ambiguous own delta.
+- **A sibling worktree beside the integration checkout, never a child of the dependency's worktree:** removing the
+  dependency's worktree after its integration would take a child with it, and a `<dep branch>--*` name reads as the
+  dependency's child in status and cleanup.
 
 ## RPG Orca notes (delivery.md section 5)
 
@@ -59,3 +84,8 @@ slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --i
 - The run report is `docs/plans/<plan>/report.md` (`docs/plans/README.md`); verdicts and specs stay in the
   per-machine state dir, so a new machine re-runs review and QA. The report layout is `report.md` in this folder's
   `references/`; it includes the Cost table (`skills/delivery/references/delivery.md` section 8).
+- `factory-pipeline.py dispatch --phase lead` takes a new task worktree's Orca parent from the checkout that holds
+  `plan.topic` and falls back to the main checkout when none has it, so the run lead sets `plan.topic` to its own
+  integration branch (or checks the topic out) before dispatching. Reason: in plan ci-matrix a task worktree landed
+  under the main checkout instead of the run lead's worktree. Dispatch prints a stderr hint; `tests/pipeline.test.sh`
+  covers it.

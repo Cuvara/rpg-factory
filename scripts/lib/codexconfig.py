@@ -12,10 +12,14 @@ def home():
     return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
 
 
+def config_path():
+    return os.path.join(home(), "config.toml")
+
+
 def config():
     try:
         import tomllib
-        with open(os.path.join(home(), "config.toml"), "rb") as fh:
+        with open(config_path(), "rb") as fh:
             data = tomllib.load(fh)
             return data if isinstance(data, dict) else {}
     except (ImportError, OSError, ValueError):

@@ -441,6 +441,11 @@ rm -f "$TMP/step"
 FAKE_CHANGING=yes FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run changing --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "changing output does not stall" || no "changing output stalled"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"working"}}}' > "$TMP/worker-read"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run frozen-off --stall-poll-ms 10 --stall-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "stall-ms 0 disables the frozen check" || no "stall-ms 0 reported a stall (status $status)"
 
 echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"completed"}]}}' > "$TMP/worker-list"
 rm -f "$TMP/step" "$TMP/workers-argv"

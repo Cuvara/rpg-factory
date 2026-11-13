@@ -61,8 +61,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         the run lead starts ONE task-lead session per task, always a registry pipeline.lead_agent (Claude) session
         whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
-        exists, it carries the earlier waves; status still compares against the base), or resumed when that branch is
-        already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
+        exists, it carries the earlier waves; status still compares against the base; stacked: when exactly one
+        dependency in the same repo is candidate or reviewed and every other one is integrated, from that
+        dependency's branch tip, recorded by SHA in <task>__stack.json (not part of the task fingerprint); its review
+        and QA base is then the newest dependency SHA in HEAD, and status names the merge when the dependency moves;
+        tier XS and a no-worktree repo never stack), or resumed when that branch is already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
         own Orca Run, split into subtasks with disjoint paths (`subplan validate`), one fresh session per subtask in the
         same worktree, sub-sessions do not commit, the task lead commits per subtask, cross-model review and QA sessions
         there, release each session, report a `status` message (to Orca run RUN_ID: worker_done needs a dispatch,
@@ -70,14 +73,19 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         nested workers, so --runner orca prints a handoff, not a worker-start:
         `git worktree add --no-track -b <branch> <path> <base>` for a new task worktree, followed by
         `orca worktree set` with its parent, then `orca agent launch --worktree path:<dir> --prompt ...`;
-        existing worktrees use only the launch command.
+        existing worktrees use only the launch command. A stacked task's handoff is the same three lines: the worktree
+        add cuts <topic>-<id> from the dependency's full tip SHA, the new worktree is a sibling beside the integration
+        checkout (never a child of the dependency's worktree, never a `<dep branch>--*` name) and `orca worktree set`
+        names the integration checkout as parent, else the main checkout; its lead prompt says to implement now, in
+        parallel with the dependency's verify, and to run no verify, review or QA dispatch before `status` clears it.
+        A fresh dispatch (no task branch yet) removes a leftover <task>__stack.json and <task>__sync.json first.
         A tier XS task starts no task lead: it prints the run lead's own steps (edit on plan.topic, commit with explicit
         paths, `dispatch --phase review --sha <sha>`, the task tier command, the `tier XS: lead ran task suites` QA
         verdict, gate); `--phase implement` on it is a usage error. Its review and QA read the topic checkout.
   dispatch <plan.json> --task ID --phase lead --placement shared|child ...
         Both placements create a task worktree beside the integration checkout (or the repo checkout if absent).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
-  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID]
+  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID] [--suite-warn N]
         implement records the model it started per task/subtask (<task>[@<subtask>]__implementer.model.json); review
         and QA pair against it (else the planned routing), never current availability. review records its reviewer
         and any SAME_MODEL fallback per candidate SHA: the only source `verdict` stamps a fallback from.
@@ -96,7 +104,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         branch in `git worktree list`, `--worktree path:<it>`), never a new one: no such worktree is an error (exit 1;
         run `--phase lead` first). implement: a sub-session that edits only the owned paths, or the subtask's --paths
         (inside them; it may then name its model with --agent), and does not commit. review/qa need --sha, the frozen
-        candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
+        candidate the task lead keeps at HEAD, and are read-only. A stacked task's verify, review and qa dispatch exit 2
+        (nothing printed, recorded or launched) until its dependency has a current review PASS whose SHA is an ancestor
+        of --sha; the reason names the merge (git merge <dependency branch>, never rebase). The reviewer is the implementer's pair (another
         model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
         no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
         run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
@@ -106,6 +116,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
         task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
         run the command after the review PASS.
+        verify and qa print on stderr `selected N of M suites (tests/affected.py)` (N: the Affected cases suites,
+        M: `--list-suites`; `selected suites: not computed (<reason>)` when there is no selection) and, when N >
+        --suite-warn N (default 40), a warning to narrow the task paths or its checks. Advisory: the prompt and the
+        exit code are unchanged; --suite-warn below 1 is a usage error (exit 2).
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
@@ -118,7 +132,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
-        `tests/run-all.sh --workspace-only`; after the PR opens, CI green is the full-suite gate.
+        `tests/run-all.sh --workspace-only`; after the PR opens, CI runs the affected suites and ci-ok must be
+        green before merging (every suite through workflow_dispatch with full=true).
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
@@ -135,18 +150,24 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
         scripts)/ .sh or .py paths; never tests/run-all.sh), the next QA dispatch reruns them.
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
+        A stacked task: a review or QA PASS (task or --subtask; verify through its review and QA) on a SHA that lacks
+        its dependency's current review PASS is refused (exit 2, nothing written); FAIL and the other states are recorded.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
         a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
-        paths (the plan file and its report.md belong to the run lead and are never stray), verdicts match the
-        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
+        paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
+        and are never stray), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
+        was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
         starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
-        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. With
+        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. A stacked
+        task whose review PASS lacks its dependency's review PASS, or that was integrated before or together with its
+        dependency (the order is: git merge --no-ff the dependency, then the task), is a blocker; a clean merge of the
+        dependency into the dependent is a sync merge and never makes the dependency's review STALE. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push, `gh pr create`, and `gh pr checks <pr> --watch` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -156,6 +177,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         first line capped at 200 characters, the full body). The lead runs it before its Orca `status` message, so the
         run lead's `status` shows completion even when the message never arrives. Exit 2 on an unknown task, a bad
         --sha or an empty body.
+  sync <plan.json> --task ID [--send]
+        after task ID moved (its task branch tip, else its review PASS), per stacked dependent whose HEAD lacks that SHA:
+        prints the `git merge` it needs and records <dependent>__sync.json, which status shows until the dependent's
+        HEAD contains the SHA (a message is only a nudge). --send also runs `orca orchestration send --type status` to
+        the dependent's lead (task orca_run, else its Orca worktree). Exit 0, 1 when a send failed, 2 usage.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -180,6 +206,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         exists. Test slots held by a run in one of the plan's checkouts (`<state dir>/locks/run-all-slots/<n>/`, written
         by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
         PID is alive (stderr with --json); status never stops the process and prints no command that would.
+        Stacked siblings (a dependency D and the tasks stacked on it, while one of their branches exists and one of
+        them is not integrated) get the note `stacked siblings <ids> on D: sibling worktrees, not children of D's
+        worktree; merge order <D branch>, then <dependent branch> ... into <topic> (dependency first, git merge
+        --no-ff); git branch -d a branch only after its merge` on D's and each dependent's row (a branch already merged
+        or gone is marked so). A `sync:` note shows only for the task's current dependency.
 
   cleanup <plan.json> [--after-merge] [--orca-run RUN_ID]... [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
@@ -199,6 +230,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         an orphaned `wsl.exe ... sleep infinity` (its parent is gone), with PID, command and start time; the user decides,
         no kill command is ever printed, and a failing probe names nothing. It also prints `SLOT` lines for held test
         slots in the plan's checkouts, as status does (`slots` in --json).
+        Stacked siblings print as `STACK <repo>: stacked siblings ... merge order ...` after the KEPT lines (`stacked`
+        in --json: repo, dep, dependents, order, states merged|not merged|gone, text); they never change the state. A
+        stacked dependent's worktree is a task worktree, never "child of <dependency>".
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
@@ -1255,15 +1289,238 @@ def task_branch(plan, info, task):
     return plan["topic"] if not info["worktrees"] else f"{plan['topic']}-{task['id']}"
 
 
-def start_base(plan, info, task):
+def start_base(plan, info, task, reg=None):
     """Where a task branch starts: a later-wave task (deps) of a worktree repo starts from the integration branch
     plan.topic when it exists (it carries the earlier waves); otherwise the base. repos.<key>.base stays the
-    comparison base of `status` and the gate."""
-    base = info["base_sha"] or info["base"]
-    if task.get("deps") and info["worktrees"] and info["path"]:
-        if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]:
-            return plan["topic"]
-    return base
+    comparison base of `status` and the gate.
+
+    Stacked (a worktree repo, not tier XS): once the task branch exists, a stack record (<task>__stack.json) means it
+    was cut from that dependency SHA. Before it exists and with `reg`, a task that is stackable() starts from the
+    tip of its one in-flight dependency (`dispatch --phase lead` records it)."""
+    def unstacked():
+        if task.get("deps") and info["worktrees"] and info["path"]:
+            if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]:
+                return plan["topic"]
+        return info["base_sha"] or info["base"]
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not info["path"]:
+        return unstacked()
+    if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
+        rec = stack_record(plan, task["id"])
+        return rec["sha"] if rec else unstacked()
+    if reg is not None:
+        stk = stackable(plan, reg, info, task)
+        if stk:
+            return stk["sha"]
+    return unstacked()
+
+
+# ---------------------------------------------------------------- stacked dispatch
+
+STACK_PHASES = ("candidate", "reviewed")  # a dependency a task may stack on: committed, not yet integrated
+SETTLED_PHASES = ("integrated", "qa")
+
+
+def stack_file(plan, task_id):
+    """The stack record of a task: <task>__stack.json beside its verdicts. It names the dependency SHA the task branch
+    was cut from (never a branch name as the base) and is not part of task_fingerprint, so verdicts stay valid."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__stack.json")
+
+
+def stack_record(plan, task_id):
+    """{dep, branch, sha, at} of a stacked task, or None."""
+    rec = fstate.read_json(stack_file(plan, task_id))
+    return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
+
+
+def sync_file(plan, task_id):
+    """The sync record of a stacked dependent: <task>__sync.json beside its verdicts, written by `sync` when its
+    dependency moved past the dependent's HEAD. It is the durable signal (an Orca message is only a nudge); status
+    shows it until the dependent's HEAD contains the SHA."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__sync.json")
+
+
+def sync_record(plan, task_id):
+    """{plan, task, dep, ref, sha, command, to, sent, at} of a dependent told to merge its dependency, or None."""
+    rec = fstate.read_json(sync_file(plan, task_id))
+    return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
+
+
+def stacked_dependents(plan, reg, dep_id):
+    """The plan tasks stacked on dep_id, in plan order: their stack record names it, same repo key, not tier XS, a
+    worktree repo with a checkout, and their task branch exists."""
+    dep = find_task(plan, dep_id)
+    out = []
+    for t in plan.get("tasks", []):
+        rec = stack_record(plan, t.get("id"))
+        if not rec or rec.get("dep") != dep_id or t.get("repo") != dep.get("repo") or pr.xs_plan(plan, t):
+            continue
+        info = repo_info(plan, reg, t["repo"])
+        if not info["worktrees"] or not info["path"]:
+            continue
+        if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, t)}")[0]:
+            out.append(t)
+    return out
+
+
+def stack_groups(plan, reg):
+    """The stacked siblings of the plan, in plan order of their dependency: [{repo, dep, dependents, order, states,
+    text}] per plan task D with at least one dependent t (stack record naming D, same repo key, t not tier XS, a
+    worktree repo with a checkout). `order` is the merge order into plan.topic: D's task branch, then each
+    dependent's (plan order); `states` per branch: gone (no refs/heads/<branch>), merged (in refs/heads/<topic>) or
+    not merged. A group is listed only while one of its branches exists. Read-only (git only)."""
+    tasks = plan.get("tasks", [])
+    by_id = {t.get("id"): t for t in tasks}
+    on = {}
+    for t in tasks:
+        rec = stack_record(plan, t.get("id"))
+        d = by_id.get(rec.get("dep")) if rec else None
+        if not d or d is t or d.get("repo") != t.get("repo") or pr.xs_plan(plan, t):
+            continue
+        on.setdefault(d["id"], []).append(t["id"])
+    out, topic = [], plan["topic"]
+    for d in tasks:
+        dependents = on.get(d.get("id"))
+        if not dependents:
+            continue
+        info = repo_info(plan, reg, d["repo"])
+        path = info["path"]
+        if not info["worktrees"] or not path:
+            continue
+        order = [task_branch(plan, info, by_id[x]) for x in [d["id"], *dependents]]
+        heads = {b: git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{b}")[0] for b in order}
+        if not any(heads.values()):
+            continue
+        has_topic = bool(git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0])
+        states = {b: "gone" if not heads[b] else
+                  "merged" if has_topic and is_ancestor(path, f"refs/heads/{b}", f"refs/heads/{topic}") else
+                  "not merged" for b in order}
+        items = ", then ".join(b + ("" if states[b] == "not merged" else f" ({states[b]})") for b in order)
+        text = (f"stacked siblings {', '.join(dependents)} on {d['id']}: sibling worktrees, not children of "
+                f"{d['id']}'s worktree; merge order {items} into {topic} (dependency first, git merge --no-ff); "
+                "git branch -d a branch only after its merge")
+        out.append({"repo": d["repo"], "dep": d["id"], "dependents": dependents, "order": order, "states": states,
+                    "text": text})
+    return out
+
+
+def plan_has_task(plan, task_id):
+    return any(t.get("id") == task_id for t in plan.get("tasks", []))
+
+
+def stackable(plan, reg, info, task, phases=None):
+    """{dep, branch, sha} when the task may start from the tip of one dependency, else None: a worktree repo, not tier
+    XS, the task has deps, exactly one dependency D in the same repo key is candidate or reviewed with its task branch
+    present (sha: its full tip), and every other dependency is integrated or qa. Two in-flight dependencies, or a
+    pending or implementing one, keep the task waiting. `phases` (id -> phase, e.g. status rows) spares task_status."""
+    deps = task.get("deps") or []
+    if not deps or not info["worktrees"] or not info["path"] or pr.xs_plan(plan, task):
+        return None
+    inflight = []
+    for did in deps:
+        if phases is not None and did in phases:
+            phase = phases[did]
+        else:
+            d = find_task(plan, did)
+            phase = task_status(plan, reg, d, serial_count(plan, reg, d["repo"]))[0]["phase"]
+        if phase in STACK_PHASES:
+            inflight.append(did)
+        elif phase not in SETTLED_PHASES:
+            return None
+    if len(inflight) != 1:
+        return None
+    dep = find_task(plan, inflight[0])
+    if dep["repo"] != task["repo"] or pr.xs_plan(plan, dep):
+        return None
+    branch = task_branch(plan, info, dep)
+    sha = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0]
+    return {"dep": dep["id"], "branch": branch, "sha": sha} if sha else None
+
+
+def stack_base(plan, reg, info, task, sha):
+    """(base, note) of a stacked task's own delta at `sha`, or None when the task is not stacked (no record, no task
+    branch, tier XS or a no-worktree repo). Once the recorded dependency SHA is on plan.topic, the task is a later wave
+    cut from the topic: review_base. Before, the base is the newest dependency SHA contained in `sha`: the dependency's
+    current review PASS, the merge-base with its branch, or the record (the PASS SHA when it is the same commit); with
+    none contained, the record's SHA and a note."""
+    path = info["path"]
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
+        return None
+    rec = stack_record(plan, task["id"])
+    if not rec or not git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
+        return None
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")[0] or sha
+    topic = plan["topic"]
+    if is_ancestor(path, rec["sha"], f"refs/heads/{topic}"):
+        return review_base(info, topic, topic, full)
+    cands = []
+    if plan_has_task(plan, rec.get("dep")):
+        rv = verdict_of(plan, reg, rec["dep"], "review")[0]
+        if rv and rv.get("state") == "PASS":
+            cands.append(rv["sha"])
+    dbranch = rec.get("branch")
+    if dbranch and git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{dbranch}")[0]:
+        mb, rc = git(path, "merge-base", full, f"refs/heads/{dbranch}")
+        if rc == 0 and mb:
+            cands.append(mb)
+    cands.append(rec["sha"])
+    kept = [c for c in cands if is_ancestor(path, c, full)]
+    if not kept:
+        return rec["sha"], f"stack base {rec['sha'][:10]} is not in {full[:10]}"
+    # the newest: every other kept SHA is its ancestor (the first wins a tie, so the PASS SHA for the same commit)
+    return max(kept, key=lambda c: sum(1 for o in kept if is_ancestor(path, o, c))), None
+
+
+def stack_notes(plan, reg, info, task, row):
+    """status of a stacked task (record and branch) at its HEAD: 'stacked on D@X', and when D moved past HEAD (its
+    branch tip, else its review PASS) a note and the merge command as next."""
+    sb = stack_base(plan, reg, info, task, row["sha"])
+    if sb is None:
+        return
+    path, rec = info["path"], stack_record(plan, task["id"])
+    x = sb[0]
+    if not re.fullmatch(r"[0-9a-f]{40}", str(x)):  # review_base may answer plan.topic: name its fork point
+        x = git(path, "merge-base", x, row["sha"])[0] or x
+    row["notes"].append(f"stacked on {rec['dep']}@{x[:10]}")
+    target = rec.get("branch")
+    y = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{target}")[0] if target else None
+    if not y and plan_has_task(plan, rec.get("dep")):
+        rv = verdict_of(plan, reg, rec["dep"], "review")[0]
+        if rv and rv.get("state") == "PASS":
+            y = target = rv["sha"]
+    if y and not is_ancestor(path, y, row["sha"]):
+        row["notes"].append(f"{rec['dep']} now at {y[:10]} not in HEAD: merge it (never rebase), then continue")
+        row["next"] = orca_cmd.quote(["git", "-C", row["worktree"], "merge", target] if row["worktree"]
+                                     else ["git", "merge", target])
+
+
+def stack_gate(plan, reg, info, task, sha):
+    """Why a stacked task may not be verified (or pass) at `sha`, or None: {dep, reason, merge}. A stacked task's
+    verify, review and QA dispatch and its review/QA PASS wait until its dependency D has a current review PASS whose
+    SHA X is an ancestor of `sha`; `merge` is what to merge to get there (D's branch when it contains X, else X), None
+    while D has no PASS. Not stacked (tier XS, a no-worktree repo, no stack record, or a record whose dependency is no
+    plan task): None. The task branch need not exist (the gate runs after it may be deleted)."""
+    path = info["path"]
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
+        return None
+    rec = stack_record(plan, task["id"])
+    if not rec or not plan_has_task(plan, rec.get("dep")):
+        return None
+    dep = rec["dep"]
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")[0] or sha
+    rv = verdict_of(plan, reg, dep, "review")[0]
+    if not rv or rv.get("state") != "PASS":
+        return {"dep": dep, "merge": None,
+                "reason": f"stacked on {dep}: {dep} has no current review PASS; verify waits until it passes and its "
+                          "PASS SHA is merged in"}
+    x = rv["sha"]
+    if is_ancestor(path, x, full):
+        return None
+    branch = rec.get("branch")
+    target = (branch if branch and git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0]
+              and is_ancestor(path, x, f"refs/heads/{branch}") else x)
+    return {"dep": dep, "merge": target,
+            "reason": f"stacked on {dep}: {dep}'s review PASS {x[:10]} is not in {full[:10]}: merge it "
+                      f"(git merge {target}, never rebase), then verify"}
 
 
 AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
@@ -1397,7 +1654,8 @@ def cmd_planner(a, reg):
               + rubric_lines(a.policy, "   ") + "\n"
               f"3. Write plan.json ({SCHEMA}, docs/schemas/pipeline-plan.schema.json) and run\n"
               f"   `python3 -B ${{CLAUDE_PLUGIN_ROOT}}/scripts/factory-pipeline.py{' --registry none' if reg.get('_defaults') else ''} validate plan.json` until it prints OK.\n"
-              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.")
+              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
+              + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
     emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
     return 0
@@ -1514,6 +1772,79 @@ def known_failing_text(plan):
               "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
 
 
+def test_env_line():
+    """The implement, verify and QA specs' test environment line when the run lead's environment sets
+    RPG_FACTORY_WORKSPACE (a worker session may not inherit it); '' when it is unset or empty."""
+    ws = os.environ.get("RPG_FACTORY_WORKSPACE")
+    return (f"Test environment: set RPG_FACTORY_WORKSPACE={shlex.quote(ws)} for every test run (the run lead's "
+            "environment sets it; a worker session may not inherit it).") if ws else ""
+
+
+def with_test_env(prompt):
+    """`prompt` with test_env_line() appended on its own line; unchanged when the line is empty."""
+    line = test_env_line()
+    if not line:
+        return prompt
+    return prompt + ("" if prompt.endswith("\n") else "\n") + line + ("\n" if prompt.endswith("\n") else "")
+
+
+def session_notes(a):
+    """Normalize and deduplicate dispatch notes in their original order."""
+    notes = []
+    for raw in a.note:
+        note = " ".join(raw.split())
+        if not note:
+            die("--note needs a TEXT")
+        if note not in notes:
+            notes.append(note)
+    env_note = " ".join(os.environ.get("RPG_FACTORY_SESSION_NOTE", "").split())
+    if env_note and env_note not in notes:
+        notes.append(env_note)
+    return notes
+
+
+def python_alias_line(platform=None, which=None, exe=None, probe=None):
+    """Describe the Windows Store python3 alias on PATH or in WindowsApps."""
+    platform = sys.platform if platform is None else platform
+    if platform != "win32":
+        return ""
+    which = shutil.which if which is None else which
+    exe = sys.executable if exe is None else exe
+    path = which("python3")
+    if not path or not any(part.lower() == "windowsapps" for part in re.split(r"[/\\]", path)[:-1]):
+        if probe is None:
+            local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+            probe = os.path.join(local, "Microsoft", "WindowsApps", "python3.exe")
+        if not os.path.isfile(probe):
+            return ""
+        path = probe
+    return (f"Python: python3 here is likely the Microsoft Store alias ({path}), which may not run: run Python as "
+            f"{shlex.quote(exe)} (the interpreter that runs dispatch) or put a python3 shim to it first on PATH.")
+
+
+def language_line(reg):
+    """The Language line of every spec: everything written is English; only the run lead's report to the owner uses the
+    report language (registry or pipeline-defaults workspace.report_language; absent: the user's own language)."""
+    ws = (reg or {}).get("workspace")
+    lang = ws.get("report_language") if isinstance(ws, dict) else None
+    lang = lang.strip() if isinstance(lang, str) and lang.strip() else "the user's language"
+    return ("Language: write everything in English (files, plans, briefs, messages, commits, PR text). Reports between "
+            f"sessions are English; only the run lead reports to the owner in {lang}.")
+
+
+def spec_session_lines(a, reg=None):
+    """Return the lines to append to a dispatch spec."""
+    lines = [language_line(reg)] + [f"Session note: {note}" for note in session_notes(a)]
+    alias = python_alias_line()
+    return lines + ([alias] if alias else [])
+
+
+def with_session_lines(a, prompt, reg=None):
+    """Append session lines, preserving the prompt's trailing newline."""
+    lines = spec_session_lines(a, reg)
+    return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
+
+
 def base_health_hint(info, spec):
     """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
     git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
@@ -1529,18 +1860,40 @@ def base_health_hint(info, spec):
     return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
+    # one token --note=<value>: a note starting with "-" would be read as an option after a bare --note
+    note_args = "".join(f" {orca_cmd.quote([f'--note={note}'])}" for note in (notes or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
              f"{orca_cmd.CHILD_RULE.split(';')[0]}." if info["worktrees"] else
              "placement is always shared here (no worktree).")
+    # a stacked task (fresh: spec.stacked_on; resumed: its stack record, read only once the task branch exists, so a
+    # leftover record of a removed branch never stacks a fresh dispatch) merges its moved dependency at subtask
+    # boundaries; every worktree-repo lead tells its own stacked dependents after each candidate
+    stacked = None
+    if info["worktrees"]:
+        stacked = spec.get("stacked_on") or (
+            stack_record(plan, task["id"]) if info["path"] and git(info["path"], "rev-parse", "--verify", "--quiet",
+                                                                    f"refs/heads/{spec['branch']}")[0] else None)
+    sync_in = (f" Stacked on {stacked.get('dep')}: at each subtask boundary run `<pipeline> status <plan>`; when it shows "
+               f"`sync: {stacked.get('dep')} moved to <sha>`, run `git merge {stacked.get('branch')}` (never rebase), "
+               "resolve conflicts inside your owned paths, then continue." if stacked else "")
+    stack_rule = ""
+    if stacked:  # the implement-now rule: verify, review and QA wait for the dependency's PASS (stack_gate)
+        sdep, ssha = stacked.get("dep"), str(stacked.get("sha") or "")[:10]
+        stack_rule = (f"Stacked on {sdep}: your worktree is a sibling cut from {sdep}@{ssha}, not a child of its "
+                      f"worktree. Implement now, in parallel with {sdep}'s verify; run no verify, review or QA dispatch "
+                      "before `<pipeline> status <plan>` clears it (no `verify waits:` note on this task: "
+                      f"{sdep}'s review PASS SHA must be in your HEAD; until then those dispatches exit 2). ")
+    sync_out = (f" After each new candidate (a fix included), run `<pipeline> sync <plan> --task {task['id']} --send`: it "
+                "tells stacked dependents to merge it (no-op without them)." if info["worktrees"] else "")
     rules = [
-        f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}`.",
+        f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}{note_args}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
         "below is its worker (Orca allows no nested workers). Outside an Orca session: --runner agent; inside Orca with "
         "the runtime unreachable: --runner agent --orca-unavailable REASON.",
@@ -1553,12 +1906,12 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "scope (exit 2).",
         f"3. Per subtask ONE fresh session in {where}: `{d} --phase implement --subplan <subplan.json> --subtask <id> "
         "--runner orca`. placement shared (default): it edits only its paths and does NOT commit (one shared index); "
-        f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}",
-        f"4. Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
+        f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}{sync_in}",
+        f"4. {stack_rule}Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
         f"--runner orca` ({reviewer} for {impl}). Keep HEAD at the candidate. Record both results with "
         "`verdict --phase verify` (a FAIL names `--failed-at review`: no test ran, the next verify keeps the original "
         "tests; or `--failed-at qa [--failed-suites ...]`). On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
-        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA.",
+        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA." + sync_out,
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
@@ -1572,6 +1925,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
          "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
+        "9. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch." if notes else None,
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
@@ -1610,15 +1964,16 @@ QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when 
 
 
 def affected_case_lines(path, base, sha, suites, explicit):
-    """Report the checkout's own case selection; failure is advisory, never a dispatch failure."""
+    """Report the checkout's own case selection; failure is advisory, never a dispatch failure.
+    Returns (text, counts): counts is (N selected suites, M suites run-all lists), None when not computed."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
-        return "Affected cases: not computed (tests/affected.py missing)"
+        return "Affected cases: not computed (tests/affected.py missing)", None
     changed, rc = git(path, "diff", "--name-only", f"{base}...{sha}")
     if rc:
-        return "Affected cases: not computed (git diff failed)"
+        return "Affected cases: not computed (git diff failed)", None
     if suites is None or suites is False:
-        return "Affected cases: not computed (suite list unavailable)"
+        return "Affected cases: not computed (suite list unavailable)", None
     try:
         with tempfile.TemporaryDirectory() as tmp:
             names = os.path.join(tmp, "changed.txt")
@@ -1627,7 +1982,7 @@ def affected_case_lines(path, base, sha, suites, explicit):
             r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode:
-            return "Affected cases: not computed (tests/affected.py cases failed)"
+            return "Affected cases: not computed (tests/affected.py cases failed)", None
         selected = {}
         for line in r.stdout.splitlines():
             suite, cases = line.split("\t", 1)
@@ -1636,9 +1991,37 @@ def affected_case_lines(path, base, sha, suites, explicit):
         selected.update({suite: "ALL" for suite in explicit})
         lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
                  for suite, cases in sorted(selected.items())]
-        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines), (len(selected), len(suites))
     except (OSError, subprocess.SubprocessError, ValueError):
-        return "Affected cases: not computed (tests/affected.py cases failed)"
+        return "Affected cases: not computed (tests/affected.py cases failed)", None
+
+
+SUITE_WARN = 40  # dispatch --suite-warn default: a task QA selecting more suites than this is wide (slow)
+
+
+def suite_warn_arg(value):
+    """argparse type of dispatch --suite-warn: a positive int (else exit 2, argparse style)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid positive int value: {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
+def selection_preflight(cases, counts, threshold):
+    """Verify/QA dispatch: how wide the case selection is, on stderr, before it costs an hour. Advisory only: the
+    prompt and the exit code do not change."""
+    if counts is None:
+        reason = cases.split("not computed (", 1)[1].rstrip(")") if "not computed (" in cases else "unknown"
+        print(f"factory-pipeline: selected suites: not computed ({reason})", file=sys.stderr)
+        return
+    n, m = counts
+    print(f"factory-pipeline: selected {n} of {m} suites (tests/affected.py)", file=sys.stderr)
+    if n > threshold:
+        print(f"factory-pipeline: warning: {n} of {m} suites selected (threshold {threshold}): narrow the task paths "
+              "or its checks before QA", file=sys.stderr)
 
 
 def tier_command(level, base, suites, task=False):
@@ -1672,11 +2055,13 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     key = "integration" if integration else "task"
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
                            task=not integration)
-    policy = ("Integration QA: run the workspace checks before the PR; CI green is the full-suite gate after the PR opens."
+    policy = ("Integration QA: run the workspace checks before the PR; after the PR opens, CI runs the affected suites "
+              "and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
               if integration and ((tiers or {}).get(key) or QA_TIERS[key]) == "ci+workspace" else
               "Integration QA: one full run per batch under the run-all lock; reuse a PASS record of the same clean tree."
               if integration else
-              "Task QA: never a full tests/run-all.sh run; CI is the full-suite gate. "
+              "Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be "
+              "green before merging. "
               "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
     if small:
         policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
@@ -1762,6 +2147,7 @@ SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/deliver
 
 
 def cmd_dispatch(a, reg):
+    session_notes(a)  # reject empty --note even when no spec is written
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -1823,6 +2209,7 @@ def cmd_dispatch(a, reg):
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1843,10 +2230,17 @@ def cmd_dispatch(a, reg):
     if placement == "child" and not info["worktrees"]:
         die(f"--placement child: repo {task['repo']} takes no worktree ({info['reason']}); nothing was printed")
     branch = plan["topic"] if xs else task_branch(plan, info, task)
+    # a new task lead (worktree repo, not XS, no task branch yet) may stack on its one in-flight dependency: decided
+    # once here, recorded below; an existing task branch keeps its record (start_base reads it)
+    fresh = (a.phase == "lead" and not xs and info["worktrees"] and bool(info["path"])
+             and not git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0])
+    stk = stackable(plan, reg, info, task) if fresh else None
     spec = {"plan": plan["id"], "task": task["id"], "repo": task["repo"], "objective": task["objective"],
             "owned_paths": task["paths"], "exclusions": task.get("exclusions", []), "deps": task.get("deps", []),
             "checks": task.get("checks", []), "acceptance": task["acceptance"], "branch": branch,
-            "base": start_base(plan, info, task)}
+            "base": stk["sha"] if stk else start_base(plan, info, task, None if fresh else reg)}
+    if stk:
+        spec["stacked_on"] = {"dep": stk["dep"], "branch": stk["branch"], "sha": stk["sha"]}
     # the task's grade (plan, else derived from its tier) and the grade of this session's work (a subtask's own grade
     # wins): implement runs with that grade's profile, review with heavy for heavy work, else review
     grade = None
@@ -1888,13 +2282,38 @@ def cmd_dispatch(a, reg):
                 if parent:
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
+                else:
+                    print(f"factory-pipeline: Orca parent: no checkout has the topic branch {plan['topic']} checked "
+                          f"out, so the Orca parent of the new task worktree falls back to the main checkout "
+                          f"{info['path']}; set plan.topic to your own integration branch (or check "
+                          f"{plan['topic']} out) before dispatching", file=sys.stderr)
+                if stk:  # a sibling of the dependency's worktree, never its child
+                    place["reason"] = (f"stacked on {stk['dep']}@{stk['sha'][:10]}: a sibling beside "
+                                       f"{parent or main_checkout(info['path'])}")
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
-                             subagent_rule(a, reg, "lead", lead))
+                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
+        prompt = with_session_lines(a, prompt, reg)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
+        if fresh:  # any runner: the task branch is cut from spec base, which the record names by SHA
+            try:
+                os.remove(sync_file(plan, task["id"]))  # a leftover of an earlier, removed task branch
+            except FileNotFoundError:
+                pass
+            if stk:
+                fstate.write_json(stack_file(plan, task["id"]), {"dep": stk["dep"], "branch": stk["branch"],
+                                                                "sha": stk["sha"], "at": now_utc()}, indent=2)
+                print(f"factory-pipeline: task {task['id']} stacks on {stk['dep']}@{stk['sha'][:10]} "
+                      f"({stk['branch']}): a sibling worktree beside the integration checkout, not a child of "
+                      f"{stk['dep']}'s worktree; merge its later commits, never rebase", file=sys.stderr)
+            else:
+                try:
+                    os.remove(stack_file(plan, task["id"]))  # a leftover of an earlier, removed task branch
+                except FileNotFoundError:
+                    pass
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
             # resolved before orca_prompt writes the spec: outside the scope, nothing is written
             m = session_model(a, lead, "lead")
@@ -1905,6 +2324,12 @@ def cmd_dispatch(a, reg):
         return 0
     if a.phase != "implement" and not a.sha:
         die(f"{a.phase} needs --sha <candidate commit>")
+    if a.phase in ("verify", "review", "qa"):
+        # a stacked task is verified only once its dependency's review PASS is in the candidate: nothing unverified
+        # reaches a PASS through the dependent
+        g = stack_gate(plan, reg, info, task, a.sha)
+        if g:
+            die(f"{a.phase} of {task['id']} at {a.sha[:10]}: {g['reason']}")
     paths = a.paths or ((sub or {}).get("paths") if sub else None)
     if paths:
         bad = [f"{p} {path_problem(p)}" for p in paths if path_problem(p)]
@@ -1972,7 +2397,7 @@ def cmd_dispatch(a, reg):
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt += "\n" + SPEC_COMPLETE + "\n" + checks
+        prompt = with_session_lines(a, with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks), reg)
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -2000,7 +2425,8 @@ def cmd_dispatch(a, reg):
     place = joined or {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
-        base, _ = review_base(info, plan["topic"], spec["base"], a.sha)
+        stacked = stack_base(plan, reg, info, task, a.sha)  # a stacked task: only its own delta past the dependency
+        base, _ = stacked if stacked is not None else review_base(info, plan["topic"], spec["base"], a.sha)
         previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
         stale = previous and previous.get("fingerprint") != scope_fingerprint(plan, reg, task["id"])
         failed = []
@@ -2009,7 +2435,8 @@ def cmd_dispatch(a, reg):
             base, failed = previous["sha"], previous["failed_suites"]
         suites = runall_suites(home or info["path"])
         explicit, _, _ = pr.qa_checks([task], suites, failed)
-        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        selection_preflight(cases, counts, a.suite_warn)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n" + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
@@ -2019,12 +2446,14 @@ def cmd_dispatch(a, reg):
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
     if agent == sub_impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
-    base, base_note = review_base(info, plan["topic"], spec["base"], a.sha)
+    stacked = stack_base(plan, reg, info, task, a.sha)  # a stacked task: only its own delta past the dependency
+    base, base_note = stacked if stacked is not None else review_base(info, plan["topic"], spec["base"], a.sha)
     plugin_repo = task["repo"] == "plugin" or (info["path"] and os.path.isfile(
         os.path.join(info["path"], ".claude-plugin", "plugin.json")))
     checklist = ("skills/factory-core/references/plugin-review.md" if plugin_repo
@@ -2053,16 +2482,19 @@ def cmd_dispatch(a, reg):
         suites = runall_suites(home or info["path"])
         selected_task = dict(task, checks=retry_checks(task, suites)) if retry else task
         explicit, _, _ = pr.qa_checks([selected_task], suites, failed)
-        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        selection_preflight(cases, counts, a.suite_warn)
         prompt += ("\nReview first. If any blocking finding exists, report FAIL and run no tests. "
                    "Otherwise run the following QA once.\n"
                    + qa_body(a.sha, [selected_task], at_head, base=base,
                              failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
                              tiers=pipe.get("qa_tiers")) + "\n" + cases
                    + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_test_env(prompt)
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
+    prompt = with_session_lines(a, prompt, reg)
     started = emit(a, reg, agent, prompt, place, title, plan, role=review_role(grade))
     full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     sha = full if rc == 0 and full else a.sha
@@ -2346,6 +2778,10 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     first-parent walk attributes on its own (direct topic commits and task merges), so
     counting it again on the task branch double-attributes it: only the sync merge's own
     conflict resolutions count, and a later task that owns them and depends on the task covers them.
+    The same holds for a merge from a dependency inside a task merge (a stacked task merging its dependency's branch):
+    a merge whose non-first parents are all ancestors of the walked topic merge's first parent brings in only what was
+    on the target before this task merge, so a clean merge of the dependency into the dependent never makes the
+    dependency's review STALE; a conflict resolution in the dependency's files still does.
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2455,7 +2891,8 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
                     continue
                 cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
                 touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
-            elif len(ps) > 1 and all(q in topic_chain for q in ps[1:]):
+            elif len(ps) > 1 and (all(q in topic_chain for q in ps[1:])
+                                  or (len(parents) > 1 and all(is_ancestor(path, q, parents[0]) for q in ps[1:]))):
                 cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
                 touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
             else:
@@ -2566,6 +3003,11 @@ def cmd_verdict(a, reg):
     full, rc = git(repo_info(plan, reg, key)["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     if rc != 0 or not full:
         die(f"--sha {a.sha} is not a commit of repo {key}")
+    if task is not None and a.phase in ("review", "qa") and a.state == "PASS":
+        # a stacked task: no PASS on a candidate without its dependency's review PASS (FAIL and the rest are recorded)
+        g = stack_gate(plan, reg, repo_info(plan, reg, key), task, full)
+        if g:
+            die(f"refused: {a.phase} PASS of {a.task} at {a.sha[:10]}: {g['reason']}")
     rec = {"plan": plan.get("id"), "task": a.task, "phase": a.phase, "sha": full, "by": a.by, "state": a.state,
            "fingerprint": scope_fingerprint(plan, reg, a.task),
            "report": os.path.abspath(a.report) if a.report else None,
@@ -2710,8 +3152,9 @@ def worktree_for(path, branch):
 
 
 def run_lead_files(plan, repo_path):
-    """Repo-relative files the run lead owns on the integration branch: the plan file and its report (its own path when
-    it sits inside the repo, else docs/plans/<id>.json); never task work and never stray."""
+    """Repo-relative files the run lead owns on the integration branch: the plan file (its own path when it sits inside
+    the repo, else docs/plans/<id>.json), its report and the backlog.md beside it (follow-ups); never task work and
+    never stray."""
     names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
     own = plan.get("_path")
     if own and repo_path:
@@ -2721,8 +3164,25 @@ def run_lead_files(plan, repo_path):
             rel = ".."
         if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
             names.add(rel)
-    names |= {os.path.splitext(n)[0] + "/report.md" for n in names}
+    names |= ({os.path.splitext(n)[0] + "/report.md" for n in names}
+              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names})
     return {norm_path(n) for n in names}
+
+
+def qa_covers_head(plan, info, qa_sha, head):
+    """QA covers later commits only when their entire diff consists of run lead files."""
+    if not qa_sha or not head:
+        return False
+    if qa_sha == head:
+        return True
+    _, rc = git(info["path"], "merge-base", "--is-ancestor", qa_sha, head)
+    if rc != 0:
+        return False
+    changed, rc = git(info["path"], "diff", "--name-only", "--no-renames", qa_sha, head)
+    if rc != 0 or changed is None:
+        return False
+    lead_files = run_lead_files(plan, info["path"])
+    return all(norm_path(path) in lead_files for path in changed.splitlines())
 
 
 def xs_diff_above(plan, reg, pipe, task, info, sha):
@@ -2757,6 +3217,19 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: integration branch {plan['topic']} does not exist")
             continue
         heads[key] = head
+        entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
+        if rc != 0 or entries is None:
+            blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
+        lead_files = run_lead_files(plan, info["path"])
+        for path in sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files):
+            content, rc = git(info["path"], "show", f"{head}:{path}")
+            if rc != 0 or content is None:
+                blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
+            else:
+                hit = plan_paths.machine_path_hit(content)
+                if hit:
+                    blockers.append(f"{key}: run lead file {path} has machine-specific path text `{hit}`: "
+                                    "write it portable (repo-relative path, ${RPG_FACTORY_WORKSPACE} or ../..)")
         home, extra = worktree_for(info["path"], plan["topic"])
         if not info["worktrees"]:
             mine = [t["path"] for t in extra if str(t.get("branch", "")).startswith(plan["topic"])]
@@ -2813,8 +3286,27 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             pass
         elif qa.get("state") != "PASS":
             blockers.append(f"{key}: QA {qa.get('state')} at {qa.get('sha', '')[:10]}")
-        elif head != qa.get("sha"):
+        elif not qa_covers_head(plan, info, qa.get("sha"), head):
             blockers.append(f"{key}: QA is STALE (ran on {qa.get('sha', '')[:10]}, integration HEAD is {head[:10]})")
+        elif head != qa.get("sha"):
+            notes.append(f"{key}: QA at {qa['sha'][:10]} covers HEAD {head[:10]}: only run lead files changed since")
+    by_id = {t.get("id"): t for t in plan.get("tasks", [])}
+    chains = {}  # repo key -> the integration head's first-parent chain, oldest first
+
+    def merged_at(key, path, c):
+        """Position on the first-parent chain of the integration head of the oldest commit that contains c: containment
+        is monotonic along that chain, so a binary search finds it."""
+        if key not in chains:
+            chains[key] = (git(path, "rev-list", "--first-parent", "--reverse", heads[key])[0] or "").splitlines()
+        chain = chains[key]
+        lo, hi = 0, len(chain) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if is_ancestor(path, c, chain[mid]):
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
     for t in plan.get("tasks", []):
         key = t.get("repo")
         if key not in heads:
@@ -2871,10 +3363,29 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                     blockers.append(f"{t['id']}: QA ran on {tq['sha'][:10]}, which does not contain the reviewed commit {rv['sha'][:10]}")
                 elif moved:
                     blockers.append(f"{t['id']}: QA is STALE - owned paths changed after {tq['sha'][:10]}")
+        # a stacked task (record of a dependency D in the same repo): its PASS must contain D's review PASS, and D is
+        # integrated first (git merge --no-ff D, then the task)
+        stk = (stack_record(plan, t["id"]) if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t)
+               else None)
+        dep = by_id.get(stk.get("dep")) if stk else None
+        if dep is not None and dep.get("repo") != key:
+            dep = None
+        dep_pass = None
+        if dep is not None:
+            drv = verdict_of(plan, reg, dep["id"], "review")[0]
+            dep_pass = drv["sha"] if drv and drv.get("state") == "PASS" else None
+            if not dep_pass or not is_ancestor(info["path"], dep_pass, rv["sha"]):
+                blockers.append(f"{t['id']}: stacked on {dep['id']}: review {rv['sha'][:10]} lacks {dep['id']}'s review "
+                                f"PASS {dep_pass[:10] if dep_pass else 'none'}: merge {task_branch(plan, info, dep)} into "
+                                f"{task_branch(plan, info, t)}, then verify again")
         _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], heads[key])
         if rc != 0:
             blockers.append(f"{t['id']}: reviewed commit {rv['sha'][:10]} is not integrated into {plan['topic']}")
             continue
+        if dep is not None and (not dep_pass or not is_ancestor(info["path"], dep_pass, heads[key])
+                                or merged_at(key, info["path"], dep_pass) >= merged_at(key, info["path"], rv["sha"])):
+            blockers.append(f"{t['id']}: integrated before its dependency {dep['id']}: integrate {dep['id']} first "
+                            f"(git merge --no-ff {task_branch(plan, info, dep)}), then {t['id']}")
         changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key], cache=coverage_cache)
         if changed:
             blockers.append(f"{t['id']}: review is STALE - owned paths changed after {rv['sha'][:10]}: "
@@ -3048,6 +3559,23 @@ def orca_worktree_paths():
     if not isinstance(rows, list):
         return None
     return {norm_wt(w["path"]) for w in rows if isinstance(w, dict) and w.get("path")}
+
+
+def orca_worktree_ids():
+    """{normalised path: Orca worktree id} from the read-only `orca worktree list --json`; None when orca cannot say
+    (not on PATH, failing: no opinion, never an error)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True,
+                           timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["worktrees"] if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {norm_wt(w["path"]): str(w["id"]) for w in rows if isinstance(w, dict) and w.get("path") and w.get("id")}
 
 
 def orca_terminals(path):
@@ -3256,7 +3784,9 @@ BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being 
 
 def cleanup(plan, reg, orca_run=None, after_merge=False):
     """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
-    Orca workers of the task leads' Runs that are not released."""
+    Orca workers of the task leads' Runs that are not released. `stacked`: the stacked siblings (stack_groups) with
+    their merge order, information only (no effect on state, left, commands or kept). A stacked dependent's worktree
+    is a sibling task worktree, never "child of <dependency>": is_child and Lineage skip the plan's own task branches."""
     left, commands, kept, leftovers, users = [], [], [], [], []
     orca_paths = []  # the Orca records, read once and only when a task worktree path is no git worktree any more
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
@@ -3395,7 +3925,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         for u in s["unreleased"]:
             left.append(f"orca:{u['dispatch']}")
             commands.append(u["command"])
-    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
+    stacked = [{k: g[k] for k in ("repo", "dep", "dependents", "order", "states", "text")}
+               for g in stack_groups(plan, reg)]
+    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept,
+            "stacked": stacked, "state_kept": specs_kept,
             "leftovers": leftovers, "terminals": users, "workers": workers, "slots": slot_holders(plan, reg),
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
@@ -3414,6 +3947,8 @@ def cmd_cleanup(a, reg):
             print("  " + c)
         for k in out["kept"]:
             print("  KEPT  " + k)
+        for g in out["stacked"]:
+            print(f"  STACK {g['repo']}: {g['text']}")
         for k in out["state_kept"]:
             print("  STATE " + k)
         for line in session_lines(out["workers"]):
@@ -3560,7 +4095,8 @@ def own_start(plan, reg, info, task, head):
     paths, so the repo base is not enough: a branch cut from plan.topic starts at its fork point (none while it is still
     on the topic's first-parent chain: cut there, nothing of its own), and a no-worktree task, which shares the topic,
     starts only after its serial predecessor's current QA PASS on an ancestor of head (otherwise it has not started,
-    and the predecessor's commits are not its own)."""
+    and the predecessor's commits are not its own). A stacked task starts at stack_base: the newest dependency SHA in
+    head (None when none is)."""
     base = info["base_sha"] or info["base"]
     if not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
@@ -3568,6 +4104,11 @@ def own_start(plan, reg, info, task, head):
             return base
         rec = verdict_of(plan, reg, prev, "qa")[0]
         return rec["sha"] if rec and rec.get("state") == "PASS" and is_ancestor(info["path"], rec["sha"], head) else None
+    stacked = stack_base(plan, reg, info, task, head)
+    if stacked is not None:
+        return None if stacked[1] else stacked[0]
+    # not stacked: with its branch, start_base(reg) is the unstacked base; without it (removed after integration) its
+    # commits are on the topic, and stackable() would re-enter task_status from uncovered_changes: no reg
     start = start_base(plan, info, task)
     if start != plan["topic"]:
         return base
@@ -3652,7 +4193,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     # Keep the lead's QA visible above, but current integration QA also proves
     # completion in repos where the gate does not require per-task QA.
     if (not per_task_qa and integration_qa and integration_qa.get("state") == "PASS"
-            and integration_qa["sha"] == topic_head):
+            and qa_covers_head(plan, info, integration_qa.get("sha"), topic_head)):
         qa = integration_qa
     if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
         row["phase"] = "qa"
@@ -3685,16 +4226,16 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
     xs_task = next((t for t in tasks if t["repo"] == key and pr.xs_plan(plan, t)), None)
     if xs_task and not (fstate.read_json(verdict_file(plan, f"integration:{key}", "qa")) or {}).get("sha"):
         xq, _ = verdict_of(plan, reg, xs_task["id"], "qa")
-        if xq and xq.get("state") == "PASS" and xq["sha"] == topic_head:
+        if xq and xq.get("state") == "PASS" and qa_covers_head(plan, info, xq.get("sha"), topic_head):
             return first
         row = rows[xs_task["id"]]
         row["phase"] = "integrated"
-        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} is not at the integration HEAD "
+        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} does not cover the integration HEAD "
                             f"{(topic_head or '?')[:10]}: the gate needs it there")
         xs_qa_next(reg, plan, xs_task, info, row, topic_head, me, pf)
         return first
     iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
-    if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
+    if iq and iq.get("state") == "PASS" and qa_covers_head(plan, info, iq.get("sha"), topic_head):
         return first
     if iq and iq.get("state") != "PASS":
         why = f"integration QA {iq.get('state')} at {iq['sha'][:10]}"
@@ -3845,7 +4386,14 @@ def status(plan, reg, orca_run=None):
             prev = serial_predecessor(plan, reg, t) if not info["worktrees"] else None
             if prev and rows[prev]["phase"] != "qa" and prev not in waiting:
                 waiting.append(prev)
-            if waiting:
+            stk = (stackable(plan, reg, info, t, {u: r["phase"] for u, r in rows.items()})
+                   if waiting and not prev else None)
+            if stk:  # one dependency in flight, the others integrated: start from its tip instead of waiting
+                row["notes"].append(f"stackable on {stk['dep']}@{stk['sha'][:10]}: dispatch --phase lead starts it "
+                                    "from that tip")
+                ready.append(tid)
+                row["next"] = f"{dispatch} --phase lead --runner orca"
+            elif waiting:
                 row["notes"].append("waits for " + ", ".join(waiting))
             else:
                 ready.append(tid)  # a worktree repo starts the task lead, which creates the task worktree
@@ -3894,6 +4442,40 @@ def status(plan, reg, orca_run=None):
                     row["notes"].append("QA runs once all tasks of the repo are integrated: waits for " + ", ".join(others))
                 else:
                     row["next"] = f"{me} dispatch {pf} --task integration:{t['repo']} --phase qa --sha {topic_head} --runner orca"
+        if row["phase"] in ("implementing", "candidate", "reviewed") and row["sha"]:
+            before = row["next"]
+            stack_notes(plan, reg, info, t, row)  # stacked on D@X; D moved past HEAD: merge it as next
+            if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
+                # the durable `sync` record; read-only here: the note goes once HEAD contains the SHA (file kept)
+                # only for the task's current dependency: a leftover record of another dependency shows nothing
+                syn, cur = sync_record(plan, t["id"]), stack_record(plan, t["id"])
+                if (syn and cur and syn.get("dep") == cur.get("dep") and plan_has_task(plan, syn.get("dep"))
+                        and not is_ancestor(info["path"], syn["sha"], row["sha"])):
+                    row["notes"].append(f"sync: {syn['dep']} moved to {syn['sha'][:10]} ({syn.get('at')}): at the next "
+                                        f"subtask boundary run {syn.get('command')} (never rebase), resolve conflicts "
+                                        "inside the owned paths, then continue")
+            if row["phase"] == "candidate" and not pr.xs_plan(plan, t):
+                g = stack_gate(plan, reg, info, t, row["sha"])
+                if g:  # verify would exit 2: merge the dependency's PASS first, or wait for it
+                    row["notes"].append(f"verify waits: {g['reason']}")
+                    row["next"] = (orca_cmd.quote(["git", "-C", row["worktree"], "merge", g["merge"]] if row["worktree"]
+                                                  else ["git", "merge", g["merge"]]) if g["merge"] else None)
+            elif row["phase"] == "reviewed" and (row["review"] or {}).get("state") == "PASS":
+                stk = (stack_record(plan, t["id"]) if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t)
+                       else None)
+                dep = stk.get("dep") if stk else None
+                if dep in rows and rows[dep]["phase"] not in done:
+                    row["notes"].append(f"integrate {dep} first (dependency first), then merge {row['branch']} with "
+                                        "git merge --no-ff")
+                    if row["next"] == before:  # keep a dependency merge stack_notes named; never the topic merge
+                        row["next"] = None
+    # stacked siblings while one of them is not integrated: sibling worktrees and the merge order (next unchanged)
+    for sg in stack_groups(plan, reg):
+        ids = [sg["dep"], *sg["dependents"]]
+        if any(rows[i]["phase"] not in done for i in ids if i in rows):
+            for i in ids:
+                if i in rows and sg["text"] not in rows[i]["notes"]:
+                    rows[i]["notes"].append(sg["text"])
     # the gate needs the repo's integration QA PASS at the integration HEAD (also after per-task QA of a no-worktree
     # repo): until then the repo's tasks stay integrated and the next command is that QA. A no-worktree checkout is
     # one serial group across every plan alias of it: its integration QA waits until every task of the checkout
@@ -4023,6 +4605,109 @@ def cmd_report(a, reg):
     return 0
 
 
+def send_orca(argv):
+    """Run one `orca orchestration send` argv: (ok, one-line why). Never raises."""
+    exe = shutil.which("orca")
+    if not exe:
+        return False, "orca is not on PATH"
+    try:
+        r = subprocess.run([exe] + list(argv[1:]), capture_output=True, text=True, timeout=60, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        why = str(e)
+    else:
+        try:
+            data = json.loads(r.stdout or "")
+        except ValueError:
+            data = None
+        if r.returncode == 0 and data is not None and not (isinstance(data, dict) and data.get("ok") is False):
+            return True, ""
+        if r.returncode != 0:
+            why = f"exit {r.returncode}: " + ((r.stderr or "").strip() or (r.stdout or "").strip() or "no output")
+        elif data is None:
+            why = "stdout is not JSON: " + ((r.stdout or "").strip() or "empty")
+        else:
+            err = data.get("error")
+            why = "ok false: " + (json.dumps(err) if err is not None else (r.stdout or "").strip())
+    return False, " ".join(why.split())[:200]
+
+
+def cmd_sync(a, reg):
+    """Tell each stacked dependent of a task that its dependency moved: print the merge command, record
+    <dependent>__sync.json (status shows it until the dependent's HEAD contains the SHA) and with --send nudge its lead
+    through Orca. Exit 0, 1 when a send failed, 2 usage."""
+    plan = read_plan(a.plan, reg)
+    plan["_path"] = a.plan
+    if a.task.startswith("integration:"):
+        die("sync is per plan task: --task <id>")
+    dep = find_task(plan, a.task)
+    did = dep["id"]
+    info = repo_info(plan, reg, dep["repo"])
+    path = info["path"]
+    dbranch = task_branch(plan, info, dep)
+    sha = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{dbranch}")[0] if path else None
+    ref = dbranch
+    if not sha:
+        rv = verdict_of(plan, reg, did, "review")[0]
+        if rv and rv.get("state") == "PASS":
+            ref = sha = rv["sha"]
+    if not sha:
+        print(f"sync: {did} has no task branch and no review PASS: nothing to sync")
+        return 0
+    print(f"sync: {did} at {sha[:10]} ({ref})")
+    deps = stacked_dependents(plan, reg, did)
+    if not deps:
+        print(f"sync: no stacked dependent of {did}")
+        return 0
+    rc, ids = 0, False  # ids: the Orca worktree ids, read once and only when a dependent has no orca_run
+    for t in deps:
+        tid = t["id"]
+        tinfo = repo_info(plan, reg, t["repo"])
+        tpath = tinfo["path"]
+        tbranch = task_branch(plan, tinfo, t)
+        head = git(tpath, "rev-parse", "--verify", "--quiet", f"refs/heads/{tbranch}")[0] or ""
+        wt = worktree_for(tpath, tbranch)[0]
+        if is_ancestor(tpath, sha, head):
+            print(f"{tid}: up to date (HEAD {head[:10]} contains {did}@{sha[:10]})")
+            if os.path.exists(sync_file(plan, tid)):
+                try:
+                    os.remove(sync_file(plan, tid))
+                except OSError as e:
+                    print(f"factory-pipeline: could not remove {sync_file(plan, tid)}: {e.strerror or e}", file=sys.stderr)
+            continue
+        cmd = orca_cmd.quote(["git", "-C", wt, "merge", ref] if wt else ["git", "merge", ref])
+        run = t.get("orca_run").strip() if isinstance(t.get("orca_run"), str) else ""
+        run = run[len("run:"):].strip() if run.startswith("run:") else run
+        to = f"run:{run}" if run else None
+        if not to and wt:
+            if ids is False:
+                ids = orca_worktree_ids()
+            if ids and ids.get(norm_wt(wt)):
+                to = f"@worktree:{ids[norm_wt(wt)]}"
+        subject = f"sync: {did} moved to {sha[:10]}"
+        print(f"{tid}: {did} moved to {sha[:10]}, not in HEAD {head[:10]}: {cmd}")
+        argv = orca_cmd.send_message(to, subject, cmd) if to else None
+        if argv:
+            print(f"  send: {orca_cmd.quote(argv)}")
+        else:
+            print(f"  no Orca address for {tid} (no task orca_run, no Orca worktree record): pass the command to its lead")
+        sent = False
+        if a.send and argv:
+            if shutil.which("orca") is None:
+                print("  not sent: orca is not on PATH")
+            else:
+                sent, why = send_orca(argv)
+                if sent:
+                    print(f"  sent to {to}")
+                else:
+                    print(f"  send FAILED ({to}): {why}")
+                    rc = 1
+        # the durable signal, with or without --send: a message is only a nudge
+        fstate.write_json(sync_file(plan, tid), {"plan": plan.get("id"), "task": tid, "dep": did, "ref": ref, "sha": sha,
+                                                 "command": cmd, "to": to, "sent": sent, "at": now_utc()}, indent=2)
+    return rc
+
+
 def cmd_agents(a, reg):
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -4074,6 +4759,8 @@ def main():
             d.add_argument("--placement", choices=PLACEMENTS)
             d.add_argument("--subplan")
             d.add_argument("--subtask")
+            d.add_argument("--suite-warn", type=suite_warn_arg, default=SUITE_WARN, metavar="N")
+            d.add_argument("--note", action="append", default=[], metavar="TEXT")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
@@ -4116,6 +4803,10 @@ def main():
     body = rp.add_mutually_exclusive_group(required=True)
     body.add_argument("--body")
     body.add_argument("--body-file")
+    sy = sub.add_parser("sync", parents=[common])
+    sy.add_argument("plan")
+    sy.add_argument("--task", required=True)
+    sy.add_argument("--send", action="store_true")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
@@ -4142,7 +4833,7 @@ def main():
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
     return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
             "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
-            "report": cmd_report}[a.cmd](a, reg)
+            "report": cmd_report, "sync": cmd_sync}[a.cmd](a, reg)
 
 
 if __name__ == "__main__":

@@ -4,13 +4,37 @@ Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standal
 `RPG_FACTORY_STATE_DIR`; `tests/run-all.sh` runs them all and prints the usage header with `-h`. Fixtures live in
 `tests/fixtures/`. Full command list and flags: `scripts/README.md` "Commands".
 
+- `tests/workspace-default.test.sh` checks the shell and Python workspace defaults across stubbed platforms.
+
 ## QA tiers and run-all flags
 
 The QA tiers table of `skills/delivery/references/delivery.md` (section 10, "QA tiers"; registry `pipeline.qa_tiers`)
 names the command of each tier. In short: a task runs `tests/run-all.sh --affected --base <base> -j 2` or its own
 suites with `--only-suites`; integration QA before a PR runs `tests/run-all.sh --workspace-only`; CI
-(`.github/workflows/tests.yml`, `--no-workspace --no-claude`) is the full-suite gate; `tests/run-all.sh --release` and
-`tests/dogfood.sh --installed` run only for a release. The rules behind those commands follow.
+runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite, `--no-workspace --no-claude`)
+and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single required check
+(`.github/workflows/tests.yml`, section "CI" below); `tests/run-all.sh --release` and `tests/dogfood.sh --installed`
+run only for a release. The rules behind those commands follow.
+
+## CI
+
+`.github/workflows/tests.yml` plans first, then runs:
+
+- The `plan` job runs `scripts/ci-plan.py`, which calls `tests/affected.py cases` once and emits one matrix job per
+  `{suite, os}`.
+- Anything unsure plans every suite: a CI plumbing change (`.github/workflows/**`, `.github/actions/**`,
+  `tests/run-all.sh`, `tests/affected.py`, `scripts/ci-plan.py`, `tests/ci-windows-suites.txt`), no or an unusable
+  base, or a `schedule` event. `workflow_dispatch` with `full=true` (the default) plans every suite on purpose; with
+  `full=false` it plans from its `base` input (a sha or a ref the checkout has, e.g. `origin/main`), and an empty or
+  unusable base plans every suite.
+- Every suite runs on ubuntu-24.04, and also on windows-2025 when `tests/ci-windows-suites.txt` lists it (one suite
+  path per line, `#` comments). A line that is not a runnable suite makes `ci-plan.py` exit 2.
+- The inline checks run on both OSes through `tests/run-all.sh --inline-only`, even when no suite is selected.
+- A suite job runs only its planned cases: it passes them to run-all with `--only-cases`, and a plan row with `ALL`
+  runs every case. A case subset publishes no suite PASS record.
+- `ci-ok` is the single required check, and branch protection must require only it. It fails on any failed or
+  cancelled job and passes when no suite is affected. The old `run-all (no workspace, <os>)` checks no longer exist.
+- `tests/ci-plan.test.sh` tests the plan.
 
 ## One full run per machine: the run-all lock
 
@@ -65,6 +89,9 @@ taken over (`run-all: taking over stale test slot <n> (<pid>)`).
 
 ## Case selection
 
-`pipeline.test.sh`, `parallel-policy.test.sh`, `routing.test.sh` and `git-guard.test.sh` take `--case NAMES` and
-`--list-cases`; `--affected` passes the cases `tests/affected.py cases` selects (case maps are `# case-map:` header
-lines of each suite), and an explicit `--only-suites` name runs all its cases.
+`pipeline.test.sh`, `parallel-policy.test.sh` and `git-guard.test.sh` take `--case NAMES` and `--list-cases`;
+`--affected` passes the cases `tests/affected.py cases` selects (case maps are `# case-map:` header lines of each
+suite), and an explicit `--only-suites` name runs all its cases unless `--only-cases L` names a subset (exactly one
+`--only-suites` suite that has a case map; misuse exits 2; `ALL` or an empty list runs every case).
+`routing.test.sh` also takes `--case` and `--list-cases` when run by hand, but it has no case map: `--affected` always
+runs all its cases and `--only-cases` rejects it.

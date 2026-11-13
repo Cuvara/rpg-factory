@@ -4,7 +4,8 @@
 # heartbeat-only batch is acked here and a real delivery stays unacknowledged for the caller.
 # The default types include status because task leads report with --type status. --types is only the wake condition and
 # a delivery is the whole FIFO batch, so heartbeats always wake the wait: consumed here, they never pile up for a later one.
-# Frozen stalls are advisory: a worker may be inside a long quiet command.
+# Frozen stalls are advisory: a worker may be inside a long quiet command. --stall-ms 0 disables only the frozen-output
+# check (provider-error stalls are still reported); --stall-poll-ms 0 disables the whole worker poll.
 # Exit codes: 0 real delivery; 2 usage / NOT_AVAILABLE / invalid receipt or state;
 # 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 6 parent process gone (orphan, lock released; a real
 # delivery that arrives after the parent died is saved to <lock>.orphan.<pid>.json and named on stderr);
@@ -17,7 +18,7 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; exit 2; }
       case "$1" in --run) run=$2 ;; --timeout-ms) timeout=$2 ;; --types) types=$2 ;; --stall-poll-ms) stall_poll=$2 ;; --stall-ms) stall_ms=$2 ;; esac
       shift 2 ;;
-    *) echo "Usage: orca-wait.sh --run ID [--timeout-ms N] [--types T] [--stall-poll-ms N] [--stall-ms N]" >&2; exit 2 ;;
+    *) echo "Usage: orca-wait.sh --run ID [--timeout-ms N] [--types T] [--stall-poll-ms N (0: no worker poll)] [--stall-ms N (0: no frozen check)]" >&2; exit 2 ;;
   esac
 done
 [[ -n "$run" && "$timeout" =~ ^[1-9][0-9]*$ && -n "$types" && "$stall_poll" =~ ^[0-9]+$ && "$stall_ms" =~ ^[0-9]+$ ]] || {
@@ -261,7 +262,7 @@ try:
         since = prior.get('since', now) if isinstance(prior, dict) and prior.get('hash') == digest else now
         current[dispatch] = {'hash': digest, 'since': since}
         reason = stall_reason(tail)
-        if not reason and now - since >= int(threshold):
+        if not reason and int(threshold) > 0 and now - since >= int(threshold):
             reason = 'frozen: output unchanged for ' + str(int((now - since) // 60000)) + ' min'
         reason_key = ('frozen' if reason and reason.startswith('frozen:') else
                       'usage limit' if reason and reason.startswith('MODEL_UNAVAILABLE: usage limit') else

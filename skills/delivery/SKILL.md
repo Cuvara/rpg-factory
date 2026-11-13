@@ -39,7 +39,8 @@ and flags: `${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`):
 8. **PR** - step 8: only when the user asked for `deliver: pr`.
 9. **Cleanup and report** - step 9 (section 8): `cleanup plan.json` until CLEAN.
 
-Resume with `status plan.json` (it re-derives progress from git and the verdicts) and continue at the first open step.
+Resume with `status plan.json` (it re-derives progress from git and the verdicts) and continue at the first open step;
+a stacked dependent merges its dependency when status shows `sync:`.
 
 ## Orca
 
