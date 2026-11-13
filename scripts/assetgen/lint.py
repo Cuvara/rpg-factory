@@ -19,8 +19,14 @@ titles, one stage group per node, the group vocabulary and order, a Note per gro
 directly into the one NineRouterImage, SaveImage only in Output with a filename suffix, no static LoadImage file).
 A legacy template without a ui block is a WARN, never a FAIL. An unreadable file or a layer load error gets no extra
 row (its assetgen-lint row already FAILs).
+Local models (UNTESTED on RTX 5060: the block is a declaration compared with planning thresholds, never a measured
+number): a template's optional requires block {profile, peak_vram_gb, ram_gb, packs, models[{kind, name, size_gb}]}
+is checked against data/hardware.json (profile id, the profile's VRAM and RAM ceilings and pack ids, model kinds, a
+model name that is a file name; no link, path or credential). A node of a known-nodes pack needs its pack id in
+requires.packs, and a local_model_nodes or pack node needs the block. No requires and no such node: nothing changes.
 """
 import json
+import math
 import os
 import re
 
@@ -42,11 +48,50 @@ FORBIDDEN = [
     (re.compile(r"\bBearer\s+\S", re.I), "bearer credential"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{12,}"), "API key value"),
 ]
+HARDWARE = os.path.join(layers.HERE, "data", "hardware.json")
+REQUIRES_KEYS = ("profile", "peak_vram_gb", "ram_gb", "packs", "models")
+MODEL_KEYS = ("kind", "name", "size_gb")
+EXTRA_MODEL_KINDS = ("loras", "vae")  # model folders a template may name that no hardware profile lists
+
+
+def known_registry():
+    """The whole data/known-nodes.json: nodes, packs {pack id: {nodes, ...}} and local_model_nodes."""
+    with open(KNOWN, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def known_nodes():
-    with open(KNOWN, encoding="utf-8") as f:
-        return json.load(f)["nodes"]
+    return known_registry()["nodes"]
+
+
+def is_number(v):
+    """An int or a finite float (bool is not a number)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and (isinstance(v, int) or math.isfinite(v))
+
+
+def hardware():
+    """(profiles, kinds) of data/hardware.json: {profile id: {"vram": requires.min_vram_gb, "ram":
+    requires.min_ram_gb, "packs": [pack id]}} and the model kinds any profile names (file order). ValueError with one
+    message when the file is missing or malformed."""
+    try:
+        with open(HARDWARE, encoding="utf-8") as f:
+            raw = json.load(f)
+        profiles, kinds = {}, []
+        for p in raw["profiles"]:
+            entry = {"vram": p["requires"]["min_vram_gb"], "ram": p["requires"]["min_ram_gb"],
+                     "packs": [pack["id"] for pack in p["packs"]]}
+            found = [m["kind"] for m in p["models"]]
+            if (not isinstance(p["id"], str) or not is_number(entry["vram"]) or not is_number(entry["ram"])
+                    or not all(isinstance(x, str) for x in entry["packs"] + found)):
+                raise ValueError("profile %r: id, pack ids and model kinds must be strings, min_vram_gb and min_ram_gb numbers" % (p["id"],))
+            profiles[p["id"]] = entry
+            kinds += [k for k in found if k not in kinds]
+        if not profiles:
+            raise ValueError("no profiles")
+        return profiles, kinds
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("data/hardware.json is missing or malformed (%s: %s): the requires block cannot be checked"
+                         % (type(exc).__name__, str(exc).replace("\n", " ")))
 
 
 def domains():
@@ -136,6 +181,82 @@ def check_graph(graph, params=None):
     return errs, warns
 
 
+def requires_errors(data, graph):
+    """(errors, warnings) of a template's optional requires block and of the graph rules tied to it. The block names
+    what a local template needs: a data/hardware.json profile, the peak VRAM and the RAM it declares (never above the
+    profile's min_vram_gb / min_ram_gb), the node packs its workflow uses and its model files (kind, file name, size).
+    A node of a known-nodes pack needs that pack id in requires.packs; a local_model_nodes or pack node needs the
+    block. A template without the block and without such a node gets no error and no warning."""
+    registry = known_registry()
+    pack_of = {name: pid for pid, spec in registry.get("packs", {}).items() for name in spec.get("nodes", [])}
+    local = set(registry.get("local_model_nodes", []))
+    typed = [(nid, node["class_type"]) for nid, node in (graph.items() if isinstance(graph, dict) else [])
+             if isinstance(node, dict) and isinstance(node.get("class_type"), str)]
+    if "requires" not in data:
+        return ["node %s (%s) runs a local model: the template needs a requires block (%s)"
+                % (nid, ctype, ", ".join(REQUIRES_KEYS)) for nid, ctype in typed if ctype in local or ctype in pack_of], []
+    req = data["requires"]
+    if not isinstance(req, dict):
+        return ["requires must be an object (%s)" % ", ".join(REQUIRES_KEYS)], []
+    try:
+        profiles, kinds = hardware()
+    except ValueError as exc:
+        return [str(exc)], []
+    errs = ["requires.%s: unknown key (a requires block holds only %s)" % (k, ", ".join(REQUIRES_KEYS))
+            for k in req if k not in REQUIRES_KEYS]
+    text = json.dumps(req)
+    errs += ["requires contains a %s (%s); it names a profile, packs and model files, never a link, an endpoint or a credential"
+             % (what, m.group(0)[:40]) for rx, what in FORBIDDEN for m in [rx.search(text)] if m]
+    profile = req.get("profile")
+    limits = profiles.get(profile) if isinstance(profile, str) else None
+    if "profile" not in req:
+        errs.append("requires.profile missing (one of %s; data/hardware.json)" % ", ".join(profiles))
+    elif limits is None:
+        errs.append("requires.profile %r is not a hardware profile (%s; data/hardware.json)" % (profile, ", ".join(profiles)))
+    for key, limit, field in (("peak_vram_gb", "vram", "min_vram_gb"), ("ram_gb", "ram", "min_ram_gb")):
+        value = req.get(key)
+        if not is_number(value) or value < 0:
+            errs.append("requires.%s must be a number >= 0" % key if key in req else "requires.%s missing (a number >= 0)" % key)
+        elif limits is not None and value > limits[limit]:
+            errs.append("requires.%s %s is above %s %s of profile %s (data/hardware.json): the template would not fit the machine the profile describes"
+                        % (key, value, field, limits[limit], profile))
+    declared = req.get("packs", [])
+    if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
+        errs.append("requires.packs must be a list of pack ids (strings)")
+        declared = [p for p in declared if isinstance(p, str)] if isinstance(declared, list) else []
+    declared_ids = list(dict.fromkeys(declared))
+    errs += ["requires.packs lists %r more than once" % p for p in declared_ids if declared.count(p) > 1]
+    if limits is not None:
+        errs += ["requires.packs: %r is not a pack of profile %s (%s)" % (p, profile, ", ".join(limits["packs"]) or "it has no packs")
+                 for p in declared_ids if p not in limits["packs"]]
+    models = req.get("models", [])
+    if not isinstance(models, list):
+        errs.append("requires.models must be a list of {%s} objects" % ", ".join(MODEL_KEYS))
+        models = []
+    allowed = kinds + [k for k in EXTRA_MODEL_KINDS if k not in kinds]
+    for i, model in enumerate(models):
+        if not isinstance(model, dict) or sorted(model) != sorted(MODEL_KEYS):
+            errs.append("requires.models[%d] must be an object with exactly %s" % (i, ", ".join(MODEL_KEYS)))
+            continue
+        if not isinstance(model["kind"], str) or model["kind"] not in allowed:
+            errs.append("requires.models[%d].kind %r is not a model kind (%s)" % (i, model["kind"], ", ".join(allowed)))
+        name = model["name"]
+        if not isinstance(name, str) or not name.strip() or any(c in name for c in "/\\:"):
+            errs.append("requires.models[%d].name must be a model file name; source links live in docs/hardware.md, never in templates" % i)
+        if not is_number(model["size_gb"]) or model["size_gb"] <= 0:
+            errs.append("requires.models[%d].size_gb must be a number > 0" % i)
+    used = set()
+    for nid, ctype in typed:
+        pid = pack_of.get(ctype)
+        if pid is None:
+            continue
+        used.add(pid)
+        if pid not in declared_ids:
+            errs.append("node %s uses %s from pack %s, not declared in requires.packs" % (nid, ctype, pid))
+    warns = ["requires.packs declares %s, but no workflow node comes from that pack" % p for p in declared_ids if p not in used]
+    return errs, warns
+
+
 def template_errors(data, ident):
     errs, warns = [], []
     params = data.get("params")
@@ -156,6 +277,9 @@ def template_errors(data, ident):
     warns += w
     used = set(PLACEHOLDER.findall(json.dumps(graph)))
     warns += ["param %s is declared but never used in the workflow" % n for n in params if n not in used]
+    e, w = requires_errors(data, graph)
+    errs += e
+    warns += w
     errs += [e for e in stylelock.purpose_errors(data) if e.startswith("max_references")]
     out = data.get("output_node")
     if not isinstance(graph, dict) or not isinstance(out, str) or out not in graph:

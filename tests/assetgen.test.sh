@@ -7,6 +7,11 @@
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), a run filename_prefix (with optional inline output suffix),
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
+# the local node registry (UNTESTED on RTX 5060: the 13 core SDXL nodes from the saved object_info, the 4 pack nodes
+# from object_info-packs.json, known-nodes packs and local_model_nodes against data/hardware.json) and the template
+# requires block (profile, peak_vram_gb, ram_gb, packs, models: accepted complete, refused without a profile, with an
+# undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, or missing next to
+# local nodes; hardware.json missing or malformed is one FAIL reason, no traceback),
 # the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
 # and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy
 # templates WARN; a style-locked render of a grouped template lays its anchors into References; the gen-run
@@ -535,7 +540,8 @@ expect_lint() { # expect_lint ID STATE TEXT LABEL
 
 echo "-- node registry"
 NS="$ROOT/scripts/assetgen/nodesync.py"; OI="$ROOT/tests/fixtures/assetgen/object_info.json"
-node_names=(ImageScale ImageSharpen ImageBlur ImageInvert ImageCrop PreviewImage SplitImageWithAlpha JoinImageWithAlpha ImageQuantize PrimitiveString)
+local_names=(CheckpointLoaderSimple CLIPTextEncode CLIPTextEncodeSDXL EmptyLatentImage VAEEncode VAEDecode VAEDecodeTiled KSampler LoraLoader ControlNetLoader ControlNetApplyAdvanced UpscaleModelLoader ImageUpscaleWithModel)
+node_names=(ImageScale ImageSharpen ImageBlur ImageInvert ImageCrop PreviewImage SplitImageWithAlpha JoinImageWithAlpha ImageQuantize PrimitiveString "${local_names[@]}")
 node_args=(); for name in "${node_names[@]}"; do node_args+=(--node "$name"); done
 python3 -B "$NS" "$OI" "${node_args[@]}" > "$TMP/nodes.json" 2>"$TMP/err"; rc=$?
 jq -c . "$TMP/nodes.json" > "$TMP/nodes-actual" 2>/dev/null
@@ -544,6 +550,42 @@ jq -c --slurpfile generated "$TMP/nodes.json" '.nodes as $nodes | reduce ($gener
   || no "nodesync fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
 python3 -B "$NS" "$OI" "${node_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && ok "nodesync --check accepts committed entries" || no "nodesync --check rc=$rc" "$(cat "$TMP/err")"
+# pack nodes: no saved object_info from a machine with the packs existed, so object_info-packs.json is written from the
+# pack sources (known-nodes packs[].signatures names each); the registry entries must still be nodesync's output of it
+OIP="$ROOT/tests/fixtures/assetgen/object_info-packs.json"; HW="$ROOT/scripts/assetgen/data/hardware.json"
+pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor InspyrenetRembg)
+pack_args=(); for name in "${pack_names[@]}"; do pack_args+=(--node "$name"); done
+python3 -B "$NS" "$OIP" "${pack_args[@]}" > "$TMP/pack-nodes.json" 2>"$TMP/err"; rc=$?
+jq -c . "$TMP/pack-nodes.json" > "$TMP/pack-nodes-actual" 2>/dev/null
+jq -c --slurpfile generated "$TMP/pack-nodes.json" '.nodes as $nodes | reduce ($generated[0] | keys_unsorted[]) as $name ({}; .[$name] = $nodes[$name])' "$KN" > "$TMP/pack-nodes-expected" 2>"$TMP/jqerr"
+[ $rc -eq 0 ] && [ "$(jq 'length' "$TMP/pack-nodes.json")" = "${#pack_names[@]}" ] && cmp -s "$TMP/pack-nodes-actual" "$TMP/pack-nodes-expected" \
+  && ok "nodesync pack fixture entries match registry including key order (${#pack_names[@]} pack nodes)" \
+  || no "nodesync pack fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
+python3 -B "$NS" "$OIP" "${pack_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "nodesync --check accepts committed pack entries" || no "nodesync --check packs rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+python3 -B - "$KN" "$HW" "${#local_names[@]}" "${local_names[@]}" "${pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
+import json, sys
+known_path, hardware_path, n_local = sys.argv[1], sys.argv[2], int(sys.argv[3])
+local_names, pack_names = sys.argv[4:4 + n_local], sys.argv[4 + n_local:]
+with open(known_path, encoding="utf-8") as f:
+    known = json.load(f)
+with open(hardware_path, encoding="utf-8") as f:
+    hardware = json.load(f)
+nodes, packs, local = known["nodes"], known["packs"], known["local_model_nodes"]
+profile_packs = [p["id"] for prof in hardware["profiles"] if prof["id"] == "local-8gb" for p in prof["packs"]]
+assert packs and profile_packs and all(pid in profile_packs for pid in packs), (list(packs), profile_packs)
+for pid, spec in packs.items():
+    assert spec["nodes"] and all(name in nodes for name in spec["nodes"]), pid
+    assert spec["provider"] and spec["signatures"], pid
+pack_nodes = [name for spec in packs.values() for name in spec["nodes"]]
+assert sorted(pack_nodes) == sorted(pack_names), pack_nodes
+assert local == local_names and all(name in nodes for name in local), local
+assert not set(local) & set(pack_nodes)
+assert "UNTESTED on RTX 5060" in known["note"]
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "known-nodes: every pack node and local_model_nodes name is a registry node, every pack id is a local-8gb pack of hardware.json, the note says UNTESTED on RTX 5060" \
+  || no "known-nodes packs / local_model_nodes" "$(cat "$TMP/o")"
 jq '.nodes.ImageScale.inputs.upscale_method.options[0] = "changed"' "$KN" > "$TMP/known-changed.json"
 python3 -B "$NS" "$OI" "${node_args[@]}" --known "$TMP/known-changed.json" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -qx ImageScale "$TMP/o" && ok "nodesync --check detects a changed combo option" || no "nodesync changed option rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
@@ -615,6 +657,133 @@ jq '.workflow["3"].inputs.scale_by = 2' "$LA/assetgen/templates/registry-chain.j
 expect_lint registry-input FAIL "unknown input scale_by" "unknown input on ImageScale"
 jq '.workflow["3"].class_type = "UnknownImageNode"' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/registry-unknown.json"
 expect_lint registry-unknown FAIL "unknown node type UnknownImageNode" "unknown node in image chain"
+
+# local nodes and the template requires block (UNTESTED on RTX 5060: the fixture declares, lint compares the
+# declaration with data/hardware.json; nothing here was generated or measured). File names and sizes are placeholders.
+LOCAL="$LA/assetgen/templates/local-full.json"
+cat > "$LOCAL" <<'EOF'
+{"schema": "rpg-factory.comfy-template/1", "title": "Local SDXL chain (lint fixture)",
+ "description": "UNTESTED on RTX 5060: lint fixture for the local node registry; no image was generated and no number measured.",
+ "output_node": "16",
+ "params": {"prompt": {"type": "string", "required": true}, "negative": {"type": "string", "default": "blurry"},
+  "checkpoint": {"type": "string", "default": "sdxl-checkpoint-fp16.safetensors"}, "seed": {"type": "int", "default": 1}},
+ "requires": {"profile": "local-8gb", "peak_vram_gb": 7.0, "ram_gb": 16,
+  "packs": ["comfyui_ipadapter_plus", "comfyui_controlnet_aux", "cut-out (BiRefNet or rembg)"],
+  "models": [{"kind": "checkpoints", "name": "sdxl-checkpoint-fp16.safetensors", "size_gb": 6.5},
+   {"kind": "controlnet", "name": "sdxl-controlnet-canny.safetensors", "size_gb": 2.5},
+   {"kind": "ipadapter", "name": "sdxl-ipadapter-plus.safetensors", "size_gb": 0.8},
+   {"kind": "clip_vision", "name": "clip-vision-vit-h.safetensors", "size_gb": 2.5},
+   {"kind": "upscale_models", "name": "upscaler-4x.safetensors", "size_gb": 0.1}]},
+ "workflow": {
+  "1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": "{{prompt}}", "model": "m", "size": "auto", "quality": "auto", "background": "auto"}},
+  "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{checkpoint}}"}},
+  "3": {"class_type": "IPAdapterUnifiedLoader", "inputs": {"model": ["2", 0], "preset": "PLUS (high strength)"}},
+  "4": {"class_type": "IPAdapterAdvanced", "inputs": {"model": ["3", 0], "ipadapter": ["3", 1], "image": ["1", 0], "weight": 0.8, "weight_type": "linear", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}},
+  "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["2", 1]}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative}}", "clip": ["2", 1]}},
+  "7": {"class_type": "CannyEdgePreprocessor", "inputs": {"image": ["1", 0], "low_threshold": 100, "high_threshold": 200, "resolution": 1024}},
+  "8": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "sdxl-controlnet-canny.safetensors"}},
+  "9": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["5", 0], "negative": ["6", 0], "control_net": ["8", 0], "image": ["7", 0], "strength": 0.6, "start_percent": 0.0, "end_percent": 1.0, "vae": ["2", 2]}},
+  "10": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "11": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "seed": "{{seed}}", "steps": 24, "cfg": 6.5, "sampler_name": "euler", "scheduler": "karras", "positive": ["9", 0], "negative": ["9", 1], "latent_image": ["10", 0], "denoise": 1.0}},
+  "12": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["11", 0], "vae": ["2", 2], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
+  "13": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "upscaler-4x.safetensors"}},
+  "14": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["13", 0], "image": ["12", 0]}},
+  "15": {"class_type": "InspyrenetRembg", "inputs": {"image": ["14", 0], "torchscript_jit": "default"}},
+  "16": {"class_type": "SaveImage", "inputs": {"images": ["15", 0], "filename_prefix": "assetgen/local"}}}}
+EOF
+lv() { local id=$1; shift; jq "$@" "$LOCAL" > "$LA/assetgen/templates/$id.json"; }  # lv ID JQ-ARGS: a variant of local-full
+expect_clean() { local got; got=$(lint_of "$1"); [ "$got" = "PASS " ] && ok "lint $2" || no "lint $2" "$got"; }  # PASS, no reason
+jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LOCAL" >/dev/null && expect_clean local-full "local template: a local SDXL chain with all four pack nodes and a complete requires block PASSES, no reasons" \
+  || no "local template fixture description must start with UNTESTED on RTX 5060:"
+hw_profiles=$(jq -r '[.profiles[].id] | join(", ")' "$HW")
+hw_lim() { jq -r --arg f "$1" '.profiles[] | select(.id == "local-8gb") | .requires[$f]' "$HW"; }
+vram_max=$(hw_lim min_vram_gb); ram_max=$(hw_lim min_ram_gb)
+lv local-vram-edge --argjson v "$vram_max" --argjson r "$ram_max" '.requires.peak_vram_gb = $v | .requires.ram_gb = $r'
+expect_clean local-vram-edge "requires: peak_vram_gb and ram_gb equal to the profile's values PASS"
+lv local-extra-kinds '.requires.models += [{"kind": "loras", "name": "style.safetensors", "size_gb": 0.2}, {"kind": "vae", "name": "sdxl-vae.safetensors", "size_gb": 0.3}]'
+expect_clean local-extra-kinds "requires.models: kinds loras and vae are accepted"
+jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/api-requires.json"
+expect_clean api-requires "requires on an API-only template: profile api-only, packs and models left out, PASS"
+lv local-no-profile 'del(.requires.profile)'
+expect_lint local-no-profile FAIL "requires.profile missing" "requires without profile"
+lv local-bad-profile '.requires.profile = "local-80gb"'
+expect_lint local-bad-profile FAIL "requires.profile 'local-80gb' is not a hardware profile ($hw_profiles" "requires: unknown profile, the ids are listed"
+lv local-pack-undeclared '.requires.packs -= ["comfyui_controlnet_aux"]'
+expect_lint local-pack-undeclared FAIL "node 7 uses CannyEdgePreprocessor from pack comfyui_controlnet_aux, not declared in requires.packs" "pack node whose pack is missing from requires.packs"
+lv local-pack-foreign '.requires.profile = "api-only" | .requires.peak_vram_gb = 0 | .requires.ram_gb = 0'
+expect_lint local-pack-foreign FAIL "requires.packs: 'comfyui_ipadapter_plus' is not a pack of profile api-only (it has no packs)" "requires.packs: a pack id that is not of the profile"
+lv local-pack-twice '.requires.packs += ["comfyui_controlnet_aux"]'
+expect_lint local-pack-twice FAIL "requires.packs lists 'comfyui_controlnet_aux' more than once" "requires.packs: a pack listed twice"
+lv local-pack-unused 'del(.workflow["15"]) | .workflow["16"].inputs.images = ["14", 0]'
+expect_lint local-pack-unused WARN "requires.packs declares cut-out (BiRefNet or rembg), but no workflow node comes from that pack" "requires.packs: a declared pack no node uses (warning)"
+lv local-no-requires 'del(.requires)'
+got=$(lint_of local-no-requires)
+case "$got" in "FAIL "*"node 2 (CheckpointLoaderSimple) runs a local model: the template needs a requires block (profile, peak_vram_gb, ram_gb, packs, models)"*) : ;; *) false ;; esac \
+  && grep -qF "node 15 (InspyrenetRembg) runs a local model" <<<"$got" && grep -qF "node 11 (KSampler) runs a local model" <<<"$got" \
+  && ! grep -qF "node 1 (NineRouterImage)" <<<"$got" && ! grep -qF "requires.packs" <<<"$got" \
+  && ok "lint local nodes with no requires block: every local and pack node is named, API nodes are not" || no "lint local nodes with no requires block" "$got"
+lv local-requires-list '.requires = ["local-8gb"]'
+expect_lint local-requires-list FAIL "requires must be an object (profile, peak_vram_gb, ram_gb, packs, models)" "requires that is not an object"
+lv local-vram-over '.requires.peak_vram_gb = 7.6'
+expect_lint local-vram-over FAIL "requires.peak_vram_gb 7.6 is above min_vram_gb $vram_max of profile local-8gb" "requires.peak_vram_gb 7.6 above profile local-8gb"
+lv local-ram-over '.requires.ram_gb = 64'
+expect_lint local-ram-over FAIL "requires.ram_gb 64 is above min_ram_gb $ram_max of profile local-8gb" "requires.ram_gb above the profile"
+lv local-vram-bool '.requires.peak_vram_gb = true'
+expect_lint local-vram-bool FAIL "requires.peak_vram_gb must be a number >= 0" "requires.peak_vram_gb true (a bool is not a number)"
+lv local-ram-missing 'del(.requires.ram_gb)'
+expect_lint local-ram-missing FAIL "requires.ram_gb missing" "requires without ram_gb"
+lv local-model-url --arg u "$scheme://models.example.invalid/sdxl-checkpoint-fp16.safetensors" '.requires.models[0].name = $u'
+MODEL_NAME="requires.models[0].name must be a model file name; source links live in docs/hardware.md, never in templates"
+expect_lint local-model-url FAIL "$MODEL_NAME" "requires.models name that is a URL: not a file name"
+expect_lint local-model-url FAIL "requires contains a URL" "requires.models name that is a URL: the reason names requires"
+lv local-model-host '.requires.models[0].name = "huggingface.co/x/y.safetensors"'
+expect_lint local-model-host FAIL "$MODEL_NAME" "requires.models name with a host and path (no scheme)"
+lv local-model-path '.requires.models[0].name = "C:\\models\\sdxl-checkpoint-fp16.safetensors"'
+expect_lint local-model-path FAIL "$MODEL_NAME" "requires.models name that is a local path"
+lv local-model-extra '.requires.models[0].source = "see docs"'
+expect_lint local-model-extra FAIL "requires.models[0] must be an object with exactly kind, name, size_gb" "requires.models entry with an extra key"
+lv local-model-size '.requires.models[1].size_gb = 0'
+expect_lint local-model-size FAIL "requires.models[1].size_gb must be a number > 0" "requires.models size_gb 0"
+lv local-model-kind '.requires.models[0].kind = "diffusers"'
+expect_lint local-model-kind FAIL "requires.models[0].kind 'diffusers' is not a model kind (" "requires.models: unknown model kind"
+lv local-credential '.requires.api_key = "placeholder"'
+expect_lint local-credential FAIL "requires contains a credential or endpoint key" "credential key inside requires"
+lv local-unknown-key '.requires.notes = "fits"'
+expect_lint local-unknown-key FAIL "requires.notes: unknown key (a requires block holds only profile, peak_vram_gb, ram_gb, packs, models)" "unknown requires key"
+lv local-bad-input '.workflow["11"].inputs.cfg_scale = 7'
+expect_lint local-bad-input FAIL "node 11 (KSampler): unknown input cfg_scale" "unknown input on KSampler"
+lv local-bad-combo '.workflow["11"].inputs.scheduler = "fastest"'
+expect_lint local-bad-combo FAIL "node 11.scheduler: 'fastest' is not one of" "combo value outside KSampler's scheduler options"
+lv local-unknown-node '.workflow["12"].class_type = "VAEDecodeTurbo"'
+expect_lint local-unknown-node FAIL "unknown node type VAEDecodeTurbo" "unknown node type in a local template"
+jq -c '.workflow' "$LOCAL" | sed 's/{{[a-z]*}}/x/g' > "$TMP/local-rendered.json"
+jq -c '.["12"].class_type = "VAEDecodeTurbo"' "$TMP/local-rendered.json" > "$TMP/local-rendered-unknown.json"
+got=$(AG lint "$TMP/local-rendered.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))')
+got2=$(AG lint "$TMP/local-rendered-unknown.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))')
+[ "$got" = "PASS " ] && case "$got2" in "FAIL "*"unknown node type VAEDecodeTurbo"*) : ;; *) false ;; esac \
+  && ok "rendered workflow lint unchanged: local nodes PASS without a requires rule, an unknown node type still FAILs" || no "rendered local workflow lint" "$got
+$got2"
+# hardware.json missing or malformed: one FAIL reason on a template with requires, never a traceback; a template
+# without requires and without local nodes does not read it
+printf 'not json\n' > "$TMP/hw-notjson.json"; echo '{"schema": "rpg-factory.assetgen-hardware/1", "profiles": [{"id": "local-8gb"}]}' > "$TMP/hw-shape.json"
+python3 -B - "$ROOT" "$LA" "$TMP" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+root, authoring, tmp = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, "scripts", "assetgen"))
+import lint
+template = lambda name: os.path.join(authoring, "assetgen", "templates", name + ".json")
+for name in ("hw-none.json", "hw-notjson.json", "hw-shape.json"):
+    lint.HARDWARE = os.path.join(tmp, name)
+    row = lint.lint_file(template("local-full"), authoring)
+    assert row["state"] == "FAIL" and len(row["reasons"]) == 1, (name, row)
+    assert row["reasons"][0].startswith("data/hardware.json is missing or malformed ("), (name, row)
+    row = lint.lint_file(template("registry-chain"), authoring)
+    assert row["state"] == "PASS" and not row["reasons"], (name, row)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "lint requires: hardware.json missing, not JSON or malformed is one FAIL reason, no traceback; a template without requires is unaffected" \
+  || no "lint requires with a bad hardware.json" "$(cat "$TMP/o")"
 LA=$lint_la
 
 expect_lint unknown-node FAIL "unknown node type FluxSampler" "unknown node type"
