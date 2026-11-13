@@ -37,6 +37,9 @@ style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] 
 workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
   (PrimitiveStringMultiline) it links to.
 run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
+save_image_prefixes(workflow) -> SaveImage node IDs and filename prefixes from the rendered workflow.
+comfy_jobs_dir() -> the configured or platform-default comfy-cli jobs directory.
+output_origins(run_dir, workflow, jobs_dir=None) -> output PNG origins from names, fetch.json or job-state evidence.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
   exactly these; the plugin requires a PASS row for each): png-edge-fringe comes last, only for qa.alpha required.
@@ -59,6 +62,12 @@ import hashlib
 import json
 import os
 import re
+import sys
+from urllib.parse import parse_qs, unquote, urlsplit
+
+PREVIEW_DIR = "previews"
+FETCH_FILE = "fetch.json"
+JOBS_DIR_ENV = "RPG_FACTORY_COMFY_JOBS_DIR"
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
@@ -138,6 +147,193 @@ def qa_errors(qa):
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
 TEXT_NODES = ("PrimitiveStringMultiline", "PrimitiveString")  # a prompt node: its "value" is the text it outputs
 RUN_PREFIX = "assetgen/"
+
+
+def save_image_prefixes(workflow):
+    if not isinstance(workflow, dict):
+        return {}
+    return {str(nid): node["inputs"]["filename_prefix"] for nid, node in workflow.items()
+            if isinstance(node, dict) and node.get("class_type") == "SaveImage"
+            and isinstance(node.get("inputs"), dict)
+            and isinstance(node["inputs"].get("filename_prefix"), str)}
+
+
+def comfy_jobs_dir():
+    configured = os.environ.get(JOBS_DIR_ENV)
+    if configured:
+        return configured
+    if sys.platform == "win32":
+        root = os.path.expanduser("~/AppData/Local/comfy-cli")
+    elif sys.platform == "darwin":
+        root = os.path.expanduser("~/Library/Application Support/comfy-cli")
+    else:
+        root = os.path.expanduser("~/.config/comfy-cli")
+    return os.path.join(root, "jobs")
+
+
+def _parts(path):
+    return path.replace("\\", "/").split("/")
+
+
+def _save_match(filename, prefixes, subfolder=None):
+    for node_id, prefix in prefixes.items():
+        parts = _parts(prefix)
+        if (re.fullmatch(re.escape(parts[-1]) + r"_[0-9]+_\.png", filename)
+                and (subfolder is None or "/".join(parts[:-1]) == subfolder)):
+            return node_id
+    return None
+
+
+def _job_state(jobs_dir, short_id):
+    matches = []
+    try:
+        entries = os.scandir(jobs_dir)
+        with entries:
+            for entry in entries:
+                if not (entry.name.lower().startswith(short_id.lower()) and entry.name.endswith(".json")):
+                    continue
+                try:
+                    with open(entry.path, encoding="utf-8") as f:
+                        state = json.load(f)
+                    prompt = state.get("prompt_id") if isinstance(state, dict) else None
+                    if isinstance(prompt, str) and prompt.lower().startswith(short_id.lower()):
+                        matches.append(state)
+                except (OSError, ValueError, UnicodeError):
+                    continue
+    except (OSError, TypeError, ValueError):
+        pass
+    return matches
+
+
+def _source_details(source):
+    if not isinstance(source, str) or not source:
+        return None
+    parsed = urlsplit(source)
+    if parsed.scheme in ("http", "https"):
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        filename = query.get("filename", [None])[0]
+        if not filename:
+            return None
+        return filename, query.get("subfolder", [None])[0], query.get("type", ["output"])[0]
+    path = unquote(parsed.path) if parsed.scheme == "file" else source
+    parts = _parts(path.rstrip("/\\"))
+    if not parts[-1]:
+        return None
+    # ComfyUI writes PreviewImage files straight into its temp dir: only the parent counts, so an install that sits
+    # under some other directory named temp does not turn its SaveImage files into previews.
+    parent = parts[-2] if len(parts) > 1 else None
+    return parts[-1], parent, "temp" if parent == "temp" else "output"
+
+
+def _record_node(record, details):
+    outputs = record.get("outputs") if isinstance(record, dict) else None
+    if not isinstance(outputs, dict):
+        return None
+    for node_id, node in outputs.items():
+        if not isinstance(node, dict):
+            continue
+        for rows in node.values():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if (isinstance(row, dict) and
+                        (row.get("filename"), row.get("subfolder", ""), row.get("type", "output")) == details):
+                    return str(node_id)
+    return None
+
+
+def _fetch_entries(run_dir):
+    """Read valid fetch evidence as a whole; a malformed file supplies no evidence."""
+    try:
+        with open(os.path.join(run_dir, FETCH_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return []
+    entries = data if isinstance(data, list) else [data]
+    if not all(isinstance(entry, dict) and isinstance(entry.get("prompt_id"), str)
+               and isinstance(entry.get("urls"), list) and all(isinstance(url, str) for url in entry["urls"])
+               for entry in entries):
+        return []
+    return entries
+
+
+def _classify_source(result, source, prefixes, save_nodes, label, evidence, record=None):
+    result["source"] = source if isinstance(source, str) else None
+    if evidence == FETCH_FILE:
+        result["evidence"] = evidence
+    try:
+        details = _source_details(source)
+    except (ValueError, TypeError):
+        details = None
+    if details is None:
+        result["reason"] = "invalid source in %s" % label
+        return
+    filename, subfolder, kind = details
+    node = _record_node(record, (filename, subfolder or "", kind))
+    result["node_id"] = node
+    if kind == "temp" or filename.startswith("ComfyUI_temp_") or (node is not None and node not in save_nodes):
+        result.update(kind="preview", reason="preview source %s (%s)" % (filename, label), evidence=evidence)
+    else:
+        save_node = node if node in save_nodes else _save_match(filename, prefixes, subfolder)
+        if save_node is not None:
+            result.update(kind="save", node_id=save_node, evidence=evidence,
+                          reason="SaveImage node %s (%s)" % (save_node, prefixes.get(save_node, filename)))
+        else:
+            result["reason"] = "unrecognized source %s (%s)" % (filename, label)
+
+
+def _job_origin(result, jobs_dir, short_id, index, prefixes, save_nodes):
+    states = _job_state(jobs_dir, short_id)
+    if len(states) != 1:
+        result["reason"] = ("no job state for " if not states else "multiple job states for ") + short_id
+    else:
+        state = states[0]
+        outputs = state.get("outputs")
+        if isinstance(outputs, list) and index < len(outputs):
+            _classify_source(result, outputs[index], prefixes, save_nodes, "comfy-cli job %s" % short_id,
+                             "job-state", state.get("record"))
+            return
+        result["reason"] = "no output %d in comfy-cli job %s" % (index, short_id)
+    result["reason"] += "; save the fetch_outputs url_only=true result as <run>/fetch.json"
+
+
+def output_origins(run_dir, workflow, jobs_dir=None):
+    """Classify output PNGs from names, fetch.json or fallback comfy-cli job evidence."""
+    prefixes = save_image_prefixes(workflow)
+    fetch_entries = _fetch_entries(run_dir)
+    save_nodes = {str(nid) for nid, node in workflow.items()
+                  if isinstance(node, dict) and node.get("class_type") == "SaveImage"} if isinstance(workflow, dict) else set()
+    results = {}
+    try:
+        entries = os.scandir(os.path.join(run_dir, "outputs"))
+        with entries:
+            names = sorted(e.name for e in entries if e.name.endswith(".png") and e.is_file())
+    except (OSError, TypeError, ValueError):
+        return results
+    for name in names:
+        result = {"kind": "unknown", "node_id": None, "source": None, "reason": "unrecognized output name", "evidence": None}
+        node = _save_match(name, prefixes)
+        if node is not None:
+            result.update(kind="save", node_id=node, reason="SaveImage node %s (%s)" % (node, prefixes[node]), evidence="name")
+        elif name.startswith("ComfyUI_temp_"):
+            result.update(kind="preview", reason="ComfyUI temp file %s" % name, evidence="name")
+        else:
+            match = re.fullmatch(r"([0-9a-fA-F]{8})_([0-9]{3,})(\.[0-9]+)?\.png", name)
+            if match:
+                short_id = match.group(1)
+                index = int(match.group(2))
+                matches = [entry for entry in fetch_entries if entry["prompt_id"].lower().startswith(short_id.lower())]
+                if len(matches) > 1:
+                    result["reason"] = "multiple fetch.json entries for " + short_id
+                elif matches:
+                    if index < len(matches[0]["urls"]):
+                        _classify_source(result, matches[0]["urls"][index], prefixes, save_nodes, FETCH_FILE, FETCH_FILE)
+                    else:
+                        result["reason"] = "no output %d in fetch.json for %s" % (index, short_id)
+                else:
+                    _job_origin(result, comfy_jobs_dir() if jobs_dir is None else jobs_dir, short_id, index, prefixes, save_nodes)
+        results["outputs/" + name] = result
+    return results
 
 
 def run_filename_prefix(run_id):
