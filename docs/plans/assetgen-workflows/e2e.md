@@ -149,7 +149,7 @@ Capture script: `<state dir>/pipeline/assetgen-workflows/live-e2e/capture-graph.
 COMFY_URL="$COMFY_URL" node "<state dir>/pipeline/assetgen-workflows/live-e2e/capture-graph.mjs" \
   --out "<state dir>/pipeline/assetgen-workflows/live-e2e/graph-e2e-icon-002.png"
 # defaults: --workflow workflows/assetgen/e2e-icon-002.json --width 2600 --height 1100 --port 9333
-#           --chrome "C:/Program Files/Google/Chrome/Application/chrome.exe"
+#           --chrome "<chrome executable>" (default: the local Chrome install)
 ```
 
 The script starts Chrome itself, with a fresh temporary profile that it deletes afterwards:
