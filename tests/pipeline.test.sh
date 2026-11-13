@@ -4018,8 +4018,9 @@ expect "gate-merge: empty commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate 
 expect "gate-merge: empty commit notes QA covers HEAD" 0 "NOTE +r: QA at .* covers HEAD" gate "$GP" --no-run-checks
 echo code >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: later code"
 expect "gate-merge: code after QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: status marks code after QA stale" 0 "integration QA.*STALE" status "$GP"
-gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+gmqa
 echo unrelated > "$TMP/gm-main/unrelated.txt"; gi "$TMP/gm-main" add unrelated.txt; gi "$TMP/gm-main" commit -qm "unrelated commit"
 gmv --task integration:r --phase qa --sha "$(git -C "$TMP/gm-main" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: non-ancestor QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
