@@ -8,7 +8,7 @@ Usage:
                       [--profile api-only|local-4gb|local-8gb|auto] [--max-outputs N] [--out FILE] [--verbose] [--json]
   assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
-  assetgen.py graph-lint [PATH...] [--run RUN] [--authoring DIR] [--json]
+  assetgen.py graph-lint [PATH...] [--run RUN] [--profile PROFILE] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
@@ -32,16 +32,24 @@ warnings: a selected anchor of another family than the run's, or the anchors anc
 also recorded as spec.warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
 
 Workflow style guide (scripts/assetgen/graphstyle.py): every API node has a title and sits in exactly one group;
-group titles come from Prompt, References, Generate, Post-process, Preview, Output, left to right in that order, each
-with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt (in a
-template that node holds {{prompt}}); exactly one NineRouterImage; every SaveImage sits in Output with an inline
-filename suffix (intermediates use PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row
-per template (a legacy template without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer
-or standalone) or a ComfyUI frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json);
---run RUN adds <run>/workflow.ui.json with SaveImage suffixes checked against assetgen/<run directory name> (a frontend
-PATH uses its extra.assetgen.run_id; without one each SaveImage FAILs as unchecked); neither: every core and game
-template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
-2 for usage (a PATH missing, not JSON or neither kind, a --run without workflow.ui.json).
+group titles come from Prompt, References, Generate, Models, Refine (local), Post-process, Preview, Output, left to
+right in that order (any subsequence), each with a Note; the reviewed prompt is one PrimitiveStringMultiline (in a
+template it holds {{prompt}}) linked directly into NineRouterImage.user_prompt and every positive text input of a
+local encoder (CLIPTextEncode, CLIPTextEncodeSDXL); exactly one NineRouterImage, or none when a local KSampler
+generates; every SaveImage sits in Output with an inline filename suffix (intermediates use PreviewImage); no static
+LoadImage file name. Profile rules (template form; UNTESTED on RTX 5060: static checks of the template's declarations
+against the planning thresholds of data/hardware.json, nothing is generated or measured): requires.peak_vram_gb fits
+the profile, no two distinct checkpoints without requires.offload true, at most one ControlNet per sampler path, batch
+size 1, VAEDecodeTiled for images above 1024 px, no fp16 or unquantized Flux under local-8gb (no Flux under
+local-4gb), and a --profile below the template's requires.profile; each names the node and the profile. lint adds one
+assetgen-graph-style row per template (its own requires.profile; a legacy template without a ui block WARNs).
+graph-lint checks only that: each PATH is a template (layer or standalone) or a ComfyUI frontend workflow (a JSON
+object with a "nodes" list, e.g. a run's workflow.ui.json); --run RUN adds <run>/workflow.ui.json with SaveImage
+suffixes checked against assetgen/<run directory name> (a frontend PATH uses its extra.assetgen.run_id; without one
+each SaveImage FAILs as unchecked); neither: every core and game template. --profile PROFILE (a data/hardware.json
+profile id) lints template rows under that profile instead of their requires.profile; frontend rows are unchanged.
+Exit 1 when a row FAILs, 0 otherwise (WARN included), 2 for usage (a PATH missing, not JSON or neither kind, a --run
+without workflow.ui.json, a --profile that is not a hardware profile id).
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
@@ -70,7 +78,8 @@ active anchors of that style version, deterministic order, capped) with reason[]
 ones}. render wires each selected anchor as a LoadImage (anchor-<id>.png) and a chain of ImageBatch nodes into
 the template's anchor_target (NineRouterImage.reference_images by default, or IPAdapterAdvanced.image); an existing
 image link stays first (an image-edit reference); the local IPAdapter path is UNTESTED on RTX 5060. render refuses an
-anchor_target or primary_node that names no such node or input (template_target_errors). primary_node names the
+anchor_target or primary_node that names no such node or input (template_target_errors, from lint.py; lint FAILs such
+a template too). primary_node names the
 generation node whose size the run requests (requested_size); render requires it when the graph has more than one
 NineRouterImage (graph-lint one-image-node still wants exactly one in a staged template). promote-anchor writes a
 proposed anchor from a manifested run output (a person approves it); reject records a rejected asset or direction;
@@ -487,43 +496,9 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewe
     return workflow, e
 
 
-ANCHOR_TARGETS = (("NineRouterImage", "reference_images"), ("IPAdapterAdvanced", "image"))
-
-
-def template_target_errors(tmpl, workflow):
-    """Validate optional anchor and primary generation node declarations on every render."""
-    errors = []
-    if "anchor_target" in tmpl:
-        target = tmpl["anchor_target"]
-        if not (isinstance(target, dict) and set(target) == {"node", "input"}
-                and all(isinstance(target[k], str) for k in ("node", "input"))):
-            errors.append('anchor_target must be {"node": <node id>, "input": <input name>}')
-        elif target["node"] not in workflow:
-            errors.append("anchor_target.node %r is not a node of the workflow" % target["node"])
-        else:
-            node = workflow[target["node"]]
-            cls = node.get("class_type") if isinstance(node, dict) else None
-            known = lint.known_nodes().get(cls, {}) if isinstance(cls, str) else {}
-            if target["input"] not in known.get("inputs", {}):
-                errors.append("anchor_target.input %r is not an input of node %s (%s)" %
-                              (target["input"], target["node"], cls))
-            elif (cls, target["input"]) not in ANCHOR_TARGETS:
-                errors.append("anchor_target %s.%s cannot take anchors (allowed: NineRouterImage.reference_images, IPAdapterAdvanced.image)" %
-                              (cls, target["input"]))
-    if "primary_node" in tmpl:
-        primary = tmpl["primary_node"]
-        if not isinstance(primary, str) or primary not in workflow:
-            errors.append("primary_node %r is not a node of the workflow" % (primary,))
-        else:
-            node = workflow[primary]
-            cls = node.get("class_type") if isinstance(node, dict) else None
-            if cls not in runfiles.GENERATION_NODES:
-                errors.append("primary_node %s (%s) is not a generation node (NineRouterImage, KSampler)" % (primary, cls))
-    else:
-        count = sum(1 for node in workflow.values() if isinstance(node, dict) and node.get("class_type") == "NineRouterImage")
-        if count > 1:
-            errors.append("the template has %d NineRouterImage nodes: declare primary_node (the node whose size the run requests)" % count)
-    return errors
+# anchor_target / primary_node validation lives in lint.py (lint runs it on the template, render on every filled workflow)
+ANCHOR_TARGETS = lint.ANCHOR_TARGETS
+template_target_errors = lint.template_target_errors
 
 
 def wire_references(workflow, picks, target=None):
@@ -1707,11 +1682,25 @@ def read_graph_json(path, what):
         fail("graph-lint: %s %s is not readable JSON (%s)" % (what, path, exc), 2)
 
 
-def graph_lint_rows(paths, run, authoring):
+def graph_lint_hardware(profile):
+    """The hardware profiles graph-lint passes to template rows (lint.hardware_or_none). A --profile must be one of
+    their ids, else exit 2 (usage) naming them; with a malformed data/hardware.json a --profile exits 2 too."""
+    hardware = lint.hardware_or_none()
+    if profile is not None and hardware is None:
+        fail("graph-lint --profile %s: data/hardware.json is missing or malformed; no profile can be checked" % profile, 2)
+    if profile is not None and profile not in hardware:
+        fail("graph-lint --profile %s: one of %s (data/hardware.json)" % (profile, ", ".join(hardware)), 2)
+    return hardware
+
+
+def graph_lint_rows(paths, run, authoring, profile=None):
     """assetgen-graph-style rows of graph-lint: each PATH (a template file or a ComfyUI frontend workflow), the run's
     workflow.ui.json, or with neither every core and game template. Exits 2 for a PATH that is missing, not JSON or
-    neither kind, and for a --run without workflow.ui.json. The --run row checks SaveImage suffixes against the run's
-    own prefix (runfiles.run_filename_prefix of the run directory name), not the file's extra.assetgen.run_id."""
+    neither kind, for a --run without workflow.ui.json and for a --profile that is not a data/hardware.json profile id.
+    Template rows get profile (None: each template's own requires.profile) and the hardware profiles; frontend rows
+    are unchanged. The --run row checks SaveImage suffixes against the run's own prefix (runfiles.run_filename_prefix
+    of the run directory name), not the file's extra.assetgen.run_id."""
+    hardware = graph_lint_hardware(profile)
     known, rows = lint.known_nodes(), []
 
     def template(path):
@@ -1719,7 +1708,9 @@ def graph_lint_rows(paths, run, authoring):
         shown = lint.display(path, authoring)
         if err is not None:  # a layer template that does not load: no graph to lint
             return {"path": shown, "check": graphstyle.CHECK, "state": "FAIL", "reasons": ["layout: " + err]}
-        return graphstyle.template_row(data, known, shown) if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        return graphstyle.template_row(data, known, shown, profile=profile, hardware=hardware)
 
     def frontend(path, raw, prefix=None):
         if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
@@ -1776,6 +1767,8 @@ def main(argv=None):
     c.add_argument("--param", action="append", default=[])
     c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
     c = sp("graph-lint"); c.add_argument("paths", nargs="*"); run_arg(c, False); c.add_argument("--json", action="store_true")
+    c.add_argument("--profile", metavar="PROFILE", help="lint template rows under this data/hardware.json profile "
+                   "instead of their requires.profile (static checks, UNTESTED on RTX 5060)")
     c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); run_arg(c)
     c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
     c = sp("embed"); run_arg(c); c.add_argument("--json", action="store_true")
@@ -1886,7 +1879,8 @@ def main(argv=None):
             results = [row for p in (a.paths or lint.default_paths(authoring)) for row in lint.lint_rows(p, authoring)]
             return validation_report(results, "assetgen-lint", "lint", a.json)
         if a.cmd == "graph-lint":
-            return validation_report(graph_lint_rows(a.paths, a.run, authoring), "assetgen-graph-lint", "graph-lint", a.json)
+            return validation_report(graph_lint_rows(a.paths, a.run, authoring, a.profile), "assetgen-graph-lint",
+                                     "graph-lint", a.json)
         if a.cmd == "review-cmd":
             cmd = review_cmd(a.run, a.phase, a.codex, not a.no_write)
             emit(cmd, a.json, cmd["shell"])
