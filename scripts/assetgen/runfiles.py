@@ -170,7 +170,7 @@ def qa_errors(qa):
     if tile is not None and not (isinstance(tile, dict) and _number(tile.get("max_seam_error"))
                                  and 0 < tile["max_seam_error"] < 1):
         errs.append("qa.tileable.max_seam_error must be a number between 0 and 1")
-    if isinstance(tile, dict) and tile.get("axis", "both") not in TILE_AXES:
+    if isinstance(tile, dict) and not (isinstance(tile.get("axis", "both"), str) and tile.get("axis", "both") in TILE_AXES):
         errs.append("qa.tileable.axis must be one of %s" % sorted(TILE_AXES))
     errs += _flipbook_errors(qa.get("flipbook_grid")) + _black_background_errors(qa.get("black_background"))
     blank = qa.get("not_blank")
