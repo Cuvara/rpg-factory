@@ -2026,8 +2026,8 @@ note_forward() {
 }
 note_forward "lead -> implement: notes starting with - and --" '' -x --foo -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note=-x --note=--foo
 note_forward "lead -> implement: an environment note starting with -" -e -e -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
-if python3 -B - "$ROOT" <<'PY'
-import importlib.util, shlex, sys
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, pathlib, shlex, sys, tempfile
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 alias = r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
@@ -2036,11 +2036,18 @@ which = lambda n: alias
 line = m.python_alias_line('win32', which, exe)
 assert line.startswith('Python: python3 here is likely the Microsoft Store alias') and alias in line and shlex.quote(exe) in line
 assert m.python_alias_line('linux', which, exe) == ''
-assert m.python_alias_line('win32', lambda n: r'C:\Py\python3.exe', exe) == ''
-assert m.python_alias_line('win32', lambda n: None, exe) == ''
+with tempfile.TemporaryDirectory(dir=sys.argv[2]) as tmp:
+    probe = pathlib.Path(tmp) / 'python3.exe'
+    shim = lambda n: r'C:\Py\python3.exe'
+    assert m.python_alias_line('win32', shim, exe, probe) == ''
+    assert m.python_alias_line('win32', lambda n: None, exe, probe) == ''
+    probe.touch()
+    line = m.python_alias_line('win32', shim, exe, probe)
+    assert str(probe) in line and line.startswith('Python: python3 here is likely the Microsoft Store alias')
+    assert m.python_alias_line('linux', shim, exe, probe) == ''
 PY
-then pass=$((pass + 1)); echo "PASS  python3 Store alias detection uses platform and resolved path"
-else fail=$((fail + 1)); echo "FAIL  python3 Store alias detection uses platform and resolved path"; fi
+then pass=$((pass + 1)); echo "PASS  python3 Store alias detection uses platform, resolved path and probe"
+else fail=$((fail + 1)); echo "FAIL  python3 Store alias detection uses platform, resolved path and probe"; fi
 # pp_spec splits only the prompt line: a stderr line with an unbalanced ' and " cannot break it
 printf 'stub spec: quotes survive\n' > "$TMP/pp-stub-spec.md"
 cat > "$TMP/pp-stub.py" <<'PPSTUB'
