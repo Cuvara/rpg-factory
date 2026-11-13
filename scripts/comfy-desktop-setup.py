@@ -15,10 +15,12 @@ Steps (each prints OK, MISSING, OUTDATED, ACTION or FAIL; `ACTION` is a human st
   provider   [model_providers.<name>] in the Codex config has base_url and an Authorization header (names only)
   node       comfyui_9router in <instance>/ComfyUI/custom_nodes equals the plugin's vendored copy
   venv       comfy-mcp installed in its own venv (default ~/.comfy-mcp-venv)
+  comfy-cli  comfy-cli 1.14.0+ in the comfy-mcp venv
   port       the instance's running port (comfy-procs/<id>.json, else port-locks/); ACTION when it is not running
   node-live  GET /object_info/NineRouterImage on that port: ACTION (Stop + Launch the instance) when absent
   mcp-claude / mcp-codex   comfy-mcp registered with COMFY_LOCAL_URL equal to the port (a changed port = remove + add)
   generate   --generate-test: PrimitiveStringMultiline -> NineRouterImage -> SaveImage through POST /prompt
+  gpu / torch / profile / packs / models   advisory hardware and local asset requirements
 
 Exit codes: 0 READY (every step OK); 1 FAIL (a step failed or a prerequisite cannot be fixed by this script);
 2 usage; 3 ACTION_NEEDED (something is missing or a human step remains: --check with a gap, or --apply done
@@ -31,10 +33,14 @@ It never runs `comfy-mcp --help` (a stdio server: it hangs) and never edits the 
 the two CLIs' MCP registrations, and with --generate-test an image in the instance's output folder. It writes no
 Factory state and nothing into the plugin or any repository, so it lives under scripts/ (write-capable tools:
 new-skill.py, changelog.py), not under scripts/checks/ or the read-only factory-context/status scripts.
-Test hooks: COMFY_SETUP_CLAUDE_CMD / COMFY_SETUP_CODEX_CMD replace the CLI argv prefix (space-split, forward slashes).
+The local profiles are UNTESTED on RTX 5060. This script never downloads models, installs packs or imports torch.
+Writes include comfy-cli in the venv with --apply.
+Test hooks: COMFY_SETUP_CLAUDE_CMD / COMFY_SETUP_CODEX_CMD / COMFY_SETUP_NVIDIA_SMI_CMD and
+COMFY_SETUP_PIP_CMD replace command prefixes; COMFY_SETUP_RAM_GB / COMFY_SETUP_FREE_DISK_GB override facts.
 Platforms: Windows is verified; the macOS and Linux paths are UNVERIFIED (reported as such in the output).
 """
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -55,6 +61,8 @@ except ImportError:  # Python < 3.11
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NODE_SRC = os.path.join(ROOT, "templates", "assetgen", "comfy-node", "comfyui_9router", "__init__.py")
 TEMPLATE = os.path.join(ROOT, "templates", "assetgen", "workflows", "image-generate.json")
+HARDWARE = os.path.join(ROOT, "scripts", "assetgen", "data", "hardware.json")
+COMFY_CLI_MIN = (1, 14, 0)
 NODE_DIR = "comfyui_9router"
 MCP_NAME = "comfy-mcp"
 HOST = "127.0.0.1"
@@ -62,6 +70,7 @@ WIN = sys.platform == "win32"
 UNVERIFIED = not WIN
 SECRET = re.compile(r"(Bearer\s+\S+|\bsk-[A-Za-z0-9_-]{8,}|\"?Authorization\"?\s*[:=]\s*\S+)", re.I)
 OK, MISSING, OUTDATED, ACTION, FAIL, SKIP = "OK", "MISSING", "OUTDATED", "ACTION", "FAIL", "SKIP"
+NOT_AVAILABLE = "NOT_AVAILABLE"
 
 
 def scrub(text, limit=300):
@@ -72,8 +81,11 @@ class Report:
     def __init__(self):
         self.rows = []
 
-    def add(self, step, state, detail="", hint=""):
-        self.rows.append({"step": step, "state": state, "detail": scrub(detail, 400), "hint": hint})
+    def add(self, step, state, detail="", hint="", advisory=False):
+        row = {"step": step, "state": state, "detail": scrub(detail, 2000 if advisory else 400), "hint": scrub(hint, 400)}
+        if advisory:
+            row["advisory"] = True
+        self.rows.append(row)
         return state
 
     def state(self, step):
@@ -83,7 +95,7 @@ class Report:
         return None
 
     def exit_code(self):
-        states = [r["state"] for r in self.rows]
+        states = [r["state"] for r in self.rows if not r.get("advisory")]
         if FAIL in states:
             return 1
         if any(s in (MISSING, OUTDATED, ACTION) for s in states):
@@ -112,6 +124,10 @@ def venv_exe(venv):
 
 def venv_python(venv):
     return os.path.join(venv, "Scripts", "python.exe") if WIN else os.path.join(venv, "bin", "python")
+
+
+def comfy_exe(venv):
+    return os.path.join(venv, "Scripts", "comfy.exe") if WIN else os.path.join(venv, "bin", "comfy")
 
 
 def codex_config(arg):
@@ -238,6 +254,47 @@ def check_venv(rep, venv, py, apply):
     return rep.add("venv", OK, exe)
 
 
+def site_packages(base):
+    return [os.path.join(base, "Lib", "site-packages")] + sorted(glob.glob(
+        os.path.join(base, "lib", "python*", "site-packages")))
+
+
+def version_tuple(value):
+    m = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?(?:[+.-].*)?$", str(value))
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def comfy_cli_status(venv):
+    exe = comfy_exe(venv)
+    dirs = [p for site in site_packages(venv) for p in glob.glob(os.path.join(site, "comfy_cli-*.dist-info"))
+            if os.path.isdir(p)]
+    if not os.path.isfile(exe) or not dirs:
+        return MISSING, "no comfy-cli binary or dist-info in " + venv
+    versions = [os.path.basename(p)[len("comfy_cli-"):-len(".dist-info")] for p in dirs]
+    parsed = [(version_tuple(v), v) for v in versions]
+    valid = [(p, v) for p, v in parsed if p is not None]
+    best, version = max(valid) if valid else (None, versions[0])
+    return (OK if best and best >= COMFY_CLI_MIN else OUTDATED), "%s (comfy-cli %s)" % (exe, version)
+
+
+def check_comfy_cli(rep, venv, apply):
+    if apply and rep.state("venv") != OK:
+        return rep.add("comfy-cli", SKIP, "needs the comfy-mcp venv")
+    state, detail = comfy_cli_status(venv)
+    if state == OK:
+        return rep.add("comfy-cli", state, detail)
+    if not apply:
+        return rep.add("comfy-cli", state, detail,
+                       'run with --apply (pip install "comfy-cli>=1.14.0" into the comfy-mcp venv)')
+    override = os.environ.get("COMFY_SETUP_PIP_CMD")
+    cmd = shlex.split(override) if override else [venv_python(venv), "-m", "pip"]
+    rc, out = run(cmd + ["install", "--disable-pip-version-check", "--upgrade", "comfy-cli>=1.14.0"], 900)
+    state, detail = comfy_cli_status(venv)
+    if rc != 0 or state != OK:
+        return rep.add("comfy-cli", FAIL, "pip install comfy-cli failed: " + out[-300:])
+    return rep.add("comfy-cli", OK, detail)
+
+
 def alive(port, timeout=3):
     try:
         with urllib.request.urlopen("http://%s:%d/system_stats" % (HOST, port), timeout=timeout) as r:
@@ -292,33 +349,42 @@ def cli_cmd(cli):
 
 
 def registered(cli):
-    """(exists, url) of the comfy-mcp registration of one CLI; the output is parsed, never echoed."""
+    """(exists, env) of the registration; the output is parsed, never echoed."""
     base = cli_cmd(cli)
     if cli == "codex":
         rc, out = run(base + ["mcp", "get", MCP_NAME, "--json"], 60)
         if rc != 0:
-            return False, None
+            return False, {}
         try:
-            return True, ((json.loads(out).get("transport") or {}).get("env") or {}).get("COMFY_LOCAL_URL")
-        except ValueError:
-            return True, None
+            env = (json.loads(out).get("transport") or {}).get("env") or {}
+            return True, env if isinstance(env, dict) else {}
+        except (ValueError, AttributeError):
+            return True, {}
     rc, out = run(base + ["mcp", "get", MCP_NAME], 90)
     if rc != 0:
-        return False, None
-    m = re.search(r"COMFY_LOCAL_URL=(\S+)", out)
-    return True, (m.group(1) if m else None)
+        return False, {}
+    return True, dict(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$", out, re.MULTILINE))
 
 
-def check_mcp(rep, cli, exe, url, apply):
+def check_mcp(rep, cli, exe, comfy, url, apply):
     step = "mcp-" + cli
     base = cli_cmd(cli)
     if not base:
         return rep.add(step, SKIP, "%s CLI not on PATH" % cli)
-    exists, have = registered(cli)
-    if exists and have == url:
+    exists, env = registered(cli)
+    env = {k: str(v).strip() for k, v in env.items()}
+    have = env.get("COMFY_LOCAL_URL")
+    binary = env.get("COMFY_BIN")
+    same_bin = binary and os.path.normcase(os.path.normpath(binary)) == os.path.normcase(os.path.normpath(comfy))
+    if exists and have == url and same_bin:
         return rep.add(step, OK, "%s -> %s (new MCP servers load only in a new session)" % (MCP_NAME, url))
     state = OUTDATED if exists else MISSING
-    detail = "registered with COMFY_LOCAL_URL %s, running port needs %s" % (have, url) if exists else "%s is not registered" % MCP_NAME
+    differences = []
+    if have != url:
+        differences.append("COMFY_LOCAL_URL %s, running port needs %s" % (have, url))
+    if not same_bin:
+        differences.append("COMFY_BIN %s, expected %s" % (binary, comfy) if binary else "COMFY_BIN not set")
+    detail = "registered with " + "; ".join(differences) if exists else "%s is not registered" % MCP_NAME
     if not apply:
         return rep.add(step, state, detail, "run with --apply")
     if exists:  # a changed port = remove + add
@@ -326,13 +392,229 @@ def check_mcp(rep, cli, exe, url, apply):
         if rc != 0:
             return rep.add(step, FAIL, "remove failed: " + out[-200:])
     if cli == "claude":
-        cmd = base + ["mcp", "add", MCP_NAME, "--scope", "user", "-e", "COMFY_LOCAL_URL=" + url, "--", exe]
+        cmd = base + ["mcp", "add", MCP_NAME, "--scope", "user", "-e", "COMFY_LOCAL_URL=" + url,
+                      "-e", "COMFY_BIN=" + comfy, "--", exe]
     else:
-        cmd = base + ["mcp", "add", MCP_NAME, "--env", "COMFY_LOCAL_URL=" + url, "--", exe]
+        cmd = base + ["mcp", "add", MCP_NAME, "--env", "COMFY_LOCAL_URL=" + url, "--env", "COMFY_BIN=" + comfy, "--", exe]
     rc, out = run(cmd, 90)
     if rc != 0:
         return rep.add(step, FAIL, "%s mcp add failed: %s" % (cli, out[-200:]))
     return rep.add(step, OK, "registered %s -> %s; start a new %s session to load it" % (MCP_NAME, url, cli))
+
+
+def gpu_info(rep):
+    override = os.environ.get("COMFY_SETUP_NVIDIA_SMI_CMD")
+    found = shutil.which("nvidia-smi") if not override else None
+    cmd = shlex.split(override) if override else ([found] if found else None)
+    if not cmd:
+        rep.add("gpu", NOT_AVAILABLE, "nvidia-smi not found (no NVIDIA GPU or driver)", advisory=True)
+        return None
+    fmt = "--format=csv,noheader,nounits"
+    rc, out = run(cmd + ["--query-gpu=name,memory.total,compute_cap,driver_version", fmt], 20)
+    old = rc != 0
+    if old:
+        rc, out = run(cmd + ["--query-gpu=name,memory.total,driver_version", fmt], 20)
+    cards = []
+    if rc == 0:
+        for line in out.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) != (3 if old else 4):
+                continue
+            try:
+                memory = round(float(parts[1]) / 1024, 1)
+            except ValueError:
+                continue
+            cap = None if old else parts[2]
+            cap = cap if cap and re.fullmatch(r"\d+\.\d+", cap) else None
+            inferred = not cap and bool(re.search(r"RTX\s*50\d0", parts[0], re.I))
+            cap = "12.0" if inferred else cap
+            cards.append(({"name": scrub(parts[0]), "vram_gb": memory, "compute_cap": cap,
+                           "driver": scrub(parts[-1])}, inferred))
+    if not cards:
+        rep.add("gpu", NOT_AVAILABLE, "nvidia-smi: " + scrub(out.strip() or "no parseable GPU", 200), advisory=True)
+        return None
+    gpu, inferred = max(cards, key=lambda item: item[0]["vram_gb"])
+    detail = "%s, %.1f GiB VRAM, compute %s%s, driver %s" % (
+        gpu["name"], gpu["vram_gb"], gpu["compute_cap"] or "unknown",
+        " (inferred from the name)" if inferred else "", gpu["driver"])
+    if len(cards) > 1:
+        detail += " (largest of %d)" % len(cards)
+    rep.add("gpu", OK, detail, advisory=True)
+    return gpu
+
+
+def torch_info(rep, inst, rules):
+    if not inst:
+        rep.add("torch", NOT_AVAILABLE, "no local instance", advisory=True)
+        return None
+    root = inst["installPath"]
+    sites = site_packages(os.path.join(root, "ComfyUI", ".venv"))
+    sites += site_packages(os.path.join(root, "standalone-env"))
+    sites.append(os.path.join(root, "python_embeded", "Lib", "site-packages"))
+    version = cuda = source = None
+    for site in sites:
+        path = os.path.join(site, "torch", "version.py")
+        try:
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            continue
+        v = re.search(r"^\s*__version__\s*=\s*['\"]([^'\"]+)['\"]", content, re.M)
+        c = re.search(r"^\s*cuda(?:\s*:\s*Optional\[str\])?\s*=\s*(None|['\"]([^'\"]+)['\"])", content, re.M)
+        if v and c:
+            version, cuda, source = v.group(1), c.group(2), os.path.relpath(path, root)
+            break
+    if version is None:
+        manifest = read_json(os.path.join(root, "manifest.json"))
+        version = manifest.get("torch_version") if isinstance(manifest, dict) else None
+        if isinstance(version, str):
+            m = re.search(r"\+cu(\d{2,3})", version)
+            cuda = "%s.%s" % (m.group(1)[:-1], m.group(1)[-1]) if m else None
+            source = "manifest.json"
+        else:
+            version = None
+    if version is None:
+        rep.add("torch", NOT_AVAILABLE, "no torch in the instance env", advisory=True)
+        return None
+    version, cuda, source = scrub(version), scrub(cuda) if cuda else None, scrub(source)
+    rule = next((r for r in rules if isinstance(r, dict) and r.get("arch") == "sm_120"), None)
+    minimum = rule.get("min_cuda") if rule else "12.8"
+    if not isinstance(minimum, str) or not version_tuple(minimum):
+        minimum = "12.8"
+    good = cuda and version_tuple(cuda) and version_tuple(minimum) and version_tuple(cuda) >= version_tuple(minimum)
+    why = ("CUDA build >= " + minimum if good else "CUDA build %s < %s" % (cuda, minimum)) if cuda else "CPU build"
+    detail = "%s, %s, sm_120: %s (%s) (from %s; inferred from the build, torch not imported)" % (
+        version, "CUDA build " + cuda if cuda else "CPU build", "yes" if good else "no", why, source)
+    rep.add("torch", OK, detail, advisory=True)
+    return {"version": version, "cuda": cuda, "source": source}
+
+
+def hardware_number(env, kind, path):
+    try:
+        if env in os.environ:
+            return float(os.environ[env])
+        if kind == "disk":
+            return round(shutil.disk_usage(path).free / 1024 ** 3, 1)
+        if WIN:
+            import ctypes
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in ("total", "avail", "page", "availpage", "virtual",
+                                                            "availvirtual", "extended")]
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return round(status.total / 1024 ** 3, 1)
+        elif sys.platform == "darwin":
+            rc, out = run(["sysctl", "-n", "hw.memsize"], 10)
+            if rc == 0:
+                return round(int(out.strip()) / 1024 ** 3, 1)
+        else:
+            with open("/proc/meminfo", encoding="utf-8") as f:
+                m = re.search(r"^MemTotal:\s*(\d+)", f.read(), re.M)
+            if m:
+                return round(int(m.group(1)) / 1024 ** 2, 1)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def profile_reasons(profile, facts, rules):
+    req = profile["requires"]
+    gpu, torch = facts["gpu"], facts["torch"]
+    reasons = []
+    if req["gpu"] and not gpu:
+        reasons.append("no NVIDIA GPU (nvidia-smi)")
+    if gpu and gpu["vram_gb"] < req["min_vram_gb"]:
+        reasons.append("VRAM %s GiB < %s" % (gpu["vram_gb"], req["min_vram_gb"]))
+    ram, disk = facts["ram_gb"], facts["free_disk_gb"]
+    if req["min_ram_gb"] and ram is None:
+        reasons.append("RAM unknown")
+    elif ram is not None and ram < req["min_ram_gb"]:
+        reasons.append("RAM %s GiB < %s" % (ram, req["min_ram_gb"]))
+    if disk is None or disk < req["min_free_disk_gb"]:
+        reasons.append("free disk %s GiB < %s" % (disk if disk is not None else "unknown", req["min_free_disk_gb"]))
+    need = req["torch"]
+    if need:
+        if not torch:
+            reasons.append("no torch in the instance env")
+        elif not torch["cuda"]:
+            reasons.append("torch %s is a CPU build" % torch["version"])
+        else:
+            cuda = version_tuple(torch["cuda"])
+            minimum = need.get("min_cuda")
+            if minimum and (not cuda or cuda < version_tuple(minimum)):
+                reasons.append("torch CUDA build %s < %s" % (torch["cuda"], minimum))
+            for rule in rules:
+                cap = version_tuple(gpu["compute_cap"]) if gpu and gpu["compute_cap"] else None
+                if cap and cap >= version_tuple(rule["min_compute_cap"]) and (
+                        not cuda or cuda < version_tuple(rule["min_cuda"])):
+                    reasons.append("torch %s has no %s kernels for %s (needs a CUDA %s+ build)" % (
+                        torch["version"], rule["arch"], gpu["name"], rule["min_cuda"]))
+    return reasons
+
+
+def asset_rows(rep, inst, best):
+    if not inst or not best or best["rank"] == 0:
+        detail = "no local instance" if not inst else "api-only: no local packs or models needed"
+        for step in ("packs", "models"):
+            rep.add(step, SKIP, detail, advisory=True)
+        return
+    root = os.path.join(inst["installPath"], "ComfyUI")
+    try:
+        nodes = [n.lower() for n in os.listdir(os.path.join(root, "custom_nodes"))
+                 if os.path.isdir(os.path.join(root, "custom_nodes", n))]
+    except OSError:
+        nodes = []
+    packs = [p["id"] for p in best["packs"] if not any(
+        match.lower() in node for match in p["match"] for node in nodes)]
+    models = []
+    for model in best["models"]:
+        folder = os.path.join(root, "models", model["kind"])
+        present = any(name.lower().endswith((".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf"))
+                      for _, _, names in os.walk(folder) for name in names)
+        if not present:
+            models.append("%s (%s)" % (model["kind"], model["need"]))
+    hint = "approve and install them yourself (ComfyUI Manager or the pack's own docs); this script never downloads models or installs packs"
+    for step, missing in (("packs", packs), ("models", models)):
+        rep.add(step, MISSING if missing else OK, "missing: " + ", ".join(missing) if missing else "all present",
+                hint if missing else "", advisory=True)
+
+
+def hardware_rows(rep, inst):
+    data = read_json(HARDWARE)
+    rules = data.get("torch_arch", []) if isinstance(data, dict) else []
+    gpu = gpu_info(rep)
+    torch = torch_info(rep, inst, rules if isinstance(rules, list) else [])
+    facts = {"gpu": gpu, "torch": torch,
+             "ram_gb": hardware_number("COMFY_SETUP_RAM_GB", "ram", None),
+             "free_disk_gb": hardware_number("COMFY_SETUP_FREE_DISK_GB", "disk",
+                                             inst["installPath"] if inst else os.path.expanduser("~"))}
+    result = {"id": None, "reasons": {}, "facts": facts}
+    try:
+        if not isinstance(data, dict) or data.get("schema") != "rpg-factory.assetgen-hardware/1":
+            raise ValueError("invalid schema")
+        profiles = sorted(data["profiles"], key=lambda p: p["rank"])
+        if ([p["id"] for p in profiles] != ["api-only", "local-4gb", "local-8gb"] or
+                not isinstance(rules, list) or any(not isinstance(r, dict) or not r.get("arch") or
+                not version_tuple(r.get("min_compute_cap")) or not version_tuple(r.get("min_cuda")) for r in rules)):
+            raise ValueError("invalid profiles or torch_arch")
+        reasons = {p["id"]: profile_reasons(p, facts, rules) for p in profiles}
+        eligible = [p for p in profiles if not reasons[p["id"]]]
+        if not eligible:
+            raise ValueError("no profile meets the requirements")
+        best = eligible[-1]
+        higher = {p["id"]: reasons[p["id"]] for p in profiles if p["rank"] > best["rank"]}
+        result.update(id=best["id"], reasons=higher)
+        detail = "%s - %s (printed only, never applied)" % (best["id"], best["nominal"])
+        for name, why in higher.items():
+            detail += "; not %s: %s" % (name, ", ".join(why))
+        rep.add("profile", OK, detail, advisory=True)
+        asset_rows(rep, inst, best)
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        rep.add("profile", FAIL, "hardware.json missing or invalid: %s" % e)
+        asset_rows(rep, inst, None)
+    return result
 
 
 def default_model():
@@ -423,16 +705,20 @@ def main(argv):
         check_node(rep, inst, apply)
         node_changed = apply and rep.state("node") == OK and before != norm_hash(NODE_SRC)
     check_venv(rep, a.venv, a.python, apply)
+    check_comfy_cli(rep, a.venv, apply)
     port = find_port(rep, desktop_dir(a.desktop_dir), inst, a.port) if inst else None
     if port:
         node_live(rep, port, node_changed)
         url = "http://%s:%d" % (HOST, port)
         exe = venv_exe(a.venv)
+        comfy = comfy_exe(a.venv)
         for cli in targets:
-            if os.path.isfile(exe) or not apply:
-                check_mcp(rep, cli, exe, url, apply and os.path.isfile(exe))
-            else:
+            if apply and not os.path.isfile(exe):
                 rep.add("mcp-" + cli, FAIL, "no comfy-mcp executable to register")
+            elif apply and not os.path.isfile(comfy):
+                rep.add("mcp-" + cli, FAIL, "no comfy-cli binary for COMFY_BIN (see the comfy-cli row)")
+            else:
+                check_mcp(rep, cli, exe, comfy, url, apply)
         if a.generate_test:
             if rep.state("node-live") == OK and rep.state("provider") == OK:
                 generate(rep, port)
@@ -441,9 +727,10 @@ def main(argv):
     else:
         for cli in targets:
             rep.add("mcp-" + cli, SKIP, "needs the running port (registration carries COMFY_LOCAL_URL)")
+    profile = hardware_rows(rep, inst)
     code = rep.exit_code()
     if a.json:
-        print(json.dumps({"mode": "apply" if apply else "check", "os": sys.platform, "unverified_os": UNVERIFIED, "exit": code, "steps": rep.rows}, indent=1))
+        print(json.dumps({"mode": "apply" if apply else "check", "os": sys.platform, "unverified_os": UNVERIFIED, "exit": code, "steps": rep.rows, "profile": profile}, indent=1))
     else:
         for r in rep.rows:
             print("%-10s %-9s %s" % (r["step"], r["state"], r["detail"]))
