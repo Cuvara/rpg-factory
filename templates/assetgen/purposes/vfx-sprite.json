@@ -1,0 +1,77 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "VFX particle sprite",
+ "description": "One centred glow, flare, puff or debris shape on an opaque pure-black background, for additive-blend particle sprites.",
+ "handoff_domain": "vfx",
+ "default_template": "image-generate",
+ "default_family": "vfx",
+ "dimensions": [
+  "palette",
+  "lighting",
+  "shape"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1024x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name one shape (for example soft glow, lens flare, smoke puff, ember, debris chunk) and its colour.",
+   "Centre the shape and leave dark margins on every side so it fades to black before the border.",
+   "Ask for an opaque pure-black (#000000) background and a bright subject that works with additive blending.",
+   "One shape only: no scene, no ground, no text, no characters."
+  ],
+  "must_include": [
+   "one shape name",
+   "centred",
+   "dark margins on every side",
+   "opaque pure black #000000 background",
+   "bright additive-blend-friendly subject"
+  ],
+  "avoid": [
+   "several shapes",
+   "shape touching the border",
+   "grey or coloured background",
+   "text",
+   "scene or ground",
+   "characters",
+   "transparent background"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear shape and its colour.",
+  "The prompt asks for the shape centred, with dark margins on every side.",
+  "The prompt asks for an opaque pure-black (#000000) background and a bright subject that suits additive blending.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example a transparent background and a pure-black background)."
+ ],
+ "image_rubric": [
+  "The image shows one centred shape, as the prompt asked, without extra subjects.",
+  "The shape keeps dark margins on every side and does not touch the border.",
+  "The background is pure black everywhere outside the shape; no grey haze, vignette or gradient.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame."
+ ],
+ "constraints": {
+  "background": "Opaque pure black (#000000) background; the shape is bright and suits additive blending.",
+  "processing": "Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool."
+ },
+ "qa": {
+  "size": {
+   "mode": "orientation",
+   "expect": "1024x1024",
+   "square_tolerance": 0.15,
+   "min_side": 512,
+   "min_pixels": 262144
+  },
+  "alpha": "forbidden",
+  "black_background": {
+   "max_luminance": 16
+  },
+  "not_blank": {
+   "min_stddev": 2.0
+  }
+ }
+}
