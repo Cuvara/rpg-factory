@@ -15,6 +15,8 @@ set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/workspace.sh"
+workspace="$(rpgf_default_workspace)"
 src=""
 if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] || [ -z "${RPG_FACTORY_REPO_KEY:-}" ]; then
   src="${RPG_FACTORY_REPO_DIR:-}"
@@ -50,7 +52,7 @@ resolve_server() {
     return 1
   fi
   local c
-  for c in "$(dirname "$src")/rpg-mmo-server" "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server"; do
+  for c in "$(dirname "$src")/rpg-mmo-server" "$workspace/rpg-mmo-server"; do
     is_worktree_root "$c" || continue
     git -C "$c" rev-parse -q --verify "refs/tags/$1" >/dev/null 2>&1 && { echo "$c"; return 0; }
   done
@@ -58,7 +60,7 @@ resolve_server() {
 }
 srv=""
 if [ -n "$sgl_tag" ]; then
-  srv=$(resolve_server "$sgl_tag") || { echo "NOT-RUN(blocked): Shared.GameLogic tag $sgl_tag not found in ${server_arg:-$(dirname "$src")/rpg-mmo-server or ${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server} (pass --server, or fetch its tags)"; exit 2; }
+  srv=$(resolve_server "$sgl_tag") || { echo "NOT-RUN(blocked): Shared.GameLogic tag $sgl_tag not found in ${server_arg:-$(dirname "$src")/rpg-mmo-server or $workspace/rpg-mmo-server} (pass --server, or fetch its tags)"; exit 2; }
 fi
 if $resolve_only; then echo "server: ${srv:-<none needed: no Shared.GameLogic pin>} tag: ${sgl_tag:-<none>}"; exit 0; fi
 
