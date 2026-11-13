@@ -1,7 +1,7 @@
 {
  "1": {
   "_meta": {
-   "title": "Generate image"
+   "title": "Generate UI element"
   },
   "class_type": "NineRouterImage",
   "inputs": {
@@ -17,11 +17,11 @@
  },
  "2": {
   "_meta": {
-   "title": "Save image"
+   "title": "Save UI element"
   },
   "class_type": "SaveImage",
   "inputs": {
-   "filename_prefix": "assetgen/golden-ui-element-001",
+   "filename_prefix": "assetgen/golden-ui-element-001-ui",
    "images": [
     "1",
     0
@@ -35,6 +35,34 @@
   "class_type": "PrimitiveStringMultiline",
   "inputs": {
    "value": "Test prompt for ui-element: one subject, centered."
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Crop top-left corner"
+  },
+  "class_type": "ImageCrop",
+  "inputs": {
+   "height": 256,
+   "image": [
+    "1",
+    0
+   ],
+   "width": 256,
+   "x": 0,
+   "y": 0
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Preview corner (nine-slice border)"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "4",
+    0
+   ]
   }
  }
 }
