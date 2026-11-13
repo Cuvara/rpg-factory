@@ -110,8 +110,7 @@ fi
 # every snapshot prints the Language line, without --full, with the registry report language
 LANG_WANT="$(jq -r '.workspace.report_language // "the user'"'"'s language"' "$ROOT/registry.json")"
 snap="$(RPG_FACTORY_WORKSPACE="$SW" bash "$ROOT/scripts/factory-context.sh" --repo all 2>&1)"
-if grep -qxF "**Language:** write everything in English (files, plans, briefs, messages, commits, PR text); report to the owner in $LANG_WANT." <<<"${snap//$'
-'/}"; then
+if grep -qxF "**Language:** write everything in English (files, plans, briefs, messages, commits, PR text); report to the owner in $LANG_WANT." <<<"${snap//$'\r'/}"; then
   selftest_pass=$((selftest_pass + 1)); echo "PASS  snapshot without --full prints the Language line ($LANG_WANT)"
 else
   selftest_fail=$((selftest_fail + 1)); echo "FAIL  snapshot without --full lacks the Language line"; grep -n 'Language' <<<"$snap" | head -3 | sed 's/^/      /'
