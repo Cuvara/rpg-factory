@@ -32,6 +32,8 @@
         "scripts/file-guard.py",
         "scripts/git-guard.py",
         "scripts/lib/gitguard.py",
+        "scripts/lib/rpgf_guard/language.py",
+        "scripts/lib/rpgf_guard/runtime.py",
         "scripts/factory-pipeline.py",
         "hooks/hooks.json",
         "hooks/codex-hooks.json",
