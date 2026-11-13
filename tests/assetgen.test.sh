@@ -24,6 +24,7 @@
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly), review
 # tiers (scripts/assetgen/data/review-tiers.json: a light purpose needs no Claude visual review but a present file is still
 # graded, style-lock anchors force full, no tier recorded in run.md or spec.json; review_tier unit cases and the data file),
+# local and hybrid provenance (UNTESTED on RTX 5060: graph binding, prompts, model hashes and sampler records),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
@@ -2665,6 +2666,125 @@ grep -q '^FAIL AGEN-qp-escape-001 .*does not match pattern' "$TMP/lint" && ok "k
 T2="$TMP/tmpl"; mkdir -p "$T2" && cp "$ROOT/templates/assetgen/gen-run.md" "$T2/" && git init -q "$T2"
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T2" --registry "$ROOT/registry.json" | grep -q '^PASS AGEN-example-icon-001$' \
   && ok "kind template templates/assetgen/gen-run.md is a schema-valid draft" || no "gen-run template lint"
+
+echo "-- local and hybrid provenance (UNTESTED on RTX 5060)"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-template.json" "$GL/templates/hybrid-provenance.json"
+cp "$ROOT/tests/fixtures/assetgen/local/literal-seed-template.json" "$GL/templates/literal-seed.json"
+python3 -B - "$ROOT" > "$TMP/local-unit" 2>&1 <<'EOF'
+import copy, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import runfiles as r
+root = sys.argv[1]
+t = json.load(open(os.path.join(root, 'tests/fixtures/assetgen/local/hybrid-template.json'), encoding='utf-8'))
+golden = json.load(open(os.path.join(root, 'tests/fixtures/assetgen/golden/icon--image-generate.json'), encoding='utf-8'))
+spec = {'params': {'seed': 123}, 'template': {'data': t}}
+def old_generation_inputs(workflow, spec, locate=None):
+    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") == "NineRouterImage"
+                                          for n in workflow.values()):
+        graph = {}
+        for nid, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = dict(node["inputs"]) if isinstance(node.get("inputs"), dict) else {}
+            graph[str(nid)] = {"class_type": node.get("class_type"), "inputs": inputs}
+        refs = {}
+        for name in r.reference_names(workflow):
+            try:
+                refs[name] = r._file_sha256(locate(os.path.basename(name)) if locate else None)
+            except (OSError, TypeError, ValueError):
+                refs[name] = None
+        out = {"graph": graph, "references": refs}
+        lock = r.style_lock_binding(spec)
+        if lock is not None:
+            out["anchors"] = [{"anchor_id": x.get("anchor_id"), "sha256": x.get("sha256")} for x in r.style_lock_references(spec)]
+        return out
+    params = spec.get("params") if isinstance(spec, dict) else None
+    return params if isinstance(params, dict) else {}
+def check(label, f):
+    try:
+        assert f()
+        print('ok ' + label)
+    except Exception as e:
+        print('no ' + label + ' | ' + repr(e))
+check('generation inputs bind local graphs and preserve legacy hashes', lambda: set(r.generation_inputs({'9': {'class_type': 'KSampler'}}, spec)) == {'graph', 'references'} and all(r.generation_inputs(g, spec) == old_generation_inputs(g, spec) and r._canonical_sha256(r.generation_inputs(g, spec)) == r._canonical_sha256(old_generation_inputs(g, spec)) for g in (golden, {'1': {'class_type': 'SaveImage'}})))
+def prompts():
+    g={'1': {'class_type':'PrimitiveString','inputs':{'value':'hello'}}, '2': {'class_type':'PrimitiveStringMultiline','inputs':{'value':'world'}}, '3': {'class_type':'CLIPTextEncode','inputs':{'text':['1',0]}}, '4': {'class_type':'CLIPTextEncodeSDXL','inputs':{'text_g':['1',0], 'text_l':['2',0]}}, '5': {'class_type':'CLIPTextEncode','inputs':{'text':'literal'}}, '6': {'class_type':'CLIPTextEncode','inputs':{'text':['2',0]}}, '7': {'class_type':'ControlNetApplyAdvanced','inputs':{'positive':['3',0], 'negative':['6',0]}}, '8': {'class_type':'KSampler','inputs':{'positive':['7',0], 'negative':['7',1]}}, '9': {'class_type':'CLIPTextEncode','inputs':{'text':['2',0]}}, '10': {'class_type':'KSampler','inputs':{'negative':['9',0]}}}
+    return r.workflow_prompts(g) == ['hello','hello','world'] and all(isinstance(r.workflow_prompts(x), list) for x in (None, [], {'x': None}, {'x': {'class_type':'KSampler','inputs':{'negative':['x',0]}}}))
+check('CLIP prompts include linked positive text and exclude literals and negative-only paths', prompts)
+def local():
+    wf=copy.deepcopy(t['workflow']); wf['9']['inputs']['seed']=123
+    a=r.local_generation(wf,spec); b=r.local_generation(wf,spec,{'checkpoints/sdxl.safetensors':'a'*64,'loras/style.safetensors':'b'*64})
+    literal=copy.deepcopy(spec); literal['template']['data']['workflow']['9']['inputs']['seed']=123
+    return (a['models'][0]['name']=='sdxl.safetensors' and not a['models'][0]['verified'] and a['loras'][0]['strength_model']==0.8 and a['loras'][0]['strength_clip']==0.7 and a['samplers'][0] == {'node':'9','class_type':'KSampler','seed':123,'seed_param':'seed','sampler_name':'dpmpp_2m','scheduler':'karras','steps':20,'cfg':5.5,'denoise':0.45} and a['requires_sha256']==r._canonical_sha256(t['requires']) and all(x['verified'] for x in b['models']+b['loras']) and r.local_generation(golden,spec) is None and r.local_generation(wf,literal)['samplers'][0]['seed_param'] is None)
+check('local record shape, cache, requires and seed provenance', local)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "local unit unexpected output" "$line" ;; esac
+done < "$TMP/local-unit"
+[ "$(grep -c '^ok ' "$TMP/local-unit")" -eq 3 ] || no "local unit cases stopped early" "$(cat "$TMP/local-unit")"
+
+localrun="$RUNS/local-hybrid-001"
+mkrun local-hybrid-001 sprite-2d --style stylized-painterly --template hybrid-provenance --authoring "$AUTH"
+AG render --run "$localrun" --param seed=123 >/dev/null; cp "$FX/icon-ok.png" "$localrun/outputs/local.png"; AG qa --run "$localrun" >/dev/null
+bound "$localrun" prompt PASS codex > "$localrun/review-prompt.json"; bound "$localrun" image PASS codex > "$localrun/review-image.json"
+bound "$localrun" image PASS claude > "$localrun/review-image-claude.json"
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$localrun" >/dev/null
+cp "$localrun/run.md" "$TMP/local-unverified.md"
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" AG manifest --run "$localrun" >/dev/null
+cp "$localrun/run.md" "$TMP/local-verified.md"
+# Preserve independent variants for each plugin check.
+for id in local-cached-001 local-prompt-001 local-cfg-001 local-missing-001 local-hash-001 local-stale-001; do
+  cp -R "$localrun" "$RUNS/$id"; rm "$RUNS/$id/run.md"; ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$RUNS/$id" >/dev/null
+done
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" AG manifest --run "$RUNS/local-cached-001" >/dev/null
+jq ' .["11"] = {"class_type":"PrimitiveString", "inputs":{"value":"another prompt"}} | .["6"].inputs.text = ["11",0]' "$RUNS/local-prompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/local-prompt-001/workflow.json"
+fmset "$RUNS/local-cfg-001" 'obj["spec"]["generation"]["local"]["samplers"][0]["cfg"] = 99'
+fmset "$RUNS/local-missing-001" 'del obj["spec"]["generation"]["local"]'
+fmset "$RUNS/local-hash-001" 'obj["spec"]["generation"]["local"]["models"][0]["verified"] = True'
+AG render --run "$RUNS/local-stale-001" --param seed=456 >/dev/null
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$RUNS/local-stale-001" >/dev/null
+literal="$RUNS/local-literal-001"; mkrun local-literal-001 sprite-2d --style stylized-painterly --template literal-seed --authoring "$AUTH"
+AG render --run "$literal" --param seed=123 >/dev/null; cp "$FX/icon-ok.png" "$literal/outputs/local.png"; AG qa --run "$literal" >/dev/null
+bound "$literal" prompt PASS codex > "$literal/review-prompt.json"; bound "$literal" image PASS codex > "$literal/review-image.json"
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" AG manifest --run "$literal" >/dev/null
+cp "$TMP/local-unverified.md" "$localrun/run.md"
+python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2> "$TMP/err" <<'EOF'
+import importlib.util, json, re, sys
+from pathlib import Path
+root, auth = Path(sys.argv[1]), Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(root / 'scripts/checks'))
+from domains._api import Context
+s = importlib.util.spec_from_file_location('assetgen_plugin', root / 'scripts/checks/domains/assetgen.py')
+p = importlib.util.module_from_spec(s); s.loader.exec_module(p)
+reg = json.load(open(root / 'registry.json', encoding='utf-8')); rows = []
+for path in sorted((auth / 'assetgen/runs').glob('*/run.md')):
+    obj = json.loads(re.match(r'\A---json\s*\n(.*?)\n---', path.read_text(encoding='utf-8'), re.S).group(1))
+    ctx = Context(str(auth), reg, path.relative_to(auth).as_posix(), {}, None, {'authoring': auth})
+    rows += [{'artifact': obj['id'], 'check': x.check, 'state': x.state, 'reasons': x.reasons} for x in p.check(obj, ctx)]
+print(json.dumps({'results':rows}))
+EOF
+case_ local-stale-001 gen-run-image-review FAIL 'bound to other requirements' 'local seed change invalidates image review binding'
+case_ local-hybrid-001 gen-run-provenance WARN 'sha256 unverified' 'local unverified hashes warn'
+python3 -B - "$TMP/local-unverified.md" "$TMP/local-verified.md" <<'EOF' > "$TMP/local-record"
+import json, re, sys
+def read(p):
+    s=open(p,encoding='utf-8').read(); return json.loads(re.match(r'\A---json\s*\n(.*?)\n---',s,re.S).group(1)),s
+a, text=read(sys.argv[1]); b,_=read(sys.argv[2]); x=a['spec']['generation']['local']; y=b['spec']['generation']['local']
+assert x['models'][0]['name']=='sdxl.safetensors' and x['loras'][0]['name']=='style.safetensors' and x['samplers'][0]['seed']==123 and x['samplers'][0]['cfg']==5.5
+assert all(not v['verified'] and v['sha256'] is None for v in x['models']+x['loras'])
+assert [v['sha256'] for v in y['models']+y['loras']]==['a'*64,'b'*64] and all(v['verified'] for v in y['models']+y['loras'])
+assert 'Local stage (UNTESTED on RTX 5060)' in text
+EOF
+[ $? -eq 0 ] && ok "local manifest records models, LoRA, sampler, cache and untested body" || no "local manifest record" "$(cat "$TMP/local-record")"
+case_ local-cached-001 gen-run-provenance PASS '' 'cache verifies all model hashes and provenance passes'
+case_ local-prompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' 'CLIP prompt mismatch fails provenance'
+case_ local-cfg-001 gen-run-provenance FAIL 'spec.generation.local differs' 'tampered sampler fails provenance'
+case_ local-missing-001 gen-run-provenance FAIL 'records no spec.generation.local' 'missing local record fails provenance'
+case_ local-hash-001 gen-run-provenance FAIL 'claims a verified sha256 it does not carry' 'invalid verified hash fails provenance'
+case_ local-literal-001 gen-run-provenance FAIL 'seed is not a rendered param' 'literal seed fails provenance'
+! grep -q '"local"\|Local stage' "$good/run.md" && [ "$(st AGEN-qp-icon-001 gen-run-provenance)" = PASS ] && ok 'old run retains provenance PASS without local record' || no 'old run changed' "$(why AGEN-qp-icon-001 gen-run-provenance)"
+python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$AUTH" --registry "$ROOT/registry.json" > "$TMP/local-lint" 2>&1
+grep -q '^PASS AGEN-local-hybrid-001$' "$TMP/local-lint" && ok 'hybrid manifest passes artifact schema lint' || no 'hybrid artifact lint' "$(grep 'AGEN-local-hybrid-001' "$TMP/local-lint")"
 
 echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
 SL="$TMP/stylelock-authoring"
