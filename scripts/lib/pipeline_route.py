@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
+import codexconfig
 import fstate
 
 with (Path(__file__).resolve().parents[2] / 'docs/schemas/pipeline-plan.schema.json').open(encoding='utf-8') as _schema:
@@ -114,29 +115,16 @@ def mark(plan, agent, reason=None):
 _cache = {}
 
 
-def _codex_config_path():
-    home = os.environ.get('CODEX_HOME')
-    return (Path(home) if home else Path.home() / '.codex') / 'config.toml'
-
-
 def _codex_auth():
     if os.environ.get('OPENAI_API_KEY'):
         return 'OPENAI_API_KEY set'
-    try:
-        import tomllib
-    except ImportError:
-        return None
-    try:
-        with _codex_config_path().open('rb') as config:
-            data = tomllib.load(config)
-        provider = data.get('model_provider')
-        providers = data.get('model_providers')
-        if isinstance(provider, str) and provider != 'openai' and isinstance(providers, dict):
-            details = providers.get(provider)
-            if isinstance(details, dict) and isinstance(details.get('base_url'), str) and details['base_url']:
-                return 'codex API provider ' + provider + ' in config.toml'
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError, TypeError, AttributeError):
-        pass
+    data = codexconfig.config()
+    provider = data.get('model_provider')
+    providers = data.get('model_providers')
+    if isinstance(provider, str) and provider != 'openai' and isinstance(providers, dict):
+        details = providers.get(provider)
+        if isinstance(details, dict) and isinstance(details.get('base_url'), str) and details['base_url']:
+            return 'codex API provider ' + provider + ' in config.toml'
     return None
 
 
@@ -149,7 +137,7 @@ def available(pipe, plan):
     config_stamp = None
     if override is None:
         try:
-            stat = _codex_config_path().stat()
+            stat = os.stat(codexconfig.config_path())
             config_stamp = (stat.st_mtime_ns, stat.st_size)
         except OSError:
             pass

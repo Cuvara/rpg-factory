@@ -321,7 +321,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
-ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
+ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
 MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
@@ -387,7 +387,7 @@ for label, payload, down in (
         assert avail['claude']['available']
         assert avail['codex']['available'] != down
 codex_cases = ('codex-provider', 'codex-no-config', 'codex-openai-provider', 'codex-no-base-url',
-               'codex-invalid-toml', 'codex-api-key', 'codex-override')
+               'codex-invalid-toml', 'codex-non-utf8', 'codex-api-key', 'codex-override')
 if case in codex_cases:
     codex_home = pathlib.Path(tmp) / case / 'codex-home'
     codex_home.mkdir(parents=True, exist_ok=True)
@@ -403,6 +403,8 @@ if case in codex_cases:
     }
     if case in configs:
         (codex_home / 'config.toml').write_text(configs[case], encoding='utf-8')
+    if case == 'codex-non-utf8':
+        (codex_home / 'config.toml').write_bytes(b'\xff')
     env = {'ORCA_WORKTREE_ID': 'fixture', 'PATH': case, 'CODEX_HOME': str(codex_home),
            'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}
     if case == 'codex-api-key':
@@ -2026,8 +2028,8 @@ note_forward() {
 }
 note_forward "lead -> implement: notes starting with - and --" '' -x --foo -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note=-x --note=--foo
 note_forward "lead -> implement: an environment note starting with -" -e -e -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
-if python3 -B - "$ROOT" <<'PY'
-import importlib.util, shlex, sys
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, pathlib, shlex, sys, tempfile
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 alias = r'C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
@@ -2036,11 +2038,18 @@ which = lambda n: alias
 line = m.python_alias_line('win32', which, exe)
 assert line.startswith('Python: python3 here is likely the Microsoft Store alias') and alias in line and shlex.quote(exe) in line
 assert m.python_alias_line('linux', which, exe) == ''
-assert m.python_alias_line('win32', lambda n: r'C:\Py\python3.exe', exe) == ''
-assert m.python_alias_line('win32', lambda n: None, exe) == ''
+with tempfile.TemporaryDirectory(dir=sys.argv[2]) as tmp:
+    probe = pathlib.Path(tmp) / 'python3.exe'
+    shim = lambda n: r'C:\Py\python3.exe'
+    assert m.python_alias_line('win32', shim, exe, probe) == ''
+    assert m.python_alias_line('win32', lambda n: None, exe, probe) == ''
+    probe.touch()
+    line = m.python_alias_line('win32', shim, exe, probe)
+    assert str(probe) in line and line.startswith('Python: python3 here is likely the Microsoft Store alias')
+    assert m.python_alias_line('linux', shim, exe, probe) == ''
 PY
-then pass=$((pass + 1)); echo "PASS  python3 Store alias detection uses platform and resolved path"
-else fail=$((fail + 1)); echo "FAIL  python3 Store alias detection uses platform and resolved path"; fi
+then pass=$((pass + 1)); echo "PASS  python3 Store alias detection uses platform, resolved path and probe"
+else fail=$((fail + 1)); echo "FAIL  python3 Store alias detection uses platform, resolved path and probe"; fi
 # pp_spec splits only the prompt line: a stderr line with an unbalanced ' and " cannot break it
 printf 'stub spec: quotes survive\n' > "$TMP/pp-stub-spec.md"
 cat > "$TMP/pp-stub.py" <<'PPSTUB'

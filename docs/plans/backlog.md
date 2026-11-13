@@ -146,20 +146,23 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
-### ci-backlog-followups
+### workspace-default-by-platform
 
-From plan ci-backlog (`docs/plans/ci-backlog/report.md`):
+From plan ci-backlog-followups (`docs/plans/ci-backlog-followups/report.md`):
 
-- `tests/routing.test.sh` defaults the workspace to the WSL form of the workspace path, so on Git Bash for Windows it
-  fails unless `RPG_FACTORY_WORKSPACE` is exported (two task QA runs failed on it). Default by platform, or skip with
-  a clear message when the workspace markers are missing.
-- The Windows `python3` alias line of `dispatch` does not appear when the run lead itself runs through a shim (the
-  shim hides the alias), so the run lead still adds a `--note` for it. Detect the alias by probing the WindowsApps
-  path, not only `shutil.which`.
-- `scripts/lib/pipeline_route.py` repeats the `CODEX_HOME` resolution and TOML load of `scripts/lib/codexconfig.py`;
-  reuse it.
+- Only `tests/routing.test.sh` defaults the workspace by platform. The other WSL-form defaults (`tests/run-all.sh`
+  workspace checks such as "registry paths exist in workspace", `tests/dogfood.sh`, `tests/routing-properties.test.py`,
+  `scripts/checks/pin-plan.py`, `pin-status.py`, `wire-parity.sh`, `netcode-headless.sh`) still fail on Git Bash for
+  Windows unless `RPG_FACTORY_WORKSPACE` is exported. Move the default into one shared helper (shell and Python).
+- `docs/pipeline-cli.md` has lines over 120 columns (pre-existing).
+- `gate` marks integration QA STALE when the only commits after it touch run lead files (plan, report, backlog), so
+  the run lead reruns a 15-20 minute `--workspace-only` run for a report commit. Ignore commits limited to
+  `run_lead_files()` in that staleness check (with a test).
 
 ## Covered
+
+- **ci-backlog-followups**: shipped in plan ci-backlog-followups (`changelog.d/routing-workspace.md`,
+  `changelog.d/alias-probe.md`, `changelog.d/codex-config-reuse.md`).
 
 - **ci-matrix-followups** and the Codex availability item of plugin-flow-5-followups: shipped in plans ci-followups
   (`changelog.d/ci-cases.md`, `changelog.d/pipeline-followups.md`, `changelog.d/orca-wait-stall.md`) and ci-backlog
