@@ -4002,8 +4002,15 @@ refute "gate-merge: no stray line for docs/plans" "changes outside every task's 
 echo update >> "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: update report"
 expect "gate-merge: report-only commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 expect "gate-merge: gate notes the QA exemption" 0 "NOTE +r: QA at .* covers HEAD .*only run lead files changed since" gate "$GP" --no-run-checks
+refute "gate-merge: status does not mark report-only QA stale" "integration QA.*STALE" status "$GP"
+refute "gate-merge: status does not request QA after report-only commit" "--task integration:r --phase qa" status "$GP"
+gmqa
+gi "$GM" commit --allow-empty -qm "chore: empty commit"
+expect "gate-merge: empty commit keeps QA current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+expect "gate-merge: empty commit notes QA covers HEAD" 0 "NOTE +r: QA at .* covers HEAD" gate "$GP" --no-run-checks
 echo code >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: later code"
 expect "gate-merge: code after QA is stale" 1 "BLOCKER r: QA is STALE" gate "$GP" --no-run-checks
+expect "gate-merge: status marks code after QA stale" 0 "integration QA.*STALE" status "$GP"
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
 echo unrelated > "$TMP/gm-main/unrelated.txt"; gi "$TMP/gm-main" add unrelated.txt; gi "$TMP/gm-main" commit -qm "unrelated commit"
 gmv --task integration:r --phase qa --sha "$(git -C "$TMP/gm-main" rev-parse HEAD)" --by codex --state PASS

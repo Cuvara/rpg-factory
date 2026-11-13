@@ -2820,8 +2820,10 @@ def qa_covers_head(plan, info, qa_sha, head):
     if rc != 0:
         return False
     changed, rc = git(info["path"], "diff", "--name-only", "--no-renames", qa_sha, head)
-    return (rc == 0 and bool(changed) and
-            all(norm_path(path) in run_lead_files(plan, info["path"]) for path in changed.splitlines()))
+    if rc != 0 or changed is None:
+        return False
+    lead_files = run_lead_files(plan, info["path"])
+    return all(norm_path(path) in lead_files for path in changed.splitlines())
 
 
 def xs_diff_above(plan, reg, pipe, task, info, sha):
