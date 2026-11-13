@@ -19,7 +19,19 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
   png-alpha           qa.alpha: required (alpha channel and some transparent pixels), forbidden (fully opaque), any
   png-corners         qa.transparent_corners: the four corner pixels have alpha <= 8
   png-tileable        qa.tileable.max_seam_error: wrap-around edge difference minus the interior
-                      neighbour difference (0..1 scale) must stay at or under the limit
+                      neighbour difference (0..1 scale) must stay at or under the limit. qa.tileable.axis: both
+                      (default; the left/right and the top/bottom seam), x (only the left/right seam, pixel(0,y) against
+                      pixel(w-1,y), interior at x = w//2; a trail that scrolls along x) or y (only top/bottom). The
+                      detail names the axis for x and y; the detail for both is unchanged.
+  png-flipbook-grid   qa.flipbook_grid {columns, rows, max_gutter_luminance 32, min_cell_stddev 2.0}: the image is split
+                      into columns x rows cells by float boundaries (the image service ignores the requested size, so
+                      no divisibility is needed). The gutter is a band of max(1, round(2% of the cell side)) px around
+                      every internal cell boundary. PASS when the mean luminance of the gutter pixels is at most
+                      max_gutter_luminance and every cell interior (gutter excluded) has a luminance stddev of at least
+                      min_cell_stddev; the detail names a bright gutter and the blank cells as (column,row), 1-based.
+  png-black-background  qa.black_background {max_luminance 16, border 0.03, edges all four}: the mean luminance of the
+                      border band (border x the short side, at least 1 px, on each listed edge) must be at most
+                      max_luminance; the detail gives the mean per edge. A pure-black opaque background.
   png-not-blank       qa.not_blank: luminance stddev >= min_stddev (0..255) and, with alpha, the share of
                       pixels with alpha > 8 >= min_coverage
   png-edge-fringe     only for qa.alpha required: imaging.edge_fringe (soft edge pixels, alpha 1-31 next to the
@@ -167,17 +179,108 @@ def diff(a, b):
     return sum(abs(a[i] - b[i]) for i in range(3)) / (3 * 255.0)
 
 
-def check_tileable(img, limit):
+def check_tileable(img, limit, axis="both"):
     w, h = img.width, img.height
     if w < 4 or h < 4:
         return "FAIL", ["image too small for a seam check"]
     ys, xs = list(steps(h)), list(steps(w))
-    edge = [diff(img.pixel(0, y), img.pixel(w - 1, y)) for y in ys] + [diff(img.pixel(x, 0), img.pixel(x, h - 1)) for x in xs]
-    inner = [diff(img.pixel(w // 2, y), img.pixel(w // 2 - 1, y)) for y in ys] + \
-            [diff(img.pixel(x, h // 2), img.pixel(x, h // 2 - 1)) for x in xs]
+    edge, inner = [], []
+    if axis in ("both", "x"):  # the left/right wrap-around seam
+        edge += [diff(img.pixel(0, y), img.pixel(w - 1, y)) for y in ys]
+        inner += [diff(img.pixel(w // 2, y), img.pixel(w // 2 - 1, y)) for y in ys]
+    if axis in ("both", "y"):  # the top/bottom wrap-around seam
+        edge += [diff(img.pixel(x, 0), img.pixel(x, h - 1)) for x in xs]
+        inner += [diff(img.pixel(x, h // 2), img.pixel(x, h // 2 - 1)) for x in xs]
     e, i = sum(edge) / len(edge), sum(inner) / len(inner)
     seam = max(0.0, e - i)
-    return ("PASS" if seam <= limit else "FAIL"), ["seam error %.3f (edge %.3f, interior %.3f; limit %.3f)" % (seam, e, i, limit)]
+    where = "" if axis == "both" else " on the %s axis" % axis
+    return ("PASS" if seam <= limit else "FAIL"), ["seam error %.3f%s (edge %.3f, interior %.3f; limit %.3f)" % (seam, where, e, i, limit)]
+
+
+def luminance(px):
+    return 0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2]
+
+
+def grid_bounds(n, size):
+    """The n + 1 float cell boundaries of an axis of `size` px, 0 and size included."""
+    return [i * size / n for i in range(n + 1)]
+
+
+def gutter_bands(bounds, side):
+    """[lo, hi) pixel bands, max(1, round(2% of the cell side)) px wide, centred on each internal boundary."""
+    width = max(1, round(0.02 * side))
+    bands = []
+    for b in bounds[1:-1]:
+        lo = int(round(b - width / 2.0))
+        bands.append((lo, lo + width))
+    return bands
+
+
+def in_bands(v, bands):
+    return any(lo <= v < hi for lo, hi in bands)
+
+
+def check_flipbook_grid(img, cfg):
+    cols, rows = cfg["columns"], cfg["rows"]
+    max_gutter = cfg.get("max_gutter_luminance", 32)
+    min_std = cfg.get("min_cell_stddev", 2.0)
+    w, h = img.width, img.height
+    if w < cols * 4 or h < rows * 4:
+        return "FAIL", ["%dx%d is too small for a %dx%d grid" % (w, h, cols, rows)]
+    xb, yb = grid_bounds(cols, w), grid_bounds(rows, h)
+    xbands, ybands = gutter_bands(xb, w / cols), gutter_bands(yb, h / rows)
+    ys, xs = list(steps(h)), list(steps(w))
+    gutter, cells = [], {}
+    for lo, hi in xbands:  # every gutter column (a band is only a few px wide) at the sampled rows
+        for x in range(max(0, lo), min(w, hi)):
+            gutter += [luminance(img.pixel(x, y)) for y in ys]
+    for lo, hi in ybands:  # every gutter row at the sampled columns outside the vertical bands
+        for y in range(max(0, lo), min(h, hi)):
+            gutter += [luminance(img.pixel(x, y)) for x in xs if not in_bands(x, xbands)]
+    for y in ys:
+        if in_bands(y, ybands):
+            continue
+        row = sum(1 for b in yb[1:-1] if b <= y)
+        for x in xs:
+            if in_bands(x, xbands):
+                continue
+            col = sum(1 for b in xb[1:-1] if b <= x)
+            cells.setdefault((col, row), []).append(luminance(img.pixel(x, y)))
+    gutter_mean = sum(gutter) / len(gutter) if gutter else 0.0
+    blank = []
+    for row in range(rows):
+        for col in range(cols):
+            lum = cells.get((col, row), [])
+            mean = sum(lum) / len(lum) if lum else 0.0
+            std = math.sqrt(sum((v - mean) ** 2 for v in lum) / len(lum)) if lum else 0.0
+            if std < min_std:
+                blank.append("(%d,%d)" % (col + 1, row + 1))
+    ok = gutter_mean <= max_gutter and not blank
+    detail = ["%dx%d grid, gutter luminance mean %.1f (max %.1f)" % (cols, rows, gutter_mean, max_gutter)]
+    detail.append("blank cells (column,row) %s (stddev below %.2f)" % (" ".join(blank), min_std) if blank
+                  else "no blank cell (stddev at least %.2f)" % min_std)
+    return ("PASS" if ok else "FAIL"), ["; ".join(detail)]
+
+
+def check_black_background(img, cfg):
+    max_lum = cfg.get("max_luminance", 16)
+    border = cfg.get("border", 0.03)
+    edges = cfg.get("edges", ["top", "bottom", "left", "right"])
+    w, h = img.width, img.height
+    band = max(1, round(border * min(w, h)))
+    ys, xs = list(steps(h)), list(steps(w))
+    sampled = {"top": [(x, y) for y in range(min(band, h)) for x in xs],
+               "bottom": [(x, y) for y in range(max(0, h - band), h) for x in xs],
+               "left": [(x, y) for x in range(min(band, w)) for y in ys],
+               "right": [(x, y) for x in range(max(0, w - band), w) for y in ys]}
+    total, count, parts = 0.0, 0, []
+    for edge in edges:
+        lum = [luminance(img.pixel(x, y)) for x, y in sampled[edge]]
+        total, count = total + sum(lum), count + len(lum)
+        parts.append("%s %.1f" % (edge, sum(lum) / len(lum) if lum else 0.0))
+    mean = total / count if count else 0.0
+    return ("PASS" if mean <= max_lum else "FAIL"), ["border luminance mean %.1f (max %.1f) over a %d px band: %s"
+                                                     % (mean, max_lum, band, ", ".join(parts))]
 
 
 def check_not_blank(img, cfg):
@@ -253,7 +356,10 @@ def run_qa(run_dir, spec, requested_size):
         checks = {"png-size": lambda: check_size(img, qa.get("size", {"mode": "any"}), requested_size),
                   "png-alpha": lambda: check_alpha(img, qa.get("alpha", "any")),
                   "png-corners": lambda: check_corners(img),
-                  "png-tileable": lambda: check_tileable(img, qa["tileable"].get("max_seam_error", 0.06)),
+                  "png-tileable": lambda: check_tileable(img, qa["tileable"].get("max_seam_error", 0.06),
+                                                         qa["tileable"].get("axis", "both")),
+                  "png-flipbook-grid": lambda: check_flipbook_grid(img, qa["flipbook_grid"]),
+                  "png-black-background": lambda: check_black_background(img, qa["black_background"]),
                   "png-not-blank": lambda: check_not_blank(img, qa["not_blank"]),
                   "png-edge-fringe": lambda: imaging.edge_fringe(img)}
         for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
