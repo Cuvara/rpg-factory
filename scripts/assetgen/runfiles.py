@@ -48,9 +48,12 @@ required_checks(purpose_qa) -> the QA check names every output must carry for th
   Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
-requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
-  the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
-  (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
+requested_size(workflow, spec) -> the size the run asked for: the size input of the template's primary_node
+  (NineRouterImage; a KSampler gives <w>x<h> of its EmptyLatentImage). A declared primary that gives no size falls
+  back to the resolved spec's size param. Without a usable declared node, use the NineRouterImage with the lowest node
+  id (never dict order), else the resolved spec's size param, else "auto". qa.json records it next to the purpose
+  content hash it graded with (purpose_sha256), so a QA report made before the size or the purpose qa block changed
+  is stale.
 qa_style_binding(spec, locate) -> what the style consistency rows of qa.py evaluate besides the purpose and the output
   bytes, or None for a spec without style_lock (no style rows): {"style": spec.style_lock.style (the style ref: id,
   version, sha256), "style_sha256": sha256 of the canonical JSON of the effective style data spec.style.data (what
@@ -644,12 +647,41 @@ def requirements_sha256(spec, generation=None):
 
 
 def requested_size(workflow, spec):
+    spec = spec if isinstance(spec, dict) else {}
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = template.get("data") if isinstance(template.get("data"), dict) else {}
+    primary = data.get("primary_node")
+    node = None
     if isinstance(workflow, dict):
-        for node in workflow.values():
-            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
-                inputs = node.get("inputs")
-                return inputs.get("size", "auto") if isinstance(inputs, dict) else "auto"
-    params = spec.get("params") if isinstance(spec, dict) else None
+        if isinstance(primary, str) and isinstance(workflow.get(primary), dict):
+            node = workflow[primary]
+        else:
+            candidates = [(nid, n) for nid, n in workflow.items()
+                          if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
+            if candidates:
+                def order(item):
+                    nid = str(item[0])
+                    if nid.isdigit():
+                        try:
+                            return (0, int(nid))
+                        except ValueError:
+                            pass
+                    return (1, nid)
+                node = min(candidates, key=order)[1]
+        if isinstance(node, dict):
+            inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+            if node.get("class_type") == "NineRouterImage":
+                return inputs.get("size", "auto")
+            if node.get("class_type") == "KSampler":
+                link = inputs.get("latent_image")
+                source = workflow.get(link[0]) if (isinstance(link, list) and len(link) == 2
+                                                   and isinstance(link[0], str)) else None
+                latent = source.get("inputs") if isinstance(source, dict) else None
+                if (isinstance(source, dict) and source.get("class_type") == "EmptyLatentImage"
+                        and isinstance(latent, dict) and type(latent.get("width")) is int
+                        and type(latent.get("height")) is int and latent["width"] > 0 and latent["height"] > 0):
+                    return "%dx%d" % (latent["width"], latent["height"])
+    params = spec.get("params")
     return params.get("size", "auto") if isinstance(params, dict) else "auto"
 
 

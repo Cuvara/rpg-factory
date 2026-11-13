@@ -31,8 +31,10 @@
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
-# manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
-# the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
+# manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
+# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060), style lock QA rows
+# through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs the run's anchor copies, edges, canvas; older specs
+# without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
 # by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
 # the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
@@ -3612,6 +3614,87 @@ AG lint --authoring "$SC" "$SG/styles/rpg-base/rejections/too-detailed-001.json"
   && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "reject: written rejections lint clean" || no "rejection lint" "$(cat "$TMP/o")"
 slrun sl-icon-004 icon && [ "$(lk '[.style_lock.rejections[].id] | join(",")' sl-icon-004)" = "palette-off-001,r-props,too-detailed-001,too-detailed-002" ] \
   && ok "resolve records the new relevant rejections (family props, any version)" || no "rejections after reject" "$(lk .style_lock.rejections sl-icon-004)"
+
+echo "-- anchor_target: anchors into NineRouterImage or IPAdapterAdvanced (UNTESTED on RTX 5060)"
+mkdir -p "$SG/templates"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$SG/templates/hybrid-anchor.json"
+echo '{"extends": "icon", "title": "Icon, two references", "max_references": 2}' > "$SG/purposes/icon-two.json"
+dh="$SR/hybrid-anchor-001"
+slrun hybrid-anchor-001 icon-two --template hybrid-anchor && AG render --run "$dh" > "$TMP/anchor-out" 2>&1; rc=$?
+python3 -B - "$dh/workflow.json" "$dh/workflow.ui.json" "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" > "$TMP/anchor-check" 2>&1 <<'EOF'
+import json, sys
+wf, ui, tmpl = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:])
+def walk(link):
+    node = wf[link[0]]
+    if node['class_type'] == 'ImageBatch':
+        return walk(node['inputs']['image1']) + walk(node['inputs']['image2'])
+    if node['class_type'] == 'NineRouterImage':
+        return ['base:' + link[0]]
+    return [node['inputs']['image']]
+assert walk(wf['12']['inputs']['image']) == ['base:1', 'anchor-b-strong.png', 'anchor-a-canon.png']
+assert 'reference_images' not in wf['1']['inputs']
+added = set(wf) - set(tmpl['workflow'])
+assert len(added) == 4
+box = next(g['bounding'] for g in ui['groups'] if g['title'] == 'References')
+nodes = {str(n['id']): n for n in ui['nodes']}
+def inside(n):
+    x, y = n['pos']; w, h = n['size']
+    return x >= box[0] and y - 30 >= box[1] and x + w <= box[0] + box[2] and y + h <= box[1] + box[3]
+assert all(inside(nodes[n]) for n in added)
+assert any(n['type'] == 'Note' and n['widgets_values'][0] == 'Style-lock anchors added by render: references/anchor-<id>.png, batched into IPAdapterAdvanced.image.' and inside(n) for n in ui['nodes'])
+print('ok')
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/anchor-check" && ok "hybrid render: base and two anchors into IPAdapterAdvanced, References group and target note" \
+  || no "hybrid anchor wiring rc=$rc" "$(cat "$TMP/anchor-out" "$TMP/anchor-check")"
+cp "$dh/workflow.json" "$TMP/hybrid-first.json"; cp "$dh/workflow.ui.json" "$TMP/hybrid-first.ui.json"
+AG render --run "$dh" > "$TMP/anchor-out" 2>&1; rc=$?
+[ $rc -eq 0 ] && cmp -s "$TMP/hybrid-first.json" "$dh/workflow.json" && cmp -s "$TMP/hybrid-first.ui.json" "$dh/workflow.ui.json" \
+  && ok "hybrid render --run: both workflow files byte-identical on repeat" || no "hybrid render determinism rc=$rc" "$(cat "$TMP/anchor-out")"
+slrun anchor-api-001 icon-two --template image-generate && AG render --run "$SR/anchor-api-001" > "$TMP/anchor-out" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(wiring "$SR/anchor-api-001/workflow.json")" = 'anchor-b-strong.png>anchor-a-canon.png' ] \
+  && ok "API-only template keeps NineRouterImage reference_images wiring" || no "API-only anchor wiring rc=$rc" "$(cat "$TMP/anchor-out")"
+
+# Mutate a resolved spec, so render validates even without selected anchors and never writes a workflow on failure.
+anchor_bad() { # label jq-filter expected-message
+  local label="$1" filter="$2" expected="$3" dir="$SR/anchor-bad-$1"
+  mkdir -p "$dir"; jq --arg p "assetgen/anchor-bad-$label" "$filter | .style_lock.references = [] | .params.filename_prefix = \$p" "$dh/spec.json" > "$dir/spec.json"
+  cp "$dh/prompt.md" "$dir/prompt.md"; rm -f "$dir/workflow.json" "$dir/workflow.ui.json"
+  AG render --run "$dir" > "$TMP/anchor-bad" 2>&1; local status=$?
+  [ "$status" -ne 0 ] && grep -Fq "$expected" "$TMP/anchor-bad" && [ ! -e "$dir/workflow.json" ] && [ ! -e "$dir/workflow.ui.json" ] \
+    && ok "render rejects $label before writing workflows" || no "render $label rc=$status" "$(cat "$TMP/anchor-bad")"
+}
+anchor_bad missing-node '.template.data.anchor_target.node = "missing"' "FAIL anchor_target.node 'missing' is not a node of the workflow"
+anchor_bad missing-input '.template.data.anchor_target.input = "images"' "FAIL anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)"
+anchor_bad disallowed '.template.data.anchor_target = {"node":"9","input":"latent_image"}' 'FAIL anchor_target KSampler.latent_image cannot take anchors'
+anchor_bad primary-missing '.template.data.primary_node = "missing"' "FAIL primary_node 'missing' is not a node of the workflow"
+anchor_bad primary-class '.template.data.primary_node = "4"' 'FAIL primary_node 4 (CheckpointLoaderSimple) is not a generation node'
+anchor_bad primary-ambiguous 'del(.template.data.primary_node) | .template.data.workflow["13"] = .template.data.workflow["1"]' 'FAIL the template has 2 NineRouterImage nodes: declare primary_node'
+
+python3 -B - "$ROOT" > "$TMP/anchor-size" 2>&1 <<'EOF'
+import glob, json, os, sys
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+import runfiles
+def nine(size): return {'class_type': 'NineRouterImage', 'inputs': {'size': size}}
+workflow = {'10': nine('ten'), '2': nine('two')}
+spec = {'template': {'data': {'primary_node': '10'}}, 'params': {'size': 'fallback'}}
+assert runfiles.requested_size(workflow, spec) == 'ten'
+assert runfiles.requested_size(workflow, {}) == 'two'
+local = {'1': {'class_type': 'KSampler', 'inputs': {'latent_image': ['2', 0]}},
+         '2': {'class_type': 'EmptyLatentImage', 'inputs': {'width': 832, 'height': 1216}}}
+assert runfiles.requested_size(local, {'template': {'data': {'primary_node': '1'}}}) == '832x1216'
+for bad in (None, [], {'template': None}, {'template': {'data': []}}, {'template': {'data': {'primary_node': []}}}, {'params': []}):
+    assert runfiles.requested_size({}, bad) == 'auto'
+for path in glob.glob(os.path.join(root, 'tests', 'fixtures', 'assetgen', 'golden', '*.json')):
+    graph = json.load(open(path, encoding='utf-8'))
+    nodes = [n for n in graph.values() if isinstance(n, dict) and n.get('class_type') == 'NineRouterImage']
+    if len(nodes) == 1:
+        assert runfiles.requested_size(graph, {}) == nodes[0].get('inputs', {}).get('size', 'auto'), path
+print('ok')
+EOF
+grep -qx ok "$TMP/anchor-size" && ok "requested_size: declared primary, numeric fallback, latent dimensions, malformed specs and golden graphs" \
+  || no "requested_size cases" "$(cat "$TMP/anchor-size")"
+rm -f "$SG/templates/hybrid-anchor.json" "$SG/purposes/icon-two.json"
 
 echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
 # fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc

@@ -59,10 +59,15 @@ without project.json the purpose default_style as before) and records spec.style
 family_source, style: {style_id, version, sha256}, override, max_references, references: the selected anchors (valid
 active anchors of that style version, deterministic order, capped) with reason[] per pick, rejections: the relevant
 ones}. render wires each selected anchor as a LoadImage (anchor-<id>.png) and a chain of ImageBatch nodes into
-NineRouterImage.reference_images (an image-edit reference stays first). promote-anchor writes a proposed anchor from a
-manifested run output (a person approves it); reject records a rejected asset or direction; drift lists gen-runs,
-anchors and rejections recorded on an older style version or another style hash, and with project.json those under a
-style id that is neither the project style nor a family style (style-id-mismatch, naming the project style).
+the template's anchor_target (NineRouterImage.reference_images by default, or IPAdapterAdvanced.image); an existing
+image link stays first (an image-edit reference); the local IPAdapter path is UNTESTED on RTX 5060. render refuses an
+anchor_target or primary_node that names no such node or input (template_target_errors). primary_node names the
+generation node whose size the run requests (requested_size); render requires it when the graph has more than one
+NineRouterImage (graph-lint one-image-node still wants exactly one in a staged template). promote-anchor writes a
+proposed anchor from a manifested run output (a person approves it); reject records a rejected asset or direction;
+drift lists gen-runs, anchors and rejections recorded on an older style version or another style hash, and with
+project.json those under a style id that is neither the project style nor a family style (style-id-mismatch, naming
+the project style).
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
@@ -104,8 +109,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       pixels are no longer the ones defringe wrote; embed keeps them)
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   references/anchor-<id>.png  render --run: a copy of each style-lock anchor spec.style_lock.references selected
-                      (refused when the anchor's image no longer has the sha256 resolve selected); the agent uploads
-                      every references/* file with comfy-mcp upload_file under its name before running
+                      for the anchor_target input (refused when the anchor's image no longer has the sha256 resolve
+                      selected); the agent uploads every references/* file with comfy-mcp upload_file under its name
+                      before running
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
@@ -399,7 +405,10 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewe
     if errors:
         return None, errors
     workflow = fill(tmpl.get("workflow", {}), values)
-    errors = wire_references(workflow, runfiles.style_lock_references(spec))
+    errors = template_target_errors(tmpl, workflow)
+    if errors:
+        return None, errors
+    errors = wire_references(workflow, runfiles.style_lock_references(spec), tmpl.get("anchor_target"))
     if errors:
         return None, errors
     for node in workflow.values():
@@ -410,23 +419,65 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewe
     return workflow, e
 
 
-def wire_references(workflow, picks):
+ANCHOR_TARGETS = (("NineRouterImage", "reference_images"), ("IPAdapterAdvanced", "image"))
+
+
+def template_target_errors(tmpl, workflow):
+    """Validate optional anchor and primary generation node declarations on every render."""
+    errors = []
+    if "anchor_target" in tmpl:
+        target = tmpl["anchor_target"]
+        if not (isinstance(target, dict) and set(target) == {"node", "input"}
+                and all(isinstance(target[k], str) for k in ("node", "input"))):
+            errors.append('anchor_target must be {"node": <node id>, "input": <input name>}')
+        elif target["node"] not in workflow:
+            errors.append("anchor_target.node %r is not a node of the workflow" % target["node"])
+        else:
+            node = workflow[target["node"]]
+            cls = node.get("class_type") if isinstance(node, dict) else None
+            known = lint.known_nodes().get(cls, {}) if isinstance(cls, str) else {}
+            if target["input"] not in known.get("inputs", {}):
+                errors.append("anchor_target.input %r is not an input of node %s (%s)" %
+                              (target["input"], target["node"], cls))
+            elif (cls, target["input"]) not in ANCHOR_TARGETS:
+                errors.append("anchor_target %s.%s cannot take anchors (allowed: NineRouterImage.reference_images, IPAdapterAdvanced.image)" %
+                              (cls, target["input"]))
+    if "primary_node" in tmpl:
+        primary = tmpl["primary_node"]
+        if not isinstance(primary, str) or primary not in workflow:
+            errors.append("primary_node %r is not a node of the workflow" % (primary,))
+        else:
+            node = workflow[primary]
+            cls = node.get("class_type") if isinstance(node, dict) else None
+            if cls not in runfiles.GENERATION_NODES:
+                errors.append("primary_node %s (%s) is not a generation node (NineRouterImage, KSampler)" % (primary, cls))
+    else:
+        count = sum(1 for node in workflow.values() if isinstance(node, dict) and node.get("class_type") == "NineRouterImage")
+        if count > 1:
+            errors.append("the template has %d NineRouterImage nodes: declare primary_node (the node whose size the run requests)" % count)
+    return errors
+
+
+def wire_references(workflow, picks, target=None):
     """Adds the selected style-lock anchors to workflow in place: one LoadImage per pick (image anchor-<id>.png) and
-    a chain of ImageBatch nodes feeding NineRouterImage.reference_images. An existing reference_images link (image-edit)
+    a chain of ImageBatch nodes feeding the target input (default NineRouterImage.reference_images). An existing link
     stays the first image. New node ids are the next free integers. Returns errors ([] when nothing to wire)."""
     if not picks:
         return []
-    targets = [n for n in workflow.values() if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
-    if len(targets) != 1:
-        return ["style lock: the template needs exactly one NineRouterImage node to take reference images, found %d" % len(targets)]
-    inputs = targets[0]["inputs"]
+    if target is None:
+        targets = [n for n in workflow.values() if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
+        if len(targets) != 1:
+            return ["style lock: the template needs exactly one NineRouterImage node to take reference images, found %d" % len(targets)]
+        inputs, input_name = targets[0]["inputs"], "reference_images"
+    else:
+        inputs, input_name = workflow[target["node"]].setdefault("inputs", {}), target["input"]
     next_id = [max([int(k) for k in workflow if str(k).isdigit()] or [0])]
 
     def add(node):
         next_id[0] += 1
         workflow[str(next_id[0])] = node
         return [str(next_id[0]), 0]
-    images = [inputs["reference_images"]] if lint.is_link(inputs.get("reference_images")) else []
+    images = [inputs[input_name]] if lint.is_link(inputs.get(input_name)) else []
     for pick in picks:
         aid = pick.get("anchor_id")
         if not isinstance(aid, str) or not stylelock.ID.match(aid):
@@ -437,16 +488,17 @@ def wire_references(workflow, picks):
     for i, image in enumerate(images[1:], 1):
         link = add({"class_type": "ImageBatch", "inputs": {"image1": link, "image2": image},
                     "_meta": {"title": "Reference batch %d" % i}})
-    inputs["reference_images"] = link
+    inputs[input_name] = link
     return []
 
 
 REFERENCES = "References"
 REFERENCES_NOTE = ("Style-lock anchors added by render: references/anchor-<id>.png, batched into the image node "
                    "reference_images.")
+REFERENCES_NOTE_TARGET = "Style-lock anchors added by render: references/anchor-<id>.png, batched into %s.%s."
 
 
-def ui_with_references(ui, workflow, template_workflow):
+def ui_with_references(ui, workflow, template_workflow, note=REFERENCES_NOTE):
     """The template ui block for to_ui with the nodes render added to the template workflow (wire_references: style-lock
     anchors and their ImageBatch chain) in the References group: the existing group of that title, else a new one
     (palette color cyan, one Note) inserted at its graphstyle.STAGES position. A copy; spec and template data are never
@@ -466,7 +518,7 @@ def ui_with_references(ui, workflow, template_workflow):
     at = next((i for i, g in enumerate(groups) if isinstance(g, dict) and g.get("title") in graphstyle.STAGES
                and graphstyle.STAGES.index(g["title"]) > rank), len(groups))
     groups.insert(at, {"title": REFERENCES, "color": "cyan", "nodes": added})
-    ui["notes"] = list(ui.get("notes") or []) + [{"text": REFERENCES_NOTE, "group": REFERENCES}]
+    ui["notes"] = list(ui.get("notes") or []) + [{"text": note, "group": REFERENCES}]
     return ui
 
 
@@ -1734,9 +1786,12 @@ def main(argv=None):
             if not errors:
                 try:
                     tmpl = spec["template"]["data"]
+                    target = tmpl.get("anchor_target")
+                    note = (REFERENCES_NOTE_TARGET % (workflow[target["node"]]["class_type"], target["input"])
+                            if target is not None else REFERENCES_NOTE)
                     ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
                                           {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}},
-                                          ui_with_references(tmpl.get("ui"), workflow, tmpl.get("workflow")))
+                                          ui_with_references(tmpl.get("ui"), workflow, tmpl.get("workflow"), note))
                 except ValueError as exc:
                     errors.append("workflow.ui.json: %s" % exc)
             if errors:
