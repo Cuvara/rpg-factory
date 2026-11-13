@@ -839,6 +839,46 @@ def _():
          "literal value")
 
 
+def late_image_node(source="1"):
+    """The hybrid template with the image node renamed 3 -> 30 (its id sorts after the encoders) and its user_prompt
+    linked from source; source "31" adds a second PrimitiveStringMultiline with literal text."""
+    def mutate(d):
+        wf = d["workflow"]
+        wf["30"] = wf.pop("3")
+        for nid, name in (("10", "image"), ("11", "pixels"), ("16", "images")):
+            wf[nid]["inputs"][name] = ["30", 0]
+        gen = next(g for g in d["ui"]["groups"] if g["title"] == "Generate")
+        gen["nodes"] = ["30" if n == "3" else n for n in gen["nodes"]]
+        if source == "31":
+            into(d, "Prompt", "31", {"class_type": "PrimitiveStringMultiline", "_meta": {"title": "API prompt"},
+                                     "inputs": {"value": "A second prompt typed for the API leg."}})
+        wf["30"]["inputs"]["user_prompt"] = [source, 0]
+    return mutate
+
+
+@case("hybrid prompt: an image node whose id sorts after the encoder, fed from a second PrimitiveStringMultiline, FAILS in the template and the UI form; fed from the reviewed prompt it passes")
+def _():
+    names = ('node 30 (NineRouterImage "Generate base image") user_prompt is linked from node 31 '
+             '(PrimitiveStringMultiline "API prompt"), a second prompt node', 'node 1 (PrimitiveStringMultiline')
+    data = hybrid(late_image_node("31"))
+    hits = rule(graphstyle.template_violations(data, KNOWN), "prompt", *names)
+    assert len([h for h in hits if "second prompt node" in h]) == 1, hits
+    assert graphstyle.template_row(data, KNOWN, "h.json")["state"] == "FAIL"
+    hits = rule(graphstyle.ui_violations(ui_form(data), KNOWN), "prompt", *names)
+    assert len(hits) == 1, hits
+    good = hybrid(late_image_node("1"))
+    assert graphstyle.template_violations(good, KNOWN) == []
+    assert profile_violations(good) == []
+    assert graphstyle.ui_violations(ui_form(good), KNOWN) == []
+
+
+@case("hybrid prompt: a literal NineRouterImage.user_prompt is one prompt violation (the _check message, no fan-out duplicate)")
+def _():
+    data = hybrid(set_input("3", "user_prompt", "a literal prompt"))
+    hits = rule(graphstyle.template_violations(data, KNOWN), "prompt", "node 3 (NineRouterImage", "literal value")
+    assert len(hits) == 1, hits
+
+
 def second_checkpoint(d, name="sd_xl_refiner_1.0.safetensors"):
     into(d, "Models", "17", {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": name},
                              "_meta": {"title": "Load refiner checkpoint"}})
@@ -955,6 +995,10 @@ PROFILE_CASES = [
      set_input("4", "ckpt_name", "flux1-dev-Q8_0.gguf"), "local-4gb", ("node 4 (CheckpointLoaderSimple", "under profile local-4gb")),
     ("flux", "a GGUF Q8 Flux checkpoint under local-8gb", set_input("4", "ckpt_name", "flux1-dev-Q8_0.gguf"), None, None),
     ("flux", "an fp8 Flux checkpoint under local-8gb", set_input("4", "ckpt_name", "flux1-dev-fp8.safetensors"), None, None),
+    ("flux", "a literal negative prompt mentioning flux under local-8gb (prompt text is not a model file)",
+     set_input("9", "text", "blurry, flux artifacts, FLUX fp16 look"), None, None),
+    ("flux", "a literal negative prompt mentioning flux under local-4gb",
+     set_input("9", "text", "blurry, flux artifacts"), "local-4gb", None),
 ]
 
 

@@ -11,6 +11,7 @@ The workflow style guide in short (rule ids in brackets):
   [prompt]         the reviewed prompt is ONE PrimitiveStringMultiline linked directly into every positive text input:
                    NineRouterImage.user_prompt, and CLIPTextEncode.text / CLIPTextEncodeSDXL.text_g, text_l when the
                    encoder's CONDITIONING reaches a KSampler positive input (directly or through ControlNetApply*).
+                   Two different prompt nodes feeding positive inputs are a violation whatever the node id order.
                    A negative-only encoder holds its own text, never the reviewed prompt node or {{prompt}}. In a
                    template that node's value is the reviewed prompt placeholder {{prompt}} (no other text), and only
                    one PrimitiveStringMultiline holds {{prompt}}.
@@ -33,8 +34,9 @@ GPU, except [profile]. Each message names the node(s) and says "under profile <i
   [batch]          a batch_size that is not 1 (a placeholder passes when its default and every option are 1).
   [tiled-vae]      a VAEDecode whose latent may be above 1024 px on a side (EmptyLatentImage, the NineRouterImage
                    size, an upscale model upstream); use VAEDecodeTiled.
-  [flux]           a Flux model file name in a local-model or pack node or requires.models: any Flux under local-4gb,
-                   unquantized Flux (no fp8, gguf, q4-q8, nf4 marker) under local-8gb.
+  [flux]           a Flux model file name in a model-file input (name ending in _name: ckpt_name, lora_name, ...) of a
+                   local-model or pack node, or in requires.models[].name (never prompt text): any Flux under
+                   local-4gb, unquantized Flux (no fp8, gguf, q4-q8, nf4 marker) under local-8gb.
 
 Two forms are checked:
   template_violations(data, known, profile=None, hardware=None) -> ["<rule>: <message>", ...] for a parsed (merged)
@@ -87,6 +89,7 @@ SIZE = re.compile(r"\s*(\d+)\s*[xX]\s*(\d+)\s*")  # NineRouterImage size "WxH"
 FLUX_RULE = {"local-4gb": "any", "local-8gb": "quantized"}
 FLUX = re.compile(r"flux", re.I)
 QUANTIZED = re.compile(r"fp8|gguf|q4|q5|q6|q8|nf4", re.I)
+MODEL_INPUT = "_name"  # a model-file input: ckpt_name, lora_name, control_net_name, model_name, unet_name, clip_name
 REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "known-nodes.json")
 _LOCAL = []
 
@@ -224,26 +227,42 @@ def _source(nodes, value):
     return None
 
 
+def _holds_prompt(nodes, nid):
+    value = nodes[nid]["inputs"].get("value")
+    return isinstance(value, str) and bool(REVIEWED_PROMPT.search(value))
+
+
 def _fan_out(nodes):
-    """prompt violations of the CLIP encoders (NineRouterImage.user_prompt keeps its own checks in _check): every
-    positive text input is a direct link from the one reviewed prompt node; a negative-only text input never uses it
-    nor holds the {{prompt}} placeholder. A graph without a CLIP encoder gets nothing here."""
+    """prompt violations of the fan-out: every positive text input (NineRouterImage.user_prompt included) is a direct
+    link from the one reviewed prompt node; a negative-only text input never uses it nor holds the {{prompt}}
+    placeholder. The missing/literal/wrong-class messages of NineRouterImage.user_prompt stay in _check. When two
+    different PrimitiveStringMultiline nodes feed positive text inputs (whatever the node id order), every input not
+    linked from the reviewed one is a "second prompt node" violation; the reviewed one is the source holding {{prompt}}
+    (template form), else the source feeding the most positive inputs, else the lowest id. A graph without a CLIP
+    encoder gets nothing here (API-only graphs keep their messages)."""
     inputs = text_inputs(nodes)
     if all(nodes[nid]["type"] == IMAGE_NODE for nid, _, _ in inputs):
         return []
     sources = [_source(nodes, nodes[nid]["inputs"].get(name)) for nid, name, positive in inputs if positive]
-    reviewed = next((s for s in sources if s is not None), None)
+    linked = [s for s in sources if s is not None]
+    reviewed = min(set(linked), key=lambda s: (not _holds_prompt(nodes, s), -linked.count(s), _sort_key(s)),
+                   default=None)
     fix = ("link it directly from the reviewed prompt %s" % _name(nodes, reviewed) if reviewed is not None
            else "link it directly from a %s" % PROMPT_NODE)
     out = []
     for nid, name, positive in inputs:
-        if nodes[nid]["type"] == IMAGE_NODE:
-            continue
         value = nodes[nid]["inputs"].get(name)
+        if nodes[nid]["type"] == IMAGE_NODE:
+            src = _source(nodes, value)
+            if src is not None and src != reviewed:
+                out.append("prompt: %s %s is linked from %s, a second prompt node; the reviewed prompt is one %s, %s, "
+                           "feeding every positive text input" % (_name(nodes, nid), name, _name(nodes, src),
+                                                                 PROMPT_NODE, _name(nodes, reviewed)))
+            continue
         if not positive:
             src = value[0] if _is_link(value) else None
-            if src is not None and src in nodes and (src in sources or (nodes[src]["type"] == PROMPT_NODE and isinstance(
-                    nodes[src]["inputs"].get("value"), str) and REVIEWED_PROMPT.search(nodes[src]["inputs"]["value"]))):
+            if src is not None and src in nodes and (src in sources or (nodes[src]["type"] == PROMPT_NODE
+                                                                        and _holds_prompt(nodes, src))):
                 out.append("prompt: %s %s feeds only negative conditioning but is linked from the reviewed prompt %s; "
                            "give the negative its own text" % (_name(nodes, nid), name, _name(nodes, src)))
             elif isinstance(value, str) and REVIEWED_PROMPT.search(value):
@@ -503,6 +522,8 @@ def _profile_rules(data, nodes, known, profile, hardware):
             return isinstance(name, str) and bool(FLUX.search(name)) and (rule == "any" or not QUANTIZED.search(name))
         for nid in local_ids:
             for name, value in sorted(nodes[nid]["inputs"].items()):
+                if not name.endswith(MODEL_INPUT):
+                    continue  # only model-file inputs (ckpt_name, lora_name, ...), never prompt text
                 hit = next((v for v in ([value] + _candidates(value, params) if isinstance(value, str) else [])
                             if refused(v)), None)
                 if hit is not None:
