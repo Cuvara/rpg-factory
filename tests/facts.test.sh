@@ -4,9 +4,10 @@
 # hard-code volatile values that belong in facts[] or in the live scripts.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 R="${RPG_FACTORY_FACTS_REGISTRY:-$ROOT/registry.json}"   # override: the stale-detection self-test below
-WS="${RPG_FACTORY_WORKSPACE:-$(jq -r .workspace.root_default "$R")}"
+WS="${RPG_FACTORY_WORKSPACE:-$(rpgf_platform_path "$(jq -r .workspace.root_default "$R")")}"
 pass=0; fail=0; skip=0
 T="$(mktemp_win)"; trap 'rm -rf "$T"' EXIT
 # Only the stale-value self-tests inherit this cache; fixture repos get their own exports.

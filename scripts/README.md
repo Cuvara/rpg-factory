@@ -154,5 +154,6 @@ tests/dogfood.sh [--installed]      # real headless Claude sessions; spends toke
 tests/dogfood-codex.sh [--dry-run]  # real `codex exec` sessions in a throwaway CODEX_HOME; spends tokens, not in run-all
 ```
 
-Workspace defaults to `/mnt/c/Workspaces/UnityIndie`; override with `RPG_FACTORY_WORKSPACE`. Python
-scripts are run with `-B` (run-all deletes `__pycache__`).
+The workspace default depends on the platform: `/c/Workspaces/UnityIndie` on Git Bash (drive form; Python on Windows
+uses `C:/Workspaces/UnityIndie`), `/mnt/c/Workspaces/UnityIndie` elsewhere (WSL form); `RPG_FACTORY_WORKSPACE`
+overrides it. Python scripts are run with `-B` (run-all deletes `__pycache__`).
