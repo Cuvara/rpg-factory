@@ -328,6 +328,39 @@
       ],
       "grade": "light",
       "grade_reason": "evidence document; the run itself is the check"
+    },
+    {
+      "id": "output-filter",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "Moved from plan assetgen-hybrid because this plan's staged-icon causes the bug and its integration QA failed on it. Start from the earlier attempt on branch feat/assetgen/hybrid-output-filter: cherry-pick its commits 6100774 (classify run outputs as SaveImage, preview or unknown; budget counts deliverables only) and d122721 (finalize moves PreviewImage files out of outputs/ first; gen-run-outputs requires outputs/ paths) onto this task branch; they touch only engine, check and test files of this plan. Its uncommitted tests/assetgen.test.sh change and tests/fixtures/assetgen/comfy-job-state.json in that worktree may be read and reused. Real bug from the plan D live e2e (one generation on staged-icon): comfy-mcp fetch_outputs also downloads the PreviewImage temp file into <run>/outputs/, so finalize and qa grade the 64 px preview as a second deliverable (png-size FAIL) and manifest would record it. Keep only the deliverables: after fetch, the engine moves every file in outputs/ that was not written by a SaveImage output node of the rendered workflow (match the run's filename_prefix and the SaveImage suffixes; PreviewImage files carry ComfyUI temp names) to <run>/previews/, before defringe, embed and qa; finalize does it as its first step and reports what it moved; nothing is deleted; the gen-run-outputs check ignores previews/. Runs whose outputs are all SaveImage files behave exactly as today. Facts from the live e2e: only staged-icon adds a 64 px PreviewImage today (staged-turnaround previews at full size, staged-sprite and staged-edit have none); fetched files are named <promptid8>_000.png and _001.png, so tell them apart by the SaveImage records of the rendered workflow, not by name alone. The budget counted the preview and an earlier failed attempt (3 of 4 used after one generation): previews/ files never count as outputs in budget. Also correct the domain doc: docs/architecture/domains/assetgen.md (around line 113) says PreviewImage fetching is unverified; the live e2e (docs/plans/assetgen-workflows/e2e.md) proved fetch_outputs brings PreviewImage files, and after this fix finalize moves them to previews/.",
+      "paths": [
+        "scripts/assetgen/budget.py",
+        "scripts/assetgen/finalize.py",
+        "scripts/assetgen/runfiles.py",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-output-filter.md",
+        "docs/architecture/domains/assetgen.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/"
+      ],
+      "deps": [
+        "live-e2e"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a run with a SaveImage file and a ComfyUI temp preview file finalizes with only the SaveImage file in outputs/ and the preview in previews/",
+        "qa and manifest never see previews/ files; gen-run-outputs passes",
+        "a run with only SaveImage outputs is unchanged (existing tests pass)",
+        "no file is deleted",
+        "budget counts only deliverables: a run with one SaveImage output and one preview uses 1, not 2",
+        "the domain doc states the observed PreviewImage behaviour and the previews/ rule, no longer 'unverified'"
+      ]
     }
   ]
 }
