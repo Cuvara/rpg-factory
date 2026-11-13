@@ -32,8 +32,9 @@
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
 # manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
-# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
-# the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
+# errors for a missing node or input; primary_node and requested_size; UNTESTED on RTX 5060), style lock QA rows
+# through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs the run's anchor copies, edges, canvas; older specs
+# without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
 # by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
 # the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
@@ -3559,7 +3560,7 @@ slrun anchor-api-001 icon-two --template image-generate && AG render --run "$SR/
 # Mutate a resolved spec, so render validates even without selected anchors and never writes a workflow on failure.
 anchor_bad() { # label jq-filter expected-message
   local label="$1" filter="$2" expected="$3" dir="$SR/anchor-bad-$1"
-  mkdir -p "$dir"; jq "$filter | .style_lock.references = []" "$dh/spec.json" > "$dir/spec.json"
+  mkdir -p "$dir"; jq --arg p "assetgen/anchor-bad-$label" "$filter | .style_lock.references = [] | .params.filename_prefix = \$p" "$dh/spec.json" > "$dir/spec.json"
   cp "$dh/prompt.md" "$dir/prompt.md"; rm -f "$dir/workflow.json" "$dir/workflow.ui.json"
   AG render --run "$dir" > "$TMP/anchor-bad" 2>&1; local status=$?
   [ "$status" -ne 0 ] && grep -Fq "$expected" "$TMP/anchor-bad" && [ ! -e "$dir/workflow.json" ] && [ ! -e "$dir/workflow.ui.json" ] \

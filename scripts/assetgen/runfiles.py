@@ -49,7 +49,8 @@ required_checks(purpose_qa) -> the QA check names every output must carry for th
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
 requested_size(workflow, spec) -> the size the run asked for: the size input of the template's primary_node
-  (NineRouterImage; a KSampler gives <w>x<h> of its EmptyLatentImage), else of the NineRouterImage with the lowest node
+  (NineRouterImage; a KSampler gives <w>x<h> of its EmptyLatentImage). A declared primary that gives no size falls
+  back to the resolved spec's size param. Without a usable declared node, use the NineRouterImage with the lowest node
   id (never dict order), else the resolved spec's size param, else "auto". qa.json records it next to the purpose
   content hash it graded with (purpose_sha256), so a QA report made before the size or the purpose qa block changed
   is stale.
