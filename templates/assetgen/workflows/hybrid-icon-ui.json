@@ -151,7 +151,7 @@
    "class_type": "ImageScale",
    "inputs": {
     "image": [
-     "2",
+     "21",
      0
     ],
     "upscale_method": "lanczos",
@@ -175,7 +175,7 @@
      1
     ],
     "image": [
-     "2",
+     "6",
      0
     ],
     "weight": 0.6,
@@ -393,6 +393,18 @@
    "_meta": {
     "title": "Save final image"
    }
+  },
+  "21": {
+   "class_type": "SplitImageWithAlpha",
+   "inputs": {
+    "image": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Drop base alpha"
+   }
   }
  },
  "ui": {
@@ -424,6 +436,7 @@
     "title": "Refine (local)",
     "color": "blue",
     "nodes": [
+     "21",
      "6",
      "7",
      "8",
@@ -474,7 +487,7 @@
     "group": "Models"
    },
    {
-    "text": "Local refine pass: the base is fitted to 1024 px so the latent never exceeds 1024 px, the IPAdapter takes the approved anchors (render batches them after the base image; without anchors the base conditions itself), batch 1, tiled VAE decode. UNTESTED on RTX 5060: IPAdapter weight 0.6 (style transfer), 24 steps, cfg 5.5, dpmpp_2m, karras and denoise 0.35 are starting points to tune in the live task, not results.",
+    "text": "Local refine pass: the base alpha is dropped before the refine (the cut-out restores alpha) and the RGB base is fitted to 1024 px so the latent never exceeds 1024 px, the IPAdapter takes the approved anchors (render batches them after the fitted RGB base; without anchors the base conditions itself), batch 1, tiled VAE decode. UNTESTED on RTX 5060: IPAdapter weight 0.6 (style transfer), 24 steps, cfg 5.5, dpmpp_2m, karras and denoise 0.35 are starting points to tune in the live task, not results.",
     "group": "Refine (local)"
    },
    {
