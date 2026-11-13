@@ -3768,7 +3768,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     # Keep the lead's QA visible above, but current integration QA also proves
     # completion in repos where the gate does not require per-task QA.
     if (not per_task_qa and integration_qa and integration_qa.get("state") == "PASS"
-            and integration_qa["sha"] == topic_head):
+            and qa_covers_head(plan, info, integration_qa.get("sha"), topic_head)):
         qa = integration_qa
     if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
         row["phase"] = "qa"

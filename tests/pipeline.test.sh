@@ -3660,6 +3660,14 @@ assert not errors, errors
 PY
 then pass=$((pass + 1)); echo "PASS  status --json matches docs/schemas/pipeline-status.schema.json"
 else fail=$((fail + 1)); echo "FAIL  status --json schema"; head -c 800 "$TMP/status.json"; fi
+# A failed task QA remains visible, but current integration QA proves completion even after a report-only commit.
+sv --task b --phase qa --sha "$SI" --by codex --state FAIL
+mkdir -p "$TMP/st-int/docs/plans/st"; echo report > "$TMP/st-int/docs/plans/st/report.md"
+gi "$TMP/st-int" add docs/plans/st/report.md; gi "$TMP/st-int" commit -qm "docs: update run report"
+SI=$(git -C "$S" rev-parse feat/core/st)
+st_phase "integration QA covers a report-only commit despite task QA FAIL" b qa
+refute "report-only commit leaves integration QA current in status" "integration QA.*STALE" status "$ST"
+rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/b__qa.json"
 sed -i 's/"objective":"o","paths":\["sa\/"\]/"objective":"changed","paths":["sa\/"]/' "$ST"
 st_phase "a changed task in the plan: its review is no longer counted; review the integration HEAD" a candidate "--task a --phase verify --sha $SI"
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
