@@ -4,14 +4,18 @@ The limit is ADVISORY. The engine cannot stop comfy-mcp run_workflow (it never r
 runs `assetgen.py budget --run <run>` before each run_workflow and does not run when remaining is 0 or the state is
 exceeded. resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default DEFAULT_MAX_OUTPUTS).
 
-used = the run's outputs/*.png + the failed attempts of its series (lower-numbered sibling run dirs without run.md).
+used = the run's deliverable outputs/*.png (excluding previews) + the failed attempts of its series (lower-numbered
+sibling run dirs without run.md).
 States: unlimited (spec.json has no budget: a run resolved before the spend guard, never a failure), ok (used <
 allowed), at-limit (used == allowed), exceeded (used > allowed), invalid (spec.budget present but malformed). Only
 exceeded and invalid exit 1. Stdlib only; never imports assetgen.
 """
 import glob
+import json
 import os
 import re
+
+import runfiles
 
 SCHEMA = "rpg-factory.assetgen-budget/1"
 DEFAULT_MAX_OUTPUTS = 4
@@ -29,10 +33,20 @@ def parse_max(text):
     return n
 
 
+def _output_counts(run_dir):
+    try:
+        with open(os.path.join(run_dir, "workflow.json"), encoding="utf-8") as f:
+            workflow = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        workflow = None
+    origins = runfiles.output_origins(run_dir, workflow)
+    previews = sum(1 for origin in origins.values() if origin["kind"] == "preview")
+    return len(origins) - previews, previews
+
+
 def count_outputs(run_dir):
-    """Number of outputs/*.png files of the run."""
-    pattern = os.path.join(glob.escape(run_dir), "outputs", "*.png")
-    return sum(1 for p in glob.glob(pattern) if os.path.isfile(p))
+    """Number of deliverable outputs/*.png files of the run."""
+    return _output_counts(run_dir)[0]
 
 
 def _limit(spec):
@@ -56,7 +70,9 @@ def state(run_dir, spec, failed_attempts):
     """The budget state of a run (see the module docstring); failed_attempts are the run ids of its series' failed
     attempts (assetgen.failed_attempts)."""
     failed = list(failed_attempts or [])
-    outputs = count_outputs(run_dir)
+    outputs, previews = _output_counts(run_dir)
+    preview_pattern = os.path.join(glob.escape(run_dir), runfiles.PREVIEW_DIR, "*")
+    previews += sum(1 for path in glob.glob(preview_pattern) if os.path.isfile(path))
     used = outputs + len(failed)
     allowed, problem = _limit(spec)
     remaining = None
@@ -77,7 +93,7 @@ def state(run_dir, spec, failed_attempts):
         else:
             st, exit_code = "exceeded", 1
             reason = "the run series used %d generations, more than the %d allowed" % (used, allowed)
-    return {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "outputs": outputs,
+    return {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "outputs": outputs, "previews": previews,
             "failed_attempts": failed, "used": used, "allowed": allowed, "remaining": remaining, "state": st,
             "reason": reason, "exit": exit_code}
 
@@ -90,8 +106,9 @@ def line(st):
     """One text line: "budget <state>: ..."."""
     used = "%d used (%s + %s)" % (st["used"], _plural(st["outputs"], "output"),
                                    _plural(len(st["failed_attempts"]), "failed attempt"))
+    preview_note = " (%s not counted)" % _plural(st.get("previews", 0), "preview file") if st.get("previews", 0) else ""
     if st["state"] == "unlimited":
-        return "budget unlimited: %s; spec.json has no budget (resolved before the spend guard)" % used
+        return "budget unlimited: %s; spec.json has no budget (resolved before the spend guard)%s" % (used, preview_note)
     if st["state"] == "invalid":
-        return "budget invalid: %s; %s" % (used, st["reason"])
-    return "budget %s: %s of %d allowed, %d remaining (advisory)" % (st["state"], used, st["allowed"], st["remaining"])
+        return "budget invalid: %s; %s%s" % (used, st["reason"], preview_note)
+    return "budget %s: %s of %d allowed, %d remaining%s (advisory)" % (st["state"], used, st["allowed"], st["remaining"], preview_note)
