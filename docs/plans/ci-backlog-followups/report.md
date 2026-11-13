@@ -5,10 +5,10 @@ PR #111). It closes backlog topic `ci-backlog-followups`.
 
 ## Summary
 
-- `tests/routing.test.sh` defaults the workspace by platform when `RPG_FACTORY_WORKSPACE` is unset: the `/c/` drive
-  form on Git Bash (MINGW, MSYS, Cygwin), the WSL form elsewhere; an explicit value wins (task `routing-workspace`).
+- `tests/routing.test.sh` defaults the workspace by platform when `RPG_FACTORY_WORKSPACE` is unset: the Git Bash
+  drive form on Git Bash (MINGW, MSYS, Cygwin), the WSL form elsewhere; an explicit value wins (task `routing-workspace`).
 - `factory-pipeline.py dispatch` prints the Windows `python3` Store-alias line also when `python3` on PATH is a shim:
-  on win32 it probes `%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe` directly (task `alias-probe`).
+  on win32 it probes `python3.exe` in the per-user WindowsApps folder directly (task `alias-probe`).
 - `scripts/lib/pipeline_route.py` reads the Codex config through `scripts/lib/codexconfig.py` (`config_path()`,
   `config()`); availability and its reasons are unchanged (task `codex-config-reuse`, which also aligned the alias
   wording in `docs/pipeline-cli.md` and `changelog.d/dispatch-notes.md`).
