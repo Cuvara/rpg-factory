@@ -61,12 +61,14 @@
       "kind": "code",
       "grade": "light",
       "grade_reason": "refactor of one helper onto an existing reader, behaviour unchanged",
-      "objective": "Backlog topic ci-backlog-followups item 3: scripts/lib/pipeline_route.py has _codex_config_path() and a tomllib load inside _codex_auth() that repeat scripts/lib/codexconfig.py home() and config(). Reuse codexconfig: compute the config path from codexconfig.home() (add a small codexconfig.config_path() if that reads better and use it in config() too) and get the parsed data from codexconfig.config() (which returns {} for a missing, unreadable or invalid file and on Python without tomllib). Keep the behaviour and the 'why' strings of _codex_auth() and the cache key in available() (it stats the config path) exactly as now; never print header or key values. Import codexconfig the way other scripts/lib modules import their siblings (both package and flat import forms if pipeline_route needs both). The existing codex-detect cases in tests/pipeline.test.sh must pass unchanged; add one case if a path was not covered (an invalid TOML file means no override). Changelog fragment changelog.d/codex-config-reuse.md (### Changed).",
+      "objective": "Backlog topic ci-backlog-followups item 3: scripts/lib/pipeline_route.py has _codex_config_path() and a tomllib load inside _codex_auth() that repeat scripts/lib/codexconfig.py home() and config(). Reuse codexconfig: compute the config path from codexconfig.home() (add a small codexconfig.config_path() if that reads better and use it in config() too) and get the parsed data from codexconfig.config() (which returns {} for a missing, unreadable or invalid file and on Python without tomllib). Keep the behaviour and the 'why' strings of _codex_auth() and the cache key in available() (it stats the config path) exactly as now; never print header or key values. Import codexconfig the way other scripts/lib modules import their siblings (both package and flat import forms if pipeline_route needs both). The existing codex-detect cases in tests/pipeline.test.sh must pass unchanged; add one case if a path was not covered (an invalid TOML file means no override). Changelog fragment changelog.d/codex-config-reuse.md (### Changed). Also, because task alias-probe (a dependency) made python_alias_line probe %LOCALAPPDATA%\\Microsoft\\WindowsApps\\python3.exe even when python3 on PATH is a shim, align the wording that still says the line appears only when python3 resolves into WindowsApps: docs/pipeline-cli.md ('dispatch', the Windows python3 alias sentence) and changelog.d/dispatch-notes.md (unreleased fragment); one sentence each, no other doc change.",
       "paths": [
         "scripts/lib/pipeline_route.py",
         "scripts/lib/codexconfig.py",
         "tests/pipeline.test.sh",
-        "changelog.d/codex-config-reuse.md"
+        "changelog.d/codex-config-reuse.md",
+        "docs/pipeline-cli.md",
+        "changelog.d/dispatch-notes.md"
       ],
       "exclusions": [],
       "deps": [
@@ -77,7 +79,8 @@
       ],
       "acceptance": [
         "pipeline_route.py has no own CODEX_HOME resolution or tomllib load",
-        "codex availability behaviour and why strings are unchanged; the codex-detect cases pass"
+        "codex availability behaviour and why strings are unchanged; the codex-detect cases pass",
+        "docs/pipeline-cli.md and changelog.d/dispatch-notes.md describe the WindowsApps probe"
       ]
     }
   ]
