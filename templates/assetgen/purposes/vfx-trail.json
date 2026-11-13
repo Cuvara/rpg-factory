@@ -60,7 +60,7 @@
  ],
  "constraints": {
   "background": "Opaque pure black (#000000) background; the streak is bright and suits additive blending.",
-  "layout": "Landscape strip; the streak runs horizontally across the full width and is tileable on the x axis only.",
+  "framing": "Landscape strip; the streak runs horizontally across the full width and is tileable on the x axis only.",
   "processing": "Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool."
  },
  "qa": {

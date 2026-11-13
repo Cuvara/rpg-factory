@@ -53,6 +53,7 @@
   "No unwanted text, watermark, signature or frame."
  ],
  "constraints": {
+  "background": "Opaque; the noise fills the whole frame on a pure-black (#000000) base, darkest values black.",
   "lighting": "Even coverage with no baked light direction and no vignette.",
   "processing": "Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool."
  },
