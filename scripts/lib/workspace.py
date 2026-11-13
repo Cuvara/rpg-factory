@@ -4,12 +4,15 @@
   main_checkout(top)               the main checkout of a work tree (parent of its common .git directory)
   linked_worktree(d)               (toplevel, main checkout) of a linked worktree, read from its `.git` file (no git call)
   native_path(p) / native_abs(p)   a path written in another shell's drive form as this platform resolves it
+  default_workspace(env, nt)      the configured workspace or the platform's default path
 
 Stdlib only and cheap to import: the file guard loads it on every Read.
 """
 import os
 import re
 import subprocess
+
+WSL_WORKSPACE_DEFAULT = "/mnt/c/Workspaces/UnityIndie"
 
 
 def git_out(cwd, *args, timeout=5):
@@ -28,6 +31,12 @@ def native_path(p, nt=None):
         return p
     m = re.match(r"^/mnt/([A-Za-z])(/|$)", p) or re.match(r"^/([A-Za-z])(/|$)", p)
     return f"{m.group(1).upper()}:/{p[m.end():]}" if m else p
+
+
+def default_workspace(env=None, nt=None):
+    """Return the configured workspace, or the default in the native path form."""
+    env = os.environ if env is None else env
+    return env.get("RPG_FACTORY_WORKSPACE") or native_path(WSL_WORKSPACE_DEFAULT, nt)
 
 
 def native_abs(p):
