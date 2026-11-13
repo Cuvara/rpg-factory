@@ -679,15 +679,21 @@ def _():
     assert lint.template_errors(hybrid(), "hybrid-clean") == ([], [])
 
 
-@case("hardware=None keeps the old result: clean.json and every core template give the same row with and without the lint.hardware() profiles")
+@case("hardware=None keeps the old result: clean.json and every core template give the same row with and without the lint.hardware() profiles; a core template with a local requires.profile FAILs (profile:) under each profile ranking below it")
 def _():
     hw = hardware_profiles()
     assert list(hw) == ["api-only", "local-4gb", "local-8gb"], list(hw)
     for name, data in [("clean.json", template())] + core_templates():
         base = graphstyle.template_row(data, KNOWN, name)
         assert graphstyle.template_row(data, KNOWN, name, None, None) == base, name
+        req = data.get("requires") if isinstance(data.get("requires"), dict) else {}
+        declared = req.get("profile") if req.get("profile") in hw else None
         for profile in [None] + list(hw):
-            assert graphstyle.template_row(data, KNOWN, name, profile, hw) == base, (name, profile)
+            row = graphstyle.template_row(data, KNOWN, name, profile, hw)
+            if profile is not None and declared is not None and list(hw).index(profile) < list(hw).index(declared):
+                assert row["state"] == "FAIL" and any(r.startswith("profile:") and profile in r for r in row["reasons"]), (name, profile, row)
+            else:
+                assert row == base, (name, profile)
         if name.startswith("staged-") or name == "clean.json":
             assert base["state"] == "PASS" and base["reasons"] == [], (name, base)
 
