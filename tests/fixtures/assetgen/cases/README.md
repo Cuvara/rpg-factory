@@ -40,8 +40,9 @@ without editing a purpose's cases file). `<purpose>` is a core purpose, `<templa
 
 For every variant, from either form, the test compares `golden/<purpose>--<template>.json`, converts the run's
 `workflow.ui.json` back to `workflow.json`, and, when the template declares `anchor_target`, the first purpose
-(by file name) with a `cases/<purpose>--<template>.json` is rendered in the style lock repo: the purpose's style-lock
-anchors must reach the `anchor_target` input after the template's own link, `graph-lint --run` must pass and a repeat
+(by file name) with a `cases/<purpose>--<template>.json` is rendered in the style lock repo with `--family props`
+(the fixture's anchors are props anchors; a purpose's own family may select none): the selected style-lock anchors
+must reach the `anchor_target` input after the template's own link, `graph-lint --run` must pass and a repeat
 `render --run` must be byte-identical. A core template that declares `anchor_target` needs at least one such file.
 
 ## Golden naming
