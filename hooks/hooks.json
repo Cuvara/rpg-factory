@@ -1,5 +1,5 @@
 {
-  "description": "rpg-factory advisories (fail-safe: every command ends with exit 0, so a missing or broken script never blocks): git guard (Bash and PowerShell tools), file guard, skill order and a stale-install check at session start.",
+  "description": "rpg-factory advisories (fail-safe: every command ends with exit 0, so a missing or broken script never blocks): git guard (Bash and PowerShell tools; the Agent tool for the English-only prompt check), file guard, skill order and a stale-install check at session start.",
   "hooks": {
     "SessionStart": [
       {
@@ -15,6 +15,16 @@
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/git-guard.py\"; exit 0",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
         "hooks": [
           {
             "type": "command",
