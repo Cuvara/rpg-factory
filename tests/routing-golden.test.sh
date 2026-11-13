@@ -107,10 +107,19 @@ if [ "${1:-}" = "--update" ]; then
   echo "routing-golden: updated $n scenarios ($(jq 'length' "$TMP/merged.json") in the file, host-dependent ones this host cannot evaluate kept)"; exit 0
 fi
 [ -f "$GOLDEN" ] || { echo "FAIL  no golden file $GOLDEN"; exit 1; }
+# every snapshot prints the Language line, without --full, with the registry report language
+LANG_WANT="$(jq -r '.workspace.report_language // "the user'"'"'s language"' "$ROOT/registry.json")"
+snap="$(RPG_FACTORY_WORKSPACE="$SW" bash "$ROOT/scripts/factory-context.sh" --repo all 2>&1)"
+if grep -qxF "**Language:** write everything in English (files, plans, briefs, messages, commits, PR text); report to the owner in $LANG_WANT." <<<"${snap//$'
+'/}"; then
+  selftest_pass=$((selftest_pass + 1)); echo "PASS  snapshot without --full prints the Language line ($LANG_WANT)"
+else
+  selftest_fail=$((selftest_fail + 1)); echo "FAIL  snapshot without --full lacks the Language line"; grep -n 'Language' <<<"$snap" | head -3 | sed 's/^/      /'
+fi
 if [ "$n" -lt 40 ]; then echo "FAIL  only $n scenarios recorded (expected >= 40)"; tail -5 "$TMP/routing.log"; exit 1; fi
 if golden_diff "$GOLDEN" "$TMP/current.json" "$TMP/diff.txt"; then
   echo "PASS  routing contract identical to the golden file ($n scenarios)"
-  echo "routing-golden: $((selftest_pass + 1)) passed, $selftest_fail failed"; exit 0
+  echo "routing-golden: $((selftest_pass + 1)) passed, $selftest_fail failed"; [ "$selftest_fail" -eq 0 ]; exit $?
 fi
 echo "FAIL  routing contract changed:"; head -60 "$TMP/diff.txt" | sed 's/^/      /'
 echo "routing-golden: $selftest_pass passed, $((selftest_fail + 1)) failed"; exit 1
