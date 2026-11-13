@@ -5,7 +5,7 @@ Usage:
   assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
   assetgen.py show ID [--kind K] [--authoring DIR] [--json]
   assetgen.py resolve --purpose P [--style S] [--template T] [--family F] [--style-override REASON] [--authoring DIR]
-                      [--max-outputs N] [--out FILE] [--verbose] [--json]
+                      [--profile api-only|local-4gb|local-8gb|auto] [--max-outputs N] [--out FILE] [--verbose] [--json]
   assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
   assetgen.py graph-lint [PATH...] [--run RUN] [--authoring DIR] [--json]
@@ -51,6 +51,15 @@ list the params render used (rendered_params: read back from workflow.json, so a
 params before the first render), and each review is bound to exactly those params.
 Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
 style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
+
+Profile routing (UNTESTED on RTX 5060: nothing was generated or measured on the target machine): resolve --profile
+picks the template per purpose and hardware profile (data/hardware.json) from scripts/assetgen/data/template-profiles.json
+(a game layer adds or replaces entries in <authoring>/assetgen/template-profiles.json; a routed template that no layer
+has yet falls back to the next lower profile, finally to the purpose's default_template). --profile auto reads
+<state>/assetgen/hardware-profile.json (the persistent state dir), the saved output of comfy-desktop-setup.py --check
+--json, else api-only. A template whose requires.profile is above the chosen profile is refused (exit 1), a --template
+too; --template still overrides the route. The spec records spec.profile = {id, requested, source, template,
+template_from, requires} and resolve prints a "profile ..." line; without --profile nothing changes.
 
 Style lock (scripts/assetgen/stylelock.py): resolve picks the family (--family, else the purpose's default_family) and
 the style (stylelock.choose: <authoring>/assetgen/project.json, its allowed_styles and families; a style outside them
@@ -282,14 +291,61 @@ def read_prompt(path):
 
 # -- resolve ---------------------------------------------------------------------------------------------------
 
-def resolve_spec(purpose, style, template, authoring, family=None, override=None):
+RECORDED_PROFILE = ("assetgen", "hardware-profile.json")  # under fstate.persistent(): saved comfy-desktop-setup --check --json
+
+
+def recorded_profile_path():
+    """Where --profile auto reads the machine's profile (the saved comfy-desktop-setup.py --check --json output)."""
+    return os.path.abspath(os.path.join(fstate.persistent(), *RECORDED_PROFILE))
+
+
+def choose_profile(requested):
+    """({"id", "requested", "source"}, warnings) for resolve --profile: a profile id as given, or auto: the recorded
+    profile (recorded_profile_path), else api-only (with a warning when the file exists but cannot be used)."""
+    if requested != "auto":
+        return {"id": requested, "requested": requested, "source": "--profile"}, []
+    path = recorded_profile_path().replace(os.sep, "/")
+    if not os.path.exists(path):
+        return {"id": "api-only", "requested": "auto", "source": "auto: no recorded profile at " + path}, []
+    reason = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, ValueError):
+        reason = "is not readable JSON"
+    if reason is None:
+        prof = obj.get("profile") if isinstance(obj, dict) else None
+        ident = prof.get("id") if isinstance(prof, dict) else prof
+        if not isinstance(ident, str) or not ident:
+            reason = "has no profile id"
+        elif ident not in [p["id"] for p in layers.hardware_profiles()]:
+            reason = "names unknown profile %r" % ident
+        else:
+            return {"id": ident, "requested": "auto", "source": "recorded " + path}, []
+    return ({"id": "api-only", "requested": "auto", "source": "auto: " + path + " " + reason},
+            ["auto profile: %s; using api-only" % reason])
+
+
+def resolve_spec(purpose, style, template, authoring, family=None, override=None, profile=None):
     """layers.resolve with the style lock: stylelock.choose picks the family and style (project.json, refusals and
     the override), then spec.style_lock records the project, family, style ref, override, the selected anchors and
     the relevant rejections. stylelock.family_fallback (purpose, else project.json anchor_family_fallback) decides
     whether anchors of another family may fill the selection; spec.warnings names each such pick (and the anchors a
-    false fallback left out)."""
+    false fallback left out). profile (a choose_profile record; UNTESTED on RTX 5060): without a template the route
+    of layers.route_template picks it (its warnings go first); a template above the profile is refused (SpecError);
+    spec.profile records the choice. profile None: the spec is exactly as without profile routing."""
+    route_warnings, template_from = [], None
+    if profile is not None:
+        if template:
+            template_from = "--template"
+        else:
+            template, template_from, route_warnings = layers.route_template(purpose, profile["id"], authoring)
     choice = stylelock.choose(layers.load("purpose", purpose, authoring), authoring, family, style, override)
     spec = layers.resolve(purpose, choice["style_id"], template, authoring)
+    if profile is not None:
+        error = layers.profile_fit_error(spec["template"], profile["id"])
+        if error:
+            raise layers.SpecError(error)
     ref = stylelock.style_ref(spec["style"])
     cap = stylelock.max_references(spec["purpose"]["data"], spec["template"]["data"])
     picks, warnings = stylelock.select_with_warnings(
@@ -301,7 +357,19 @@ def resolve_spec(purpose, style, template, authoring, family=None, override=None
                           "style": ref, "override": choice["override"], "max_references": cap, "references": picks,
                           "rejections": rejections}
     spec["warnings"] = warnings  # cross-family anchor picks (resolve prints them; not part of the style lock record)
+    if profile is not None:
+        spec["warnings"] = route_warnings + spec["warnings"]
+        spec["profile"] = {"id": profile["id"], "requested": profile["requested"], "source": profile["source"],
+                           "template": spec["template"]["id"], "template_from": template_from,
+                           "requires": layers.template_requires_profile(spec["template"])}
     return spec
+
+
+def profile_line(prof):
+    """resolve's text line for spec.profile."""
+    return ("profile %s [%s], template %s [%s], requires %s" % (
+        prof["id"], prof["source"], prof["template"], prof["template_from"], prof["requires"])
+        + (" (local profiles are UNTESTED on RTX 5060)" if prof["id"] != "api-only" else ""))
 
 
 def style_lock_lines(lock):
@@ -1585,6 +1653,8 @@ def resolve_text(spec, verbose):
     """resolve's text output: a short summary; verbose adds the source of every param, hint and field."""
     head = ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(
         x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
+    if spec.get("profile"):
+        head.append(profile_line(spec["profile"]))
     if verbose:
         return "\n".join(head
                          + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
@@ -1688,6 +1758,9 @@ def main(argv=None):
     c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
     c.add_argument("--family"); c.add_argument("--style-override", metavar="REASON")
     c.add_argument("--authoring"); c.add_argument("--out")
+    c.add_argument("--profile", metavar="PROFILE", help="pick the template for this hardware profile: api-only, "
+                   "local-4gb, local-8gb or auto (the profile saved from comfy-desktop-setup.py --check --json, else "
+                   "api-only); local profiles are UNTESTED on RTX 5060")
     c.add_argument("--max-outputs", metavar="N", help="advisory limit of generations per run series, recorded as "
                    "spec.budget.max_outputs (default %d)" % budget.DEFAULT_MAX_OUTPUTS)
     c.add_argument("--verbose", action="store_true", help="also print the source of every param, hint and field")
@@ -1757,7 +1830,15 @@ def main(argv=None):
                     max_outputs = budget.parse_max(a.max_outputs)
                 except ValueError as exc:
                     fail("--max-outputs %s: %s" % (a.max_outputs, exc), 2)
-            spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override)
+            profile, profile_warnings = None, []
+            if a.profile is not None:
+                ids = [p["id"] for p in layers.hardware_profiles()] + ["auto"]
+                if a.profile not in ids:
+                    fail("--profile %s: one of %s (data/hardware.json)" % (a.profile, ", ".join(ids)), 2)
+                profile, profile_warnings = choose_profile(a.profile)
+            spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override, profile)
+            if profile is not None:
+                spec["warnings"] += profile_warnings
             spec["budget"] = {"max_outputs": max_outputs}
             run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
             if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
