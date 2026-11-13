@@ -17,7 +17,7 @@
       "id": "hardware-profile",
       "repo": "plugin",
       "kind": "code",
-      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Turn the hardware requirement into data the machine can check. Add scripts/assetgen/data/hardware.json with profiles api-only, local-4gb (SD1.5 class, no SDXL) and local-8gb (RTX 5060 8 GB, 32 GB RAM: SDXL pruned fp16 or fp8 at 1024 px batch 1, one SDXL ControlNet at a time, IPAdapter, tiled VAE, 4x upscaler, BiRefNet or rembg cut-out; no Flux fp16, Flux GGUF only as an optional later step, no 3D mesh generation) with min vram_gb, min ram_gb, min free disk and the torch requirement (CUDA 12.8 or newer build so Blackwell sm_120 kernels exist). Extend scripts/comfy-desktop-setup.py --check (read-only) with rows gpu (name and VRAM from nvidia-smi, absent is NOT_AVAILABLE), torch (the instance env's torch version and CUDA build, sm_120 support) and profile (the best profile the machine meets, printed, never applied). It must never download models or install packs; models and packs are listed as missing for the user to approve. Cover it with fake nvidia-smi and fake instance env fixtures in tests/comfy-desktop-setup.test.sh (a 4 GB card, a 5060 8 GB, no GPU). UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "objective": "Target machine: Windows 11, NVIDIA RTX 5060 with 8 GB VRAM, 32 GB RAM (the RTX 5060 is on another machine than the one the plugin is developed on, where nvidia-smi shows a GTX 1650 with 4 GB). Turn the hardware requirement into data the machine can check. Add scripts/assetgen/data/hardware.json with profiles api-only, local-4gb (SD1.5 class, no SDXL) and local-8gb (RTX 5060 8 GB, 32 GB RAM: SDXL pruned fp16 or fp8 at 1024 px batch 1, one SDXL ControlNet at a time, IPAdapter, tiled VAE, 4x upscaler, BiRefNet or rembg cut-out; no Flux fp16, Flux GGUF only as an optional later step, no 3D mesh generation) with min vram_gb, min ram_gb, min free disk and the torch requirement (CUDA 12.8 or newer build so Blackwell sm_120 kernels exist). Extend scripts/comfy-desktop-setup.py --check (read-only) with rows gpu (name and VRAM from nvidia-smi, absent is NOT_AVAILABLE), torch (the instance env's torch version and CUDA build, sm_120 support) and profile (the best profile the machine meets, printed, never applied). It must never download models or install packs; models and packs are listed as missing for the user to approve. Cover it with fake nvidia-smi and fake instance env fixtures in tests/comfy-desktop-setup.test.sh (a 4 GB card, a 5060 8 GB, no GPU). UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch. Also fix the setup gap the asset-gen live e2e hit: comfy-mcp wraps the comfy-cli binary and resolves it with shutil.which(COMFY_BIN) (default `comfy` on PATH), but the setup installed comfy-mcp without comfy-cli and registered no COMFY_BIN, so every comfy-mcp tool failed with a bare 'Error executing tool'. --check gets a row comfy-cli (present in the comfy-mcp venv, version at least 1.14.0, and COMFY_BIN set in both MCP registrations to that binary); --apply installs comfy-cli into the venv and registers COMFY_BIN together with COMFY_LOCAL_URL for Claude and Codex. Note: `claude mcp add` takes a variadic -e, so the name and command go after `--`.",
       "paths": [
         "scripts/assetgen/data/hardware.json",
         "scripts/comfy-desktop-setup.py",
@@ -34,7 +34,32 @@
         "--check prints gpu, torch and profile rows and writes nothing",
         "a 4 GB card resolves to local-4gb, a 5060 8 GB with a CUDA 12.8 torch to local-8gb, no GPU or a torch without sm_120 to api-only with the reason",
         "the check never prints a credential and never downloads or installs anything",
-        "existing comfy-desktop-setup assertions are unchanged and pass"
+        "existing comfy-desktop-setup assertions are unchanged and pass",
+        "--check reports a missing comfy-cli or COMFY_BIN as a row; --apply installs it and registers COMFY_BIN for both CLIs (fake CLIs in the test)"
+      ]
+    },
+    {
+      "id": "ui-output-row",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Layout fix found in the asset-gen live e2e screenshot: in workflow.ui.json the wire from the Generate node to the Save node runs along the same row as the Post-process -> Preview chain, so the Save node looks fed by the 64 px preview although it saves the full-size image. In scripts/assetgen/uiworkflow.py place a node whose input comes from a stage further left than its own previous stage on its own row (or offset the Output row) so wires never run through unrelated nodes; keep group bounding, notes, colors and the UI-to-API round trip. Regenerate the staged goldens' workflow.ui.json expectations only where the layout assertions need it.",
+      "paths": [
+        "scripts/assetgen/uiworkflow.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-ui-output-row.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "for staged-icon the Save node no longer shares the row of the Preview chain and its wire crosses no other node",
+        "the UI graph still converts back to exactly the API graph and workflow.json is unchanged",
+        "groups still contain their members and notes"
       ]
     },
     {
@@ -51,7 +76,8 @@
       ],
       "exclusions": [],
       "deps": [
-        "hardware-profile"
+        "hardware-profile",
+        "ui-output-row"
       ],
       "checks": [
         "tests/assetgen.test.sh"
@@ -287,7 +313,7 @@
       "id": "mcp-hybrid-rules",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Rules for an agent building or running hybrid workflows through comfy-mcp. In skills/comfyui (references/workflow-style.md and SKILL.md): run comfy-desktop-setup --check and read the gpu, torch and profile rows first; resolve with --profile; never run a local template on a lower profile; render, lint, graph-lint and live validate_workflow before run_workflow; start from a core or game-layer template, never a free-form graph; never install packs or download models without the user's yes; report the profile, the models and seed in the run. skills/asset-gen/SKILL.md names the rule within its 160-line cap. Cite code by anchor symbol and docs by section. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch.",
+      "objective": "Rules for an agent building or running hybrid workflows through comfy-mcp. In skills/comfyui (references/workflow-style.md and SKILL.md): run comfy-desktop-setup --check and read the gpu, torch and profile rows first; resolve with --profile; never run a local template on a lower profile; render, lint, graph-lint and live validate_workflow before run_workflow; start from a core or game-layer template, never a free-form graph; never install packs or download models without the user's yes; report the profile, the models and seed in the run. skills/asset-gen/SKILL.md names the rule within its 160-line cap. Cite code by anchor symbol and docs by section. UNTESTED on target hardware: the user will test on the RTX 5060 8 GB machine after merge. State this wherever the artifact is described (template description starts with 'UNTESTED on RTX 5060:', docs, changelog), never claim a measured number, a passing generation or a quality result for the local branch. Also make skills/comfyui/references/workflow-style.md agree with the staged templates: it says post-process feeds previews only and the deliverable is the image node's output, but staged-texture saves the ImageScale resize and staged-turnaround saves the ImageSharpen output; state the actual rule (a post-process node may produce the deliverable when the purpose needs it, named per template).",
       "paths": [
         "skills/comfyui/SKILL.md",
         "skills/comfyui/references/workflow-style.md",
