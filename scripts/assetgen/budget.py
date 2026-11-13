@@ -5,7 +5,7 @@ runs `assetgen.py budget --run <run>` before each run_workflow and does not run 
 exceeded. resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default DEFAULT_MAX_OUTPUTS).
 
 used = the run's deliverable outputs/*.png (excluding previews) + the failed attempts of its series (lower-numbered
-sibling run dirs without run.md).
+sibling run dirs without run.md). Output classification uses fetch.json evidence via runfiles.output_origins.
 States: unlimited (spec.json has no budget: a run resolved before the spend guard, never a failure), ok (used <
 allowed), at-limit (used == allowed), exceeded (used > allowed), invalid (spec.budget present but malformed). Only
 exceeded and invalid exit 1. Stdlib only; never imports assetgen.

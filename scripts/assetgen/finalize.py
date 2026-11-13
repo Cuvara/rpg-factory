@@ -3,6 +3,7 @@
 filter comes first: fetch_outputs also downloads PreviewImage files into outputs/, so every outputs/*.png that
 runfiles.output_origins classifies as a preview (not written by a SaveImage node of the rendered workflow.json) is moved
 to <run>/previews/ (never overwritten, never deleted); a file with no SaveImage or preview evidence stays and is reported.
+The primary source evidence is fetch.json; the comfy-cli job state is the fallback.
 filter FAILs, moving nothing, when every output is a preview. Runs whose outputs are all SaveImage files are untouched.
 
 The three verbs keep their own contracts; this module only sequences them so embed can never be skipped before qa.
