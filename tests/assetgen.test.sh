@@ -297,9 +297,16 @@ for pw in "legacy-shape-icon-001 1 3" "legacy-shape-edit-001 2 4"; do
     && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
     && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
 done
+# an API template links NineRouterImage.user_prompt; a local-only template (no NineRouterImage) links a CLIP encoder's
+# text; either way no input outside the prompt node inlines {{prompt}} (graphstyle checks the full fan-out)
 for t in $CORE_TEMPLATES; do
-  jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
-    && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
+  jq -e '([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
+    | (if $n > 0 then [.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]
+       else any(.workflow[] | select(.class_type | test("^CLIPTextEncode")) | .inputs | (.text, .text_g, .text_l); type == "array") end)
+    and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)' \
+    "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
+    && ok "core template $t: no inline prompt, $(jq -r 'if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end' "$ROOT/templates/assetgen/workflows/$t.json") is a link" \
+    || no "template $t user_prompt"
 done
 python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
@@ -3767,7 +3774,7 @@ for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of th
     && ok "lint FAILs $f: ${c#*|}" || no "lint $f" "$got"
 done
 # every core template that declares anchor_target, rendered in the style lock repo for the purpose its cases file
-# names (the first cases/<purpose>--<template>.json): the purpose's anchors reach anchor_target after the template's
+# names (the first cases/<purpose>--<template>.json), family props: its anchors reach anchor_target after the template's
 # own link, graph-lint --run passes (anchor nodes laid into References) and render --run is byte-identical on repeat.
 # Discovery finds nothing while no core template declares anchor_target. UNTESTED on RTX 5060: nothing is generated.
 cat > "$TMP/anchor-core.py" <<'EOF'
@@ -3794,12 +3801,15 @@ for t in $CORE_TEMPLATES; do
   p=""; for v in "$CASES"/*--"$t".json; do [ -f "$v" ] && { p=$(basename "$v" .json); p=${p%--"$t"}; break; }; done
   [ -n "$p" ] || { no "anchor_target $t: no cases/<purpose>--$t.json names a purpose to render it with"; continue; }
   da="$SR/anchor-core-$t-001"; mapfile -t args < <(case_params "$p" "$t")
-  slrun "anchor-core-$t-001" "$p" --template "$t" && AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  # family props: the fixture's anchors are props anchors of rpg-base (a purpose's own family may select none)
+  if slrun "anchor-core-$t-001" "$p" --template "$t" --family props; then
+    AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  else rc=1; { echo "resolve failed:"; cat "$TMP/err"; } > "$TMP/anchor-out"; fi
   out=$(python3 -B "$TMP/anchor-core.py" "$da/workflow.json" "$da/spec.json" "$CORE/workflows/$t.json" 2>&1)
   AG graph-lint --run "$da" > "$TMP/anchor-gl" 2>&1; rc2=$?
   [ $rc -eq 0 ] && [ "${out%% *}" = ok ] && [ $rc2 -eq 0 ] \
     && ok "anchor_target $t ($p): ${out#ok } style-lock anchors reach $(jq -r '.anchor_target | .node + "." + .input' "$CORE/workflows/$t.json") after the template's own link; graph-lint --run PASS" \
-    || no "anchor_target $t ($p) rc=$rc graph-lint rc=$rc2" "$(cat "$TMP/err" "$TMP/anchor-out" "$TMP/anchor-gl"; echo "$out")"
+    || no "anchor_target $t ($p) rc=$rc graph-lint rc=$rc2" "$(cat "$TMP/anchor-out" "$TMP/anchor-gl"; echo "$out")"
   cp "$da/workflow.json" "$TMP/anchor-core-first.json"; cp "$da/workflow.ui.json" "$TMP/anchor-core-first.ui.json"
   AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
   [ $rc -eq 0 ] && cmp -s "$TMP/anchor-core-first.json" "$da/workflow.json" && cmp -s "$TMP/anchor-core-first.ui.json" "$da/workflow.ui.json" \
