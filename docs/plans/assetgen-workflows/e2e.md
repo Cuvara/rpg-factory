@@ -209,3 +209,62 @@ Comparison with the reference look (the re-capture confirms the earlier verdicts
 - The `comfyui_9router` pack version is not shown by `server_info` (`freshness.packs` empty): unverified.
 - The earlier attempt `e2e-icon-001` (commit c21c583) was NOT_RUN because the comfy-mcp venv had no comfy-cli; it
   was left untouched and is replaced here by this run's evidence.
+
+## Recheck e2e-icon-003 (after output-filter and size-fit)
+
+Result: **FAIL at step 10c** against the specified procedure: the URL-only response contained host URLs, which the
+task's hard limit prohibited storing. It was therefore not saved verbatim. A subsequent recheck using host-free source
+paths reached finalize PASS, but does not prove the specified verbatim-evidence path. No second generation was run.
+
+Approval was one `run_workflow`, low quality, requested 1024x1024; exactly one call was used, with no
+`confirm_spend`, install, update or model download. Before generation budget was 2 of 4 used (0 outputs and 2 earlier
+failed attempts), 2 remaining. After the first finalize it was 4 of 4 (2 outputs, 2 failed attempts); after the
+host-free evidence and second finalize it was 3 of 4 (1 deliverable, 2 failed attempts, 1 preview excluded), 1 remaining.
+
+Steps 1-7 and 9-11 ran: the server and NineRouterImage were available; resolve used icon, staged-icon and
+stylized-painterly in the same authoring scratch directory; a fresh sword prompt requested diagonal placement, even
+margins, transparency and 64 px readability. Render with `quality=low`, the printed Codex prompt review (PASS, no
+findings), and the second render succeeded. Template and run graph lint each reported 1 PASS, 0 WARN, 0 FAIL;
+assetgen lint reported 32 PASS, 3 WARN, 0 FAIL; live validation was valid with no errors, warnings or partner nodes
+and `spends_credits: false`. Step 8 had no references to upload; optional publish and graph capture were skipped.
+
+The one queued job `03d54d65-c9a3-4a35-8247-c8626d53083d` completed: node 1 `NineRouterImage` requested 1024x1024,
+low quality and transparent background, and node 2 SaveImage returned **1254x1254**; node 5 PreviewImage returned
+64x64. Fetch returned two files. The URL-only call was made first, but its host-bearing result could not be stored
+under the hard limit; `fetch.json` instead contains the same prompt id and host-free source paths, not the verbatim
+response, and was created only after the first finalize. This is a procedural deviation, not a verbatim fetch test.
+
+The first finalize had no usable origin evidence: filter skipped both files, fit skipped both square images, defringe
+processed both, embed added both workflow chunks, and QA failed (11 PASS, 1 FAIL, 8 NOT_AVAILABLE) on the 64x64
+preview's size. After adding host-free evidence, a second finalize moved the preview, skipped fit, skipped already
+defringed output, kept the embedded workflow, and QA passed (6 PASS, 0 FAIL, 4 NOT_AVAILABLE). Its `finalize.json`
+has no fitted entries: the original and final deliverable dimensions were both 1254x1254; this tests square
+pass-through, not padding. `raw/` was not created because fit skipped. The defringe original
+`outputs-raw/03d54d65_000.png` is byte-identical to the fetched original (both SHA-256 prefix `109bbb3cdf2b775e`);
+the final `outputs/03d54d65_000.png` has prefix `8a1fcdcc17e8b957`. `previews/` contains only
+`03d54d65_001.png`, already defringed and embedded by the first finalize (prefix `bd8c1d89c3892612`); its fetched
+original is preserved in `outputs-raw/` (prefix `71011f967a9bb696`).
+
+Final `qa.json` rows for the deliverable:
+
+| Check | State and evidence |
+| --- | --- |
+| png-valid | PASS, 1254x1254, Pillow |
+| png-size | PASS, square, short side 1254 and area 1,572,516 |
+| png-alpha | PASS, alpha present, 83.3% transparent |
+| png-corners | PASS, alpha [0, 0, 0, 0] |
+| png-not-blank | PASS, luminance stddev 51.40, coverage 16.7% |
+| png-edge-fringe | PASS, 0 of 4520 soft edge pixels off-colour |
+| style-palette | NOT_AVAILABLE, no structured palette colours |
+| style-tone | NOT_AVAILABLE, no tone settings |
+| style-edges | NOT_AVAILABLE, purpose does not expect outlines |
+| style-canvas | NOT_AVAILABLE, no canvas entry for family props |
+
+Earlier findings:
+
+1. **Fixed with host-free evidence**: filter moved the preview and retained one deliverable; the required verbatim
+   URL-only evidence path was not exercised because of the host URL restriction.
+2. **Not fixed by this recheck**: the gateway still returned a different size, but it was square and passed size QA;
+   padding an orientation mismatch and preserving its `raw/` original were not exercised.
+3. **Fixed for preview counting with host-free evidence**: final budget counted one deliverable and excluded the
+   preview. The two earlier sibling runs without `run.md` still count as failed attempts, as designed.
