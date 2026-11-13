@@ -147,7 +147,8 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       settings and the requires hash. Model sha256 values come only from the read-only JSON cache
                       <persistent state dir>/comfy/model-hashes.json (or ASSETGEN_MODEL_HASHES when set): schema
                       rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256; missing entries are
-                      unverified. This record makes no measured or quality claim.
+                      unverified. The record follows the machine's cache: re-running manifest with a different cache
+                      changes run.md and resets an approved run to proposed. This record makes no measured or quality claim.
   approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
                       (approval.approve_record: refuses an agent or model name and names the run records as agents or
                       reviewers; sets run.md status approved; rev = the git blob id of that run.md). An agent runs it
