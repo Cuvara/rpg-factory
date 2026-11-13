@@ -1547,14 +1547,21 @@ def session_notes(a):
     return notes
 
 
-def python_alias_line(platform=None, which=None, exe=None):
-    """Describe the Windows Store python3 alias when it is on PATH."""
+def python_alias_line(platform=None, which=None, exe=None, probe=None):
+    """Describe the Windows Store python3 alias on PATH or in WindowsApps."""
     platform = sys.platform if platform is None else platform
+    if platform != "win32":
+        return ""
     which = shutil.which if which is None else which
     exe = sys.executable if exe is None else exe
-    path = which("python3") if platform == "win32" else None
+    path = which("python3")
     if not path or not any(part.lower() == "windowsapps" for part in re.split(r"[/\\]", path)[:-1]):
-        return ""
+        if probe is None:
+            local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+            probe = os.path.join(local, "Microsoft", "WindowsApps", "python3.exe")
+        if not os.path.isfile(probe):
+            return ""
+        path = probe
     return (f"Python: python3 here is likely the Microsoft Store alias ({path}), which may not run: run Python as "
             f"{shlex.quote(exe)} (the interpreter that runs dispatch) or put a python3 shim to it first on PATH.")
 
