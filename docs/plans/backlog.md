@@ -155,6 +155,9 @@ From plan ci-backlog-followups (`docs/plans/ci-backlog-followups/report.md`):
   `scripts/checks/pin-plan.py`, `pin-status.py`, `wire-parity.sh`, `netcode-headless.sh`) still fail on Git Bash for
   Windows unless `RPG_FACTORY_WORKSPACE` is exported. Move the default into one shared helper (shell and Python).
 - `docs/pipeline-cli.md` has lines over 120 columns (pre-existing).
+- `gate` marks integration QA STALE when the only commits after it touch run lead files (plan, report, backlog), so
+  the run lead reruns a 15-20 minute `--workspace-only` run for a report commit. Ignore commits limited to
+  `run_lead_files()` in that staleness check (with a test).
 
 ## Covered
 
