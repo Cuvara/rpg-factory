@@ -104,25 +104,60 @@ def _plan(a):
     return authoring, plan, fams, project
 
 
-def _write_new(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def _missing_dirs(path):
+    """The directories above path that do not exist yet, outermost first."""
+    out = []
+    d = os.path.dirname(path)
+    while d and not os.path.isdir(d):
+        out.append(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return out[::-1]
+
+
+def _write_new(path, obj, created):
+    """Writes a new file (never over an existing one); appends every directory and the file this call created to
+    created before writing into it, so a failure can be undone."""
+    for d in _missing_dirs(path):
+        os.mkdir(d)
+        created.append(d)
     with open(path, "x", encoding="utf-8", newline="\n") as f:
+        created.append(path)
         json.dump(obj, f, indent=1)
         f.write("\n")
 
 
+def _undo(created):
+    """Removes what this call created (files, then now-empty directories, innermost first); best effort."""
+    for path in reversed(created):
+        try:
+            if os.path.isdir(path):
+                os.rmdir(path)
+            else:
+                os.remove(path)
+        except OSError:
+            pass
+
+
 def init(a):
     authoring, plan, fams, project = _plan(a)
+    created = []
     written = []
-    for path, rel, obj in plan:
-        try:
-            _write_new(path, obj)
-        except FileExistsError:
-            raise Refusal("%s already exists (%s): init never overwrites" % (rel, path.replace(os.sep, "/")))
-        written.append(rel)
-    errors = stylelock.project_errors(project, authoring)
-    if errors:
-        raise Refusal("assetgen/project.json is not valid:\n" + "\n".join("  " + e for e in errors))
+    try:
+        for path, rel, obj in plan:
+            try:
+                _write_new(path, obj, created)
+            except FileExistsError:
+                raise Refusal("%s already exists (%s): init never overwrites" % (rel, path.replace(os.sep, "/")))
+            written.append(rel)
+        errors = stylelock.project_errors(project, authoring)
+        if errors:
+            raise Refusal("assetgen/project.json is not valid:\n" + "\n".join("  " + e for e in errors))
+    except BaseException:
+        _undo(created)
+        raise
     if a.json:
         print(json.dumps({"schema": INIT_SCHEMA, "style": a.id, "extends": a.extends, "families": fams,
                           "files": written, "project": project}, indent=1, sort_keys=True))
