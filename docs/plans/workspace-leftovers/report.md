@@ -23,13 +23,17 @@ Claude Opus 5.5 leads and reviews; no Codex, so every review is SAME_MODEL (owne
 
 | Task | Implementer | Verify (review + QA) | Candidate | Tier run |
 |---|---|---|---|---|
-| cygwin-guard-tests | claude-sonnet-5-5 high | claude-opus-5-5 medium: QA FAIL at f46dd07 (guard self-flagged its fixture), then PASS | 6414cf5 | 568 checks: 330 passed, 0 failed, 238 skipped |
+| cygwin-guard-tests | claude-sonnet-5-5 high | claude-opus-5-5 medium: QA FAIL at f46dd07 (guard self-flagged its fixture), then PASS; CI fix round PASS | 35c9daf | 568 checks: 426 passed, 0 failed, 142 skipped |
 | gate-english | claude-sonnet-5-5 high | claude-opus-5-5 medium: PASS | d1c09b0 | 568 checks: 349 passed, 0 failed, 219 skipped |
 | affected-workspace-lib | claude-sonnet-5-5 high | claude-opus-5-5 medium: PASS | f58b7c4 | 568 checks: 332 passed, 0 failed, 236 skipped |
 | pin-loader | claude-sonnet-5-5 high | claude-opus-5-5 medium: QA FAIL at 631c12b (test expected lowercase booleans), then PASS | 4a2ddaf | 572 checks: 331 passed, 0 failed, 241 skipped |
-| integration | - | run lead, `tests/run-all.sh --workspace-only` with the workspace variable unset | 393e9cb | 24 checks: 24 passed, 0 failed, 0 skipped |
+| integration | - | run lead, `tests/run-all.sh --workspace-only` with the workspace variable unset | 0cb26de | 24 checks: 24 passed, 0 failed, 0 skipped |
 
 ## Limitations
+
+- CI on PR #117 first failed in `tests/routing.test.sh` on Linux: its Cygwin self-test expected the drive form, and
+  the task verify passed locally because Git Bash ships `cygpath`. Fix round: the case hides `cygpath` and expects
+  the cygdrive form (plan commit gave the task `tests/routing.test.sh`).
 
 - Open follow-ups: `docs/plans/backlog.md` "workspace-leftovers-followups".
 - Cost: NOT_AVAILABLE (no usage reported through Orca).
