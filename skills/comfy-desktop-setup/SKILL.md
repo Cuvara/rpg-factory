@@ -95,10 +95,11 @@ what the person asked for by invoking this; still ask before `--apply` when the 
 - **A pack or model install needs the person's yes:** list the missing packs and models (the `packs` and `models` rows,
   with kind, name and size) and ask. Never `install_node`, `download_model`, update ComfyUI or fetch a weight on your
   own; the cut-out node also downloads its weight on its first run, which needs the same yes. Never substitute a model
-  silently.
+  silently (`scripts/comfy-desktop-setup.py` header docstring: the script never downloads models or installs packs;
+  `scripts/assetgen/data/hardware.json`).
 - **The local profiles are UNTESTED on RTX 5060** (8 GB): the user tests them after merge. The `profile` row reports
   what the machine meets, not a measured result; claim no VRAM number, timing or generation (`rpg-factory:comfyui`
-  Idioms "Hybrid and local runs").
+  Idioms "Hybrid and local runs"; `scripts/assetgen/data/hardware.json` `description`).
 - **macOS and Linux paths are UNVERIFIED** (`references/platform-paths.md`): the output says so; pass
   `--desktop-dir` when the default is wrong and report what you found.
 

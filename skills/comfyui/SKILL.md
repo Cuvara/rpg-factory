@@ -2,7 +2,7 @@
 name: comfyui
 description: How asset-gen's ComfyUI side actually works - the comfy-template format (rpg-factory.comfy-template/1, {{param}} placeholders, typed params, output_node, extends), core versus game-layer precedence, the comfy-mcp setup and tool sequence, the 9router image node's behaviour and pitfalls (credentials read by the node, returned size, unsupported model ids, local models only by hardware profile), Desktop versus headless ports, and how to add a purpose, style or template. Use when you render, run, debug or review a ComfyUI workflow for an asset-gen run, or extend the generation data. Not for deciding scope, rules, checks or gates of a run (asset-gen and the art, UI and VFX leads own those), and not for approving or handing off images.
 argument-hint: "[task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py:*)
 ---
 
 # ComfyUI for asset generation (templates, comfy-mcp, 9router node)
