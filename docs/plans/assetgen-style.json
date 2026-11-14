@@ -9,7 +9,7 @@
   "repos": {
     "plugin": {
       "path": "../..",
-      "base": "feat/assetgen/hybrid"
+      "base": "main"
     }
   },
   "tasks": [
@@ -122,7 +122,7 @@
       "id": "style-skill-scaffold",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Scaffold the new tech skill: python3 -B scripts/new-skill.py --name asset-style --kind tech --repos authoring --domain assetgen --used-by asset-gen --summary <one line>. It writes skills/asset-style/SKILL.md and the registry fragment and rebuilds registry.json. Then update every touchpoint scripts/skill-touchpoints.py names: skills/factory-core/SKILL.md, skills/factory-core/references/skill-contract.md layering diagram, README.md diagram and tech table, docs/architecture/overview.md tech-skill count, and name rpg-factory:asset-style in skills/asset-gen/SKILL.md. Replace every SCAFFOLD marker with real, minimal but valid content (the current style-lock facts, citing docs by section), because verify runs skills-lint on the candidate and a marker fails it. The content task expands it later. Registry changes are a global input of tests/affected.py: expect every suite in verify.",
+      "objective": "Scaffold the new tech skill: python3 -B scripts/new-skill.py --name asset-style --kind tech --repos authoring --domain assetgen --used-by asset-gen --summary <one line>. It writes skills/asset-style/SKILL.md and the registry fragment and rebuilds registry.json. Then update every touchpoint scripts/skill-touchpoints.py names: skills/factory-core/SKILL.md, skills/factory-core/references/skill-contract.md layering diagram, README.md diagram and tech table, docs/architecture/overview.md tech-skill count, and name rpg-factory:asset-style in skills/asset-gen/SKILL.md. Replace every SCAFFOLD marker with real, minimal but valid content (the current style-lock facts, citing docs by section), because verify runs skills-lint on the candidate and a marker fails it. The content task expands it later. Registry changes are a global input of tests/affected.py: expect every suite in verify. It also adds the minimal touchpoints skill-touchpoints.py --all requires for a new tech skill (one routing scenario, one dogfood EXPECT, the asset-style-fired grader) so skills-lint passes; style-skill-scenarios extends them later.",
       "paths": [
         "skills/asset-style/SKILL.md",
         "skills/asset-gen/SKILL.md",
@@ -132,7 +132,10 @@
         "registry.json",
         "README.md",
         "docs/architecture/overview.md",
-        "changelog.d/asset-style-skill.md"
+        "changelog.d/asset-style-skill.md",
+        "tests/routing.test.sh",
+        "tests/dogfood.sh",
+        "evals/asset-gen-icon/graders/asset-style-fired.md"
       ],
       "exclusions": [],
       "deps": [],

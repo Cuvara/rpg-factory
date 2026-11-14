@@ -19,7 +19,10 @@ sel 1 "an unrelated script skips the suite" tests/pipeline.test.sh scripts/chang
 sel 0 "registry change runs everything" tests/changelog.test.sh registry/core.json
 sel 0 "library reaches its importer suite" tests/pipeline.test.sh scripts/lib/plan_paths.py
 sel 1 "library skips unrelated suite" tests/changelog.test.sh scripts/lib/plan_paths.py
-sel 0 "dynamic library stays global" tests/changelog.test.sh scripts/lib/gitguard.py
+# gitguard.py uses the plugin's static sys.path/spec_from_file_location idiom: it selects its importer suite, not every
+# suite; the "dynamic stays global" property is covered by the computed/importlib/bytes modules of the fixture below
+sel 0 "a static-idiom library selects its importer suite" tests/git-guard.test.sh scripts/lib/gitguard.py
+sel 1 "a static-idiom library skips an unrelated suite" tests/changelog.test.sh scripts/lib/gitguard.py
 sel 0 "unknown top-level path runs everything" tests/changelog.test.sh new-unknown-file
 sel 0 "skill text reaches skills-lint (EXTRA)" tests/skills-lint.sh skills/vfx/SKILL.md
 sel 0 "an agent file reaches skills-lint (EXTRA)" tests/skills-lint.sh agents/factory-explorer.md
@@ -90,6 +93,22 @@ want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
+# scripts/lib/workspace.sh reaches ~43 suites through transitive callers (factory-cmd.py runs check-registry.sh): a change
+# selects its direct callers and the suites that name it or a direct caller, not that whole fan-out
+sel 0 "workspace.sh selects its default-path suite" tests/workspace-default.test.sh scripts/lib/workspace.sh
+sel 1 "workspace.sh skips git-guard (no caller runs it)" tests/git-guard.test.sh scripts/lib/workspace.sh
+printf '%s\n' scripts/lib/workspace.sh > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
+missing=""
+for s in tests/workspace-default.test.sh tests/routing.test.sh tests/facts.test.sh tests/check-registry.test.sh \
+         tests/netcode-headless.test.sh scripts/checks/netcode-headless.sh scripts/checks/wire-parity.sh \
+         tests/checks-candidate.test.sh tests/domains.test.sh; do
+  grep -qxF "$s" <<<"$got" || missing="$missing $s"
+done
+if [ -z "$missing" ] && ! grep -qxE 'tests/(git-guard|compat|assetgen|changelog)[.]test[.]sh' <<<"$got" \
+   && [ "$(grep -c . <<<"$got")" -lt 25 ]; then
+  pass=$((pass + 1)); echo "PASS  workspace.sh selects every real caller suite, not the runner's whole fan-out"
+else fail=$((fail + 1)); echo "FAIL  workspace.sh selection: missing [$missing] got $(grep -c . <<<"$got") [$(tr '\n' ' ' <<<"$got")]"; fi
 # an asset-gen engine module reaches fixtures run under a computed name (tests/fixtures/assetgen/*_selftest.py): the
 # suite's EXTRA patterns cover them, so the answer is a short named list, not every suite (finalize.py may not exist yet)
 printf '%s\n' scripts/assetgen/assetgen.py scripts/assetgen/finalize.py > "$TMP/many"
@@ -111,6 +130,9 @@ import inspect
 check("only selection is narrowed: the import closure still reaches the suites it did, and hashes ignore the table",
       any(m.selects(p, "tests/codex-plugin.test.sh") for p in m.closure("scripts/factory-pipeline.py"))
       and "PIPELINE_SUITES" not in inspect.getsource(m.hashes))
+reach = m.closure("scripts/lib/workspace.sh")
+check("only selection is narrowed for workspace.sh: the import closure still reaches factory-cmd.py, and hashes ignore the table",
+      reach is not None and "scripts/factory-cmd.py" in reach and "CALLER_SUITES" not in inspect.getsource(m.hashes))
 tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
 bare = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value in ("bash", "bash.exe")]
 check("affected.py runs no bare bash subprocess (find_bash resolves it)", not bare
@@ -132,8 +154,10 @@ PY
 )
 [ "$out" = "b,c" ] && { pass=$((pass + 1)); echo "PASS  changed = committed since merge-base + untracked"; } || { fail=$((fail + 1)); echo "FAIL  changed: '$out'"; }
 out=$(python3 -B - "$A" "$TMP" <<'PY'
-import contextlib, importlib.util, io, os, pathlib, subprocess, sys
+import contextlib, importlib.util, io, os, pathlib, subprocess, sys, types
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# hashes() imports find_bash from <fixture>/scripts/lib/shells.py, which the fixture does not have: stub it (no host bash)
+stub = types.ModuleType("shells"); stub.find_bash = lambda: None; sys.modules["shells"] = stub
 root = pathlib.Path(sys.argv[2]) / "hash-fixture"; root.mkdir()
 subprocess.run(["git", "init", "-q", str(root)], check=True)
 files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from inner import VALUE\n",
@@ -303,12 +327,15 @@ check("hash changes through a relative multiline import", rel_before != h("tests
 reset()
 check("an unparsable Python file makes selection unsure", m.needed(["scripts/lib/leaf.py"], "tests/other.test.sh"))
 check("an unparsable Python file disables reuse", h("tests/other.test.sh") == "-")
+check("the hash-fixture block ran to its end", True)
 PY
 )
 while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# a crash in the heredoc (an import error, a traceback) loses the checks after it: count it as a failure
+grep -qF "PASS  the hash-fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the hash-fixture block crashed before its end"; }
 out=$(python3 -B - "$A" "$TMP" <<'PY'
 import importlib.util, pathlib, subprocess, sys
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -352,5 +379,109 @@ while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# the plugin's own sys.path idiom (a directory of this repo built from __file__ and string literals) is not unsure for
+# selection; a computed entry, importlib and __import__ stay unsure; the conservative rule (reuse hashes) is unchanged
+out=$(python3 -B - "$A" "$TMP" <<'PY'
+import contextlib, importlib.util, io, pathlib, subprocess, sys, types
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# hashes() imports find_bash from <fixture>/scripts/lib/shells.py, which the fixture does not have: stub it (no host bash)
+stub = types.ModuleType("shells"); stub.find_bash = lambda: None; sys.modules["shells"] = stub
+root = pathlib.Path(sys.argv[2]) / "syspath-fixture"; root.mkdir()
+subprocess.run(["git", "init", "-q", str(root)], check=True)
+files = {
+    # static idiom, directly: dirname/abspath(__file__) and os.path.join with string literals
+    "scripts/lib/stat_base.py": "X = 1\n",
+    "scripts/lib/stat_mod.py": "import os, sys\nsys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib'))\nfrom stat_base import X\n",
+    "scripts/stat-entry.py": "import stat_mod\n", "tests/stat.test.sh": "python scripts/stat-entry.py\n",
+    # static idiom through a module-level name and a name imported from a sibling module, with append
+    "scripts/lib/stat_paths.py": "import os\nLIBDIR = os.path.dirname(os.path.abspath(__file__))\n",
+    "scripts/lib/stat_base2.py": "Y = 1\n",
+    "scripts/lib/stat_mod2.py": "import os, sys\nfrom stat_paths import LIBDIR\nSCRIPTS = os.path.join(LIBDIR, '..')\nsys.path.append(SCRIPTS)\nimport stat_base2\n",
+    "scripts/stat2-entry.py": "import stat_mod2\n", "tests/stat2.test.sh": "python scripts/stat2-entry.py\n",
+    # static idiom with a bare dirname(__file__)
+    "scripts/lib/stat_base3.py": "Z = 1\n",
+    "scripts/lib/stat_mod3.py": "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nimport stat_base3\n",
+    "scripts/stat3-entry.py": "import stat_mod3\n", "tests/stat3.test.sh": "python scripts/stat3-entry.py\n",
+    # computed entries: argv, the environment, a literal join with a computed part, a computed name
+    "scripts/lib/comp_base.py": "W = 1\n",
+    "scripts/lib/comp_argv.py": "import sys\nsys.path.insert(0, sys.argv[1])\nimport comp_base\n",
+    "scripts/lib/comp_env.py": "import os, sys\nsys.path.insert(0, os.environ['X_PATH'])\nimport comp_base\n",
+    "scripts/lib/comp_name.py": "import os, sys\nname = sys.argv[2]\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), name))\nimport comp_base\n",
+    "scripts/lib/comp_fn.py": "import os, sys\nsys.path.append(compute_dir())\nimport comp_base\n",
+    # importlib and __import__, alone and next to a static idiom
+    "scripts/lib/imp_mod.py": "import importlib\nmod = importlib.import_module(NAME)\n",
+    "scripts/lib/imp_dunder.py": "mod = __import__(NAME)\n",
+    # code in a bytes literal is not analysed (only a str constant used to be scanned)
+    "scripts/lib/imp_bytes.py": "import os\nCODE = b\"exec('import sys; sys.path.insert(0, X)')\"\n",
+    "scripts/lib/imp_mixed.py": "import importlib, os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nmod = importlib.import_module(NAME)\n",
+    # a static entry plus a computed one in the same file stays unsure
+    "scripts/lib/two_paths.py": "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nsys.path.insert(0, sys.argv[1])\n",
+    # an entry script that imports every dynamic module (so only dynamic() can make them unsure), named by a suite
+    "scripts/comp-entry.py": "import comp_argv, comp_env, comp_name, comp_fn, two_paths, imp_mod, imp_dunder, imp_mixed, imp_bytes\n",
+    "tests/comp.test.sh": "python scripts/comp-entry.py\n",
+    # an unrelated suite
+    "scripts/unrel/unrelated.py": "x = 1\n", "tests/other.test.sh": "python scripts/unrel/unrelated.py\n",
+}
+for path, text in files.items():
+    p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+m.ROOT = str(root)
+def reset():
+    for name in [n for n, v in vars(m).items() if hasattr(v, "cache_clear")]:
+        getattr(m, name).cache_clear()
+def h(suite):
+    reset(); output = io.StringIO()
+    with contextlib.redirect_stdout(output): m.hashes([suite])
+    return output.getvalue().strip().split()[-1]
+def check(name, ok): print(("PASS  " if ok else "FAIL  ") + name)
+reset()
+static = ["scripts/lib/stat_mod.py", "scripts/lib/stat_mod2.py", "scripts/lib/stat_mod3.py"]
+check("the static sys.path idiom is not dynamic for selection", all(m.dynamic(p, conservative=False) is False for p in static))
+check("a static-idiom module imported by a suite's script is reached from its imported module",
+      m.needed(["scripts/lib/stat_base.py"], "tests/stat.test.sh") and m.needed(["scripts/lib/stat_base3.py"], "tests/stat3.test.sh"))
+check("a change to a module the static-idiom module imports skips an unrelated suite",
+      not m.needed(["scripts/lib/stat_base.py"], "tests/other.test.sh") and not m.needed(["scripts/lib/stat_base3.py"], "tests/other.test.sh")
+      and not m.needed(["scripts/lib/stat_base.py"], "tests/stat2.test.sh"))
+check("a static-idiom module's own change selects its importer's suite and skips an unrelated suite",
+      m.needed(["scripts/lib/stat_mod.py"], "tests/stat.test.sh") and not m.needed(["scripts/lib/stat_mod.py"], "tests/other.test.sh"))
+check("a module-level name and a name imported from a sibling module resolve (append)",
+      m.needed(["scripts/lib/stat_base2.py"], "tests/stat2.test.sh") and not m.needed(["scripts/lib/stat_base2.py"], "tests/other.test.sh"))
+check("the sibling module that defines the path name selects the importer's suite only",
+      m.needed(["scripts/lib/stat_paths.py"], "tests/stat2.test.sh") and not m.needed(["scripts/lib/stat_paths.py"], "tests/other.test.sh"))
+computed = ["scripts/lib/comp_argv.py", "scripts/lib/comp_env.py", "scripts/lib/comp_name.py", "scripts/lib/comp_fn.py", "scripts/lib/two_paths.py"]
+check("a computed sys.path entry stays dynamic", all(m.dynamic(p, conservative=False) is True for p in computed))
+check("a computed sys.path entry stays unsure: it selects an unrelated suite", all(m.needed([p], "tests/other.test.sh") for p in computed))
+dyn = ["scripts/lib/imp_mod.py", "scripts/lib/imp_dunder.py", "scripts/lib/imp_mixed.py", "scripts/lib/imp_bytes.py"]
+check("importlib, __import__ and code in a bytes literal stay dynamic, next to a static idiom too", all(m.dynamic(p, conservative=False) is True for p in dyn))
+check("importlib and __import__ stay unsure: they select an unrelated suite", all(m.needed([p], "tests/other.test.sh") for p in dyn))
+check("the conservative rule keeps every sys.path/importlib/__import__ mention dynamic, the static idiom too",
+      all(m.dynamic(p, conservative=True) is True for p in static + computed + dyn))
+check("the conservative rule leaves the static-idiom module unsure (no reach set)",
+      all(m.reaches(p, True) is None for p in static) and all(m.reaches(p, False) is not None for p in static))
+check("the conservative closure of a module the static-idiom module imports is unsure too, the narrow one is not",
+      m.closure("scripts/lib/stat_base.py", True) is None and m.closure("scripts/lib/stat_base.py") is not None)
+stat_before, other_before = h("tests/stat.test.sh"), h("tests/other.test.sh")
+(root / "scripts/lib/stat_mod.py").write_text((root / "scripts/lib/stat_mod.py").read_text() + "# touched\n")
+check("hashes stay conservative: a change to a static-idiom module changes the hash of every suite",
+      stat_before != h("tests/stat.test.sh") and other_before != h("tests/other.test.sh"))
+check("the sys.path fixture block ran to its end", True)
+PY
+)
+while IFS= read -r line; do
+  echo "$line"
+  case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
+done <<< "$out"
+# a crash in the heredoc loses the checks after it: count it as a failure
+grep -qF "PASS  the sys.path fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the sys.path fixture block crashed before its end"; }
+# the real repository: scripts/lib/workspace.py is imported by scripts/lib/fstate.py and the guard modules after a sys.path
+# insert of their own directory; a change selects the suites of those importers, not every suite
+printf '%s\n' scripts/lib/workspace.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort -u)
+missing=""
+for s in tests/workspace-default.test.sh tests/routing.test.sh tests/session-state.test.sh tests/file-guard.test.sh; do
+  grep -qxF "$s" <<<"$got" || missing="$missing $s"
+done
+if [ -z "$missing" ] && ! grep -qxE 'tests/(changelog|release-check)[.]test[.]sh' <<<"$got" && [ "$(grep -c . <<<"$got")" -lt "${#suites[@]}" ]; then
+  pass=$((pass + 1)); echo "PASS  workspace.py selects its importers' suites (workspace-default, routing, session-state, file-guard), not every suite"
+else fail=$((fail + 1)); echo "FAIL  workspace.py selection: missing [$missing] got $(grep -c . <<<"$got") of ${#suites[@]} [$(tr '\n' ' ' <<<"$got")]"; fi
 total=$((pass + fail)); echo "affected tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

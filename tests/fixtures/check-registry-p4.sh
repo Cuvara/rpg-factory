@@ -7,6 +7,7 @@
 #   --registry <file> validate a registry other than the default
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/workspace.sh"
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REGISTRY="$PLUGIN_ROOT/registry.json"
@@ -138,7 +139,7 @@ modules_count=$(jq '.modules | length' "$REGISTRY")
 # ---- on-disk paths
 missing=""; path_count=0
 if ! $structure_only; then
-  ws="${RPG_FACTORY_WORKSPACE:-$(jq -r '.workspace.root_default' "$REGISTRY")}"
+  ws="${RPG_FACTORY_WORKSPACE:-$(rpgf_platform_path "$(jq -r '.workspace.root_default' "$REGISTRY")")}"
   optional_absent="|"
   while IFS=$'\t' read -r key rel; do
     if [ ! -d "$ws/$rel" ]; then

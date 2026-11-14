@@ -286,6 +286,7 @@ assetgen_route="$(lead asset-gen) and $(tech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/runs/iron-sword-icon-001/run.md assetgen/templates/image-generate.json 2>&1)
 fexpect 'authoring assetgen path -> asset-gen leads, tech comfyui' "jq -e '.repos[0] | $assetgen_route' <<<\"\$out\" >/dev/null"
 fexpect 'authoring assetgen path -> tech comfy-desktop-setup too (used_by asset-gen)' "jq -e '.repos[0] | $(tech comfy-desktop-setup)' <<<\"\$out\" >/dev/null"
+fexpect 'authoring assetgen path -> tech asset-style too (used_by asset-gen)' "jq -e '.repos[0] | $(tech asset-style)' <<<\"\$out\" >/dev/null"
 art2d_nocomfy="$(lead art-2d) and $(notech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths art2d/specs/iron-sword.md 2>&1)
 fexpect 'authoring art2d path -> art-2d leads, no tech comfyui (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
@@ -398,8 +399,11 @@ if has_case cli-selftest; then
     "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MINGW64_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
   ws_expect "MSYS_NT -> /c/ drive form" \
     "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MSYS_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
-  ws_expect "CYGWIN_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo CYGWIN_NT-10.0; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
+  # cygpath is hidden (empty PATH dir): Git Bash ships a real one whose answer is the drive form, Linux CI has none.
+  nocyg=$(mktemp -d)
+  ws_expect "CYGWIN_NT without cygpath -> /cygdrive/c/ form" \
+    "$(unset RPG_FACTORY_WORKSPACE; PATH="$nocyg"; hash -r; uname() { echo CYGWIN_NT-10.0; }; rpgf_default_workspace)" /cygdrive/c/Workspaces/UnityIndie
+  rmdir "$nocyg" 2>/dev/null; hash -r
   ws_expect "Linux -> /mnt/c/ WSL form" \
     "$(unset RPG_FACTORY_WORKSPACE; uname() { echo Linux; }; rpgf_default_workspace)" /mnt/c/Workspaces/UnityIndie
   ws_expect "empty RPG_FACTORY_WORKSPACE counts as unset" \

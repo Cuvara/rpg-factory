@@ -1,8 +1,8 @@
 ---
 name: comfyui
-description: How asset-gen's ComfyUI side actually works - the comfy-template format (rpg-factory.comfy-template/1, {{param}} placeholders, typed params, output_node, extends), core versus game-layer precedence, the comfy-mcp setup and tool sequence, the 9router image node's behaviour and pitfalls (credentials read by the node, returned size, unsupported model ids, no local models), Desktop versus headless ports, and how to add a purpose, style or template. Use when you render, run, debug or review a ComfyUI workflow for an asset-gen run, or extend the generation data. Not for deciding scope, rules, checks or gates of a run (asset-gen and the art, UI and VFX leads own those), and not for approving or handing off images.
+description: How asset-gen's ComfyUI side actually works - the comfy-template format (rpg-factory.comfy-template/1, {{param}} placeholders, typed params, output_node, extends), core versus game-layer precedence, the comfy-mcp setup and tool sequence, the 9router image node's behaviour and pitfalls (credentials read by the node, returned size, unsupported model ids, local models only by hardware profile), Desktop versus headless ports, and how to add a purpose, style or template. Use when you render, run, debug or review a ComfyUI workflow for an asset-gen run, or extend the generation data. Not for deciding scope, rules, checks or gates of a run (asset-gen and the art, UI and VFX leads own those), and not for approving or handing off images.
 argument-hint: "[task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py:*)
 ---
 
 # ComfyUI for asset generation (templates, comfy-mcp, 9router node)
@@ -20,15 +20,12 @@ authoring repo. `assetgen.py` is `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen
 
 ## Applies when / Not when
 
-- **Applies:** rendering or validating a workflow, running it through comfy-mcp, a ComfyUI or image-node error, a
-  returned image that looks wrong for its params, writing or overriding a purpose, style or workflow template.
-- **Not when:** which asset to make, the review and approval flow, the record and the handoff (`asset-gen`); art,
-  UI or VFX specs (`art-2d`, `art-3d`, `ui-ux`, `vfx`).
+- **Applies:** rendering or validating a workflow, running it through comfy-mcp, a ComfyUI or image-node error, a returned image that looks wrong for its params, writing or overriding a purpose, style or workflow template.
+- **Not when:** which asset to make, the review and approval flow, the record and the handoff (`asset-gen`); art, UI or VFX specs (`art-2d`, `art-3d`, `ui-ux`, `vfx`).
 
 ## Scope
 
-Repos `authoring`. Owns no module, contract or check. Reads the plugin's core data and engine; writes only what the
-lead's workflow asks for in a run directory or the game layer.
+Repos `authoring`. Owns no module, contract or check. Reads the plugin's core data and engine; writes only what the lead's workflow asks for in a run directory or the game layer.
 
 ## Architecture
 
@@ -66,7 +63,7 @@ lead's workflow asks for in a run directory or the game layer.
 
 ## Idioms
 
-- **Run sequence:** `server_info` (version, nodes present) -> `assetgen.py graph-lint --run <run>` (exit 0) ->
+- **Run sequence:** `server_info` (version, nodes present) -> `assetgen.py graph-lint --run <run>` (exit 0; a local or hybrid template: also the template with `--profile`, see Hybrid and local runs) ->
   `validate_workflow` (`<run>/workflow.json` against the live node list) -> `upload_file` (every `<run>/references/*`
   file under its own name; returns the input-folder name) -> `assetgen.py budget --run <run>` (exit 1 or `remaining 0`
   (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (`workflow_path`, `wait`) -> `job` (status) ->
@@ -75,17 +72,18 @@ lead's workflow asks for in a run directory or the game layer.
   fit; defringe if `qa.alpha` required; embed; qa; fixed order, never `qa` alone). `nodes`, `list_workflow_slots` only inspect.
 - **Authoring rule (comfy-mcp):** comfy-mcp runs only a graph from `assetgen.py render` of the purpose's template (core
   or a game-layer one that `extends` it), laid out per [references/workflow-style.md](references/workflow-style.md).
-  Before any `run_workflow`, `assetgen.py lint`, `assetgen.py graph-lint` (the template, and `--run <run>`) and a live
+  Before any `run_workflow`, `assetgen.py lint`, `assetgen.py graph-lint` (the template, with `--profile <resolved>` for a local one, and `--run <run>`) and a live
   `validate_workflow` pass (graph-lint exit 1: no `run_workflow`; fix the template, render again). Never run a graph
   patched with `set_workflow_slot` or by hand without rendering it again (render, not patch). No free-form graph for an
   asset-gen run: no hand-built graph, no `run_template`, `generate_image`, `fetch_template`, `vary_workflow` or `emit_partner_workflow`.
-- **Node pack version:** `server_info` shows the `comfyui_9router` pack; when outdated, report its version and let the
-  user update it - never `update_comfyui`, `install_node` or any other update yourself. The flag compares the pack's
-  hash with ComfyUI's own commit: for a pack inside the ComfyUI checkout report it as unverified, never an update on it alone.
-- **See the run in ComfyUI:** `run_workflow` only queues the API graph on `/prompt` and opens no canvas tab; optional
-  `assetgen.py publish --run <run> --comfy-url <URL>` uploads `workflow.ui.json` via the userdata API to Workflows >
-  assetgen, writing nothing locally (exit 0 PASS, 1 FAIL: HTTP error, 2 usage: bad run id or URL, 3 `NOT_AVAILABLE`:
-  connection refused). An embedded output PNG dragged in restores the graph.
+- **Hybrid and local runs** (templates with a `requires` block: `hybrid-icon-ui`, `hybrid-character`, `hybrid-environment`, `local-variation`; UNTESTED on RTX 5060: the branch never ran on the 8 GB target, the user tests it after merge; claim no VRAM number, timing, passing generation or quality result, and a local run's report says UNTESTED-on-target until the user confirms):
+  1. First `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py --check` (read-only; or `rpg-factory:comfy-desktop-setup`) and read the `gpu`, `torch`, `profile`, `packs` and `models` rows. Save the machine's profile so `--profile auto` works (nothing else writes it; `scripts/assetgen/assetgen.py` `recorded_profile_path`; the script exits 3 when a step needs action but still prints the JSON, so do not chain on its exit code; again after a GPU, driver or instance change): `mkdir -p ~/.local/state/rpg-factory/assetgen && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py --check --json > ~/.local/state/rpg-factory/assetgen/hardware-profile.json` (the directory is `scripts/lib/fstate.py` `persistent`: adjust it when `RPG_FACTORY_STATE_DIR` or `XDG_STATE_HOME` is set).
+  2. `assetgen.py resolve --profile auto|api-only|local-4gb|local-8gb` (`scripts/assetgen/assetgen.py` `choose_profile`, `resolve_spec`) picks the template for the purpose and profile and records `spec.profile`; never run a local template on a lower profile, never force one with `--template` (resolve exits 1), and an api-only machine never runs one.
+  3. Before `run_workflow`: render, `assetgen.py lint`, `graph-lint <template> --profile <resolved>` (the profile rules [profile], [vram], [checkpoints], [controlnet], [batch], [tiled-vae], [flux] run on the template form only) and `graph-lint --run <run>`, then a live `validate_workflow`. Start from a core or game-layer template, never a free-form graph.
+  4. Never `install_node`, `download_model`, a manual model download, `update_comfyui` or a first cut-out run (the cut-out node fetches its weight) without the user's explicit yes. For a missing pack or model (`validate_workflow`, the `packs` and `models` rows) list pack id, model kind, name and `size_gb` from `requires` and ask; never substitute a model silently.
+  5. Report the profile (`spec.profile`: id, source), the models (`spec.generation.local` via `manifest`: checkpoint, LoRAs, ControlNet, IPAdapter, upscaler, hash or "unverified"; `scripts/assetgen/runfiles.py` `local_generation`) and the seed.
+- **Node pack version:** `server_info` shows the `comfyui_9router` pack; when outdated, report its version and let the user update it - never `update_comfyui`, `install_node` or any other update yourself. The flag compares the pack's hash with ComfyUI's own commit: for a pack inside the ComfyUI checkout report it as unverified, never an update on it alone.
+- **See the run in ComfyUI:** `run_workflow` only queues the API graph on `/prompt` and opens no canvas tab; optional `assetgen.py publish --run <run> --comfy-url <URL>` uploads `workflow.ui.json` via the userdata API to Workflows > assetgen, writing nothing locally (exit 0 PASS, 1 FAIL: HTTP error, 2 usage: bad run id or URL, 3 `NOT_AVAILABLE`: connection refused). An embedded output PNG dragged in restores the graph.
 - **Setup** (once, the user's machine): invoke `rpg-factory:comfy-desktop-setup` (a local Desktop instance, the vendored
   9router node, comfy-mcp registered with the running port for Claude and Codex; its own `--check` first). Headless ComfyUI: install `comfy-mcp` yourself and set `COMFY_LOCAL_URL`. New MCP servers load only in a new session.
 - **Add a purpose:** copy the closest `templates/assetgen/purposes/*.json` (game layer for one game, core for all),
@@ -120,8 +118,7 @@ lead's workflow asks for in a run directory or the game layer.
 - **Credentials are read by the node at run time** from the user's local provider configuration; templates, params
   and run records carry none. `assetgen.py lint` fails a file with a URL, host address or credential-shaped key
   (`FORBIDDEN` in `scripts/assetgen/lint.py`).
-- **No local models:** the install runs API nodes only; a checkpoint loader or sampler has nothing to load and is not
-  in the offline snapshot (9router, IO and core image nodes: `scripts/assetgen/data/known-nodes.json`).
+- **"No local models" is superseded:** profile `api-only` still runs API nodes only (a checkpoint loader or sampler has nothing to load there); the hybrid and local templates use the local core nodes and pack nodes of `scripts/assetgen/data/known-nodes.json` (`local_model_nodes`, `packs`) only on a machine whose profile meets the template's `requires.profile`, with packs and models installed by the user (UNTESTED on RTX 5060, see Hybrid and local runs).
 - **LoadImage reads ComfyUI's input folder, not the run directory:** upload the reference with `upload_file` and pass
   the returned name as `reference_image` (`templates/assetgen/workflows/image-edit.json`); keep the original as
   `<run>/references/<that name>` too, or the gen-run quality plugin fails provenance and cannot bind it.
@@ -147,14 +144,9 @@ lead's workflow asks for in a run directory or the game layer.
 
 ## Testing
 
-- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI
-  graph converted back equals the API graph), hints and lint blame, review-cmd, embed, defringe, finalize, budget, publish
-  against a fake HTTP server, PNG QA (real returned sizes, a coloured low-alpha fringe), style lock (project config, anchors,
-  selection, anchor wiring, consistency rows, drift), manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
-- `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs
-  ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
+- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI graph converted back equals the API graph), hints and lint blame, review-cmd, embed, defringe, finalize, budget, publish against a fake HTTP server, PNG QA (real returned sizes, a coloured low-alpha fringe), style lock (project config, anchors, selection, anchor wiring, consistency rows, drift), manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
+- `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
 
 ## Tools
 
-- `comfy-mcp`: the run sequence above (Idioms). Not OK: `assetgen.py render` only; generation `NOT_RUN` and a
-  person loads `workflow.ui.json` in ComfyUI.
+- `comfy-mcp`: the run sequence above (Idioms). Not OK: `assetgen.py render` only; generation `NOT_RUN` and a person loads `workflow.ui.json` in ComfyUI.

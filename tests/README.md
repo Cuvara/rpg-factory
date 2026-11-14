@@ -5,6 +5,7 @@ Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standal
 `tests/fixtures/`. Full command list and flags: `scripts/README.md` "Commands".
 
 - `tests/workspace-default.test.sh` checks the shell and Python workspace defaults across stubbed platforms.
+- `tests/plugin-registry.test.sh` checks `scripts/lib/plugin_registry.py`: plugin root lookup and registry loading shared by the pin checks.
 
 ## QA tiers and run-all flags
 
