@@ -402,6 +402,28 @@
       ],
       "grade": "light",
       "grade_reason": "a runbook document; the user runs the test later"
+    },
+    {
+      "id": "gate-delta-review",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Make a delta re-review usable by the gate. (1) The stacked-task checks in gate (review lacks the dependency's review PASS; integrated before its dependency) use the dependency's review PASS that the dependent actually contains: the newest PASS record of the dependency (current or kept per-SHA record <task>__review__<sha>__<agent>.json) whose SHA is an ancestor of the dependent's reviewed SHA; integration order compares that SHA's merge point, not the dependency's latest review. A later delta review of the dependency at the integration HEAD then no longer reports 'integrated before its dependency'. (2) A task review recorded with `verdict --phase review` at a later SHA of an already reviewed task (a delta review) keeps the fallback that dispatch recorded for that task's earlier review (its reviewer model record), so SAME_MODEL with a recorded fallback stays an accepted note instead of a cross-model blocker; a task never reviewed before still needs the dispatch record. Fail safe: any git error keeps the blocker.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/gate-delta-review.md"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "a throwaway-repo case: D, stacked dependent T (stack record), both integrated in order with --no-ff, then a new review PASS of D at the integration HEAD: gate reports neither 'integrated before its dependency' nor 'lacks ... review PASS' for T",
+        "the existing stacked-gate cases (dependent integrated before D, dependent without D's PASS SHA) still block",
+        "a delta review PASS of a task whose earlier review had a dispatch-recorded fallback is a SAME_MODEL note, not a cross-model blocker; a first review without a dispatch record still blocks",
+        "docs/pipeline-cli.md gate section states both rules; tests/pipeline.test.sh passes"
+      ]
     }
   ]
 }
