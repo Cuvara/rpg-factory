@@ -4779,6 +4779,41 @@ printf '# path:line or path:* # reason\ndocs/plans/gm/report.md:* # fixture\n' >
 refute "gate-merge: a path:* allowlist entry does not block gate" 'is not English' gate "$GP" --no-run-checks
 printf 'docs/plans/gm/report.md line 2 without the reason separator\n' > "$GM/tests/fixtures/english-allow.txt"; gi "$GM" commit -qam "test: malformed allowlist"; gmqa
 expect "gate-merge: a malformed allowlist blocks gate" 1 'BLOCKER r: .*english-allow.txt' gate "$GP" --no-run-checks
+# the allowlist is looked up with the exact tree path, like scripts/checks/english-only.py, whether or not the file system
+# folds case (ICASE forced both ways; norm_path stays for the run lead file membership test): a run lead file with an
+# upper-case path passes with its exact-case entry and still blocks with a case-folded one (CI is case-exact)
+if python3 - "$ROOT" "$TMP" <<'PY'
+import importlib.util, os, subprocess, sys, tempfile
+spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+def git(repo, *args):
+    return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
+repo = tempfile.mkdtemp(prefix="gmcase-", dir=sys.argv[2])
+git(repo, "init", "-q", "-b", "main")
+os.makedirs(repo + "/docs/plans/GmCase"); os.makedirs(repo + "/tests/fixtures")
+with open(repo + "/docs/plans/GmCase/report.md", "wb") as f:  # the bytes of the Vietnamese line the cases above use
+    f.write(b"B\xc3\xa1o c\xc3\xa1o: \xc4\x91\xc3\xa3 ki\xe1\xbb\x83m tra nh\xe1\xbb\xafng thay \xc4\x91\xe1\xbb\x95i\n")
+plan = {"id": "GmCase", "_path": os.path.join(tempfile.gettempdir(), "gmcase-plan-outside.json")}
+info = {"path": repo}
+def blockers(entry):
+    with open(repo + "/tests/fixtures/english-allow.txt", "w", encoding="utf-8", newline="\n") as f:
+        f.write("# path:line or path:* # reason\n" + (entry + " # fixture\n" if entry else ""))
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "c", "--allow-empty")
+    return m.run_lead_file_blockers(plan, info, "r", git(repo, "rev-parse", "HEAD"))
+bad = []
+for icase in (False, True):
+    m.ICASE = icase
+    for entry, blocks in (("docs/plans/GmCase/report.md:1", False), ("docs/plans/GmCase/report.md:*", False),
+                          ("docs/plans/gmcase/report.md:1", True), ("docs/plans/gmcase/report.md:*", True), ("", True)):
+        got = blockers(entry)
+        english = [b for b in got if "is not English" in b]
+        if bool(english) != blocks or len(got) != len(english):
+            bad.append((icase, entry, got))
+assert not bad, bad
+PY
+then pass=$((pass + 1)); echo "PASS  gate-merge: the English allowlist matches the exact tree path of a mixed-case run lead file (case forced both ways)"
+else fail=$((fail + 1)); echo "FAIL  gate-merge: the English allowlist matches the exact tree path of a mixed-case run lead file"; fi
 # restore: no allowlist, an English report; later cases see the original state
 gi "$GM" rm -q -f tests/fixtures/english-allow.txt; echo portable > "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: English report again"; gmqa
 expect "gate-merge: an English report without an allowlist passes" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks

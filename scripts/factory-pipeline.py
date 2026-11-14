@@ -3241,7 +3241,8 @@ def run_lead_file_blockers(plan, info, key, head):
                 blockers.append(allow_error)
         if allow_error:
             continue
-        breach = first_english_breach(english, norm_path(path), content, allowed)
+        # the exact tree path, like scripts/checks/english-only.py: norm_path folds case on Windows (membership only)
+        breach = first_english_breach(english, path, content, allowed)
         if breach:
             number, reasons = breach
             blockers.append(f"{key}: run lead file {path} line {number} is not English ({'; '.join(reasons)}): rule "
