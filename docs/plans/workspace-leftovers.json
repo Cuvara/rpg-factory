@@ -21,12 +21,14 @@
       "paths": [
         "scripts/lib/workspace.sh",
         "tests/workspace-default.test.sh",
-        "changelog.d/workspace-leftovers-cygwin.md"
+        "changelog.d/workspace-leftovers-cygwin.md",
+        "tests/routing.test.sh"
       ],
       "exclusions": [],
       "deps": [],
       "checks": [
-        "tests/workspace-default.test.sh"
+        "tests/workspace-default.test.sh",
+        "tests/routing.test.sh"
       ],
       "acceptance": [
         "on CYGWIN the workspace default is the cygdrive form (or the cygpath answer)",
