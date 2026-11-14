@@ -49,7 +49,9 @@ def pkg_json_at(repo, ref, path):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    ws = default_workspace()
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    reg = json.load(open(os.path.join(root, "registry.json"), encoding="utf-8"))
+    ws = default_workspace(registry=reg)
     if "--workspace" in sys.argv:
         ws = sys.argv[sys.argv.index("--workspace") + 1]
         args = [a for a in args if a != ws]
