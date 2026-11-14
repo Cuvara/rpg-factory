@@ -313,6 +313,16 @@ def git(repo, *args):
     return r.stdout.strip(), r.returncode
 
 
+def git_blob(repo, head, path):
+    """`git show <head>:<path>` unstripped (line numbers must match the file), or None when it cannot be read."""
+    try:
+        r = subprocess.run(["git", "-C", repo, "show", f"{head}:{path}"], capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
 # ---------------------------------------------------------------- tier
 
 def tier_of(ctx, pipe, lines=None):
@@ -3169,6 +3179,76 @@ def run_lead_files(plan, repo_path):
     return {norm_path(n) for n in names}
 
 
+ENGLISH_ALLOWLIST = "tests/fixtures/english-allow.txt"
+
+
+class _GitBlob:
+    """A file of a commit shaped like the Path scripts/lib/english.allowlist reads (exists, read_text, str)."""
+
+    def __init__(self, repo, head, path):
+        self.text = git_blob(repo, head, path)
+        self.label = f"{head[:10]}:{path}"
+
+    def exists(self):
+        return self.text is not None
+
+    def read_text(self, encoding="utf-8"):
+        return self.text or ""
+
+    def __str__(self):
+        return self.label
+
+
+def first_english_breach(english, path, content, allowed):
+    """(line number, reasons) of the first line of a run lead file that is not English and is not allowlisted the way
+    scripts/checks/english-only.py honours `path:line` and `path:*` entries, or None."""
+    if f"{path}:*" in allowed or english.first_offending_line(content) is None:
+        return None
+    for number, line in enumerate(content.splitlines(), 1):
+        reasons = english.classify(line)
+        if reasons and f"{path}:{number}" not in allowed:
+            return number, reasons
+    return None
+
+
+def run_lead_file_blockers(plan, info, key, head):
+    """Blockers of the run lead files on the integration HEAD: unreadable, machine-specific path text, and a line that is
+    not English (rule english-only, allowlist read from the same HEAD). At most one machine-path and one English blocker
+    per file; `status` shows the same blockers as `gate`."""
+    blockers = []
+    entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
+    if rc != 0 or entries is None:
+        blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
+    lead_files = run_lead_files(plan, info["path"])
+    paths = sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files)
+    english, allowed, allow_error = None, {}, None
+    for path in paths:
+        content = git_blob(info["path"], head, path)
+        if content is None:
+            blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
+            continue
+        hit = plan_paths.machine_path_hit(content)
+        if hit:
+            blockers.append(f"{key}: run lead file {path} has machine-specific path text `{hit}`: "
+                            "write it portable (repo-relative path, ${RPG_FACTORY_WORKSPACE} or ../..)")
+        if english is None:  # lazy: the first run lead file loads scripts/lib/english.py and the allowlist once
+            import english as english_lib
+            english = english_lib
+            try:
+                allowed = english.allowlist(_GitBlob(info["path"], head, ENGLISH_ALLOWLIST))
+            except ValueError as exc:
+                allow_error = f"{key}: english-only allowlist {ENGLISH_ALLOWLIST} on integration HEAD is invalid: {exc}"
+                blockers.append(allow_error)
+        if allow_error:
+            continue
+        breach = first_english_breach(english, norm_path(path), content, allowed)
+        if breach:
+            number, reasons = breach
+            blockers.append(f"{key}: run lead file {path} line {number} is not English ({'; '.join(reasons)}): rule "
+                            f"english-only (scripts/lib/english.py); write it in English or allowlist it in {ENGLISH_ALLOWLIST}")
+    return blockers
+
+
 def qa_covers_head(plan, info, qa_sha, head):
     """QA covers later commits only when their entire diff consists of run lead files."""
     if not qa_sha or not head:
@@ -3217,19 +3297,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: integration branch {plan['topic']} does not exist")
             continue
         heads[key] = head
-        entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
-        if rc != 0 or entries is None:
-            blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
-        lead_files = run_lead_files(plan, info["path"])
-        for path in sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files):
-            content, rc = git(info["path"], "show", f"{head}:{path}")
-            if rc != 0 or content is None:
-                blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
-            else:
-                hit = plan_paths.machine_path_hit(content)
-                if hit:
-                    blockers.append(f"{key}: run lead file {path} has machine-specific path text `{hit}`: "
-                                    "write it portable (repo-relative path, ${RPG_FACTORY_WORKSPACE} or ../..)")
+        blockers.extend(run_lead_file_blockers(plan, info, key, head))
         home, extra = worktree_for(info["path"], plan["topic"])
         if not info["worktrees"]:
             mine = [t["path"] for t in extra if str(t.get("branch", "")).startswith(plan["topic"])]
@@ -4511,6 +4579,15 @@ def status(plan, reg, orca_run=None):
         rinfo = repo_info(plan, reg, t["repo"])
         rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done, rinfo["path"],
                                                     no_worktree=not rinfo["worktrees"], blockers=task_fails[t["id"]])
+    for key in keys:  # the run lead file blockers of `gate`, once per repo, on that repo's first task (plan order)
+        info = repo_info(plan, reg, key)
+        if not info["path"] or not os.path.isdir(info["path"]):
+            continue
+        head, rc = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")
+        if rc != 0 or not head:
+            continue
+        first = next(t for t in tasks if t["repo"] == key)
+        rows[first["id"]]["notes"] += [f"gate blocker: {b}" for b in run_lead_file_blockers(plan, info, key, head)]
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]
