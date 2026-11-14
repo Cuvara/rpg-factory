@@ -1,0 +1,507 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Hybrid icon and UI element generation",
+ "description": "UNTESTED on RTX 5060: hybrid generation of an icon or a UI element. The API image node makes the base image; a local SDXL stage refines it at low denoise with IPAdapter conditioning from the approved style-lock anchors, then a tiled 4x upscale and a cut-out give the saved image its alpha. Previews show the base, the refined image and a 64 px view; one file is saved. This is a static declaration for the local-8gb profile: nothing was generated or measured, requires.peak_vram_gb is a planning estimate, and the sampler values are starting points to tune in the live task. Credentials are read by the node at run time, never stored here.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file)."
+  },
+  "model": {
+   "type": "string",
+   "default": "cx/gpt-5.6-sol-image",
+   "description": "Image model id served through the NineRouterImage node."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "1024x1024"
+   ],
+   "default": "1024x1024",
+   "description": "Requested size of the API base image; 1024 px is the maximum of the local-8gb profile."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "auto",
+   "description": "Image quality."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "auto",
+   "description": "Background mode."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  },
+  "seed": {
+   "type": "int",
+   "default": 123456,
+   "description": "Seed of the local refine sampler; fixed so a re-render sends the same graph."
+  }
+ },
+ "requires": {
+  "profile": "local-8gb",
+  "peak_vram_gb": 7.0,
+  "ram_gb": 24,
+  "packs": [
+   "comfyui_ipadapter_plus",
+   "cut-out (BiRefNet or rembg)"
+  ],
+  "models": [
+   {
+    "kind": "checkpoints",
+    "name": "sd_xl_base_1.0.safetensors",
+    "size_gb": 6.9
+   },
+   {
+    "kind": "ipadapter",
+    "name": "ip-adapter-plus_sdxl_vit-h.safetensors",
+    "size_gb": 0.8
+   },
+   {
+    "kind": "clip_vision",
+    "name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+    "size_gb": 2.5
+   },
+   {
+    "kind": "upscale_models",
+    "name": "4x-UltraSharp.pth",
+    "size_gb": 0.07
+   }
+  ]
+ },
+ "anchor_target": {
+  "node": "7",
+  "input": "image"
+ },
+ "primary_node": "2",
+ "output_node": "20",
+ "workflow": {
+  "1": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
+   }
+  },
+  "2": {
+   "class_type": "NineRouterImage",
+   "inputs": {
+    "user_prompt": [
+     "1",
+     0
+    ],
+    "model": "{{model}}",
+    "size": "{{size}}",
+    "quality": "{{quality}}",
+    "background": "{{background}}"
+   },
+   "_meta": {
+    "title": "Generate base image (API)"
+   }
+  },
+  "3": {
+   "class_type": "CheckpointLoaderSimple",
+   "inputs": {
+    "ckpt_name": "sd_xl_base_1.0.safetensors"
+   },
+   "_meta": {
+    "title": "Load SDXL checkpoint"
+   }
+  },
+  "4": {
+   "class_type": "IPAdapterUnifiedLoader",
+   "inputs": {
+    "model": [
+     "3",
+     0
+    ],
+    "preset": "PLUS (high strength)"
+   },
+   "_meta": {
+    "title": "Load IPAdapter (SDXL)"
+   }
+  },
+  "5": {
+   "class_type": "UpscaleModelLoader",
+   "inputs": {
+    "model_name": "4x-UltraSharp.pth"
+   },
+   "_meta": {
+    "title": "Load 4x upscale model"
+   }
+  },
+  "6": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "21",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": 1024,
+    "height": 1024,
+    "crop": "center"
+   },
+   "_meta": {
+    "title": "Fit base to 1024 px"
+   }
+  },
+  "7": {
+   "class_type": "IPAdapterAdvanced",
+   "inputs": {
+    "model": [
+     "4",
+     0
+    ],
+    "ipadapter": [
+     "4",
+     1
+    ],
+    "image": [
+     "6",
+     0
+    ],
+    "weight": 0.6,
+    "weight_type": "style transfer",
+    "combine_embeds": "concat",
+    "start_at": 0.0,
+    "end_at": 1.0,
+    "embeds_scaling": "V only"
+   },
+   "_meta": {
+    "title": "Apply anchor style"
+   }
+  },
+  "8": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": [
+     "1",
+     0
+    ],
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode reviewed prompt"
+   }
+  },
+  "9": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": "text, watermark, frame, blurry, busy background",
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode negative prompt"
+   }
+  },
+  "10": {
+   "class_type": "VAEEncode",
+   "inputs": {
+    "pixels": [
+     "6",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Encode fitted base"
+   }
+  },
+  "11": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "7",
+     0
+    ],
+    "seed": "{{seed}}",
+    "steps": 24,
+    "cfg": 5.5,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+    "positive": [
+     "8",
+     0
+    ],
+    "negative": [
+     "9",
+     0
+    ],
+    "latent_image": [
+     "10",
+     0
+    ],
+    "denoise": 0.35
+   },
+   "_meta": {
+    "title": "Refine base at low denoise"
+   }
+  },
+  "12": {
+   "class_type": "VAEDecodeTiled",
+   "inputs": {
+    "samples": [
+     "11",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ],
+    "tile_size": 512,
+    "overlap": 64,
+    "temporal_size": 64,
+    "temporal_overlap": 8
+   },
+   "_meta": {
+    "title": "Decode in tiles"
+   }
+  },
+  "13": {
+   "class_type": "ImageUpscaleWithModel",
+   "inputs": {
+    "upscale_model": [
+     "5",
+     0
+    ],
+    "image": [
+     "12",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Upscale 4x"
+   }
+  },
+  "14": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "13",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": 2048,
+    "height": 2048,
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Downscale to 2048 px"
+   }
+  },
+  "15": {
+   "class_type": "InspyrenetRembg",
+   "inputs": {
+    "image": [
+     "14",
+     0
+    ],
+    "torchscript_jit": "default"
+   },
+   "_meta": {
+    "title": "Cut out background"
+   }
+  },
+  "16": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview API base"
+   }
+  },
+  "17": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "12",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview refined image"
+   }
+  },
+  "18": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "15",
+     0
+    ],
+    "upscale_method": "area",
+    "width": 64,
+    "height": 64,
+    "crop": "center"
+   },
+   "_meta": {
+    "title": "Downscale to 64 px"
+   }
+  },
+  "19": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "18",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview at 64 px"
+   }
+  },
+  "20": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "filename_prefix": "{{filename_prefix}}-final",
+    "images": [
+     "15",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Save final image"
+   }
+  },
+  "21": {
+   "class_type": "SplitImageWithAlpha",
+   "inputs": {
+    "image": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Drop base alpha"
+   }
+  }
+ },
+ "ui": {
+  "groups": [
+   {
+    "title": "Prompt",
+    "color": "pale_blue",
+    "nodes": [
+     "1"
+    ]
+   },
+   {
+    "title": "Generate",
+    "color": "green",
+    "nodes": [
+     "2"
+    ]
+   },
+   {
+    "title": "Models",
+    "color": "brown",
+    "nodes": [
+     "3",
+     "4",
+     "5"
+    ]
+   },
+   {
+    "title": "Refine (local)",
+    "color": "blue",
+    "nodes": [
+     "21",
+     "6",
+     "7",
+     "8",
+     "9",
+     "10",
+     "11",
+     "12"
+    ]
+   },
+   {
+    "title": "Post-process",
+    "color": "yellow",
+    "nodes": [
+     "13",
+     "14",
+     "15"
+    ]
+   },
+   {
+    "title": "Preview",
+    "color": "red",
+    "nodes": [
+     "16",
+     "17",
+     "18",
+     "19"
+    ]
+   },
+   {
+    "title": "Output",
+    "color": "purple",
+    "nodes": [
+     "20"
+    ]
+   }
+  ],
+  "notes": [
+   {
+    "text": "The reviewed prompt; render fills it from prompt.md. It feeds the API image node and the positive encoder of the local refine, so both stages get the recorded prompt.",
+    "group": "Prompt"
+   },
+   {
+    "text": "The one API image node makes the base image.",
+    "group": "Generate"
+   },
+   {
+    "text": "Local loaders: one SDXL checkpoint, the IPAdapter (PLUS preset, with its CLIP vision model) and a 4x upscale model. No ControlNet: the low-denoise img2img pass keeps the base layout (the local-8gb profile allows at most one, this template uses none). UNTESTED on RTX 5060: the file names are the ones requires.models declares; confirm them in the live task.",
+    "group": "Models"
+   },
+   {
+    "text": "Local refine pass: the base alpha is dropped before the refine (the cut-out restores alpha) and the RGB base is fitted to 1024 px so the latent never exceeds 1024 px, the IPAdapter takes the approved anchors (render batches them after the fitted RGB base; without anchors the base conditions itself), batch 1, tiled VAE decode. UNTESTED on RTX 5060: IPAdapter weight 0.6 (style transfer), 24 steps, cfg 5.5, dpmpp_2m, karras and denoise 0.35 are starting points to tune in the live task, not results.",
+    "group": "Refine (local)"
+   },
+   {
+    "text": "Tiled 4x upscale of the refined image, downscale to 2048 px, then the cut-out last: the local refine drops the API alpha and the cut-out restores it. UNTESTED on RTX 5060.",
+    "group": "Post-process"
+   },
+   {
+    "text": "Compare the API base with the refined image and judge readability at 64 px. Previews only; nothing here is saved.",
+    "group": "Preview"
+   },
+   {
+    "text": "The only saved file: the run prefix plus the -final suffix, with the alpha from the cut-out.",
+    "group": "Output"
+   }
+  ]
+ }
+}
