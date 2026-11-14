@@ -146,21 +146,15 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
-### workspace-leftovers-followups
+### affected-selection-followups
 
-From plan workspace-leftovers (`docs/plans/workspace-leftovers/report.md`):
+From plan leftovers-followups (`docs/plans/leftovers-followups/report.md`):
 
-- `scripts/factory-pipeline.py` `run_lead_file_blockers`: the english-only allowlist lookup uses `norm_path`, which is
-  case-folded on Windows, so an allowlist entry for a mixed-case run lead file path does not match there (a false gate
-  blocker CI would not report). Pass the exact tree path.
-- `tests/README.md` does not list `tests/plugin-registry.test.sh`.
-- `tests/affected.py`: a change to `scripts/lib/workspace.py` still selects every suite, because `fstate.py` and the
-  guard modules import it through `sys.path` edits the import graph cannot follow.
-- `tests/affected.py` selects only direct callers of `scripts/lib/workspace.sh`; `tests/commands.test.sh` and
-  `tests/hook-perf.test.sh` reach it two hops away and run only in a full run (reviewed: their assertions do not
-  depend on that path).
-- `tests/workspace-default.test.sh`: with a Windows-form `TMPDIR` the stub directories on `PATH` break and five cases
-  fail (the Git Bash default `TMPDIR` is fine).
+- `tests/affected.py`: a change to `scripts/lib/rpgf_guard/__init__.py` (loaded by path, no importer edge) still
+  selects every suite, as does any module loaded only through `spec_from_file_location`.
+- `tests/affected.py` selects only direct callers of `scripts/lib/workspace.sh` (accepted in plan workspace-leftovers:
+  `tests/commands.test.sh` and `tests/hook-perf.test.sh` reach it two hops away and run only in a full run).
+- `tests/affected.py` docstring has a 145-character line.
 
 ### language-policy-followups
 
@@ -186,6 +180,10 @@ From plan language-policy (`docs/plans/language-policy/report.md`):
   still reports it available. Probe for the prompt, or document the one-time trust step in `docs/codex.md`.
 
 ## Covered
+
+- **workspace-leftovers-followups**: shipped in plan leftovers-followups
+  (`changelog.d/leftovers-gate-allowlist-case.md`, `changelog.d/leftovers-affected-syspath.md`,
+  `changelog.d/leftovers-tmpdir.md`); the two-hop `workspace.sh` callers were accepted as they are.
 
 - **workspace-followups-leftovers**: shipped in plan workspace-leftovers (`changelog.d/workspace-leftovers-cygwin.md`,
   `changelog.d/workspace-leftovers-gate-english.md`, `changelog.d/workspace-leftovers-affected.md`,
