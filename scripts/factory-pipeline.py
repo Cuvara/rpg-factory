@@ -3145,10 +3145,11 @@ def cmd_verdict(a, reg):
         if (a.fallback is None and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
-        if "fallback" not in rec and a.fallback is None and not a.subtask and a.by == impl:
+        if "fallback" not in rec and a.fallback is None and not a.subtask and a.by == impl and not disp:
             # a delta review (a later SHA of an already reviewed task) has no dispatch of its own: it keeps the fallback
-            # that dispatch recorded for the task's earlier review by this model. A task never reviewed before has no
-            # earlier record, so it still needs its own dispatch record.
+            # that dispatch recorded for the task's earlier review by this model. A review dispatch at this SHA (even
+            # one that was not a fallback, e.g. codex available again) decides it alone: no inheritance. A task never
+            # reviewed before has no earlier record, so it still needs its own dispatch record.
             earlier = earlier_review_fallback(plan, reg, task, a.by, rec["fingerprint"], full)
             if earlier:
                 rec["fallback"], rec["fallback_from"] = earlier

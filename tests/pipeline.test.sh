@@ -4581,6 +4581,15 @@ if [ -f "$KD" ] && jq -e '.fallback == "codex unavailable" and (.fallback_from |
 else fail=$((fail + 1)); echo "FAIL  a delta review keeps the earlier dispatch-recorded fallback (fallback and fallback_from)"; fi
 expect "gate accepts the delta review as a SAME_MODEL note" 1 "NOTE    k: SAME_MODEL \(fallback: codex unavailable\)" gate "$RP" --no-run-checks
 refute "a delta review with a recorded fallback is not a cross-model blocker" "BLOCKER k: reviewed by claude" gate "$RP" --no-run-checks
+# a review dispatch at the SHA that was not a fallback (codex available again) decides alone: a claude verdict after it is
+# not a delta review and never inherits the earlier fallback
+gi "$R" commit -q --allow-empty -m "chore: delta dispatched"; RS6=$(git -C "$R" rev-parse HEAD)
+expect "both models available: the review dispatch of k at the next candidate goes to codex without a fallback" 0 "review -> codex" dispatch "$RP" --task k --phase review --sha "$RS6" --runner orca
+expect "a claude verdict at a SHA whose review dispatch went to codex is recorded" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS6" --by claude --state PASS
+KX="$RVD/k__review__${RS6:0:12}__claude.json"
+if [ -f "$KX" ] && ! grep -q '"fallback": "' "$KX"; then pass=$((pass + 1)); echo "PASS  a claude verdict after a non-fallback codex review dispatch does not inherit the earlier fallback"
+else fail=$((fail + 1)); echo "FAIL  a claude verdict after a non-fallback codex review dispatch does not inherit the earlier fallback"; fi
+expect "that claude verdict stays a cross-model blocker" 1 "BLOCKER k: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
 # negative: an earlier fallback review whose SHA is not an ancestor of the new SHA (a commit on a side line) is not inherited
 RPG_FACTORY_AGENTS=claude expect "claude-only: the code task q is implemented by claude (fallback)" 0 "implement -> claude" dispatch "$RP" --task q --phase implement --runner orca
 SS=$(gi "$R" commit-tree "$RS^{tree}" -p "$RS" -m "side line")
