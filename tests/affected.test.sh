@@ -90,6 +90,22 @@ want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
+# scripts/lib/workspace.sh is sourced by tests/run-all.sh and many checks: a change selects its direct callers and the
+# suites that name it or a direct caller, not every suite the runner reaches
+sel 0 "workspace.sh selects its default-path suite" tests/workspace-default.test.sh scripts/lib/workspace.sh
+sel 1 "workspace.sh skips git-guard (no caller runs it)" tests/git-guard.test.sh scripts/lib/workspace.sh
+printf '%s\n' scripts/lib/workspace.sh > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
+missing=""
+for s in tests/workspace-default.test.sh tests/routing.test.sh tests/facts.test.sh tests/check-registry.test.sh \
+         tests/netcode-headless.test.sh scripts/checks/netcode-headless.sh scripts/checks/wire-parity.sh \
+         tests/checks-candidate.test.sh tests/domains.test.sh; do
+  grep -qxF "$s" <<<"$got" || missing="$missing $s"
+done
+if [ -z "$missing" ] && ! grep -qxE 'tests/(git-guard|compat|assetgen|changelog)[.]test[.]sh' <<<"$got" \
+   && [ "$(grep -c . <<<"$got")" -lt 25 ]; then
+  pass=$((pass + 1)); echo "PASS  workspace.sh selects every real caller suite, not the runner's whole fan-out"
+else fail=$((fail + 1)); echo "FAIL  workspace.sh selection: missing [$missing] got $(grep -c . <<<"$got") [$(tr '\n' ' ' <<<"$got")]"; fi
 # an asset-gen engine module reaches fixtures run under a computed name (tests/fixtures/assetgen/*_selftest.py): the
 # suite's EXTRA patterns cover them, so the answer is a short named list, not every suite (finalize.py may not exist yet)
 printf '%s\n' scripts/assetgen/assetgen.py scripts/assetgen/finalize.py > "$TMP/many"
@@ -111,6 +127,9 @@ import inspect
 check("only selection is narrowed: the import closure still reaches the suites it did, and hashes ignore the table",
       any(m.selects(p, "tests/codex-plugin.test.sh") for p in m.closure("scripts/factory-pipeline.py"))
       and "PIPELINE_SUITES" not in inspect.getsource(m.hashes))
+reach = m.closure("scripts/lib/workspace.sh")
+check("only selection is narrowed for workspace.sh: the import closure still reaches factory-cmd.py, and hashes ignore the table",
+      reach is not None and "scripts/factory-cmd.py" in reach and "CALLER_SUITES" not in inspect.getsource(m.hashes))
 tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
 bare = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value in ("bash", "bash.exe")]
 check("affected.py runs no bare bash subprocess (find_bash resolves it)", not bare
