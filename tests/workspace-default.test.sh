@@ -15,6 +15,9 @@ out=$(RPG_FACTORY_WORKSPACE='kept value'; . "$HELPER"; [ "$RPG_FACTORY_WORKSPACE
 [ "$?" -eq 0 ] && [ -z "$out" ] && ok "source leaves an existing workspace unchanged and is silent" || no "source with existing workspace"
 
 T=$(mktemp -d) || exit 1
+# A drive-form TMPDIR (C:/...) would put a colon into the stub directories prepended to PATH and split it.
+# pwd without -W prints the POSIX form of the shell (/c/... on Git Bash, a no-op elsewhere).
+T=$(cd "$T" && pwd) || exit 1
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/outside" "$T/ws" "$T/nocyg" "$T/cyg"
 # Deterministic cygpath choices for the CYGWIN cases: "hidden" runs with a PATH that has no cygpath
