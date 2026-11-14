@@ -90,8 +90,8 @@ want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
-# scripts/lib/workspace.sh is sourced by tests/run-all.sh and many checks: a change selects its direct callers and the
-# suites that name it or a direct caller, not every suite the runner reaches
+# scripts/lib/workspace.sh reaches ~43 suites through transitive callers (factory-cmd.py runs check-registry.sh): a change
+# selects its direct callers and the suites that name it or a direct caller, not that whole fan-out
 sel 0 "workspace.sh selects its default-path suite" tests/workspace-default.test.sh scripts/lib/workspace.sh
 sel 1 "workspace.sh skips git-guard (no caller runs it)" tests/git-guard.test.sh scripts/lib/workspace.sh
 printf '%s\n' scripts/lib/workspace.sh > "$TMP/many"
