@@ -41,24 +41,24 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
 - **The `go` directive differs per module** (`grep -H '^go ' backend/*/go.mod`). With the default
   `GOTOOLCHAIN=auto` an older local `go` silently downloads the module's toolchain; `go version`
   run inside the module shows which one actually builds it.
-- **Gateway:** `Gateway` struct (`backend/gateway/server/server.go:33`), built by
-  `New(sessions, reg, jwtSecret, logger, opts...)` (`server.go:259`) with functional `Option`s
-  (`server.go:108`, e.g. `WithDungeons` at `:119`), served by `Run` (`server.go:412`). Wiring of
+- **Gateway:** `Gateway` struct (`backend/gateway/server/server.go:41`), built by
+  `New(sessions, reg, jwtSecret, logger, opts...)` (`server.go:294`) with functional `Option`s
+  (`server.go:120`, e.g. `WithDungeons` at `:137`), served by `Run` (`server.go:451`). Wiring of
   stores, allocator and options is all in `backend/gateway/cmd/gateway/main.go` (redis vs memory
-  backend from `backendRedis` `:179-216`, `server.New` `:369`). Collaborators: `ClientConn`
+  backend from `backendRedis` `:231-268`, `server.New` `:456`). Collaborators: `ClientConn`
   (`server/connection.go:30`), `registry.RegistryService` (`registry/registry.go:77`),
   `session.SessionManager` (`session/manager.go:38`), and the seams
   `transfer.PartyMembership` (`transfer/party.go:37`), `transfer.DungeonAllocator`
-  (`transfer/dungeon.go:46`), `registry.KindAllocator` (`registry/agones_allocator.go:83`).
+  (`transfer/dungeon.go:46`), `registry.KindAllocator` (`registry/agones_allocator.go:105`).
 - **Storage seams:** `PlayerStore`, `SessionStore`, `ServerRegistry`, `DungeonIndex`,
-  `EventStream` in `backend/shared/storage/interfaces.go:76-152`. Two implementations each:
+  `EventStream` in `backend/shared/storage/interfaces.go:85-169`. Two implementations each:
   in-memory (`storage/memory.go`, also the gateway's `--backend=memory`) and Redis
   (`storage/redisstore/`). Compile-time assertions for the in-memory types (`MemoryPlayerStore` etc.) sit at
   `interfaces.go:14-19`.
 - **Nakama plugin:** a `-buildmode=plugin` `.so`; entry `InitModule` (`backend/nakama/main.go:25`)
   registers RPCs and hooks. Handlers are plain functions
   `(ctx, runtime.Logger, *sql.DB, runtime.NakamaModule, payload)` (e.g.
-  `RewardKillsRPC`, `economy/reward_batch.go:140`), so per-plugin state lives in package-level singletons.
+  `RewardKillsRPC`, `economy/reward_batch.go:144`), so per-plugin state lives in package-level singletons.
 - **Data ownership** (`backend/docs/ARCHITECTURE-DECISIONS.md`): ADR-1 - one writer per datum,
   `player_states` in Postgres is the only recoverable gameplay datum; sessions and registry are
   rebuilt, not restored. ADR-4 - one Redis, roles separated by key prefix
@@ -71,7 +71,7 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
 - **Errors:** wrap with `%w`; absence is `storage.ErrNotFound` tested with `errors.Is`
   (`interfaces.go:11`, `isRetriable()` `gateway/registry/registry.go:234-238`, the watcher's
   `storage.ErrNotFound` check `registry/watcher.go:145`).
-- **Logging:** gateway and shared use `log/slog` (`slog.Logger` `server.go:41`, `shared/logger/logger.go`);
+- **Logging:** gateway and shared use `log/slog` (`slog.Logger` `server.go:49`, `shared/logger/logger.go`);
   the Nakama plugin uses the printf-style `runtime.Logger` it is handed - no slog there.
 - **Nakama errors:** `runtime.NewError(msg, grpcCode)` (`economy/reward_batch.go:158`).
 - **Idempotent economy write:** the caller-supplied `BatchID` is the key
@@ -82,7 +82,7 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
   with `StartCleanup` (`backend/nakama/social/ratelimit.go:48-53`); per-IP/per-connection in the
   gateway (`server.go` `connLimiter`, `msgRate`).
 - **Nil means off:** optional collaborators are nil-able and documented as such
-  (`Gateway.dungeonIndex` / `partyMembers` `server.go:36-39`, `WithDungeons` treating one-without-the-other as off).
+  (`Gateway.dungeonIndex` / `partyMembers` `server.go:44-47`, `WithDungeons` treating one-without-the-other as off).
 - **Narrow interfaces over Nakama:** declare the slice of `runtime.NakamaModule` you call
   (`nakama/auth/profile.go:35`) and assert it (`profileStore` check `auth/profile_test.go:270`).
 
