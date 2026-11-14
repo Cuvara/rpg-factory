@@ -40,14 +40,14 @@ def checkout_registry():
         return json.load(f)
 
 if mode == 'checkout':
-    print('root', same(plugin_registry.plugin_root(), root))
-    print('registry', plugin_registry.load_registry() == checkout_registry())
+    print('root', str(same(plugin_registry.plugin_root(), root)).lower())
+    print('registry', str(plugin_registry.load_registry() == checkout_registry()).lower())
 elif mode == 'fixture':
-    print('root', same(plugin_registry.plugin_root(), fixture))
-    print('registry', plugin_registry.load_registry() == {'marker': 'fixture'})
+    print('root', str(same(plugin_registry.plugin_root(), fixture)).lower())
+    print('registry', str(plugin_registry.load_registry() == {'marker': 'fixture'}).lower())
 elif mode == 'explicit':
-    print('root', same(plugin_registry.plugin_root(), root))
-    print('registry', plugin_registry.load_registry(fixture) == {'marker': 'fixture'})
+    print('root', str(same(plugin_registry.plugin_root(), root)).lower())
+    print('registry', str(plugin_registry.load_registry(fixture) == {'marker': 'fixture'}).lower())
 PY
 }
 expect_probe() { # <label> <mode> [env assignments...]
