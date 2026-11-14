@@ -166,8 +166,14 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
         integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. A stacked
         task whose review PASS lacks its dependency's review PASS, or that was integrated before or together with its
-        dependency (the order is: git merge --no-ff the dependency, then the task), is a blocker; a clean merge of the
-        dependency into the dependent is a sync merge and never makes the dependency's review STALE. With
+        dependency (the order is: git merge --no-ff the dependency, then the task), is a blocker; both checks use the
+        newest review PASS of the dependency (current or kept per candidate) that the dependent contains, so a later
+        delta review of the dependency at the integration HEAD does not report it integrated first (that PASS counts
+        only when it is the dependency's current one or the current one contains the dependent's reviewed commit); a
+        clean merge of the dependency into the dependent is a sync merge and never makes the dependency's review
+        STALE. A task review recorded at a later SHA of an already reviewed task (a delta review, `verdict --phase
+        review`) keeps the fallback that dispatch recorded for the earlier review by the same model, so SAME_MODEL
+        stays an accepted note; a task never reviewed before still needs its dispatch record. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push, `gh pr create`, and `gh pr checks <pr> --watch` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -2953,6 +2959,41 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model, cac
     return blockers, notes
 
 
+def kept_task_reviews(plan, task_id):
+    """The kept per-candidate review records of a task (<task>__review__<sha12>__<agent>.json; never a subtask's
+    <task>@<id>__... file): dicts that are the task's own review records with a string sha, newest first."""
+    prefix = f"{safe_name(task_id)}__review__"
+    vdir = verdict_dir(plan)
+    try:
+        names = sorted(n for n in os.listdir(vdir) if n.startswith(prefix) and n.endswith(".json"))
+    except OSError:
+        return []
+    recs = []
+    for n in names:
+        rec = fstate.read_json(os.path.join(vdir, n))
+        if (isinstance(rec, dict) and rec.get("task") == task_id and not rec.get("subtask")
+                and rec.get("phase") == "review" and isinstance(rec.get("sha"), str) and rec["sha"]):
+            recs.append(rec)
+    return sorted(recs, key=lambda r: str(r.get("timestamp") or ""), reverse=True)
+
+
+def earlier_review_fallback(plan, reg, task, by, fingerprint, full):
+    """(fallback, sha) a delta review of `task` at `full` keeps, or None: the fallback of the reviewer dispatch recorded
+    for the newest earlier review (a kept record of this task, this reviewer and this version of the plan, on an
+    ancestor of `full`) whose dispatch started this reviewer with a recorded fallback. Any git error: None."""
+    path = repo_info(plan, reg, task["repo"])["path"]
+    if not path:
+        return None
+    for old in kept_task_reviews(plan, task["id"]):
+        sha = old["sha"]
+        if sha == full or old.get("by") != by or old.get("fingerprint") != fingerprint or not is_ancestor(path, sha, full):
+            continue
+        d = pr.recorded(plan, task["id"], None, "reviewer", sha)
+        if d and d.get("fallback") and d.get("agent") == by and sha.startswith(str(d.get("sha"))):
+            return d["fallback"], sha
+    return None
+
+
 def cmd_verdict(a, reg):
     if a.phase == "verify":
         if a.task.startswith("integration:"):
@@ -3104,6 +3145,15 @@ def cmd_verdict(a, reg):
         if (a.fallback is None and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
+        if "fallback" not in rec and a.fallback is None and not a.subtask and a.by == impl:
+            # a delta review (a later SHA of an already reviewed task) has no dispatch of its own: it keeps the fallback
+            # that dispatch recorded for the task's earlier review by this model. A task never reviewed before has no
+            # earlier record, so it still needs its own dispatch record.
+            earlier = earlier_review_fallback(plan, reg, task, a.by, rec["fingerprint"], full)
+            if earlier:
+                rec["fallback"], rec["fallback_from"] = earlier
+                print(f"factory-pipeline: delta review of {a.task} at {full[:10]} keeps the dispatch-recorded fallback of "
+                      f"its review at {earlier[1][:10]}", file=sys.stderr)
     for k in ("model", "effort"):  # what the session ran with (optional), so reports show it
         if getattr(a, k, None):
             rec[k] = getattr(a, k)
@@ -3280,6 +3330,33 @@ def xs_diff_above(plan, reg, pipe, task, info, sha):
     return pr.above_xs(rule, paths, numstat_lines("\n".join(rows))) + xs_heavy(plan, reg, rule, task["repo"], paths)
 
 
+def dep_review_pass(plan, reg, path, dep_id, sha):
+    """(pass_sha, current_sha) for a stacked task whose reviewed commit is `sha`. current_sha is the dependency's
+    current review PASS SHA (None when missing, STALE or not PASS). pass_sha is the SHA of the newest review PASS of the
+    dependency that `sha` contains (the current record or a kept per-candidate one of this version of the plan), else
+    None. It is returned only when it is the current PASS, or when the current PASS is a delta review on a tree that
+    already contains `sha` (e.g. the integration HEAD); otherwise a newer PASS the dependent never merged would hide a
+    missing merge, so pass_sha is None. A git error makes is_ancestor false: the blocker stays."""
+    cur, _ = verdict_of(plan, reg, dep_id, "review")
+    current_sha = cur["sha"] if cur and cur.get("state") == "PASS" else None
+    fingerprint = scope_fingerprint(plan, reg, dep_id)
+    current_file = verdict_file(plan, dep_id, "review")
+    candidates = [(fstate.read_json(current_file), 1)] + [(r, 0) for r in kept_task_reviews(plan, dep_id)]
+    best = None
+    for rec, is_current in candidates:
+        if (not isinstance(rec, dict) or rec.get("task") != dep_id or rec.get("subtask") or rec.get("phase") != "review"
+                or rec.get("state") != "PASS" or not isinstance(rec.get("sha"), str) or not rec["sha"]
+                or rec.get("fingerprint") != fingerprint or not is_ancestor(path, rec["sha"], sha)):
+            continue
+        key = (str(rec.get("timestamp") or ""), is_current)
+        if best is None or key > best[0]:
+            best = (key, rec["sha"])
+    pass_sha = best[1] if best else None
+    if pass_sha and pass_sha != current_sha and not (current_sha and is_ancestor(path, sha, current_sha)):
+        pass_sha = None
+    return pass_sha, current_sha
+
+
 def gate(plan, reg, allow_same_model=False, run_checks=True):
     coverage_cache = {}
     pipe = settings(reg)
@@ -3440,11 +3517,12 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             dep = None
         dep_pass = None
         if dep is not None:
-            drv = verdict_of(plan, reg, dep["id"], "review")[0]
-            dep_pass = drv["sha"] if drv and drv.get("state") == "PASS" else None
+            # the dependency's review PASS this task contains (a later delta review of the dependency does not hide it)
+            dep_pass, dep_current = dep_review_pass(plan, reg, info["path"], dep["id"], rv["sha"])
             if not dep_pass or not is_ancestor(info["path"], dep_pass, rv["sha"]):
+                shown = dep_pass or dep_current
                 blockers.append(f"{t['id']}: stacked on {dep['id']}: review {rv['sha'][:10]} lacks {dep['id']}'s review "
-                                f"PASS {dep_pass[:10] if dep_pass else 'none'}: merge {task_branch(plan, info, dep)} into "
+                                f"PASS {shown[:10] if shown else 'none'}: merge {task_branch(plan, info, dep)} into "
                                 f"{task_branch(plan, info, t)}, then verify again")
         _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], heads[key])
         if rc != 0:
