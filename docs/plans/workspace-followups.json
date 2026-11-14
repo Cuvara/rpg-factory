@@ -56,7 +56,8 @@
         "scripts/checks/skill-citations.py",
         "scripts/factory-cmd.py",
         "tests/facts.test.sh",
-        "tests/fixtures/check-registry-p4.sh"
+        "tests/fixtures/check-registry-p4.sh",
+        "tests/skill-citations.test.sh"
       ],
       "exclusions": [],
       "deps": [
