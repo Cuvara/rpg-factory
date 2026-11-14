@@ -146,16 +146,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
-### affected-selection-followups
-
-From plan leftovers-followups (`docs/plans/leftovers-followups/report.md`):
-
-- `tests/affected.py`: a change to `scripts/lib/rpgf_guard/__init__.py` (loaded by path, no importer edge) still
-  selects every suite, as does any module loaded only through `spec_from_file_location`.
-- `tests/affected.py` selects only direct callers of `scripts/lib/workspace.sh` (accepted in plan workspace-leftovers:
-  `tests/commands.test.sh` and `tests/hook-perf.test.sh` reach it two hops away and run only in a full run).
-- `tests/affected.py` docstring has a 145-character line.
-
 ### language-policy-followups
 
 From plan language-policy (`docs/plans/language-policy/report.md`):
@@ -180,6 +170,9 @@ From plan language-policy (`docs/plans/language-policy/report.md`):
   still reports it available. Probe for the prompt, or document the one-time trust step in `docs/codex.md`.
 
 ## Covered
+
+- **affected-selection-followups**: shipped in plan affected-followups (`changelog.d/affected-rpgf-guard.md`); the
+  two-hop `workspace.sh` callers stay accepted (they run in a full run).
 
 - **workspace-leftovers-followups**: shipped in plan leftovers-followups
   (`changelog.d/leftovers-gate-allowlist-case.md`, `changelog.d/leftovers-affected-syspath.md`,

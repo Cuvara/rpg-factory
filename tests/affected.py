@@ -7,8 +7,9 @@
   affected.py select-many FILE SUITE...
                                     print each SUITE that must run (same rule as select), one per line; the
                                     import graph is built once (run-all --affected calls it once per run)
-  affected.py cases FILE SUITE...   print each selected suite and its affected cases, or ALL when uncertain: the case map
-                                    must name every file the suite selects in the import closure of a changed file
+  affected.py cases FILE SUITE...   print each selected suite and its affected cases, or ALL when uncertain: the
+                                    case map must name every file the suite selects in the import closure of a
+                                    changed file
   affected.py hashes SUITE...       print suite and input hash (or '-' when reuse is unsafe)
 
 A suite runs when one of these holds (anything unsure runs):
@@ -52,13 +53,15 @@ module (or in the tracked module it is imported from with `from .mod import NAME
 The resolved directory is the module's import root; import edges are already resolved by module stem in
 library_graph(), so the idiom needs no extra edge. Anything else stays unsure: a computed or unresolvable entry,
 importlib.import_module, __import__, sys.path assigned, sliced or aliased, and a string or bytes literal (not a
-docstring) that holds sys.path, importlib or __import__ code. An accepted spec_from_file_location FILE gets no graph
-edge from the loader (the edge exists only through an import or a load_refs mention of FILE elsewhere), so a loaded
-file nobody imports stays unsure (scripts/lib/rpgf_guard/__init__.py today). hashes (suite reuse) keep the conservative rule: any such mention is
-unsure there (dynamic(path, conservative=True), reaches(path, True)). A
-tracked Python file that does not parse makes every selection unsure. Unknown paths otherwise run only suites
-with matching rules; unknown top-level files run all. The reuse hash of a suite covers exactly the files that
-select it under the conservative tree rule (plus its literal named paths).
+docstring) that holds sys.path, importlib or __import__ code. A Python module that calls
+spec_from_file_location(name, FILE, ...) gets an importer edge for FILE
+when FILE resolves by static evaluation (static_value) to an existing tracked file inside the repo (loaded_files): a
+change to scripts/lib/rpgf_guard/__init__.py selects the suites that reach its loader scripts/lib/gitguard.py. A FILE
+that does not resolve statically (a computed path) gets no edge, so a loaded file nobody imports stays unsure. hashes
+(suite reuse) keep the conservative rule: any such mention is unsure there (dynamic(path, conservative=True),
+reaches(path, True)). A tracked Python file that does not parse makes every selection unsure. Unknown paths
+otherwise run only suites with matching rules; unknown top-level files run all. The reuse hash of a suite covers
+exactly the files that select it under the conservative tree rule (plus its literal named paths).
 Two uses, two tree rules. select / select-many (task QA iteration) use the narrow rule above: a code file with
 a caller edge follows its edges only, so a library change selects only its importers; a miss there is caught by
 the integration full run. hashes (suite reuse at that full run, where a false PASS is the risk) use the
@@ -107,31 +110,36 @@ SKILL_TEXT = ["skills/*", ".claude/skills/*"]
 # indirect inputs: what a suite reads without naming the file
 EXTRA = {
     "tests/skills-lint.sh": SKILL_TEXT + ["commands/*", "agents/*", "scripts/checks/*"],
-    "tests/parallel-policy.test.sh": SKILL_TEXT + ["tests/skills-lint.sh", "scripts/orca-wait.sh", "tests/orca-wait.test.sh"],
-    "tests/new-skill.test.sh": SKILL_TEXT + ["scripts/new-skill.py", "scripts/skill-touchpoints.py", "tests/routing.test.sh",
-                                             "evals/*", "tests/skills-lint.sh", "docs/architecture/overview.md"],
+    "tests/parallel-policy.test.sh": SKILL_TEXT + ["tests/skills-lint.sh", "scripts/orca-wait.sh",
+                                                   "tests/orca-wait.test.sh"],
+    "tests/new-skill.test.sh": SKILL_TEXT + ["scripts/new-skill.py", "scripts/skill-touchpoints.py",
+                                             "tests/routing.test.sh", "evals/*", "tests/skills-lint.sh",
+                                             "docs/architecture/overview.md"],
     "scripts/checks/english-only.py": ["*"],
     "tests/english-only.test.sh": ["scripts/checks/english-only.py"],
     "tests/routing.test.sh": SKILL_TEXT + ["scripts/factory_session.py"],
     "tests/routing-golden.test.sh": SKILL_TEXT,
     "tests/ui-skills.test.sh": ["skills/ui-*", "docs/architecture/*"],
-    "tests/orca-commands.test.sh": ["skills/delivery/references/delivery.md", "skills/factory-core/references/parallel-work.md",
-                                   "docs/pipeline-cli.md"],
+    "tests/orca-commands.test.sh": ["skills/delivery/references/delivery.md",
+                                   "skills/factory-core/references/parallel-work.md", "docs/pipeline-cli.md"],
     # absent until task checks-lows lands: run-all lists a suite only when its file exists (list_suites), so while it is
     # absent --list-suites and --only-suites never name it and no candidate list holds it
     "tests/plan-paths.test.sh": ["scripts/lib/plan_paths.py", "scripts/lib/compat.sh"],
-    "tests/delivery-generic.test.sh": ["skills/delivery/*", "scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py"],
+    "tests/delivery-generic.test.sh": ["skills/delivery/*", "scripts/factory-pipeline.py",
+                                       "scripts/lib/pipeline_route.py"],
     "scripts/checks/skill-citations.py": SKILL_TEXT,
-    "tests/commands.test.sh": ["commands/*", "scripts/factory-*.py", "scripts/run-checks.py", "scripts/ui/*", "scripts/assetgen/*"],
+    "tests/commands.test.sh": ["commands/*", "scripts/factory-*.py", "scripts/run-checks.py", "scripts/ui/*",
+                               "scripts/assetgen/*"],
     "tests/assetgen.test.sh": ["scripts/assetgen/*", "templates/assetgen/*", "scripts/checks/domains/assetgen.py",
-                               "scripts/checks/domains/_api.py", "scripts/checks/artifact-*.py", "tests/fixtures/assetgen/*",
-                               "docs/schemas/kinds/gen-run.schema.json"],
+                               "scripts/checks/domains/_api.py", "scripts/checks/artifact-*.py",
+                               "tests/fixtures/assetgen/*", "docs/schemas/kinds/gen-run.schema.json"],
     "tests/changelog.test.sh": ["changelog.d/*", "CHANGELOG.md"],
     "tests/codex-plugin.test.sh": [".agents/*", "docs/codex.md"],
     "tests/dogfood-grader.test.sh": ["tests/dogfood/*", "evals/*"],
     "tests/release-check.test.sh": ["VERSION", "README.md", "CHANGELOG.md"],
 }
-PATH_RE = re.compile(r"(?<![\w.-])((?:scripts|skills|commands|templates|docs|testlab|evals|hooks|tests)/[A-Za-z0-9_./*-]+)")
+PATH_RE = re.compile(
+    r"(?<![\w.-])((?:scripts|skills|commands|templates|docs|testlab|evals|hooks|tests)/[A-Za-z0-9_./*-]+)")
 
 
 def git(*args):
@@ -240,6 +248,25 @@ def ast_imports(raw):
     return found
 
 
+def loaded_files(path, text, known):
+    """Tracked files (keys of known) that a module loads by importlib.util.spec_from_file_location(name, FILE, ...) when
+    FILE resolves by static evaluation (static_value) to an existing file inside this repo. A computed FILE gives no
+    edge. Uses only the lru_cached static helpers, never library_graph()."""
+    if "spec_from_file_location" not in text or parsed(path) is None:
+        return set()
+    found = set()
+    for node in ast.walk(parsed(path)):
+        fn = node.func if isinstance(node, ast.Call) else None
+        if not (isinstance(fn, ast.Attribute) and fn.attr == "spec_from_file_location" and len(node.args) >= 2):
+            continue
+        value = static_value(node.args[1], path)
+        if inside_root(value) and os.path.isfile(value):
+            rel = os.path.relpath(value, ROOT).replace(os.sep, "/")
+            if rel in known:
+                found.add(rel)
+    return found
+
+
 @lru_cache(None)
 def library_graph():
     """Reverse static edges over scripts/lib/* and every tracked code file (.py/.sh/.jq); scan each file once.
@@ -272,7 +299,8 @@ def library_graph():
         text = raw.decode("utf-8", errors="replace")
         if path.endswith(SCANNED):
             text = code_only(path, text)
-        for base in (set(PY_FILE.findall(text)) | set(HELPER_FILE.findall(text))) - {"__init__.py"}:  # a package loaded by path is unsure
+        # a package loaded by path is unsure: its __init__.py name is no mention
+        for base in (set(PY_FILE.findall(text)) | set(HELPER_FILE.findall(text))) - {"__init__.py"}:
             mentioned.setdefault(base, set()).add(path)
         if not path.endswith(SCANNED) or path in NOT_IMPORTERS:
             continue
@@ -294,12 +322,15 @@ def library_graph():
             candidates = [f"{stem}.py", f"{stem}/__init__.py"]
             candidates += [p for m in members for p in (f"{stem}/{m}.py", f"{stem}/{m}/__init__.py")]
             refs.update(p for p in candidates if p in reverse)
+        if path.endswith(".py") and path not in broken:
+            refs.update(loaded_files(path, text, reverse))
         for base in load_refs(path, text):
             refs.update(by_name.get(base, ()))
         for base in load_refs(path, text, HELPER_FILE):
             refs.update(helpers.get(base, ()))
         for ref in re.findall(r"\blib/([\w./-]+)", text):
-            refs.update(p for p in libs if p == "scripts/lib/" + ref or p.startswith("scripts/lib/" + ref.rstrip("/") + "/"))
+            refs.update(p for p in libs
+                        if p == "scripts/lib/" + ref or p.startswith("scripts/lib/" + ref.rstrip("/") + "/"))
         for target in refs:
             if path != target:
                 reverse[target].add(path)
@@ -482,12 +513,14 @@ def static_idiom(path):
             if up.attr != "path":
                 continue
             use = parent.get(up)
-            if isinstance(use, ast.Compare) and up in use.comparators and all(isinstance(o, (ast.In, ast.NotIn)) for o in use.ops):
+            if (isinstance(use, ast.Compare) and up in use.comparators
+                    and all(isinstance(o, (ast.In, ast.NotIn)) for o in use.ops)):
                 continue
             call = parent.get(use)
             if not (isinstance(use, ast.Attribute) and use.value is up and use.attr in ("insert", "append")
                     and isinstance(call, ast.Call) and call.func is use and not call.keywords
-                    and len(call.args) == (2 if use.attr == "insert" else 1) and resolves_in_root(call.args[-1], path, "dir")):
+                    and len(call.args) == (2 if use.attr == "insert" else 1)
+                    and resolves_in_root(call.args[-1], path, "dir")):
                 return False
         elif isinstance(node, ast.Name) and node.id == "importlib":
             util = parent.get(node)
@@ -762,7 +795,8 @@ def hashes(suites):
             continue
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=10)
-            versions.append(result.stdout.splitlines()[0].decode("utf-8", errors="replace") if result.stdout else "absent")
+            versions.append(
+                result.stdout.splitlines()[0].decode("utf-8", errors="replace") if result.stdout else "absent")
         except (OSError, subprocess.TimeoutExpired):
             versions.append("absent")
     # one pass over the tree: the files every suite depends on, and per reached path the files that reach it
@@ -785,7 +819,8 @@ def hashes(suites):
             if selects(p, suite):
                 inputs |= sources
         # Literal named inputs remain inputs even when deleted/untracked-absent.
-        inputs.update(p for p in suite_patterns(suite) if not any(c in p for c in "*?[") and not os.path.isdir(os.path.join(ROOT, p)))
+        inputs.update(p for p in suite_patterns(suite)
+                      if not any(c in p for c in "*?[") and not os.path.isdir(os.path.join(ROOT, p)))
         for path in sorted(inputs):
             raw = contents(path)
             digest.update(path.encode() + b"\0")
