@@ -19,7 +19,10 @@ sel 1 "an unrelated script skips the suite" tests/pipeline.test.sh scripts/chang
 sel 0 "registry change runs everything" tests/changelog.test.sh registry/core.json
 sel 0 "library reaches its importer suite" tests/pipeline.test.sh scripts/lib/plan_paths.py
 sel 1 "library skips unrelated suite" tests/changelog.test.sh scripts/lib/plan_paths.py
-sel 0 "dynamic library stays global" tests/changelog.test.sh scripts/lib/gitguard.py
+# gitguard.py uses the plugin's static sys.path/spec_from_file_location idiom: it selects its importer suite, not every
+# suite; the "dynamic stays global" property is covered by the computed/importlib/bytes modules of the fixture below
+sel 0 "a static-idiom library selects its importer suite" tests/git-guard.test.sh scripts/lib/gitguard.py
+sel 1 "a static-idiom library skips an unrelated suite" tests/changelog.test.sh scripts/lib/gitguard.py
 sel 0 "unknown top-level path runs everything" tests/changelog.test.sh new-unknown-file
 sel 0 "skill text reaches skills-lint (EXTRA)" tests/skills-lint.sh skills/vfx/SKILL.md
 sel 0 "an agent file reaches skills-lint (EXTRA)" tests/skills-lint.sh agents/factory-explorer.md
@@ -151,8 +154,10 @@ PY
 )
 [ "$out" = "b,c" ] && { pass=$((pass + 1)); echo "PASS  changed = committed since merge-base + untracked"; } || { fail=$((fail + 1)); echo "FAIL  changed: '$out'"; }
 out=$(python3 -B - "$A" "$TMP" <<'PY'
-import contextlib, importlib.util, io, os, pathlib, subprocess, sys
+import contextlib, importlib.util, io, os, pathlib, subprocess, sys, types
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# hashes() imports find_bash from <fixture>/scripts/lib/shells.py, which the fixture does not have: stub it (no host bash)
+stub = types.ModuleType("shells"); stub.find_bash = lambda: None; sys.modules["shells"] = stub
 root = pathlib.Path(sys.argv[2]) / "hash-fixture"; root.mkdir()
 subprocess.run(["git", "init", "-q", str(root)], check=True)
 files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from inner import VALUE\n",
@@ -322,12 +327,15 @@ check("hash changes through a relative multiline import", rel_before != h("tests
 reset()
 check("an unparsable Python file makes selection unsure", m.needed(["scripts/lib/leaf.py"], "tests/other.test.sh"))
 check("an unparsable Python file disables reuse", h("tests/other.test.sh") == "-")
+check("the hash-fixture block ran to its end", True)
 PY
 )
 while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# a crash in the heredoc (an import error, a traceback) loses the checks after it: count it as a failure
+grep -qF "PASS  the hash-fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the hash-fixture block crashed before its end"; }
 out=$(python3 -B - "$A" "$TMP" <<'PY'
 import importlib.util, pathlib, subprocess, sys
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -374,8 +382,10 @@ done <<< "$out"
 # the plugin's own sys.path idiom (a directory of this repo built from __file__ and string literals) is not unsure for
 # selection; a computed entry, importlib and __import__ stay unsure; the conservative rule (reuse hashes) is unchanged
 out=$(python3 -B - "$A" "$TMP" <<'PY'
-import contextlib, importlib.util, io, pathlib, subprocess, sys
+import contextlib, importlib.util, io, pathlib, subprocess, sys, types
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# hashes() imports find_bash from <fixture>/scripts/lib/shells.py, which the fixture does not have: stub it (no host bash)
+stub = types.ModuleType("shells"); stub.find_bash = lambda: None; sys.modules["shells"] = stub
 root = pathlib.Path(sys.argv[2]) / "syspath-fixture"; root.mkdir()
 subprocess.run(["git", "init", "-q", str(root)], check=True)
 files = {
@@ -401,11 +411,13 @@ files = {
     # importlib and __import__, alone and next to a static idiom
     "scripts/lib/imp_mod.py": "import importlib\nmod = importlib.import_module(NAME)\n",
     "scripts/lib/imp_dunder.py": "mod = __import__(NAME)\n",
+    # code in a bytes literal is not analysed (only a str constant used to be scanned)
+    "scripts/lib/imp_bytes.py": "import os\nCODE = b\"exec('import sys; sys.path.insert(0, X)')\"\n",
     "scripts/lib/imp_mixed.py": "import importlib, os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nmod = importlib.import_module(NAME)\n",
     # a static entry plus a computed one in the same file stays unsure
     "scripts/lib/two_paths.py": "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nsys.path.insert(0, sys.argv[1])\n",
     # an entry script that imports every dynamic module (so only dynamic() can make them unsure), named by a suite
-    "scripts/comp-entry.py": "import comp_argv, comp_env, comp_name, comp_fn, two_paths, imp_mod, imp_dunder, imp_mixed\n",
+    "scripts/comp-entry.py": "import comp_argv, comp_env, comp_name, comp_fn, two_paths, imp_mod, imp_dunder, imp_mixed, imp_bytes\n",
     "tests/comp.test.sh": "python scripts/comp-entry.py\n",
     # an unrelated suite
     "scripts/unrel/unrelated.py": "x = 1\n", "tests/other.test.sh": "python scripts/unrel/unrelated.py\n",
@@ -438,8 +450,8 @@ check("the sibling module that defines the path name selects the importer's suit
 computed = ["scripts/lib/comp_argv.py", "scripts/lib/comp_env.py", "scripts/lib/comp_name.py", "scripts/lib/comp_fn.py", "scripts/lib/two_paths.py"]
 check("a computed sys.path entry stays dynamic", all(m.dynamic(p, conservative=False) is True for p in computed))
 check("a computed sys.path entry stays unsure: it selects an unrelated suite", all(m.needed([p], "tests/other.test.sh") for p in computed))
-dyn = ["scripts/lib/imp_mod.py", "scripts/lib/imp_dunder.py", "scripts/lib/imp_mixed.py"]
-check("importlib and __import__ stay dynamic, next to a static idiom too", all(m.dynamic(p, conservative=False) is True for p in dyn))
+dyn = ["scripts/lib/imp_mod.py", "scripts/lib/imp_dunder.py", "scripts/lib/imp_mixed.py", "scripts/lib/imp_bytes.py"]
+check("importlib, __import__ and code in a bytes literal stay dynamic, next to a static idiom too", all(m.dynamic(p, conservative=False) is True for p in dyn))
 check("importlib and __import__ stay unsure: they select an unrelated suite", all(m.needed([p], "tests/other.test.sh") for p in dyn))
 check("the conservative rule keeps every sys.path/importlib/__import__ mention dynamic, the static idiom too",
       all(m.dynamic(p, conservative=True) is True for p in static + computed + dyn))
@@ -451,12 +463,15 @@ stat_before, other_before = h("tests/stat.test.sh"), h("tests/other.test.sh")
 (root / "scripts/lib/stat_mod.py").write_text((root / "scripts/lib/stat_mod.py").read_text() + "# touched\n")
 check("hashes stay conservative: a change to a static-idiom module changes the hash of every suite",
       stat_before != h("tests/stat.test.sh") and other_before != h("tests/other.test.sh"))
+check("the sys.path fixture block ran to its end", True)
 PY
 )
 while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# a crash in the heredoc loses the checks after it: count it as a failure
+grep -qF "PASS  the sys.path fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the sys.path fixture block crashed before its end"; }
 # the real repository: scripts/lib/workspace.py is imported by scripts/lib/fstate.py and the guard modules after a sys.path
 # insert of their own directory; a change selects the suites of those importers, not every suite
 printf '%s\n' scripts/lib/workspace.py > "$TMP/many"

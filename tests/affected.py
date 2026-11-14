@@ -51,8 +51,10 @@ os.path.abspath/realpath/normpath/dirname/join and str() of resolvable parts, an
 module (or in the tracked module it is imported from with `from .mod import NAME`) binds to one resolvable value.
 The resolved directory is the module's import root; import edges are already resolved by module stem in
 library_graph(), so the idiom needs no extra edge. Anything else stays unsure: a computed or unresolvable entry,
-importlib.import_module, __import__, sys.path assigned, sliced or aliased, and a string (not a docstring) that holds
-sys.path, importlib or __import__ code. hashes (suite reuse) keep the conservative rule: any such mention is
+importlib.import_module, __import__, sys.path assigned, sliced or aliased, and a string or bytes literal (not a
+docstring) that holds sys.path, importlib or __import__ code. An accepted spec_from_file_location FILE gets no graph
+edge from the loader (the edge exists only through an import or a load_refs mention of FILE elsewhere), so a loaded
+file nobody imports stays unsure (scripts/lib/rpgf_guard/__init__.py today). hashes (suite reuse) keep the conservative rule: any such mention is
 unsure there (dynamic(path, conservative=True), reaches(path, True)). A
 tracked Python file that does not parse makes every selection unsure. Unknown paths otherwise run only suites
 with matching rules; unknown top-level files run all. The reuse hash of a suite covers exactly the files that
@@ -459,9 +461,10 @@ def static_idiom(path):
     docstrings = {n.body[0].value for n in ast.walk(tree_) if isinstance(n, (ast.Module, ast.FunctionDef,
                   ast.AsyncFunctionDef, ast.ClassDef)) and n.body and isinstance(n.body[0], ast.Expr)}
     for node in ast.walk(tree_):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings:
-            if DYNAMIC_TEXT.search(node.value):
-                return False  # code in a string (a -c script, a getattr name) is not analysed
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)) and node not in docstrings:
+            text = node.value if isinstance(node.value, str) else node.value.decode("utf-8", "replace")
+            if DYNAMIC_TEXT.search(text):
+                return False  # code in a string or bytes literal (a -c script, a getattr name) is not analysed
         elif isinstance(node, ast.Attribute) and node.attr in ("__import__", "import_module"):
             return False
         elif isinstance(node, ast.Import):
