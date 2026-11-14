@@ -55,8 +55,10 @@ def parse_pin(spec):
 
 
 def main():
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    reg = json.load(open(os.path.join(root, "registry.json"), encoding="utf-8"))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workspace", default=default_workspace())
+    ap.add_argument("--workspace", default=default_workspace(registry=reg))
     ap.add_argument("--remote", action="store_true", help="also confirm tags with git ls-remote (network)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()

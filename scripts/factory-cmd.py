@@ -47,6 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 from shells import find_bash  # noqa: E402
+from workspace import default_workspace  # noqa: E402
 
 BASH = find_bash() or "bash"  # never the System32 WSL launcher on Windows
 CODEX = "python3 -B " + os.path.join(ROOT, "scripts", "factory-cmd.py").replace(os.sep, "/")  # the shell form of a verb
@@ -138,7 +139,7 @@ def capture(argv):
 
 
 def workspace(reg):
-    return os.environ.get(reg["workspace"]["root_env"]) or reg["workspace"]["root_default"]
+    return default_workspace(registry=reg)
 
 
 def cmd_doctor(args):
