@@ -8,8 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; }
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 unset RPG_FACTORY_WORKSPACE
 P="$TMP/plugin"; WS="$TMP/ws"; SRV="$WS/srv"; CLI="$WS/cli"
-mkdir -p "$P/scripts/checks" "$P/skills/demo/references" "$SRV/backend/game" "$SRV/backend/other" "$CLI/Assets/UI"
+mkdir -p "$P/scripts/checks" "$P/scripts/lib" "$P/skills/demo/references" "$SRV/backend/game" "$SRV/backend/other" "$CLI/Assets/UI"
 cp "$ROOT/scripts/checks/skill-citations.py" "$P/scripts/checks/"
+cp "$ROOT/scripts/lib/workspace.py" "$P/scripts/lib/"
 gc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 cat > "$P/registry.json" <<EOF
 {"workspace": {"root_default": "$WS", "root_env": "RPGF_TEST_WS"},

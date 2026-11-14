@@ -65,7 +65,8 @@ case "$(uname -s)" in
     stub_platform=MINGW64_NT ;;
   *) registry_ws=$(cd "$T/ws" && pwd); stub_platform=Linux ;;
 esac
-RPGF_TEST_REGISTRY_WS="$registry_ws" jq '.workspace.root_default = env.RPGF_TEST_REGISTRY_WS' "$ROOT/registry.json" > "$T/registry.json"
+printf '%s' "$registry_ws" > "$T/registry-ws"
+jq --rawfile w "$T/registry-ws" 'setpath(["workspace", "root_default"]; $w)' "$ROOT/registry.json" > "$T/registry.json"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\n' "$stub_platform" > "$T/bin/uname"
 chmod +x "$T/bin/uname"
 reg_out=$(unset RPG_FACTORY_WORKSPACE; PATH="$T/bin:$PATH" bash "$ROOT/scripts/check-registry.sh" --registry "$T/registry.json" 2>&1)
@@ -75,7 +76,11 @@ for platform in Linux MINGW64_NT; do
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\n' "$platform" > "$T/bin/uname"
   case "$platform" in Linux) expected=/mnt/c/Workspaces/UnityIndie/Netcode ;; *) expected=/c/Workspaces/UnityIndie/Netcode ;; esac
   headless_out=$(cd "$T/outside" && unset RPG_FACTORY_WORKSPACE RPG_FACTORY_REPO_DIR RPG_FACTORY_REPO_KEY && PATH="$T/bin:$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --resolve-server 2>&1)
-  case "$headless_out" in *'<unresolved>'*) no "headless default $platform unresolved" ;; *"$expected"*|server:*) ok "headless default $platform" ;; *) no "headless default $platform: $headless_out" ;; esac
+  case "$headless_out" in
+    *'<unresolved>'*) no "headless default $platform unresolved" ;;
+    *"$expected"*|server:*"${expected%/Netcode}/rpg-mmo-server"*|NOT-RUN\(blocked\):*"${expected%/Netcode}/rpg-mmo-server"*) ok "headless default $platform" ;;
+    *) no "headless default $platform: $headless_out" ;;
+  esac
 done
 
 # Return each forbidden literal occurrence, retaining file and line for diagnostics.
