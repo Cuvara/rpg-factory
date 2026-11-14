@@ -398,8 +398,11 @@ if has_case cli-selftest; then
     "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MINGW64_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
   ws_expect "MSYS_NT -> /c/ drive form" \
     "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MSYS_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
-  ws_expect "CYGWIN_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo CYGWIN_NT-10.0; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
+  # cygpath is hidden (empty PATH dir): Git Bash ships a real one whose answer is the drive form, Linux CI has none.
+  nocyg=$(mktemp -d)
+  ws_expect "CYGWIN_NT without cygpath -> /cygdrive/c/ form" \
+    "$(unset RPG_FACTORY_WORKSPACE; PATH="$nocyg"; hash -r; uname() { echo CYGWIN_NT-10.0; }; rpgf_default_workspace)" /cygdrive/c/Workspaces/UnityIndie
+  rmdir "$nocyg" 2>/dev/null; hash -r
   ws_expect "Linux -> /mnt/c/ WSL form" \
     "$(unset RPG_FACTORY_WORKSPACE; uname() { echo Linux; }; rpgf_default_workspace)" /mnt/c/Workspaces/UnityIndie
   ws_expect "empty RPG_FACTORY_WORKSPACE counts as unset" \

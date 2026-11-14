@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+from plugin_registry import load_registry
 from workspace import default_workspace
 
 # upstream repo name (from the git URL) -> workspace dir, tag prefix, package.json path in that repo
@@ -55,8 +56,9 @@ def parse_pin(spec):
 
 
 def main():
+    reg = load_registry()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workspace", default=default_workspace())
+    ap.add_argument("--workspace", default=default_workspace(registry=reg))
     ap.add_argument("--remote", action="store_true", help="also confirm tags with git ls-remote (network)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()

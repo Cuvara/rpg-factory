@@ -146,23 +146,21 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
-### workspace-default-followups
+### workspace-leftovers-followups
 
-From plan workspace-default (`docs/plans/workspace-default/report.md`):
+From plan workspace-leftovers (`docs/plans/workspace-leftovers/report.md`):
 
-- `scripts/README.md` still states the old WSL-form workspace default; mirror the platform sentence of
-  `.claude/CLAUDE.md` "Commands".
-- No test stops a caller from hard-coding the workspace literal again: add a grep case to
-  `tests/workspace-default.test.sh` (allowed: the two helpers, their suite, test fixtures).
-- Integration QA with `RPG_FACTORY_WORKSPACE` unset on Git Bash still fails 6 of 22 checks: `scripts/check-registry.sh`
-  ("registry paths exist in workspace") and `factory-context.sh` (four cases: markers not found) take the workspace
-  from the registry root default or the environment, not from the shared helper, and
-  `scripts/checks/netcode-headless.sh` uses the workspace for the Netcode source only when `RPG_FACTORY_WORKSPACE` is
-  exported. Route them through `scripts/lib/workspace.{sh,py}` too.
-- `scripts/lib/workspace.sh`: stock Cygwin mounts drives under a cygdrive prefix, not at the root; the helper assumes
-  the Git Bash form there too.
-- `gate` checks run lead files for machine paths, but other docs checks on `docs/plans` (English only) are still caught
-  only by CI.
+- `scripts/factory-pipeline.py` `run_lead_file_blockers`: the english-only allowlist lookup uses `norm_path`, which is
+  case-folded on Windows, so an allowlist entry for a mixed-case run lead file path does not match there (a false gate
+  blocker CI would not report). Pass the exact tree path.
+- `tests/README.md` does not list `tests/plugin-registry.test.sh`.
+- `tests/affected.py`: a change to `scripts/lib/workspace.py` still selects every suite, because `fstate.py` and the
+  guard modules import it through `sys.path` edits the import graph cannot follow.
+- `tests/affected.py` selects only direct callers of `scripts/lib/workspace.sh`; `tests/commands.test.sh` and
+  `tests/hook-perf.test.sh` reach it two hops away and run only in a full run (reviewed: their assertions do not
+  depend on that path).
+- `tests/workspace-default.test.sh`: with a Windows-form `TMPDIR` the stub directories on `PATH` break and five cases
+  fail (the Git Bash default `TMPDIR` is fine).
 
 ### language-policy-followups
 
@@ -188,6 +186,13 @@ From plan language-policy (`docs/plans/language-policy/report.md`):
   still reports it available. Probe for the prompt, or document the one-time trust step in `docs/codex.md`.
 
 ## Covered
+
+- **workspace-followups-leftovers**: shipped in plan workspace-leftovers (`changelog.d/workspace-leftovers-cygwin.md`,
+  `changelog.d/workspace-leftovers-gate-english.md`, `changelog.d/workspace-leftovers-affected.md`,
+  `changelog.d/workspace-leftovers-pin-loader.md`).
+
+- **workspace-default-followups**: shipped in plan workspace-followups
+  (`changelog.d/workspace-default-followups.md`).
 
 - **workspace-default-by-platform**: shipped in plan workspace-default (`changelog.d/workspace-default.md`,
   `changelog.d/gate-lead-files.md`).

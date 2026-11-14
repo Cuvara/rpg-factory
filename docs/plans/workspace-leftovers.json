@@ -1,0 +1,115 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "workspace-leftovers",
+  "title": "Backlog workspace-followups-leftovers: Cygwin drive prefix, English check of run lead files in the gate, narrower suite selection for workspace.sh, shared registry loading of the pin checks",
+  "topic": "workspace-leftovers",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "cygwin-guard-tests",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one shell helper branch and test cases that copy existing patterns",
+      "objective": "Backlog topic workspace-followups-leftovers items 1 and 4. (a) scripts/lib/workspace.sh rpgf_platform_path maps a WSL-form path to the Git Bash drive form on MINGW, MSYS and CYGWIN, but stock Cygwin mounts drives under the cygdrive prefix (/cygdrive/c/...): on CYGWIN use `cygpath -u` on the Windows form when cygpath is on PATH, else the /cygdrive/<drive>/ form; MINGW and MSYS keep the current drive form; uname is still looked up at call time. rpgf_default_workspace follows through rpgf_platform_path. (b) tests/workspace-default.test.sh: add a negative self-test for the root_default reader guard (a throwaway file with a raw reader in a temporary tree must be reported, a converted reader must not), and make the MINGW netcode-headless case independent of the real Netcode checkout (a temporary workspace fixture with the SGL pin it needs) so it passes on a machine without that checkout. Add CYGWIN cases with a stubbed uname, with and without a stubbed cygpath. Changelog fragment changelog.d/workspace-leftovers-cygwin.md (### Fixed).",
+      "paths": [
+        "scripts/lib/workspace.sh",
+        "tests/workspace-default.test.sh",
+        "changelog.d/workspace-leftovers-cygwin.md",
+        "tests/routing.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/workspace-default.test.sh",
+        "tests/routing.test.sh"
+      ],
+      "acceptance": [
+        "on CYGWIN the workspace default is the cygdrive form (or the cygpath answer)",
+        "MINGW, MSYS and other platforms keep their current answers",
+        "the root_default reader guard has a negative self-test",
+        "tests/workspace-default.test.sh passes without a real Netcode checkout"
+      ]
+    },
+    {
+      "id": "gate-english",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a new gate blocker in the pipeline script; a false positive blocks every PR",
+      "objective": "Backlog topic workspace-followups-leftovers item 2. scripts/factory-pipeline.py gate (near the machine-path check of run lead files, function gate) checks run lead files only for machine paths; the English-only rule on docs/plans is caught only by CI (scripts/checks/english-only.py). In the same loop, also check each run lead file read from the integration HEAD with scripts/lib/english.py (first_offending_line, honouring the english-only allowlist the same way scripts/checks/english-only.py does) and add a blocker naming the file, line number and the rule when it is not English. Keep the import of english.py lazy or cheap. Make `status` agree with the gate the same way it does for the machine-path blocker. Tests in tests/pipeline.test.sh: a run lead file with a non-English line blocks the gate with that line; an allowlisted file and an English file do not. Document the blocker in docs/pipeline-cli.md (gate section). Changelog fragment changelog.d/workspace-leftovers-gate-english.md (### Added).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/workspace-leftovers-gate-english.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "gate blocks when a run lead file on the integration HEAD has a non-English line, naming file and line",
+        "allowlisted entries and English files pass",
+        "status shows the same blocker as gate"
+      ]
+    },
+    {
+      "id": "affected-workspace-lib",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "suite selection logic; a selection that is too narrow lets a regression through CI",
+      "objective": "Backlog topic workspace-followups-leftovers item 3. tests/run-all.sh sources scripts/lib/workspace.sh, so a change to that helper selects about 55 of 74 suites in `tests/run-all.sh --affected` and in CI (scripts/ci-plan.py uses tests/affected.py). Narrow it the way tests/affected.py already narrows PIPELINE_SUITES: a change to scripts/lib/workspace.sh (and scripts/lib/workspace.py if the same cause applies; measure first with `python3 -B tests/affected.py select-many` on a file list naming it) selects only the suites that name the file or reach it through a script they run (workspace-default, routing, check-registry, netcode-headless, facts, wire-parity and the other real callers), not every suite because the runner sources it. Keep hashes (suite reuse) conservative as for PIPELINE_SUITES. Update the docstring list of rules. Tests in tests/affected.test.sh: a change to workspace.sh selects its real callers and not an unrelated suite (e.g. git-guard); a change to tests/run-all.sh itself still selects what it did before. Report the before and after counts. Changelog fragment changelog.d/workspace-leftovers-affected.md (### Changed).",
+      "paths": [
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "changelog.d/workspace-leftovers-affected.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "a change to scripts/lib/workspace.sh selects only suites that use it",
+        "every real caller suite is still selected",
+        "suite reuse hashes stay conservative"
+      ]
+    },
+    {
+      "id": "pin-loader",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "small refactor of two read-only checks onto one helper",
+      "objective": "Backlog topic workspace-followups-leftovers item 5. scripts/checks/pin-plan.py and scripts/checks/pin-status.py (function main in both) repeat the plugin root lookup (CLAUDE_PLUGIN_ROOT, else three directories up) and the registry.json loading before default_workspace(registry=reg). Move that into one helper in scripts/lib/ (a small new module, e.g. scripts/lib/plugin_registry.py, stdlib only) and use it in both checks; behaviour, output and exit codes stay the same, including with RPG_FACTORY_WORKSPACE set and with --workspace. Add a test for the helper (CLAUDE_PLUGIN_ROOT set and unset) in a new suite tests/plugin-registry.test.sh registered in tests/run-all.sh only if no existing suite covers the pin checks; otherwise extend the suite that runs them. Changelog fragment changelog.d/workspace-leftovers-pin-loader.md (### Changed).",
+      "paths": [
+        "scripts/lib/plugin_registry.py",
+        "scripts/checks/pin-plan.py",
+        "scripts/checks/pin-status.py",
+        "tests/plugin-registry.test.sh",
+        "tests/run-all.sh",
+        "scripts/README.md",
+        "changelog.d/workspace-leftovers-pin-loader.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/plugin-registry.test.sh"
+      ],
+      "acceptance": [
+        "pin-plan.py and pin-status.py load the registry through one helper",
+        "their output and exit codes are unchanged",
+        "the helper has a test"
+      ]
+    }
+  ]
+}

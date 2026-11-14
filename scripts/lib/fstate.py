@@ -79,11 +79,17 @@ def workspace_key(ws):
     return hashlib.sha1(os.path.normcase(os.path.realpath(ws or "-")).encode()).hexdigest()[:12]
 
 
-def workspace(registry):
-    """The workspace root: $<root_env> when it names a directory, else the registry default. One rule for
+def workspace(registry, nt=None):
+    """The workspace root: $<root_env> when it names a directory, else the native registry default. One rule for
     run-checks.py and factory-status.py, so both read the same evidence."""
     env = os.environ.get(registry["workspace"]["root_env"])
-    return env if env and os.path.isdir(env) else registry["workspace"]["root_default"]
+    if env and os.path.isdir(env):
+        return env
+    try:  # imported lazily: hooks import fstate on every call; scripts/orca-wait.sh imports it as lib.fstate
+        from workspace import native_path
+    except ImportError:
+        from lib.workspace import native_path
+    return native_path(registry["workspace"]["root_default"], nt)
 
 
 def unique_suffix():

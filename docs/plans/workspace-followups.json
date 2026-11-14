@@ -1,0 +1,81 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "workspace-followups",
+  "title": "Backlog workspace-default-followups: registry root default by platform, last shell callers, a guard against new hard-coded defaults",
+  "topic": "workspace-followups",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "root-default-python",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "workspace discovery used by the routing engine, the hooks and the state paths; a wrong answer misroutes or writes state elsewhere",
+      "objective": "Backlog topic workspace-default-followups item 1 (Python part). With RPG_FACTORY_WORKSPACE unset, factory-context.sh run outside the workspace fails with 'markers not found' on Git Bash for Windows: scripts/lib/workspace.py find_workspace(use_default=True) checks registry workspace.root_default (the WSL form) as is, which Windows Python cannot resolve, and scripts/lib/fstate.py (the function that returns the env root or registry root_default, near line 86) returns it unchanged. Route the registry root default through the platform conversion that already exists (native_path in workspace.py) at both places, and make default_workspace() take the registry value when one is given, so the registry stays the single source of the default (keep the current literal only as the fallback when no registry is passed). An explicit RPG_FACTORY_WORKSPACE still wins and the cwd-first rule of find_workspace is unchanged. Keep workspace.py stdlib-only and cheap (the file guard imports it on every Read). Tests in tests/workspace-default.test.sh: find_workspace(use_default=True) with a stubbed nt flag finds a temporary workspace given in the WSL form; fstate returns the converted default; default_workspace(registry) follows the registry value. Changelog fragment changelog.d/workspace-default-followups.md (### Fixed).",
+      "paths": [
+        "scripts/lib/workspace.py",
+        "scripts/lib/fstate.py",
+        "tests/workspace-default.test.sh",
+        "changelog.d/workspace-default-followups.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/workspace-default.test.sh",
+        "tests/routing.test.sh",
+        "tests/session-state.test.sh"
+      ],
+      "acceptance": [
+        "factory-context.sh finds the workspace on Git Bash for Windows with RPG_FACTORY_WORKSPACE unset",
+        "the registry root default is the one source of the default for Python",
+        "an exported RPG_FACTORY_WORKSPACE and the cwd-first rule are unchanged"
+      ]
+    },
+    {
+      "id": "shell-callers",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "six callers in shell and Python, one doc line and one grep guard",
+      "objective": "Backlog topic workspace-default-followups items 1 (shell part), 2 and 3, after task root-default-python. (a) scripts/check-registry.sh defaults the workspace to registry workspace.root_default as is (near line 255), so 'registry paths exist in workspace' fails on Git Bash with RPG_FACTORY_WORKSPACE unset: add a sourceable helper in scripts/lib/workspace.sh that maps a WSL-form path to the platform form (the Git Bash drive form on MINGW, MSYS and Cygwin, unchanged elsewhere; uname looked up at call time) and use it on the registry value; express rpgf_default_workspace through it if that keeps its behaviour. (b) scripts/checks/netcode-headless.sh falls back to the Netcode checkout under the workspace only when RPG_FACTORY_WORKSPACE is exported: use the resolved default workspace (the variable it already computes) instead. (c) scripts/README.md 'Commands' still states the old WSL-form default: mirror the platform sentence of .claude/CLAUDE.md 'Commands'. (d) Add a case to tests/workspace-default.test.sh that greps scripts/ and tests/ for the WSL-form workspace literal and fails on any file except scripts/lib/workspace.sh, scripts/lib/workspace.py, tests/workspace-default.test.sh, the helper self-tests in tests/routing.test.sh and test fixtures, so a new hard-coded default cannot come back. Tests for (a) and (b) with a stubbed uname in tests/workspace-default.test.sh, and keep tests/check-registry.test.sh and tests/netcode-headless.test.sh passing. Extend changelog.d/workspace-default-followups.md by one sentence. (e) Task root-default-python found more raw uses of the registry default: scripts/checks/pin-plan.py and scripts/checks/pin-status.py call default_workspace() without the registry (pass the loaded registry so the registry value is used); scripts/checks/skill-citations.py and scripts/factory-cmd.py read workspace.root_default without native_path (convert it the same way); tests/facts.test.sh and tests/fixtures/check-registry-p4.sh read it raw in shell (use the new shell mapping helper). Keep each caller's behaviour when RPG_FACTORY_WORKSPACE is set.",
+      "paths": [
+        "scripts/lib/workspace.sh",
+        "scripts/check-registry.sh",
+        "scripts/checks/netcode-headless.sh",
+        "scripts/README.md",
+        "tests/workspace-default.test.sh",
+        "changelog.d/workspace-default-followups.md",
+        "scripts/checks/pin-plan.py",
+        "scripts/checks/pin-status.py",
+        "scripts/checks/skill-citations.py",
+        "scripts/factory-cmd.py",
+        "tests/facts.test.sh",
+        "tests/fixtures/check-registry-p4.sh",
+        "tests/skill-citations.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [
+        "root-default-python"
+      ],
+      "checks": [
+        "tests/workspace-default.test.sh",
+        "tests/check-registry.test.sh",
+        "tests/netcode-headless.test.sh",
+        "tests/facts.test.sh",
+        "tests/skill-citations.test.sh"
+      ],
+      "acceptance": [
+        "check-registry.sh and netcode-headless.sh resolve the workspace on Git Bash with RPG_FACTORY_WORKSPACE unset",
+        "scripts/README.md describes the platform default",
+        "a test fails when a script hard-codes the workspace default again",
+        "no script reads workspace.root_default without the platform conversion"
+      ]
+    }
+  ]
+}

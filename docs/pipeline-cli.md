@@ -203,6 +203,12 @@ factory-pipeline.py sync plan.json --task <id> [--send]
 - The gate checks the run lead files present on the integration branch with the machine-path rule of
   `scripts/lib/plan_paths.py` (the same rule as the portable-plans case of `tests/parallel-policy.test.sh`) and lists
   a blocker naming each file that holds machine-specific path text, so it is caught before the PR, not by CI.
+- The gate also applies the English-only rule of `scripts/lib/english.py` to each of those files as read from the
+  integration HEAD, honouring `tests/fixtures/english-allow.txt` read from the same HEAD (`path:line` and `path:*`
+  entries, as `scripts/checks/english-only.py` does; no file means an empty allowlist). It lists one blocker per file
+  naming the file, the first offending line number and the rule (`run lead file <path> line <n> is not English`), and a
+  blocker when the allowlist itself is malformed. `status` shows the same blockers as `gate blocker:` notes on the
+  first task of the repo.
 - `status` follows the same XS flow: the task's branch is the `topic`; uncommitted edits in its paths are the run
   lead's; a commit names `--phase review --sha <sha>`; after the review PASS the next step is the task tier command and
   the lead QA record at the `topic` HEAD (never an integration QA session); with that QA PASS it names the gate.
