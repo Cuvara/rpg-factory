@@ -23,6 +23,7 @@ Usage:
                      [--style S --authoring DIR] [--any-version] [--id ID] [--json]
   assetgen.py drift --authoring DIR [--json]
   assetgen.py approve-record --run RUN --by NAME [--note TEXT] [--authoring DIR] [--json]
+  assetgen.py style init --id ID --extends CORE [--family FAM=STYLE]... --authoring DIR [--title T] [--json]
 
 RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
 <authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
@@ -208,7 +209,9 @@ finalize (all of those), manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
 the given run dir, approve-record (run.md and <authoring>/approvals/AGEN-<run-id>/), promote-anchor
 (assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and reject
-(assetgen/styles/<style>/rejections/<id>.json) in the authoring repo. review-cmd only prints a `codex exec --sandbox
+(assetgen/styles/<style>/rejections/<id>.json) in the authoring repo, and style init (scripts/assetgen/style_cmd.py:
+a draft assetgen/styles/<id>.json extending a core style, draft stubs for family styles and the assetgen/project.json
+skeleton; it never overwrites a file, exit 1 with nothing written). review-cmd only prints a `codex exec --sandbox
 read-only` command with absolute paths (it works from any cwd); --no-write (factory-cmd always passes it) never builds
 a tile or composite: it uses each only when it holds the current pixels, else exits 2. The only network call is publish: it POSTs workflow.ui.json to ComfyUI's userdata
 API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
@@ -247,6 +250,7 @@ import lint  # noqa: E402
 import png  # noqa: E402
 import qa  # noqa: E402
 import runfiles  # noqa: E402
+import style_cmd  # noqa: E402
 import stylelock  # noqa: E402
 import uiworkflow  # noqa: E402
 
@@ -1796,6 +1800,7 @@ def main(argv=None):
     c.add_argument("--authoring", help="authoring repo (direction rejections; a --run id resolves in it)")
     c.add_argument("--any-version", action="store_true"); c.add_argument("--id"); c.add_argument("--json", action="store_true")
     c = sp("drift"); c.add_argument("--authoring", required=True); c.add_argument("--json", action="store_true")
+    style_cmd.add_parsers(sp("style"))
     c = sp("manifest"); run_arg(c); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
@@ -1951,6 +1956,8 @@ def main(argv=None):
             report = stylelock.drift(authoring)
             emit(report, a.json, drift_text(report))
             return 0
+        if a.cmd == "style":
+            return style_cmd.run(a)
         if a.cmd == "manifest":
             front, reset, changes = manifest(a.run, a.title, a.prompt_author, a.generated_by)
             newline = run_md_newline(a.run)

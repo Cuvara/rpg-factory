@@ -58,6 +58,10 @@
 # under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
 # preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
 # recorded previews/ path), finalize size fitting (transparent bands, original preservation, skips and refusals),
+# style init (style_cmd.py: a draft game style, a family stub and project.json written into a fresh authoring dir; lint
+# 0 FAIL and no WARN for them, the expected WARN once the style is active, resolve locks it; an existing style or
+# project.json is never overwritten, exit 1; a non-core --extends or a malformed --family exits 2; templates/assetgen
+# unchanged),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -4317,6 +4321,78 @@ SP="$TMP/style-plugin"; rm -rf "$SP/assetgen/runs/seed-001"
 (cd "$SP" && eval "${cmd//\{plugin_root\}/\"$ROOT\"}") > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q "a-good.json: .*seed-001 is missing" "$TMP/o" \
   && ok "assetgen-lint (registry command, in the authoring repo): an active anchor whose source run.md is gone FAILS" || no "assetgen-lint rc=$rc" "$(grep -v '^PASS' "$TMP/o")"
+
+echo "-- style init: draft game style, family stub and project.json skeleton (style_cmd.py)"
+SI="$TMP/style-init"; mkdir -p "$SI"
+tpl_hash() { find "$ROOT/templates/assetgen" -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1; }
+tpl0=$(tpl_hash)
+AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+SS="$SI/assetgen/styles"; SPJ="$SI/assetgen/project.json"
+[ $rc -eq 0 ] && [ -f "$SS/demo-game.json" ] && [ -f "$SS/demo-game-characters.json" ] && [ -f "$SPJ" ] \
+  && ok "style init exits 0 and writes the style, the family stub and project.json" || no "style init rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+[ "$(jq -c '[.extends, .version, .status]' "$SS/demo-game.json")" = '["pixel-art",1,"draft"]' ] \
+  && ok "style init: the main style extends pixel-art, version 1, status draft" || no "style init main style" "$(cat "$SS/demo-game.json")"
+[ "$(jq -c '[.extends, .status]' "$SS/demo-game-characters.json")" = '["demo-game","draft"]' ] \
+  && ok "style init: the family stub extends the main style and is draft" || no "style init family stub" "$(cat "$SS/demo-game-characters.json")"
+[ "$(jq -c '[.schema, .style, .families, .allowed_styles]' "$SPJ")" \
+  = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"},["demo-game","demo-game-characters"]]' ] \
+  && ok "style init: project.json has the schema, style {id, 1}, families and allowed_styles" || no "style init project.json" "$(cat "$SPJ")"
+AG lint --authoring "$SI" --json > "$TMP/si-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/si-lint.json")
+nwarn=$(jq '[.results[] | select(.state == "WARN" and (.path | test("project[.]json|assetgen/styles/")))] | length' "$TMP/si-lint.json")
+npass=$(jq '[.results[] | select(.state == "PASS" and (.path == "game:assetgen/project.json" or (.path | test("^game:assetgen/styles/demo-game"))))] | length' "$TMP/si-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$nwarn" = 0 ] && [ "$npass" = 3 ] \
+  && ok "lint after style init: 0 FAIL, project.json and both draft styles PASS with no WARN" || no "lint after init rc=$rc fail=$nfail warn=$nwarn pass=$npass" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/si-lint.json")"
+jq '.status = "active"' "$SS/demo-game.json" > "$TMP/si-active.json" && cp "$TMP/si-active.json" "$SS/demo-game.json"
+AG lint --authoring "$SI" --json > "$TMP/si-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/si-lint.json")
+siw=$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json" and .state == "WARN") | .reasons[]] | join(" ")' "$TMP/si-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && grep -q "active game style has no usable structured style fields" <<<"$siw" \
+  && ok "an active style from init WARNs 'no usable structured style fields' (0 FAIL)" || no "active style lint rc=$rc fail=$nfail" "$siw"
+AG resolve --purpose icon --authoring "$SI" --out "$TMP/si-spec.json" > /dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.style_lock.style.style_id' "$TMP/si-spec.json")" = demo-game ] \
+  && ok "resolve --authoring locks the new project style (spec.style_lock.style.style_id)" || no "resolve after init rc=$rc" "$(jq -c .style_lock "$TMP/si-spec.json" 2>&1)"
+h_style=$(sha256sum "$SS/demo-game.json" | cut -d' ' -f1); h_proj=$(sha256sum "$SPJ" | cut -d' ' -f1); n_files=$(find "$SI/assetgen" -type f | wc -l | tr -d ' ')
+AG style init --id demo-game --extends pixel-art --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/si.err" && [ "$(sha256sum "$SS/demo-game.json" | cut -d' ' -f1)" = "$h_style" ] \
+  && [ "$(sha256sum "$SPJ" | cut -d' ' -f1)" = "$h_proj" ] && [ "$(find "$SI/assetgen" -type f | wc -l | tr -d ' ')" = "$n_files" ] \
+  && ok "a second style init exits 1 with a message and leaves the files byte-identical" || no "second init rc=$rc" "$(cat "$TMP/si.err")"
+SJ="$TMP/style-init-proj"; mkdir -p "$SJ/assetgen"; echo '{"keep": true}' > "$SJ/assetgen/project.json"; h_keep=$(sha256sum "$SJ/assetgen/project.json" | cut -d' ' -f1)
+AG style init --id other-game --extends pixel-art --authoring "$SJ" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "project.json already exists" "$TMP/si.err" && [ ! -e "$SJ/assetgen/styles/other-game.json" ] \
+  && [ "$(sha256sum "$SJ/assetgen/project.json" | cut -d' ' -f1)" = "$h_keep" ] \
+  && ok "an existing project.json alone exits 1: no style file is written, project.json untouched" || no "existing project.json rc=$rc" "$(cat "$TMP/si.err")"
+SU="$TMP/style-init-usage"; mkdir -p "$SU"
+AG style init --id bad-game --extends no-such-core-style --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "not a core style" "$TMP/si.err" && [ ! -e "$SU/assetgen" ] \
+  && ok "--extends naming a non-core style exits 2 and writes nothing" || no "non-core extends rc=$rc" "$(cat "$TMP/si.err")"
+AG style init --id demo-game --extends demo-game --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$SU/assetgen" ] && ok "--extends naming a game style exits 2 (core styles only)" || no "game extends rc=$rc" "$(cat "$TMP/si.err")"
+for badfam in "characters" "Characters=x" "characters=" "=x"; do
+  AG style init --id bad-game --extends pixel-art --family "$badfam" --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "must be FAM=STYLE" "$TMP/si.err" && [ ! -e "$SU/assetgen" ] \
+    && ok "malformed --family '$badfam' exits 2 and writes nothing" || no "malformed --family '$badfam' rc=$rc" "$(cat "$TMP/si.err")"
+done
+SF="$TMP/style-init-family"; mkdir -p "$SF"
+AG style init --id demo-game --extends pixel-art --family characters=pixel-art --authoring "$SF" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "is a core style" "$TMP/si.err" && [ ! -e "$SF/assetgen" ] \
+  && ok "--family naming a core style exits 1 and writes nothing" || no "core family style rc=$rc" "$(cat "$TMP/si.err"; find "$SF" -type f)"
+SG="$TMP/style-init-gamefam"; mkdir -p "$SG/assetgen/styles"
+echo '{"schema":"rpg-factory.assetgen-style/1","title":"other","extends":"pixel-art","version":1,"status":"draft"}' > "$SG/assetgen/styles/other-fam.json"
+h_fam=$(sha256sum "$SG/assetgen/styles/other-fam.json" | cut -d' ' -f1)
+AG style init --id demo-game --extends pixel-art --family characters=other-fam --authoring "$SG" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "must extend the project style" "$TMP/si.err" && [ ! -e "$SG/assetgen/styles/demo-game.json" ] && [ ! -e "$SG/assetgen/project.json" ] \
+  && [ "$(sha256sum "$SG/assetgen/styles/other-fam.json" | cut -d' ' -f1)" = "$h_fam" ] && [ "$(find "$SG/assetgen" -type f | wc -l | tr -d ' ')" = 1 ] \
+  && ok "an existing game family style that does not extend the new id exits 1 and writes nothing" || no "foreign family style rc=$rc" "$(cat "$TMP/si.err"; find "$SG" -type f)"
+SK="$TMP/style-init-json"; mkdir -p "$SK"
+AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SK" --json > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/si.out")" = "rpg-factory.assetgen-style-init/1" ] \
+  && [ "$(jq -c '.files | sort' "$TMP/si.out")" = '["assetgen/project.json","assetgen/styles/demo-game-characters.json","assetgen/styles/demo-game.json"]' ] \
+  && [ "$(jq -c '.project | [.schema, .style, .families]' "$TMP/si.out")" = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"}]' ] \
+  && [ "$(jq -cS '.project' "$TMP/si.out")" = "$(jq -cS . "$SK/assetgen/project.json")" ] \
+  && ok "style init --json prints schema rpg-factory.assetgen-style-init/1 with files and project" || no "style init --json rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style init changed nothing under templates/assetgen" || no "templates/assetgen changed" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
 echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
