@@ -42,6 +42,18 @@ A suite runs when one of these holds (anything unsure runs):
     through the other rules (a suite that reads one names it). The root README.md is a top-level file: it runs all.
 Python imports are read with the ast module (plain, dotted, parenthesized, multiline and relative forms; a
 package member that is a module is an edge) and with a text scan that also sees imports inside strings. A
+library module that touches sys.path or importlib is unsure for selection unless every use is the plugin's own
+static idiom (static_idiom), read with ast: a sys.path.insert(i, X) / sys.path.append(X) whose X resolves to an
+existing directory inside this repo, an `X in sys.path` test, and importlib.util.spec_from_file_location(name, FILE,
+submodule_search_locations=[DIR]) with module_from_spec (the rpgf_guard package loader in scripts/lib/gitguard.py)
+whose FILE and DIR resolve inside the repo. X resolves by static evaluation only: string literals, __file__,
+os.path.abspath/realpath/normpath/dirname/join and str() of resolvable parts, and a name that every assignment in the
+module (or in the tracked module it is imported from with `from .mod import NAME`) binds to one resolvable value.
+The resolved directory is the module's import root; import edges are already resolved by module stem in
+library_graph(), so the idiom needs no extra edge. Anything else stays unsure: a computed or unresolvable entry,
+importlib.import_module, __import__, sys.path assigned, sliced or aliased, and a string (not a docstring) that holds
+sys.path, importlib or __import__ code. hashes (suite reuse) keep the conservative rule: any such mention is
+unsure there (dynamic(path, conservative=True), reaches(path, True)). A
 tracked Python file that does not parse makes every selection unsure. Unknown paths otherwise run only suites
 with matching rules; unknown top-level files run all. The reuse hash of a suite covers exactly the files that
 select it under the conservative tree rule (plus its literal named paths).
@@ -292,10 +304,220 @@ def library_graph():
     return reverse, mentioned, frozenset(broken)
 
 
-def dynamic(path):
+DYNAMIC_TEXT = re.compile(r"\b(importlib|__import__)\b|sys\.path")
+SPEC_CALLS = {"spec_from_file_location", "module_from_spec"}
+
+
+@lru_cache(None)
+def parsed(path):
+    raw = contents(path)
+    try:
+        return None if raw is None else ast.parse(raw)
+    except (SyntaxError, ValueError):
+        return None
+
+
+def inside_root(value):
+    """An absolute path equal to ROOT or under it (compared by normcase(normpath))."""
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return False
+    here, root = os.path.normcase(os.path.normpath(value)), os.path.normcase(os.path.normpath(ROOT))
+    return here == root or here.startswith(root.rstrip(os.sep) + os.sep)
+
+
+@lru_cache(None)
+def bindings(path):
+    """name -> every way the module binds it: ("expr", node) for a single-target `NAME = expr`, ("from", level,
+    module, name) for an import-from, ("other",) for anything else (augmented or tuple assignment, loop and with
+    targets, parameters, imports, def/class, walrus). "*" is present when a star import can bind any name."""
+    found = {}
+
+    def add(name, kind):
+        found.setdefault(name, []).append(kind)
+
+    def stores(target):
+        for n in ast.walk(target):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                add(n.id, ("other",))
+
+    for node in ast.walk(parsed(path)):
+        if isinstance(node, ast.Assign):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                add(node.targets[0].id, ("expr", node.value))
+            else:
+                for target in node.targets:
+                    stores(target)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.comprehension)):
+            stores(node.target)
+        elif isinstance(node, ast.NamedExpr):
+            stores(node.target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    stores(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            add(node.name, ("other",))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if not isinstance(node, ast.Lambda):
+                add(node.name, ("other",))
+            args = node.args
+            for a in args.posonlyargs + args.args + args.kwonlyargs + [x for x in (args.vararg, args.kwarg) if x]:
+                add(a.arg, ("other",))
+        elif isinstance(node, ast.ClassDef):
+            add(node.name, ("other",))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                add(alias.asname or alias.name.split(".")[0], ("other",))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    add("*", ("other",))
+                else:
+                    add(alias.asname or alias.name, ("from", node.level, node.module or "", alias.name))
+        elif isinstance(node, (getattr(ast, "MatchAs", ()), getattr(ast, "MatchStar", ()))) and node.name:
+            add(node.name, ("other",))
+        elif isinstance(node, getattr(ast, "MatchMapping", ())) and node.rest:
+            add(node.rest, ("other",))
+    return found
+
+
+def imported_module(path, level, module):
+    """The one tracked module `from .mod import NAME` / `from mod import NAME` names, else None."""
+    files = set(inventory())
+    if level:
+        stem = "/".join(path.split("/")[:-level] + ([module.replace(".", "/")] if module else []))
+        found = [p for p in ([f"{stem}.py"] if module else []) + [f"{stem}/__init__.py"] if p in files]
+    else:
+        rel = module.replace(".", "/")
+        found = [p for d in {"scripts/lib", path.rsplit("/", 1)[0]} for p in (f"{d}/{rel}.py", f"{d}/{rel}/__init__.py")
+                 if p in files]
+    return found[0] if len(set(found)) == 1 else None
+
+
+def name_value(path, name, active):
+    """The one string a module-level or local name always holds, else None."""
+    key = (path, name)
+    found = bindings(path)
+    if key in active or "*" in found or name not in found:
+        return None
+    values = {}
+    for kind in found[name]:
+        if kind[0] == "expr":
+            value = static_value(kind[1], path, active + (key,))
+        elif kind[0] == "from":
+            target = imported_module(path, kind[1], kind[2])
+            value = name_value(target, kind[3], active + (key,)) if target and parsed(target) else None
+        else:
+            return None
+        if value is None:
+            return None
+        values.setdefault(os.path.normpath(value), value)
+    return next(iter(values.values())) if len(values) == 1 else None
+
+
+def static_value(node, path, active=()):
+    """The string an expression evaluates to without running code: literals, __file__, os.path.abspath/realpath/
+    normpath/dirname/join and str() of resolvable parts, and names (name_value). None when it does not resolve."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        if node.id == "__file__":
+            return os.path.join(ROOT, *path.split("/"))
+        return name_value(path, node.id, active)
+    if not isinstance(node, ast.Call) or node.keywords:
+        return None
+    fn = node.func
+    if isinstance(fn, ast.Name) and fn.id == "str" and len(node.args) == 1:
+        return static_value(node.args[0], path, active)
+    if not (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Attribute) and fn.value.attr == "path"
+            and isinstance(fn.value.value, ast.Name) and fn.value.value.id == "os"):
+        return None
+    parts = [static_value(a, path, active) for a in node.args]
+    if not parts or None in parts:
+        return None
+    if fn.attr == "join":
+        return os.path.join(*parts)
+    if len(parts) != 1:
+        return None
+    if fn.attr in ("abspath", "realpath"):
+        return os.path.normpath(parts[0]) if os.path.isabs(parts[0]) else None  # a relative one depends on the cwd
+    return {"normpath": os.path.normpath, "dirname": os.path.dirname}.get(fn.attr, lambda _: None)(parts[0])
+
+
+def resolves_in_root(node, path, kind):
+    value = static_value(node, path)
+    return inside_root(value) and (os.path.isdir(value) if kind == "dir" else os.path.isfile(value))
+
+
+@lru_cache(None)
+def static_idiom(path):
+    """Every sys.path / importlib / __import__ use of a module is the plugin's own idiom (see the module docstring)."""
+    tree_ = parsed(path)
+    if tree_ is None:
+        return False
+    parent = {child: node for node in ast.walk(tree_) for child in ast.iter_child_nodes(node)}
+    docstrings = {n.body[0].value for n in ast.walk(tree_) if isinstance(n, (ast.Module, ast.FunctionDef,
+                  ast.AsyncFunctionDef, ast.ClassDef)) and n.body and isinstance(n.body[0], ast.Expr)}
+    for node in ast.walk(tree_):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings:
+            if DYNAMIC_TEXT.search(node.value):
+                return False  # code in a string (a -c script, a getattr name) is not analysed
+        elif isinstance(node, ast.Attribute) and node.attr in ("__import__", "import_module"):
+            return False
+        elif isinstance(node, ast.Import):
+            if any(a.asname and a.name.split(".")[0] in ("sys", "importlib") for a in node.names):
+                return False
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and (node.module or "").split(".")[0] in ("sys", "importlib"):
+                return False
+        elif isinstance(node, ast.Name) and node.id == "__import__":
+            return False
+        elif isinstance(node, ast.Name) and node.id == "sys":
+            up = parent.get(node)
+            if not (isinstance(up, ast.Attribute) and up.value is node):
+                return False
+            if up.attr != "path":
+                continue
+            use = parent.get(up)
+            if isinstance(use, ast.Compare) and up in use.comparators and all(isinstance(o, (ast.In, ast.NotIn)) for o in use.ops):
+                continue
+            call = parent.get(use)
+            if not (isinstance(use, ast.Attribute) and use.value is up and use.attr in ("insert", "append")
+                    and isinstance(call, ast.Call) and call.func is use and not call.keywords
+                    and len(call.args) == (2 if use.attr == "insert" else 1) and resolves_in_root(call.args[-1], path, "dir")):
+                return False
+        elif isinstance(node, ast.Name) and node.id == "importlib":
+            util = parent.get(node)
+            fn = parent.get(util)
+            call = parent.get(fn)
+            if not (isinstance(util, ast.Attribute) and util.value is node and util.attr == "util"
+                    and isinstance(fn, ast.Attribute) and fn.value is util and fn.attr in SPEC_CALLS
+                    and isinstance(call, ast.Call) and call.func is fn):
+                return False
+            if fn.attr == "module_from_spec":
+                if call.keywords or len(call.args) != 1:
+                    return False
+                continue
+            if len(call.args) != 2 or not resolves_in_root(call.args[1], path, "file"):
+                return False
+            for kw in call.keywords:
+                if kw.arg != "submodule_search_locations" or not isinstance(kw.value, (ast.List, ast.Tuple)) or not all(
+                        resolves_in_root(e, path, "dir") for e in kw.value.elts):
+                    return False
+    return True
+
+
+@lru_cache(None)
+def dynamic(path, conservative=False):
+    """The module may import by a path the graph cannot see. conservative (reuse hashes): any sys.path, importlib or
+    __import__ mention in the code. Otherwise (selection): only a use that is not the plugin's static idiom."""
     raw = contents(path)
     code = re.sub(rb"(?m)#.*$", b"", raw or b"")
-    return raw is None or re.search(rb"\b(importlib|__import__)\b|sys\.path", code) is not None
+    if raw is None:
+        return True
+    if re.search(rb"\b(importlib|__import__)\b|sys\.path", code) is None:
+        return False
+    return conservative or not static_idiom(path)
 
 
 def extra_covered(path):
@@ -305,13 +527,14 @@ def extra_covered(path):
 
 
 @lru_cache(None)
-def reaches(path):
+def reaches(path, conservative=False):
     """Every file a change to path can reach through static edges, path included; None when unsure.
 
     Library modules and the code files they reach are followed to their importers and callers. A dynamic
     library, a library nobody imports, and a reached code file that has no importer and that no other file
     names (loaded or run by a computed path) are unsure, unless a suite's EXTRA patterns cover it (that suite
-    mentions it: selects() then picks the suite); a suite directly in tests/ has no caller (run-all runs it)."""
+    mentions it: selects() then picks the suite); a suite directly in tests/ has no caller (run-all runs it).
+    conservative (reuse hashes) keeps the blanket dynamic() rule; selection uses the static-idiom rule."""
     graph, mentioned = library_graph()[:2]
     if path not in graph:
         return frozenset([path])
@@ -321,7 +544,7 @@ def reaches(path):
         if current in seen:
             continue
         seen.add(current)
-        if current.startswith("scripts/lib/") and dynamic(current):
+        if current.startswith("scripts/lib/") and dynamic(current, conservative):
             return None
         importers = graph.get(current, ())
         if (current != path and current.endswith(SCANNED) and not importers and tree(current) != ("tests/", False)
@@ -418,7 +641,7 @@ def closure(path, conservative=False):
         start = todo.pop()
         if start in found:
             continue
-        reached = reaches(start)
+        reached = reaches(start, True)
         if reached is None:
             return None
         new = reached - found
