@@ -41,6 +41,12 @@ what the person asked for by invoking this; still ask before `--apply` when the 
   (default) prints one row per step (`desktop`, `instance`, `provider`, `node`, `venv`, `port`, `node-live`,
   `mcp-claude`, `mcp-codex`) with OK, MISSING, OUTDATED, ACTION or FAIL and changes nothing; `--apply` does the missing
   steps; `--generate-test` (with `--apply`) runs one low-quality image. Exit 0 READY, 1 FAIL, 2 usage, 3 ACTION_NEEDED.
+- **Hardware rows** (`scripts/comfy-desktop-setup.py` header docstring, advisory): `comfy-cli` (1.14.0+ in the comfy-mcp
+  venv; `--apply` installs it there), `gpu`, `torch`, `profile`, `packs`, `models`. `profile` prints the best hardware
+  profile the machine meets (`api-only`, `local-4gb`, `local-8gb`, `scripts/assetgen/data/hardware.json`) and why the
+  higher ones fail: printed only, never applied; `asset-gen` resolve picks it up. `packs` and `models` list what that
+  profile's templates still need; the person approves and installs them. The script never downloads a model, installs a
+  pack or imports torch. `--check --json` also prints the `profile` object (`id`, `reasons`).
 - **Where it lives:** `scripts/`, not `scripts/assetgen/` (that engine is scanned for URLs and credentials by
   `tests/assetgen.test.sh`) and not `scripts/checks/` (read-only by rule). It writes no Factory state.
 - **Credentials:** the node reads `base_url` and the Authorization header at run time from the provider section the
@@ -50,9 +56,17 @@ what the person asked for by invoking this; still ask before `--apply` when the 
 ## Idioms
 
 - **Order:** `setup --check` -> do the human steps it names -> `setup --apply` -> human restart -> `setup --check`
-  until READY (exit 0) -> new session -> the `comfyui` run sequence. `--generate-test` proves the whole chain once.
+  until READY (exit 0) -> **save the profile** -> new session -> the `comfyui` run sequence. `--generate-test` proves the
+  whole chain once.
+- **Save the profile:** `assetgen.py resolve --profile auto` reads `<state>/assetgen/hardware-profile.json` and nothing
+  else writes it (`scripts/assetgen/assetgen.py` `recorded_profile_path`; `<state>` is `scripts/lib/fstate.py`
+  `persistent`: `$RPG_FACTORY_STATE_DIR` if absolute, else `$XDG_STATE_HOME/rpg-factory`, else `~/.local/state/rpg-factory`).
+  In Git Bash: `mkdir -p ~/.local/state/rpg-factory/assetgen && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py --check --json > ~/.local/state/rpg-factory/assetgen/hardware-profile.json`
+  (adjust the directory when a state variable is set). The script exits 3 while a step needs action but still prints the
+  JSON: never chain on its exit code. Save again after a GPU, driver or instance change; without the file `auto` means
+  `api-only`.
 - **Human steps an agent cannot do** (give them as a short list, then stop): (1) Desktop starts with only a "Comfy
-  Cloud" instance: Dashboard > New Instance > Standalone / Local (CPU is enough, only API nodes run). (2) Launch the
+  Cloud" instance: Dashboard > New Instance > Standalone / Local (for the `api-only` profile a CPU instance is enough, only API nodes run; the local profiles need the GPU the `profile` row reports). (2) Launch the
   instance. (3) After `--apply` copies the node: Stop + Launch the instance (custom nodes load only at start).
   (4) Start a new Claude/Codex session (a new MCP server loads only in a new session).
 - **Port:** read the running port from Desktop's `comfy-procs/<installationId>.json`, else `port-locks/`; never assume.
@@ -78,6 +92,14 @@ what the person asked for by invoking this; still ask before `--apply` when the 
   because the instance ships its own env with torch, numpy and PIL (`.claude/CLAUDE.md` Operating lessons).
 - **The gateway does not list the image model and returns other sizes** (1254x1254 for a 1024 request): see the
   `comfyui` Pitfalls; a `--generate-test` size difference is not a setup failure (`scripts/assetgen/data/known-nodes.json` `warn_values`, `skills/comfyui/SKILL.md`).
+- **A pack or model install needs the person's yes:** list the missing packs and models (the `packs` and `models` rows,
+  with kind, name and size) and ask. Never `install_node`, `download_model`, update ComfyUI or fetch a weight on your
+  own; the cut-out node also downloads its weight on its first run, which needs the same yes. Never substitute a model
+  silently (`scripts/comfy-desktop-setup.py` header docstring: the script never downloads models or installs packs;
+  `scripts/assetgen/data/hardware.json`).
+- **The local profiles are UNTESTED on RTX 5060** (8 GB): the user tests them after merge. The `profile` row reports
+  what the machine meets, not a measured result; claim no VRAM number, timing or generation (`rpg-factory:comfyui`
+  Idioms "Hybrid and local runs"; `scripts/assetgen/data/hardware.json` `description`).
 - **macOS and Linux paths are UNVERIFIED** (`references/platform-paths.md`): the output says so; pass
   `--desktop-dir` when the default is wrong and report what you found.
 
