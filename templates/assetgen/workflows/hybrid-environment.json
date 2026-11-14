@@ -1,0 +1,584 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Hybrid environment image (API base, local SDXL refine)",
+ "description": "UNTESTED on RTX 5060: hybrid environment template for scene-2d, concept-2d and texture-tileable. The API base comes from the 9router image node; a local SDXL refine at 1024 px adds the IPAdapter style anchors and one Canny ControlNet that keeps the base layout, then a tiled VAE decode, a 4x model upscale, previews and one SaveImage; no cut-out. Requires the local-8gb profile. Nothing was generated or measured: peak_vram_gb and the sampler values are declared starting points. For texture-tileable the local refine does not enforce seamless edges (the QA tileable check decides). Credentials are read by the node at run time, never stored here.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file); it feeds the image node and the positive local encoder."
+  },
+  "model": {
+   "type": "string",
+   "default": "cx/gpt-5.6-sol-image",
+   "description": "Image model id served through the NineRouterImage node."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "1024x1024",
+    "1536x1024"
+   ],
+   "default": "1536x1024",
+   "description": "Requested size of the API base; the gateway may return another size (QA checks per purpose). Portrait and auto are not offered: the local stage scales the base to 1024 px wide keeping the aspect, so a portrait base would exceed 1024 px on its height."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "high",
+   "description": "Image quality of the API base."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "opaque",
+   "description": "Background mode of the API base."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  },
+  "seed": {
+   "type": "int",
+   "default": 1234,
+   "description": "Local refine sampler seed, fixed so a render is repeatable. A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  },
+  "steps": {
+   "type": "int",
+   "default": 24,
+   "description": "Local refine sampler steps. A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  },
+  "cfg": {
+   "type": "number",
+   "default": 6.0,
+   "description": "Local refine classifier-free guidance scale. A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  },
+  "sampler_name": {
+   "type": "enum",
+   "options": [
+    "euler",
+    "dpmpp_2m",
+    "dpmpp_2m_sde"
+   ],
+   "default": "dpmpp_2m",
+   "description": "Local refine sampler. A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  },
+  "scheduler": {
+   "type": "enum",
+   "options": [
+    "karras",
+    "normal",
+    "simple"
+   ],
+   "default": "karras",
+   "description": "Local refine noise scheduler. A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  },
+  "denoise": {
+   "type": "number",
+   "default": 0.4,
+   "description": "Local refine denoise: how far the refine may move away from the API base. A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  },
+  "output_width": {
+   "type": "int",
+   "default": 1536,
+   "description": "Width of the saved deliverable after the 4x model upscale (the height keeps the aspect). A documented starting point to tune in the live test on the target machine, not a measured or verified value."
+  }
+ },
+ "requires": {
+  "profile": "local-8gb",
+  "peak_vram_gb": 7.0,
+  "ram_gb": 24,
+  "packs": [
+   "comfyui_ipadapter_plus",
+   "comfyui_controlnet_aux"
+  ],
+  "models": [
+   {
+    "kind": "checkpoints",
+    "name": "sd_xl_base_1.0.safetensors",
+    "size_gb": 6.9
+   },
+   {
+    "kind": "controlnet",
+    "name": "diffusers_xl_canny_mid.safetensors",
+    "size_gb": 0.5
+   },
+   {
+    "kind": "ipadapter",
+    "name": "ip-adapter-plus_sdxl_vit-h.safetensors",
+    "size_gb": 0.8
+   },
+   {
+    "kind": "clip_vision",
+    "name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+    "size_gb": 2.5
+   },
+   {
+    "kind": "upscale_models",
+    "name": "4x-UltraSharp.pth",
+    "size_gb": 0.07
+   }
+  ]
+ },
+ "anchor_target": {
+  "node": "9",
+  "input": "image"
+ },
+ "primary_node": "2",
+ "output_node": "22",
+ "workflow": {
+  "1": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
+   }
+  },
+  "2": {
+   "class_type": "NineRouterImage",
+   "inputs": {
+    "user_prompt": [
+     "1",
+     0
+    ],
+    "model": "{{model}}",
+    "size": "{{size}}",
+    "quality": "{{quality}}",
+    "background": "{{background}}"
+   },
+   "_meta": {
+    "title": "Generate API base image"
+   }
+  },
+  "3": {
+   "class_type": "CheckpointLoaderSimple",
+   "inputs": {
+    "ckpt_name": "sd_xl_base_1.0.safetensors"
+   },
+   "_meta": {
+    "title": "Load SDXL checkpoint"
+   }
+  },
+  "4": {
+   "class_type": "IPAdapterUnifiedLoader",
+   "inputs": {
+    "model": [
+     "3",
+     0
+    ],
+    "preset": "PLUS (high strength)"
+   },
+   "_meta": {
+    "title": "Load IPAdapter (PLUS)"
+   }
+  },
+  "5": {
+   "class_type": "ControlNetLoader",
+   "inputs": {
+    "control_net_name": "diffusers_xl_canny_mid.safetensors"
+   },
+   "_meta": {
+    "title": "Load Canny ControlNet"
+   }
+  },
+  "6": {
+   "class_type": "UpscaleModelLoader",
+   "inputs": {
+    "model_name": "4x-UltraSharp.pth"
+   },
+   "_meta": {
+    "title": "Load 4x upscale model"
+   }
+  },
+  "7": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "2",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": 1024,
+    "height": 0,
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Scale base to 1024 px wide"
+   }
+  },
+  "8": {
+   "class_type": "CannyEdgePreprocessor",
+   "inputs": {
+    "image": [
+     "7",
+     0
+    ],
+    "low_threshold": 100,
+    "high_threshold": 200,
+    "resolution": 1024
+   },
+   "_meta": {
+    "title": "Canny edges of the base"
+   }
+  },
+  "9": {
+   "class_type": "IPAdapterAdvanced",
+   "inputs": {
+    "model": [
+     "4",
+     0
+    ],
+    "ipadapter": [
+     "4",
+     1
+    ],
+    "image": [
+     "7",
+     0
+    ],
+    "weight": 0.6,
+    "weight_type": "style transfer",
+    "combine_embeds": "concat",
+    "start_at": 0.0,
+    "end_at": 1.0,
+    "embeds_scaling": "V only"
+   },
+   "_meta": {
+    "title": "Apply style anchors"
+   }
+  },
+  "10": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": [
+     "1",
+     0
+    ],
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode reviewed prompt"
+   }
+  },
+  "11": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": "blurry, low quality, watermark, text, logo, signature, frame",
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode negative"
+   }
+  },
+  "12": {
+   "class_type": "ControlNetApplyAdvanced",
+   "inputs": {
+    "positive": [
+     "10",
+     0
+    ],
+    "negative": [
+     "11",
+     0
+    ],
+    "control_net": [
+     "5",
+     0
+    ],
+    "image": [
+     "8",
+     0
+    ],
+    "strength": 0.45,
+    "start_percent": 0.0,
+    "end_percent": 0.8,
+    "vae": [
+     "3",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Keep the base layout (Canny)"
+   }
+  },
+  "13": {
+   "class_type": "VAEEncode",
+   "inputs": {
+    "pixels": [
+     "7",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Encode scaled base"
+   }
+  },
+  "14": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "9",
+     0
+    ],
+    "seed": "{{seed}}",
+    "steps": "{{steps}}",
+    "cfg": "{{cfg}}",
+    "sampler_name": "{{sampler_name}}",
+    "scheduler": "{{scheduler}}",
+    "positive": [
+     "12",
+     0
+    ],
+    "negative": [
+     "12",
+     1
+    ],
+    "latent_image": [
+     "13",
+     0
+    ],
+    "denoise": "{{denoise}}"
+   },
+   "_meta": {
+    "title": "Refine locally"
+   }
+  },
+  "15": {
+   "class_type": "VAEDecodeTiled",
+   "inputs": {
+    "samples": [
+     "14",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ],
+    "tile_size": 512,
+    "overlap": 64,
+    "temporal_size": 64,
+    "temporal_overlap": 8
+   },
+   "_meta": {
+    "title": "Decode in tiles"
+   }
+  },
+  "16": {
+   "class_type": "ImageUpscaleWithModel",
+   "inputs": {
+    "upscale_model": [
+     "6",
+     0
+    ],
+    "image": [
+     "15",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Upscale 4x with model"
+   }
+  },
+  "17": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "16",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": "{{output_width}}",
+    "height": 0,
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Scale to deliverable width"
+   }
+  },
+  "18": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "17",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": 0,
+    "height": 256,
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Thumbnail for the readability check"
+   }
+  },
+  "19": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview API base"
+   }
+  },
+  "20": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "8",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview Canny edges"
+   }
+  },
+  "21": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "18",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview thumbnail (readability at small size)"
+   }
+  },
+  "22": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "filename_prefix": "{{filename_prefix}}-final",
+    "images": [
+     "17",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Save final image"
+   }
+  }
+ },
+ "ui": {
+  "groups": [
+   {
+    "title": "Prompt",
+    "color": "pale_blue",
+    "nodes": [
+     "1"
+    ]
+   },
+   {
+    "title": "Generate",
+    "color": "green",
+    "nodes": [
+     "2"
+    ]
+   },
+   {
+    "title": "Models",
+    "color": "brown",
+    "nodes": [
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   {
+    "title": "Refine (local)",
+    "color": "blue",
+    "nodes": [
+     "7",
+     "8",
+     "9",
+     "10",
+     "11",
+     "12",
+     "13",
+     "14",
+     "15"
+    ]
+   },
+   {
+    "title": "Post-process",
+    "color": "yellow",
+    "nodes": [
+     "16",
+     "17",
+     "18"
+    ]
+   },
+   {
+    "title": "Preview",
+    "color": "red",
+    "nodes": [
+     "19",
+     "20",
+     "21"
+    ]
+   },
+   {
+    "title": "Output",
+    "color": "purple",
+    "nodes": [
+     "22"
+    ]
+   }
+  ],
+  "notes": [
+   {
+    "text": "The reviewed prompt; render fills it from prompt.md. It feeds the image node and the positive local encoder.",
+    "group": "Prompt"
+   },
+   {
+    "text": "The one API image node makes the high-quality base image through 9router.",
+    "group": "Generate"
+   },
+   {
+    "text": "Local loaders: one SDXL checkpoint, the IPAdapter, one Canny ControlNet and the 4x upscale model (UNTESTED on RTX 5060).",
+    "group": "Models"
+   },
+   {
+    "text": "Local refine at 1024 px: IPAdapter style anchors, one Canny ControlNet (strength 0.45) on the base layout, batch 1, tiled VAE decode (UNTESTED on RTX 5060). The sampler values are starting points to tune.",
+    "group": "Refine (local)"
+   },
+   {
+    "text": "4x model upscale, then a scale to the deliverable width and a 256 px thumbnail for the readability check.",
+    "group": "Post-process"
+   },
+   {
+    "text": "Compare the API base, the Canny edges and the thumbnail before approving.",
+    "group": "Preview"
+   },
+   {
+    "text": "The only saved file: the run prefix plus the -final suffix.",
+    "group": "Output"
+   }
+  ]
+ }
+}
