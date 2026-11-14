@@ -4762,6 +4762,28 @@ gmqa
 echo 'C:/Users/example/project' >> "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: nonportable report"
 expect "gate-merge: machine path in report blocks gate" 1 'BLOCKER r: run lead file docs/plans/gm/report.md has machine-specific path text' gate "$GP" --no-run-checks
 echo portable > "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: portable report"; gmqa
+# English-only rule (scripts/lib/english.py) on run lead files read from the integration HEAD: a non-English line blocks
+# the gate naming file and line, status shows the same blocker, the allowlist on the integration HEAD silences it
+printf 'B\xc3\xa1o c\xc3\xa1o: \xc4\x91\xc3\xa3 ki\xe1\xbb\x83m tra nh\xe1\xbb\xafng thay \xc4\x91\xe1\xbb\x95i\n' >> "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: non-English report"; gmqa
+expect "gate-merge: a non-English line in a run lead file blocks gate with file and line" 1 'BLOCKER r: run lead file docs/plans/gm/report.md line 2 is not English' gate "$GP" --no-run-checks
+expect "gate-merge: the English blocker names the rule" 1 'line 2 is not English \(.*\): rule english-only \(scripts/lib/english.py\)' gate "$GP" --no-run-checks
+refute "gate-merge: the English blocker is not a machine-path blocker" 'has machine-specific path text' gate "$GP" --no-run-checks
+expect "gate-merge: status shows the same English blocker as gate" 0 'gate blocker: r: run lead file docs/plans/gm/report.md line 2 is not English' status "$GP"
+mkdir -p "$GM/tests/fixtures"; printf '# path:line or path:* # reason\ndocs/plans/gm/report.md:2 # fixture\n' > "$GM/tests/fixtures/english-allow.txt"
+gi "$GM" add tests/fixtures/english-allow.txt; gi "$GM" commit -qm "test: allowlist report line 2"; gmqa
+refute "gate-merge: an allowlisted line does not block gate" 'is not English' gate "$GP" --no-run-checks
+refute "gate-merge: an allowlisted line is not a gate blocker in status" 'gate blocker: r: run lead file docs/plans/gm/report.md line' status "$GP"
+printf '# path:line or path:* # reason\ndocs/plans/gm/report.md:3 # fixture\n' > "$GM/tests/fixtures/english-allow.txt"; gi "$GM" commit -qam "test: allowlist another line"; gmqa
+expect "gate-merge: an allowlist entry for another line does not cover line 2" 1 'BLOCKER r: run lead file docs/plans/gm/report.md line 2 is not English' gate "$GP" --no-run-checks
+printf '# path:line or path:* # reason\ndocs/plans/gm/report.md:* # fixture\n' > "$GM/tests/fixtures/english-allow.txt"; gi "$GM" commit -qam "test: allowlist whole report"; gmqa
+refute "gate-merge: a path:* allowlist entry does not block gate" 'is not English' gate "$GP" --no-run-checks
+printf 'docs/plans/gm/report.md line 2 without the reason separator\n' > "$GM/tests/fixtures/english-allow.txt"; gi "$GM" commit -qam "test: malformed allowlist"; gmqa
+expect "gate-merge: a malformed allowlist blocks gate" 1 'BLOCKER r: .*english-allow.txt' gate "$GP" --no-run-checks
+# restore: no allowlist, an English report; later cases see the original state
+gi "$GM" rm -q -f tests/fixtures/english-allow.txt; echo portable > "$GM/docs/plans/gm/report.md"; gi "$GM" commit -qam "docs: English report again"; gmqa
+expect "gate-merge: an English report without an allowlist passes" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: an English report has no English blocker" 'is not English' gate "$GP" --no-run-checks
+refute "gate-merge: status has no gate blocker for an English report" 'gate blocker: r: run lead file' status "$GP"
 # the run lead's follow-ups in docs/plans/backlog.md (delivery.md section 8) are never stray either
 echo b > "$GM/docs/plans/backlog.md"; gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): backlog follow-ups"; gmqa
 expect "gate-merge: the run lead's docs/plans/backlog.md is not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
