@@ -1,0 +1,466 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Local seeded variation",
+ "description": "UNTESTED on RTX 5060: a seeded local variation of an approved base image, no API call and no credit. The base comes in through References (reference_image); one SDXL checkpoint with IPAdapter (the base, then the style-lock anchors render batches after it) re-samples it at low denoise with a fixed seed and sampler, a tiled VAE decode, the base's alpha joined back, previews and one SaveImage. Sampler values are starting points to tune on the target machine, not measured results; nothing here was generated or measured.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file)."
+  },
+  "reference_image": {
+   "type": "string",
+   "required": true,
+   "description": "Name of the approved base image in the ComfyUI input folder (comfy-mcp upload_file returns it)."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536"
+   ],
+   "default": "1024x1024",
+   "description": "Size the purpose asks of the approved base (shown in the base node title; no node here calls the API). QA compares the output size with it."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "auto",
+   "description": "Background the purpose asks of the approved base (shown in the base node title; no node here calls the API). The base's alpha is joined back onto the variation."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "auto",
+   "description": "Quality the purpose asks of the approved base (shown in the base node title; no node here calls the API)."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  },
+  "width": {
+   "type": "int",
+   "default": 1024,
+   "description": "Width the base is fitted to before the local pass: keep the base's aspect, longest side at most 1024 px (local-8gb), a multiple of 8."
+  },
+  "height": {
+   "type": "int",
+   "default": 1024,
+   "description": "Height the base is fitted to before the local pass: keep the base's aspect, longest side at most 1024 px (local-8gb), a multiple of 8."
+  },
+  "seed": {
+   "type": "int",
+   "default": 1,
+   "description": "Fixed sampler seed, recorded with the rendered params; another seed renders another variation."
+  },
+  "steps": {
+   "type": "int",
+   "default": 24,
+   "description": "Sampler steps. A starting point to tune in the live task on the target machine, not a measured value."
+  },
+  "cfg": {
+   "type": "number",
+   "default": 5.5,
+   "description": "Classifier-free guidance scale. A starting point to tune in the live task on the target machine, not a measured value."
+  },
+  "denoise": {
+   "type": "number",
+   "default": 0.35,
+   "description": "Denoise strength; a low value keeps the base. A starting point to tune in the live task on the target machine, not a measured value."
+  },
+  "ipadapter_weight": {
+   "type": "number",
+   "default": 0.6,
+   "description": "IPAdapter weight of the base and the style-lock anchors. A starting point to tune in the live task on the target machine, not a measured value."
+  },
+  "sampler_name": {
+   "type": "enum",
+   "options": [
+    "euler",
+    "euler_ancestral",
+    "dpmpp_2m",
+    "dpmpp_2m_sde",
+    "dpmpp_sde"
+   ],
+   "default": "dpmpp_2m",
+   "description": "KSampler sampler. A starting point to tune in the live task on the target machine, not a measured value."
+  },
+  "scheduler": {
+   "type": "enum",
+   "options": [
+    "normal",
+    "karras",
+    "exponential",
+    "sgm_uniform"
+   ],
+   "default": "karras",
+   "description": "KSampler scheduler. A starting point to tune in the live task on the target machine, not a measured value."
+  }
+ },
+ "requires": {
+  "profile": "local-8gb",
+  "peak_vram_gb": 7.0,
+  "ram_gb": 24,
+  "packs": [
+   "comfyui_ipadapter_plus"
+  ],
+  "models": [
+   {
+    "kind": "checkpoints",
+    "name": "sd_xl_base_1.0.safetensors",
+    "size_gb": 6.9
+   },
+   {
+    "kind": "ipadapter",
+    "name": "ip-adapter-plus_sdxl_vit-h.safetensors",
+    "size_gb": 0.8
+   },
+   {
+    "kind": "clip_vision",
+    "name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+    "size_gb": 2.5
+   }
+  ]
+ },
+ "anchor_target": {
+  "node": "6",
+  "input": "image"
+ },
+ "primary_node": "10",
+ "output_node": "15",
+ "workflow": {
+  "1": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
+   }
+  },
+  "2": {
+   "class_type": "LoadImage",
+   "inputs": {
+    "image": "{{reference_image}}"
+   },
+   "_meta": {
+    "title": "Approved base ({{size}}, {{background}} background, {{quality}} quality)"
+   }
+  },
+  "3": {
+   "class_type": "CheckpointLoaderSimple",
+   "inputs": {
+    "ckpt_name": "sd_xl_base_1.0.safetensors"
+   },
+   "_meta": {
+    "title": "Load SDXL checkpoint"
+   }
+  },
+  "4": {
+   "class_type": "IPAdapterUnifiedLoader",
+   "inputs": {
+    "model": [
+     "3",
+     0
+    ],
+    "preset": "PLUS (high strength)"
+   },
+   "_meta": {
+    "title": "Load IPAdapter"
+   }
+  },
+  "5": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "2",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": "{{width}}",
+    "height": "{{height}}",
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Fit base to the local size"
+   }
+  },
+  "6": {
+   "class_type": "IPAdapterAdvanced",
+   "inputs": {
+    "model": [
+     "4",
+     0
+    ],
+    "ipadapter": [
+     "4",
+     1
+    ],
+    "image": [
+     "2",
+     0
+    ],
+    "weight": "{{ipadapter_weight}}",
+    "weight_type": "linear",
+    "combine_embeds": "concat",
+    "start_at": 0.0,
+    "end_at": 1.0,
+    "embeds_scaling": "V only"
+   },
+   "_meta": {
+    "title": "Apply base and anchor look"
+   }
+  },
+  "7": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": [
+     "1",
+     0
+    ],
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode reviewed prompt"
+   }
+  },
+  "8": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": "blurry, low quality, watermark, text, extra objects, cropped",
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode negative"
+   }
+  },
+  "9": {
+   "class_type": "VAEEncode",
+   "inputs": {
+    "pixels": [
+     "5",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Encode fitted base"
+   }
+  },
+  "10": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "6",
+     0
+    ],
+    "seed": "{{seed}}",
+    "steps": "{{steps}}",
+    "cfg": "{{cfg}}",
+    "sampler_name": "{{sampler_name}}",
+    "scheduler": "{{scheduler}}",
+    "positive": [
+     "7",
+     0
+    ],
+    "negative": [
+     "8",
+     0
+    ],
+    "latent_image": [
+     "9",
+     0
+    ],
+    "denoise": "{{denoise}}"
+   },
+   "_meta": {
+    "title": "Vary the base (fixed seed, low denoise)"
+   }
+  },
+  "11": {
+   "class_type": "VAEDecodeTiled",
+   "inputs": {
+    "samples": [
+     "10",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ],
+    "tile_size": 512,
+    "overlap": 64,
+    "temporal_size": 64,
+    "temporal_overlap": 8
+   },
+   "_meta": {
+    "title": "Decode in tiles"
+   }
+  },
+  "12": {
+   "class_type": "JoinImageWithAlpha",
+   "inputs": {
+    "image": [
+     "11",
+     0
+    ],
+    "alpha": [
+     "2",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Join the base alpha"
+   }
+  },
+  "13": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "5",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview fitted base"
+   }
+  },
+  "14": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "11",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview variation before alpha"
+   }
+  },
+  "15": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "filename_prefix": "{{filename_prefix}}-variation",
+    "images": [
+     "12",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Save variation"
+   }
+  }
+ },
+ "ui": {
+  "groups": [
+   {
+    "title": "Prompt",
+    "color": "pale_blue",
+    "nodes": [
+     "1"
+    ]
+   },
+   {
+    "title": "References",
+    "color": "cyan",
+    "nodes": [
+     "2"
+    ]
+   },
+   {
+    "title": "Models",
+    "color": "brown",
+    "nodes": [
+     "3",
+     "4"
+    ]
+   },
+   {
+    "title": "Refine (local)",
+    "color": "blue",
+    "nodes": [
+     "5",
+     "6",
+     "7",
+     "8",
+     "9",
+     "10",
+     "11"
+    ]
+   },
+   {
+    "title": "Post-process",
+    "color": "yellow",
+    "nodes": [
+     "12"
+    ]
+   },
+   {
+    "title": "Preview",
+    "color": "red",
+    "nodes": [
+     "13",
+     "14"
+    ]
+   },
+   {
+    "title": "Output",
+    "color": "purple",
+    "nodes": [
+     "15"
+    ]
+   }
+  ],
+  "notes": [
+   {
+    "text": "The reviewed prompt is filled from prompt.md by render. It feeds the positive encoder only: this template makes no API call.",
+    "group": "Prompt"
+   },
+   {
+    "text": "The approved base named by --param reference_image (upload it with comfy-mcp upload_file). Its title shows the size, background and quality the purpose asks of the base. Render batches the style-lock anchors after it into the IPAdapter image input.",
+    "group": "References"
+   },
+   {
+    "text": "Local loaders: one SDXL checkpoint and the IPAdapter loader (PLUS preset with its CLIP vision model), profile local-8gb. UNTESTED on RTX 5060.",
+    "group": "Models"
+   },
+   {
+    "text": "Local pass: fit the base (longest side at most 1024 px), encode it, re-sample at low denoise with the fixed seed and sampler (batch 1), tiled VAE decode. The values are starting points to tune on the target machine. UNTESTED on RTX 5060.",
+    "group": "Refine (local)"
+   },
+   {
+    "text": "Joins the base's alpha back onto the variation, so a transparent base keeps its cut-out.",
+    "group": "Post-process"
+   },
+   {
+    "text": "The fitted base and the variation before alpha. Previews are never deliverables.",
+    "group": "Preview"
+   },
+   {
+    "text": "The only saved file uses the run prefix plus the -variation suffix.",
+    "group": "Output"
+   }
+  ]
+ }
+}

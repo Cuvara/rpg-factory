@@ -3,7 +3,10 @@
 # source, param precedence, purpose constraints over style hints), strict render of every core purpose
 # (templates/assetgen/purposes/*.json) against golden workflows (tests/fixtures/assetgen/golden/<purpose>.json
 # for the default template, <purpose>--<template>.json for a variant; extra render params from the optional
-# tests/fixtures/assetgen/cases/<purpose>.json),
+# tests/fixtures/assetgen/cases/<purpose>.json and a variant's cases/<purpose>--<template>.json; every variant's
+# workflow.ui.json converts back too; every core template declaring anchor_target gets its style-lock anchors there,
+# graph-lint --run PASS and a byte-identical repeat render; a core template with a local requires.profile FAILS
+# graph-lint --profile api-only naming the profile),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), a run filename_prefix (with optional inline output suffix),
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
@@ -200,15 +203,40 @@ mkrun() { # mkrun NAME PURPOSE [resolve args...]
   printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
 }
 mkdir -p "$GOLD"
-# cases file (optional): tests/fixtures/assetgen/cases/<purpose>.json, see its README.md
+# cases files (optional): tests/fixtures/assetgen/cases/<purpose>.json and cases/<purpose>--<template>.json, see its README.md
 CASES="$ROOT/tests/fixtures/assetgen/cases"
-# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant TEMPLATE)
+# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant
+# TEMPLATE: the top-level render_params of cases/<purpose>--<template>.json, else variants.<template> of cases/<purpose>.json)
 case_params() {
-  local f="$CASES/$1.json"; [ -f "$f" ] || return 0
+  local f="$CASES/$1.json" v="$CASES/$1--${2:-}.json"
+  if [ -n "${2:-}" ] && [ -f "$v" ]; then
+    jq -r '(.render_params // {}) | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$v"; return 0
+  fi
+  [ -f "$f" ] || return 0
   jq -r --arg t "${2:-}" '(if $t == "" then .render_params else .variants[$t].render_params end) // {}
     | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$f"
 }
-case_variants() { local f="$CASES/$1.json"; [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f" | LC_ALL=C sort; return 0; }
+# case_variants PURPOSE: the variant template ids of the purpose, from variants in cases/<purpose>.json and from the
+# cases/<purpose>--<template>.json files, sorted, each once
+case_variants() {
+  local f="$CASES/$1.json" v
+  { [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f"
+    for v in "$CASES/$1--"*.json; do [ -f "$v" ] && { v=$(basename "$v" .json); echo "${v#"$1--"}"; }; done
+  } | LC_ALL=C sort -u; return 0
+}
+# a variant is declared once: either in cases/<purpose>.json variants or as cases/<purpose>--<template>.json
+for p in $CORE_PURPOSES; do
+  for t in $(case_variants "$p"); do
+    if [ -f "$CASES/$p--$t.json" ] && [ -f "$CASES/$p.json" ] && jq -e --arg t "$t" '(.variants // {}) | has($t)' "$CASES/$p.json" >/dev/null; then
+      no "cases: variant $p--$t is declared twice (cases/$p.json variants and cases/$p--$t.json)"
+    fi
+  done
+done
+for v in "$CASES"/*--*.json; do
+  [ -f "$v" ] || continue; b=$(basename "$v" .json)
+  [ -f "$CORE/purposes/${b%%--*}.json" ] && [ -f "$CORE/workflows/${b#*--}.json" ] \
+    || no "cases: $b.json names no core purpose and core template (cases/<purpose>--<template>.json)"
+done
 # golden_render RUN-NAME PURPOSE GOLDEN-NAME [TEMPLATE]: render the run and compare it with golden/<GOLDEN-NAME>.json
 golden_render() {
   local run="$1" p="$2" g="$3" t="${4:-}" out rc wf args=() targs=()
@@ -269,9 +297,16 @@ for pw in "legacy-shape-icon-001 1 3" "legacy-shape-edit-001 2 4"; do
     && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
     && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
 done
+# an API template links NineRouterImage.user_prompt; a local-only template (no NineRouterImage) links a CLIP encoder's
+# text; either way no input outside the prompt node inlines {{prompt}} (graphstyle checks the full fan-out)
 for t in $CORE_TEMPLATES; do
-  jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
-    && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
+  jq -e '([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
+    | (if $n > 0 then [.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]
+       else any(.workflow[] | select(.class_type | test("^CLIPTextEncode")) | .inputs | (.text, .text_g, .text_l); type == "array") end)
+    and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)' \
+    "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
+    && ok "core template $t: no inline prompt, $(jq -r 'if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end' "$ROOT/templates/assetgen/workflows/$t.json") is a link" \
+    || no "template $t user_prompt"
 done
 python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
@@ -373,6 +408,13 @@ for p in $CORE_PURPOSES; do
   out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
   [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
     && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
+  for t in $(case_variants "$p"); do
+    d="$RUNS/golden-$p--$t-001"; mapfile -t args < <(case_params "$p" "$t")
+    AG render --run "$d" "${args[@]}" >/dev/null 2>&1
+    out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+    [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p--$t-001|0.4" ] \
+      && ok "workflow.ui.json $p--$t: converts back to workflow.json; run id in extra" || no "ui workflow $p--$t" "$out"
+  done
 done
 u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
 [ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
@@ -976,9 +1018,22 @@ gs_want=$(for t in $CORE_TEMPLATES; do if has_groups "$CORE/workflows/$t.json"; 
 # data/hardware.json; nothing is generated or measured)
 gl_rows() { jq -c '[.results[] | {path, state, reasons}]' "$1"; }
 AG graph-lint --profile api-only --json > "$TMP/gl-api.json" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(gl_rows "$TMP/gl-api.json")" = "$(gl_rows "$TMP/gl.json")" ] \
-  && ok "graph-lint --profile api-only over the core templates: the same rows as without --profile (API-only staged templates keep their result), exit 0" \
-  || no "graph-lint --profile api-only core templates rc=$rc" "$(cat "$TMP/err"; diff <(gl_rows "$TMP/gl.json") <(gl_rows "$TMP/gl-api.json"))"
+# a core template declaring a local requires.profile (a hybrid or local template) FAILS under api-only with a profile:
+# reason naming api-only; every other core template keeps its row
+local_tpls=$(for t in $CORE_TEMPLATES; do
+  jq -e '(.requires.profile // "api-only") != "api-only"' "$CORE/workflows/$t.json" >/dev/null 2>&1 && echo "core:templates/assetgen/workflows/$t.json"; done)
+local_json=$(printf '%s\n' "$local_tpls" | jq -R . | jq -sc 'map(select(. != ""))')
+gl_api_rows() { jq -c --argjson l "$local_json" '[.results[] | select(.path as $p | $l | index($p) | not) | {path, state, reasons}]' "$1"; }
+want_rc=0; [ -n "$local_tpls" ] && want_rc=1
+[ $rc -eq $want_rc ] && [ "$(gl_api_rows "$TMP/gl-api.json")" = "$(gl_api_rows "$TMP/gl.json")" ] \
+  && ok "graph-lint --profile api-only over the core templates: the same rows as without --profile for every template without a local requires.profile (API-only staged templates keep their result), exit $want_rc" \
+  || no "graph-lint --profile api-only core templates rc=$rc (want $want_rc)" "$(cat "$TMP/err"; diff <(gl_api_rows "$TMP/gl.json") <(gl_api_rows "$TMP/gl-api.json"))"
+for p in $local_tpls; do
+  jq -e --arg p "$p" '[.results[] | select(.path == $p)] | length == 1 and .[0].state == "FAIL"
+      and ([.[0].reasons[] | select(startswith("profile:") and contains("api-only"))] | length > 0)' "$TMP/gl-api.json" >/dev/null \
+    && ok "graph-lint --profile api-only: local template ${p##*/} FAILS with a profile: reason naming api-only" \
+    || no "graph-lint --profile api-only local template ${p##*/}" "$(jq -c --arg p "$p" '.results[] | select(.path == $p)' "$TMP/gl-api.json")"
+done
 AG graph-lint --profile bogus "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
 hw_ids=$(jq -r '[.profiles[].id] | join(", ")' "$ROOT/scripts/assetgen/data/hardware.json")
 [ $rc -eq 2 ] && ! grep -q '^assetgen graph-lint:' "$TMP/o" && grep -qF -- "--profile bogus: one of $hw_ids (data/hardware.json)" "$TMP/err" \
@@ -3717,6 +3772,48 @@ for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of th
   jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LF/$f.json" >/dev/null \
     && case "$got" in "FAIL ${c#*|}"*) : ;; *) false ;; esac \
     && ok "lint FAILs $f: ${c#*|}" || no "lint $f" "$got"
+done
+# every core template that declares anchor_target, rendered in the style lock repo for the purpose its cases file
+# names (the first cases/<purpose>--<template>.json), family props: its anchors reach anchor_target after the template's
+# own link, graph-lint --run passes (anchor nodes laid into References) and render --run is byte-identical on repeat.
+# Discovery finds nothing while no core template declares anchor_target. UNTESTED on RTX 5060: nothing is generated.
+cat > "$TMP/anchor-core.py" <<'EOF'
+import json, sys
+wf, spec, tmpl = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:4])
+target = tmpl['anchor_target']
+def walk(link):
+    node = wf[link[0]]
+    if link[0] not in tmpl['workflow'] and node['class_type'] == 'ImageBatch':
+        return walk(node['inputs']['image1']) + walk(node['inputs']['image2'])
+    if link[0] not in tmpl['workflow'] and node['class_type'] == 'LoadImage':
+        return [node['inputs']['image']]
+    return ['node:' + link[0]]
+want = ['anchor-%s.png' % r['anchor_id'] for r in spec['style_lock']['references']]
+assert want, 'the purpose selected no anchor in the style lock repo'
+own = tmpl['workflow'][target['node']]['inputs'].get(target['input'])
+head = ['node:' + own[0]] if isinstance(own, list) else []
+got = walk(wf[target['node']]['inputs'][target['input']])
+assert got == head + want, (got, head + want)
+print('ok %d' % len(want))
+EOF
+for t in $CORE_TEMPLATES; do
+  jq -e 'has("anchor_target")' "$CORE/workflows/$t.json" >/dev/null 2>&1 || continue
+  p=""; for v in "$CASES"/*--"$t".json; do [ -f "$v" ] && { p=$(basename "$v" .json); p=${p%--"$t"}; break; }; done
+  [ -n "$p" ] || { no "anchor_target $t: no cases/<purpose>--$t.json names a purpose to render it with"; continue; }
+  da="$SR/anchor-core-$t-001"; mapfile -t args < <(case_params "$p" "$t")
+  # family props: the fixture's anchors are props anchors of rpg-base (a purpose's own family may select none)
+  if slrun "anchor-core-$t-001" "$p" --template "$t" --family props; then
+    AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  else rc=1; { echo "resolve failed:"; cat "$TMP/err"; } > "$TMP/anchor-out"; fi
+  out=$(python3 -B "$TMP/anchor-core.py" "$da/workflow.json" "$da/spec.json" "$CORE/workflows/$t.json" 2>&1)
+  AG graph-lint --run "$da" > "$TMP/anchor-gl" 2>&1; rc2=$?
+  [ $rc -eq 0 ] && [ "${out%% *}" = ok ] && [ $rc2 -eq 0 ] \
+    && ok "anchor_target $t ($p): ${out#ok } style-lock anchors reach $(jq -r '.anchor_target | .node + "." + .input' "$CORE/workflows/$t.json") after the template's own link; graph-lint --run PASS" \
+    || no "anchor_target $t ($p) rc=$rc graph-lint rc=$rc2" "$(cat "$TMP/anchor-out" "$TMP/anchor-gl"; echo "$out")"
+  cp "$da/workflow.json" "$TMP/anchor-core-first.json"; cp "$da/workflow.ui.json" "$TMP/anchor-core-first.ui.json"
+  AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  [ $rc -eq 0 ] && cmp -s "$TMP/anchor-core-first.json" "$da/workflow.json" && cmp -s "$TMP/anchor-core-first.ui.json" "$da/workflow.ui.json" \
+    && ok "anchor_target $t: render --run byte-identical on repeat (workflow.json and workflow.ui.json)" || no "anchor_target $t determinism rc=$rc" "$(cat "$TMP/anchor-out")"
 done
 
 python3 -B - "$ROOT" > "$TMP/anchor-size" 2>&1 <<'EOF'
