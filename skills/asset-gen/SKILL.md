@@ -40,7 +40,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    another family warns, and `anchor_family_fallback: false` in the purpose or `project.json` forbids one); `--verbose`
    or `--json` adds each field's and param's source file (game layer wins). A run directory copied under a new id needs
    `resolve --out` again (`filename_prefix`). The purpose's `constraints` (`scripts/assetgen/data/precedence.json`) win
-   over the style's hints; `resolve` marks each overridden style hint (`spec.hints`), the prompt uses the purpose's.
+   over the style's hints; `resolve` marks each overridden style hint (`spec.hints`), the prompt uses the purpose's. **Hybrid and local:** run `rpg-factory:comfy-desktop-setup` `--check` first and read its `gpu`, `torch` and `profile` rows, then add `--profile auto|<id the profile row printed>` (`scripts/assetgen/assetgen.py` `choose_profile`; `auto` reads the saved `hardware-profile.json`, the save step is in that skill). Never run a local template on a lower profile (resolve refuses it, also with `--template`); UNTESTED on RTX 5060. Detail: `rpg-factory:comfyui` Idioms "Hybrid and local runs".
 3. **Prompt.** Write `<run>/prompt.md` (the prompt text only) from the purpose's `prompt.guidance`, `must_include`
    and `avoid` (`assetgen.py show --kind purpose <id> --authoring <A>`: an id like `image-edit` is both a purpose and
    a template, so always pass `--kind`), the style prefix and suffix, `spec.hints` (never an overridden one), the
@@ -58,7 +58,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    reference_image=<name it returned>`. `render --run` copies and wires each selected anchor (`references/anchor-*`).
 6. **Generate** (spends image credits: only when the task asks). comfy-mcp: `server_info` (ComfyUI up, image node present;
    an outdated `comfyui_9router` pack: report its version, never update or reinstall it; comfy-mcp or the node missing:
-   `rpg-factory:comfy-desktop-setup`) -> `assetgen.py graph-lint --run <run>` (exit 1: no `run_workflow`, report it) ->
+   `rpg-factory:comfy-desktop-setup`) -> `assetgen.py graph-lint --run <run>` (a local run: also the template with `--profile <resolved>`; exit 1: no `run_workflow`, report it) ->
    `validate_workflow` on `<run>/workflow.json` -> `upload_file` of each `<run>/references/*` file under its name ->
    `assetgen.py budget --run <run>` before each `run_workflow` (used: outputs plus the series' failed attempts against
    `resolve --max-outputs N`, default 4; exit 1 or `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) ->
@@ -108,7 +108,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 - Generated images reach production only through an approved gen-run and its handoff (`docs/architecture/domains/art2d.md`).
 - comfy-mcp runs only `<run>/workflow.json` rendered from the purpose's template (core or game-layer `extends`), after
   `graph-lint` and a live `validate_workflow`; a `set_workflow_slot` patch or hand edit runs only after a new `render`;
-  no free-form graph (gallery templates, `generate_image`): `rpg-factory:comfyui` Idioms "Authoring rule".
+  no free-form graph (gallery templates, `generate_image`): `rpg-factory:comfyui` Idioms "Authoring rule". Never install a pack (`install_node`), download a model (`download_model`, a manual download, the cut-out node's first-run weight) or update ComfyUI without the user's yes: list what is missing and ask, never swap a model silently.
 
 ## Generated & protected paths
 
@@ -152,7 +152,7 @@ Run id and gen-run ID, purpose / style / template with their layer, the prompt, 
 reviewers (SAME_MODEL named), the review tier, tool states (comfy-mcp, codex), outputs (path, size, SHA-256), QA table,
 your visual findings, budget line, regenerations and failed attempt ids, finalize (defringe state, a FAIL's step), style
 ref, family, override, selected anchors (cross-family named), drift items, publish state, an outdated `comfyui_9router`
-pack, record status, approval (the person's quoted word, committed and signed or not) and handoff target.
+pack, record status, approval (the person's quoted word, committed and signed or not) and handoff target. A local or hybrid run adds the profile (`spec.profile`: id, source), the local models (`spec.generation.local`: checkpoint, LoRAs, hashes or "unverified") and the seed, and states "UNTESTED on RTX 5060" with no VRAM, timing or quality claim until the user confirms.
 
 ## Tools
 
