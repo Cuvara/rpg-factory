@@ -65,7 +65,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   `artifacts.py` (artifact discovery and quality), `orca_cmd.py` (Orca and Agent dispatch
   argv, with `--model`/`--effort`), `model_policy.py` (model scope, role and grade profiles, personal override; `delivery.md`
   section 10 "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
-  `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
+  `pluginroot.py`, `plugin_registry.py` (plugin root and `registry.json` loader for the pin checks), `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
   `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
   `tests/hook-perf.test.sh`, `tests/workspace-default.test.sh`
 - `ui/` - UI plan engine (`ui_plan.py`, data in `ui/data/`), `ui_catalog.py`, `ui_select.py`, `figma_env.py`.
@@ -154,5 +154,6 @@ tests/dogfood.sh [--installed]      # real headless Claude sessions; spends toke
 tests/dogfood-codex.sh [--dry-run]  # real `codex exec` sessions in a throwaway CODEX_HOME; spends tokens, not in run-all
 ```
 
-Workspace defaults to `/mnt/c/Workspaces/UnityIndie`; override with `RPG_FACTORY_WORKSPACE`. Python
-scripts are run with `-B` (run-all deletes `__pycache__`).
+The workspace default depends on the platform: `/c/Workspaces/UnityIndie` on Git Bash (drive form; Python on Windows
+uses `C:/Workspaces/UnityIndie`), `/mnt/c/Workspaces/UnityIndie` elsewhere (WSL form); `RPG_FACTORY_WORKSPACE`
+overrides it. Python scripts are run with `-B` (run-all deletes `__pycache__`).

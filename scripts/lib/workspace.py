@@ -1,10 +1,10 @@
 """Where the workspace and a checkout are: the one copy of the path helpers the hooks and the routing engine share.
 
-  find_workspace(start, registry)  the workspace holding `start` (nearest ancestor with every root marker), else the env root
+  find_workspace(start, registry)  the workspace holding `start`, else the env root or native registry default
   main_checkout(top)               the main checkout of a work tree (parent of its common .git directory)
   linked_worktree(d)               (toplevel, main checkout) of a linked worktree, read from its `.git` file (no git call)
   native_path(p) / native_abs(p)   a path written in another shell's drive form as this platform resolves it
-  default_workspace(env, nt)       the configured workspace or the platform's default path
+  default_workspace(env, nt, registry)  the configured workspace or the registry default in native form
 
 Stdlib only and cheap to import: the file guard loads it on every Read.
 """
@@ -33,10 +33,13 @@ def native_path(p, nt=None):
     return f"{m.group(1).upper()}:/{p[m.end():]}" if m else p
 
 
-def default_workspace(env=None, nt=None):
-    """Return the configured workspace, or the default in the native path form."""
+def default_workspace(env=None, nt=None, registry=None):
+    """Return the configured workspace, or the registry default in native form."""
     env = os.environ if env is None else env
-    return env.get("RPG_FACTORY_WORKSPACE") or native_path(WSL_WORKSPACE_DEFAULT, nt)
+    ws = registry["workspace"] if registry is not None else {}
+    return env.get(ws.get("root_env") or "RPG_FACTORY_WORKSPACE") or native_path(
+        ws.get("root_default") or WSL_WORKSPACE_DEFAULT, nt
+    )
 
 
 def native_abs(p):
@@ -62,12 +65,12 @@ def _markers_ok(d, markers):
     return bool(d) and all(os.path.exists(os.path.join(d, m)) for m in markers)
 
 
-def find_workspace(start, registry, env_first=False, use_default=False):
+def find_workspace(start, registry, env_first=False, use_default=False, nt=None):
     """The workspace containing `start` (nearest ancestor with every root marker), else the env root.
     The cwd wins: an env root exported for one workspace must never hide another workspace the command
     actually runs in (the guard would see "outside the workspace" and let a tag through).
     The routing engine (context.py) asks the other way round: env_first=True tries the env root before the
-    ancestors of `start`, use_default=True falls back to the registry root_default."""
+    ancestors of `start`, use_default=True falls back to the registry root_default in native form."""
     ws = registry["workspace"]
     markers = ws["root_markers"]
     env_root = os.environ.get(ws.get("root_env", ""), "")
@@ -83,8 +86,10 @@ def find_workspace(start, registry, env_first=False, use_default=False):
         d = parent
     if not env_first and _markers_ok(env_root, markers):
         return os.path.abspath(env_root)
-    if use_default and _markers_ok(ws.get("root_default"), markers):
-        return ws["root_default"]
+    if use_default:
+        rd = native_path(ws.get("root_default"), nt)
+        if _markers_ok(rd, markers):
+            return rd
     return None
 
 

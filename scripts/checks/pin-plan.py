@@ -25,6 +25,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+from plugin_registry import load_registry
 from workspace import default_workspace
 
 PKGS = {
@@ -49,7 +50,8 @@ def pkg_json_at(repo, ref, path):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    ws = default_workspace()
+    reg = load_registry()
+    ws = default_workspace(registry=reg)
     if "--workspace" in sys.argv:
         ws = sys.argv[sys.argv.index("--workspace") + 1]
         args = [a for a in args if a != ws]

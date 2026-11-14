@@ -7,7 +7,7 @@
 #
 # Usage: netcode-headless.sh [--netcode DIR] [--server DIR] [--keep] [--resolve-server]
 # The Shared.GameLogic tag is read from rpg-mmo-server: --server DIR, else the first of
-# <dirname of the Netcode dir>/rpg-mmo-server and $RPG_FACTORY_WORKSPACE/rpg-mmo-server that has the
+# <dirname of the Netcode dir>/rpg-mmo-server and the resolved workspace/rpg-mmo-server that has the
 # tag (a Netcode worktree outside the workspace has no sibling server repo). --resolve-server prints
 # the server repo it would use and exits.
 # Exit 0 = executed > 0 and failed == 0; 1 = failures or nothing executed; 2 = setup error.
@@ -25,7 +25,7 @@ if [ -z "$src" ]; then
   cwd_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   if [ -n "$cwd_top" ] && [ -f "$cwd_top/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj" ]; then src="$cwd_top"; fi
 fi
-if [ -z "$src" ] && [ -n "${RPG_FACTORY_WORKSPACE:-}" ]; then src="$RPG_FACTORY_WORKSPACE/Netcode"; fi
+if [ -z "$src" ]; then src="$workspace/Netcode"; fi
 keep=false
 server_arg=""; resolve_only=false
 while [ $# -gt 0 ]; do
