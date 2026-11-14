@@ -325,7 +325,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -1044,7 +1044,7 @@ if case.startswith('stack-'):
             b_verdict('review', merged)
             assert record('b', 'review')['state'] == 'PASS' and record('b', 'review')['sha'] == merged
             assert not any(n.startswith('verify waits:') for n in status_row('b')['notes'])
-        elif case in ('stack-gate-order', 'stack-gate-correct', 'stack-gate-delta'):
+        elif case in ('stack-gate-order', 'stack-gate-correct', 'stack-gate-delta', 'stack-gate-delta-both'):
             bh = stacked_b(True)
             assert m.stack_gate(plan, reg, info, tb, bh) is None
             b_verdict('review', bh)
@@ -1063,6 +1063,23 @@ if case.startswith('stack-'):
                 verdict('a', 'review', head)
                 g = blockers()
                 assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+                # b's own delta review at that HEAD (its earlier PASS is on its task branch) keeps the blocker: b's
+                # merge brings a's PASS in at the same first-parent position, so the merge points tie
+                b_verdict('review', head)
+                assert record('b', 'review')['sha'] == head, record('b', 'review')
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+            elif case == 'stack-gate-delta-both':
+                # a and b integrated in order, then delta reviews of BOTH at the integration HEAD: b's earlier PASS
+                # (on its task branch) contains a's PASS merged strictly earlier, so no stacked blocker remains
+                head = integrate('topic-a', 'topic-b')
+                verdict('a', 'review', head)
+                b_verdict('review', head)
+                assert record('a', 'review')['sha'] == head and record('b', 'review')['sha'] == head
+                g = blockers()
+                assert not any('integrated before its dependency' in x for x in g), g
+                assert not any("lacks a's review PASS" in x for x in g), g
+                assert not any(x.startswith('b: stacked on a') for x in g), g
             elif case == 'stack-gate-delta':
                 # a and b integrated in order, then a delta review of a at the integration HEAD (a's latest review is
                 # no longer an ancestor of b's reviewed commit): the gate keeps using the PASS b actually contains

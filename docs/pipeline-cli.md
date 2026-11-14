@@ -195,7 +195,11 @@ factory-pipeline.py sync plan.json --task <id> [--send]
   reviewed commit; it is used when it is the dependency's current PASS or when the current PASS contains the
   dependent's reviewed commit (a delta review of the dependency at the integration HEAD). The integration order
   compares the merge point of that SHA, so a later delta review of the dependency no longer reports "integrated
-  before its dependency". Any git error keeps the blocker (fail safe).
+  before its dependency". When the dependent's own current review is a delta review too (its reviewed commit is the
+  integration HEAD), its earlier review PASS records contained in it (same plan version, newest first) are tried as
+  well: one that contains a dependency PASS merged strictly earlier clears both checks. A dependent integrated before
+  its dependency stays blocked, because its merge brings the dependency PASS in at the same first-parent position.
+  Any git error keeps the blocker (fail safe).
 - A recorded verdict holds for its task's fingerprint (objective, owned paths, exclusions, acceptance, checks,
   agents): a plan edit that only changes deps keeps it; changing a task's paths or acceptance makes it stale. Re-run
   `status` after any plan edit.

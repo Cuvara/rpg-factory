@@ -3516,10 +3516,25 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         if dep is not None and dep.get("repo") != key:
             dep = None
         dep_pass = None
+        stack_ok = False
         if dep is not None:
             # the dependency's review PASS this task contains (a later delta review of the dependency does not hide it)
             dep_pass, dep_current = dep_review_pass(plan, reg, info["path"], dep["id"], rv["sha"])
-            if not dep_pass or not is_ancestor(info["path"], dep_pass, rv["sha"]):
+            # a delta review of the task itself (its current review sha is e.g. the integration HEAD) is also judged
+            # by its earlier PASS records contained in it: one that contains a dependency PASS merged strictly earlier
+            # clears both checks (only for an integrated review; any git error keeps the blockers)
+            if is_ancestor(info["path"], rv["sha"], heads[key]):
+                own_fp = scope_fingerprint(plan, reg, t["id"])
+                cands = [rv["sha"]] + [r["sha"] for r in kept_task_reviews(plan, t["id"])
+                                       if r.get("state") == "PASS" and r.get("fingerprint") == own_fp
+                                       and r["sha"] != rv["sha"] and is_ancestor(info["path"], r["sha"], rv["sha"])]
+                for s in cands:
+                    d_pass, _ = dep_review_pass(plan, reg, info["path"], dep["id"], s)
+                    if (d_pass and is_ancestor(info["path"], d_pass, s) and is_ancestor(info["path"], d_pass, heads[key])
+                            and merged_at(key, info["path"], d_pass) < merged_at(key, info["path"], s)):
+                        stack_ok = True
+                        break
+            if not stack_ok and (not dep_pass or not is_ancestor(info["path"], dep_pass, rv["sha"])):
                 shown = dep_pass or dep_current
                 blockers.append(f"{t['id']}: stacked on {dep['id']}: review {rv['sha'][:10]} lacks {dep['id']}'s review "
                                 f"PASS {shown[:10] if shown else 'none'}: merge {task_branch(plan, info, dep)} into "
@@ -3528,8 +3543,9 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         if rc != 0:
             blockers.append(f"{t['id']}: reviewed commit {rv['sha'][:10]} is not integrated into {plan['topic']}")
             continue
-        if dep is not None and (not dep_pass or not is_ancestor(info["path"], dep_pass, heads[key])
-                                or merged_at(key, info["path"], dep_pass) >= merged_at(key, info["path"], rv["sha"])):
+        if dep is not None and not stack_ok and (
+                not dep_pass or not is_ancestor(info["path"], dep_pass, heads[key])
+                or merged_at(key, info["path"], dep_pass) >= merged_at(key, info["path"], rv["sha"])):
             blockers.append(f"{t['id']}: integrated before its dependency {dep['id']}: integrate {dep['id']} first "
                             f"(git merge --no-ff {task_branch(plan, info, dep)}), then {t['id']}")
         changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key], cache=coverage_cache)
