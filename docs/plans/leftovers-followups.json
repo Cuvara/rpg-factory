@@ -63,7 +63,7 @@
       "kind": "code",
       "grade": "light",
       "grade_reason": "test fixture robustness and one doc line",
-      "objective": "Backlog topic workspace-leftovers-followups items 2 and 5. (a) tests/workspace-default.test.sh: with a Windows-form TMPDIR (C:/...) the stub directories it prepends to PATH break (the colon in the drive letter splits PATH) and five cases fail; make the stub directories PATH-safe on every platform (for example create the temp root with a POSIX-form path, or convert it with cygpath -u when the path has a drive letter), so the suite passes with TMPDIR in either form. (b) tests/README.md lists the suites but not tests/plugin-registry.test.sh (added by plan workspace-leftovers): add it in the same style. Changelog fragment changelog.d/leftovers-tmpdir.md (### Fixed).",
+      "objective": "Backlog topic workspace-leftovers-followups items 2 and 5. (a) tests/workspace-default.test.sh: with a Windows-form TMPDIR (drive letter and colon) the stub directories it prepends to PATH break (the colon in the drive letter splits PATH) and five cases fail; make the stub directories PATH-safe on every platform (for example create the temp root with a POSIX-form path, or convert it with cygpath -u when the path has a drive letter), so the suite passes with TMPDIR in either form. (b) tests/README.md lists the suites but not tests/plugin-registry.test.sh (added by plan workspace-leftovers): add it in the same style. Changelog fragment changelog.d/leftovers-tmpdir.md (### Fixed).",
       "paths": [
         "tests/workspace-default.test.sh",
         "tests/README.md",
