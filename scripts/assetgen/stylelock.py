@@ -217,7 +217,8 @@ def style_errors(data):
                 if not isinstance(c, dict):
                     errs.append("canvas.%s must be an object" % fam)
                     continue
-                if not isinstance(c.get("aspect"), str) or not ASPECT.match(c["aspect"]):
+                # aspect is optional (consistency.canvas_config accepts aspect or min_side); validated only when present
+                if "aspect" in c and (not isinstance(c["aspect"], str) or not ASPECT.match(c["aspect"])):
                     errs.append("canvas.%s.aspect must be W:H" % fam)
                 if "min_side" in c and not (_int(c["min_side"]) and c["min_side"] >= 1):
                     errs.append("canvas.%s.min_side must be an integer >= 1" % fam)
