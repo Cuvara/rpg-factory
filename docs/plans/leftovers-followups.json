@@ -1,0 +1,83 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "leftovers-followups",
+  "title": "Backlog workspace-leftovers-followups: case-exact allowlist lookup in the gate, suite selection through sys.path imports, Windows TMPDIR in the workspace default suite",
+  "topic": "leftovers-followups",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "gate-allowlist-case",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one argument in one call plus one test case",
+      "objective": "Backlog topic workspace-leftovers-followups item 1. scripts/factory-pipeline.py run_lead_file_blockers passes norm_path(path) to first_english_breach (near line 3244); norm_path is case-folded on Windows, so an english-only allowlist entry for a run lead file whose path has upper-case letters does not match there and the gate reports a false English blocker that CI (scripts/checks/english-only.py) would not. Look the allowlist up with the exact tree path as scripts/checks/english-only.py does; keep norm_path for the run lead file membership test. Test in tests/pipeline.test.sh: an allowlisted run lead file with a mixed-case path passes the gate. Changelog fragment changelog.d/leftovers-gate-allowlist-case.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/leftovers-gate-allowlist-case.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "an allowlist entry for a mixed-case run lead file path matches on every platform",
+        "the gate and scripts/checks/english-only.py agree on allowlisted lines"
+      ]
+    },
+    {
+      "id": "affected-syspath",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "suite selection logic; a selection that is too narrow lets a regression through CI",
+      "objective": "Backlog topic workspace-leftovers-followups item 3. tests/affected.py treats any module whose source mentions sys.path, importlib or __import__ as unsure (near line 298), so a change to scripts/lib/workspace.py (imported by scripts/lib/fstate.py and the guard modules after a sys.path insert of scripts/lib or scripts) selects every suite. Teach the import graph the plugin's own idiom: a sys.path.insert/append whose argument is built only from os.path.dirname(__file__)/os.path.join with string literals (resolve it statically to a directory of this repo) adds that directory to the module's import roots, and the module is then no longer unsure for that reason; anything else (computed paths, importlib, __import__) stays unsure. Measure the suite count for a change to scripts/lib/workspace.py and scripts/lib/fstate.py before and after with `python3 -B tests/affected.py select-many` and report both. Keep hashes (suite reuse) conservative. Update the docstring rule list. Tests in tests/affected.test.sh: the idiom resolves and a change to workspace.py selects its real importers' suites (workspace-default, routing, session-state, file-guard) and not an unrelated suite; a computed sys.path entry stays unsure. Changelog fragment changelog.d/leftovers-affected-syspath.md (### Changed).",
+      "paths": [
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "changelog.d/leftovers-affected-syspath.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "a change to scripts/lib/workspace.py no longer selects every suite",
+        "every suite that imports it, directly or through the guard and state modules, is still selected",
+        "a computed sys.path entry or importlib use stays unsure",
+        "suite reuse hashes stay conservative"
+      ]
+    },
+    {
+      "id": "tmpdir-readme",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "test fixture robustness and one doc line",
+      "objective": "Backlog topic workspace-leftovers-followups items 2 and 5. (a) tests/workspace-default.test.sh: with a Windows-form TMPDIR (C:/...) the stub directories it prepends to PATH break (the colon in the drive letter splits PATH) and five cases fail; make the stub directories PATH-safe on every platform (for example create the temp root with a POSIX-form path, or convert it with cygpath -u when the path has a drive letter), so the suite passes with TMPDIR in either form. (b) tests/README.md lists the suites but not tests/plugin-registry.test.sh (added by plan workspace-leftovers): add it in the same style. Changelog fragment changelog.d/leftovers-tmpdir.md (### Fixed).",
+      "paths": [
+        "tests/workspace-default.test.sh",
+        "tests/README.md",
+        "changelog.d/leftovers-tmpdir.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/workspace-default.test.sh"
+      ],
+      "acceptance": [
+        "tests/workspace-default.test.sh passes with TMPDIR in the Windows drive form and in the POSIX form",
+        "tests/README.md lists tests/plugin-registry.test.sh"
+      ]
+    }
+  ]
+}
