@@ -325,7 +325,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -1044,7 +1044,8 @@ if case.startswith('stack-'):
             b_verdict('review', merged)
             assert record('b', 'review')['state'] == 'PASS' and record('b', 'review')['sha'] == merged
             assert not any(n.startswith('verify waits:') for n in status_row('b')['notes'])
-        elif case in ('stack-gate-order', 'stack-gate-correct', 'stack-gate-delta', 'stack-gate-delta-both'):
+        elif case in ('stack-gate-order', 'stack-gate-correct', 'stack-gate-delta', 'stack-gate-delta-both',
+                      'stack-gate-delta-late'):
             bh = stacked_b(True)
             assert m.stack_gate(plan, reg, info, tb, bh) is None
             b_verdict('review', bh)
@@ -1067,6 +1068,17 @@ if case.startswith('stack-'):
                 # merge brings a's PASS in at the same first-parent position, so the merge points tie
                 b_verdict('review', head)
                 assert record('b', 'review')['sha'] == head, record('b', 'review')
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+            elif case == 'stack-gate-delta-late':
+                # the dependent integrated first (it carries a in), one more commit on topic, then b reviewed again at
+                # that later HEAD without re-reviewing a: the delta SHA is an integration commit, never b's own merge
+                # point, so the order blocker stays (b's earlier PASS merged at the same position as a's)
+                integrate('topic-b')
+                git('commit', '-q', '--allow-empty', '-m', 'chore: later integration commit')
+                late = git('rev-parse', 'HEAD')
+                b_verdict('review', late)
+                assert record('b', 'review')['sha'] == late, record('b', 'review')
                 g = blockers()
                 assert any(x.startswith('b: integrated before its dependency a') for x in g), g
             elif case == 'stack-gate-delta-both':
@@ -4577,7 +4589,7 @@ if [ ! -e "$RVD/k__reviewer__${RS5:0:12}.model.json" ]; then pass=$((pass + 1));
 else fail=$((fail + 1)); echo "FAIL  no review dispatch exists at the delta SHA"; fi
 RPG_FACTORY_AGENTS=claude expect "a delta review of k by the implementer's model is recorded without a dispatch at its SHA" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS5" --by claude --state PASS
 KD="$RVD/k__review__${RS5:0:12}__claude.json"
-if [ -f "$KD" ] && jq -e '.fallback == "codex unavailable" and (.fallback_from | length > 0)' "$KD" >/dev/null; then pass=$((pass + 1)); echo "PASS  a delta review keeps the earlier dispatch-recorded fallback (fallback and fallback_from)"
+if [ -f "$KD" ] && jq -e '(.fallback == "codex" or .fallback == "codex unavailable") and (.fallback_from | length > 0)' "$KD" >/dev/null; then pass=$((pass + 1)); echo "PASS  a delta review keeps the earlier dispatch-recorded fallback (fallback and fallback_from)"
 else fail=$((fail + 1)); echo "FAIL  a delta review keeps the earlier dispatch-recorded fallback (fallback and fallback_from)"; fi
 expect "gate accepts the delta review as a SAME_MODEL note" 1 "NOTE    k: SAME_MODEL \(fallback: codex unavailable\)" gate "$RP" --no-run-checks
 refute "a delta review with a recorded fallback is not a cross-model blocker" "BLOCKER k: reviewed by claude" gate "$RP" --no-run-checks

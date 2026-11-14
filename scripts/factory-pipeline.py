@@ -3453,6 +3453,12 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             else:
                 lo = mid + 1
         return lo
+
+    def on_chain(key, path, c):
+        """True when c is itself a commit of the integration head's first-parent chain (an integration commit, e.g. a
+        delta review's SHA at the integration HEAD): it is never a task's own merge point."""
+        pos = merged_at(key, path, c)
+        return bool(chains[key]) and chains[key][pos] == c
     for t in plan.get("tasks", []):
         key = t.get("repo")
         if key not in heads:
@@ -3530,6 +3536,8 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                                        if r.get("state") == "PASS" and r.get("fingerprint") == own_fp
                                        and r["sha"] != rv["sha"] and is_ancestor(info["path"], r["sha"], rv["sha"])]
                 for s in cands:
+                    if on_chain(key, info["path"], s):
+                        continue  # an integration commit does not stand for the task's own merge point
                     d_pass, _ = dep_review_pass(plan, reg, info["path"], dep["id"], s)
                     if (d_pass and is_ancestor(info["path"], d_pass, s) and is_ancestor(info["path"], d_pass, heads[key])
                             and merged_at(key, info["path"], d_pass) < merged_at(key, info["path"], s)):
@@ -3546,6 +3554,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             continue
         if dep is not None and not stack_ok and (
                 not dep_pass or not is_ancestor(info["path"], dep_pass, heads[key])
+                or on_chain(key, info["path"], rv["sha"])
                 or merged_at(key, info["path"], dep_pass) >= merged_at(key, info["path"], rv["sha"])):
             blockers.append(f"{t['id']}: integrated before its dependency {dep['id']}: integrate {dep['id']} first "
                             f"(git merge --no-ff {task_branch(plan, info, dep)}), then {t['id']}")

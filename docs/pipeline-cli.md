@@ -197,9 +197,15 @@ factory-pipeline.py sync plan.json --task <id> [--send]
   compares the merge point of that SHA, so a later delta review of the dependency no longer reports "integrated
   before its dependency". When the dependent's own current review is a delta review too (its reviewed commit is the
   integration HEAD), its earlier review PASS records contained in it (same plan version, newest first) are tried as
-  well: one that contains a dependency PASS merged strictly earlier clears both checks. A dependent integrated before
-  its dependency stays blocked, because its merge brings the dependency PASS in at the same first-parent position.
-  Any git error keeps the blocker (fail safe).
+  well: one that contains a dependency PASS merged strictly earlier clears both checks. A review SHA that is itself a
+  commit of the integration head's first-parent chain (an integration commit, for example a delta review at the
+  integration HEAD or later) never stands for the task's own merge point: such a candidate is skipped, and without an
+  earlier PASS on the task branch merged after the dependency the order blocker stays. A dependent integrated before
+  its dependency stays blocked, because its merge brings the dependency PASS in at the same first-parent position,
+  even when it is reviewed again at a later integration HEAD. Any git error keeps the blocker (fail safe).
+- A task review recorded at a later SHA of an already reviewed task (a delta review) keeps the fallback that dispatch
+  recorded for its earlier review, so a recorded SAME_MODEL fallback stays an accepted note and a task never reviewed
+  before still blocks (see "Fallback reviews").
 - A recorded verdict holds for its task's fingerprint (objective, owned paths, exclusions, acceptance, checks,
   agents): a plan edit that only changes deps keeps it; changing a task's paths or acceptance makes it stale. Re-run
   `status` after any plan edit.
