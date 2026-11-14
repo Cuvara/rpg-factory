@@ -14,19 +14,45 @@ out=$(unset RPG_FACTORY_WORKSPACE; set -euo pipefail; . "$HELPER"; [ "${RPG_FACT
 out=$(RPG_FACTORY_WORKSPACE='kept value'; . "$HELPER"; [ "$RPG_FACTORY_WORKSPACE" = 'kept value' ])
 [ "$?" -eq 0 ] && [ -z "$out" ] && ok "source leaves an existing workspace unchanged and is silent" || no "source with existing workspace"
 
+T=$(mktemp -d) || exit 1
+trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/bin" "$T/outside" "$T/ws" "$T/nocyg" "$T/cyg"
+# Deterministic cygpath choices for the CYGWIN cases: "hidden" runs with a PATH that has no cygpath
+# (Git for Windows ships a real one), "stub" puts a recognisable stub first on PATH.
+cat > "$T/cyg/cygpath" <<'STUB'
+#!/usr/bin/env bash
+[ "$1" = -u ] || exit 2
+p=$2
+printf '/stub-cygdrive/%s%s\n' "$(printf '%s' "${p:0:1}" | tr '[:upper:]' '[:lower:]')" "${p:2}"
+STUB
+chmod +x "$T/cyg/cygpath"
+# Mode: hidden (no cygpath), stub (the stub above); anything else leaves PATH alone.
+use_cygpath_mode() {
+  case "$1" in
+    hidden) PATH="$T/nocyg" ;;
+    stub) PATH="$T/cyg:$PATH" ;;
+  esac
+  hash -r
+}
+
 shell_default() (
   unset RPG_FACTORY_WORKSPACE
   # Keep the platform in a separate variable: uname receives -s from the helper.
   _PLATFORM=$1
   uname() { printf '%s\n' "$_PLATFORM"; }
+  use_cygpath_mode "${2-}"
   . "$HELPER"
   rpgf_default_workspace
 )
-for platform in MINGW64_NT MSYS_NT CYGWIN_NT Linux Darwin; do
-  case "$platform" in MINGW*|MSYS*|CYGWIN*) expected=/c/Workspaces/UnityIndie ;; *) expected=/mnt/c/Workspaces/UnityIndie ;; esac
+for platform in MINGW64_NT MSYS_NT Linux Darwin; do
+  case "$platform" in MINGW*|MSYS*) expected=/c/Workspaces/UnityIndie ;; *) expected=/mnt/c/Workspaces/UnityIndie ;; esac
   got=$(shell_default "$platform")
   [ "$got" = "$expected" ] && ok "shell default $platform" || no "shell default $platform: $got"
 done
+got=$(shell_default CYGWIN_NT hidden)
+[ "$got" = /cygdrive/c/Workspaces/UnityIndie ] && ok 'shell default CYGWIN without cygpath is the cygdrive form' || no "shell default CYGWIN without cygpath: $got"
+got=$(shell_default CYGWIN_NT stub)
+[ "$got" = /stub-cygdrive/c/Workspaces/UnityIndie ] && ok 'shell default CYGWIN with cygpath is the cygpath answer' || no "shell default CYGWIN with cygpath: $got"
 for platform in MINGW64_NT Linux; do
   got=$(unset RPG_FACTORY_WORKSPACE; RPG_FACTORY_WORKSPACE=''; uname() { printf '%s\n' "$platform"; }; . "$HELPER"; rpgf_default_workspace)
   [ "$got" = "$(shell_default "$platform")" ] && ok "shell empty value falls back on $platform" || no "shell empty value on $platform: $got"
@@ -35,20 +61,26 @@ for platform in MINGW64_NT Linux; do
 done
 
 # The conversion is evaluated at call time and leaves other path forms alone.
-for platform in MINGW64_NT MSYS_NT CYGWIN_NT Linux Darwin; do
+# CYGWIN runs twice: without cygpath (cygdrive form) and with a stub (the cygpath answer for '<D>:/rest').
+for variant in MINGW64_NT MSYS_NT CYGWIN_NT:hidden CYGWIN_NT:stub Linux Darwin; do
+  platform=${variant%%:*}
+  mode=""; [ "$variant" = "$platform" ] || mode=${variant#*:}
   for path in /mnt/c/Workspaces/UnityIndie /mnt/d/Other/WS /mnt/c /c/x C:/x relative/path; do
     expected=$path
     case "$platform:$path" in
-      MINGW*:/mnt/*|MSYS*:/mnt/*|CYGWIN*:/mnt/*) expected="/${path#/mnt/}" ;;
+      MINGW*:/mnt/*|MSYS*:/mnt/*) expected="/${path#/mnt/}" ;;
+      CYGWIN*:/mnt/*)
+        drive_rest=${path#/mnt/}
+        case "$mode" in
+          stub) expected="/stub-cygdrive/${drive_rest:0:1}${drive_rest:1}"; [ "${#drive_rest}" -gt 1 ] || expected="$expected/" ;;
+          *) expected="/cygdrive/$drive_rest" ;;
+        esac ;;
     esac
-    got=$(uname() { printf '%s\n' "$platform"; }; . "$HELPER"; rpgf_platform_path "$path")
-    [ "$got" = "$expected" ] && ok "platform path $platform $path" || no "platform path $platform $path: $got"
+    got=$(uname() { printf '%s\n' "$platform"; }; use_cygpath_mode "$mode"; . "$HELPER"; rpgf_platform_path "$path")
+    [ "$got" = "$expected" ] && ok "platform path $variant $path" || no "platform path $variant $path: $got"
   done
 done
 
-T=$(mktemp -d) || exit 1
-trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/bin" "$T/outside" "$T/ws"
 # Construct every on-disk registry path as a directory; the check requires existence only.
 jq -r '(.repos | to_entries[] | .value.path as $p | $p, ((.value.instructions // [])[] | $p + "/" + .)),
   (.repos as $r | .modules[] | $r[.repo].path as $p | (.paths[], (.claude_md // empty), (.changelog // empty), (.docs // [])[], (.generated // [])[]) | $p + "/" + .),
@@ -72,13 +104,21 @@ chmod +x "$T/bin/uname"
 reg_out=$(unset RPG_FACTORY_WORKSPACE; PATH="$T/bin:$PATH" bash "$ROOT/scripts/check-registry.sh" --registry "$T/registry.json" 2>&1)
 case "$reg_out" in *'referenced paths exist'*) ok 'registry default resolves to existing workspace paths' ;; *) no "registry default workspace: $reg_out" ;; esac
 
+# The Netcode checkout is a throwaway fixture (cwd's git toplevel holding the headless csproj) whose
+# package.json pins a Shared.GameLogic tag no server repo has, so the check ends NOT-RUN(blocked) and names
+# the platform's default workspace server path. No real Netcode or rpg-mmo-server checkout is needed.
+fx="$T/fx/Netcode"
+mkdir -p "$fx/Tests~/Headless"
+git init -q "$fx" >/dev/null 2>&1
+: > "$fx/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
+printf '%s\n' '{"x-manualDependencies": {"com.rpgmmo.shared-gamelogic": "https://example.invalid/rpg-mmo-server.git?path=/Shared.GameLogic#sgl-v0.0.0-rpgf-fixture-missing"}}' > "$fx/package.json"
 for platform in Linux MINGW64_NT; do
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\n' "$platform" > "$T/bin/uname"
-  case "$platform" in Linux) expected=/mnt/c/Workspaces/UnityIndie/Netcode ;; *) expected=/c/Workspaces/UnityIndie/Netcode ;; esac
-  headless_out=$(cd "$T/outside" && unset RPG_FACTORY_WORKSPACE RPG_FACTORY_REPO_DIR RPG_FACTORY_REPO_KEY && PATH="$T/bin:$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --resolve-server 2>&1)
+  case "$platform" in Linux) expected=/mnt/c/Workspaces/UnityIndie/rpg-mmo-server ;; *) expected=/c/Workspaces/UnityIndie/rpg-mmo-server ;; esac
+  headless_out=$(cd "$fx" && unset RPG_FACTORY_WORKSPACE RPG_FACTORY_REPO_DIR RPG_FACTORY_REPO_KEY && PATH="$T/bin:$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --resolve-server 2>&1)
   case "$headless_out" in
     *'<unresolved>'*) no "headless default $platform unresolved" ;;
-    *"$expected"*|server:*"${expected%/Netcode}/rpg-mmo-server"*|NOT-RUN\(blocked\):*"${expected%/Netcode}/rpg-mmo-server"*) ok "headless default $platform" ;;
+    NOT-RUN\(blocked\):*sgl-v0.0.0-rpgf-fixture-missing*"$expected"*) ok "headless default $platform" ;;
     *) no "headless default $platform: $headless_out" ;;
   esac
 done
@@ -118,6 +158,15 @@ reader_violations() {
     printf '%s:%s:%s\n' "$file" "$line" "$text"
   done < <(cd "$root" && grep -rInE --include='*.py' 'default_workspace\(\)' scripts 2>/dev/null || true)
 }
+# Negative self-test: a raw reader is reported, a converted one is not.
+mkdir -p "$T/rguard/scripts" "$T/rguard/tests"
+printf '%s\n' 'root=$(jq -r .workspace.root_default registry.json)' > "$T/rguard/scripts/raw.sh"
+printf '%s\n' 'root=$(rpgf_platform_path "$(jq -r .workspace.root_default registry.json)")' > "$T/rguard/scripts/ok.sh"
+printf '%s\n' "root = registry['workspace']['root_default']" > "$T/rguard/scripts/raw.py"
+violations=$(reader_violations "$T/rguard")
+case "$violations" in *scripts/raw.sh*) ok 'reader guard detects a raw jq reader' ;; *) no 'reader guard missed a raw jq reader' ;; esac
+case "$violations" in *scripts/ok.sh*) no 'reader guard flags a converted jq reader' ;; *) ok 'reader guard accepts a converted jq reader' ;; esac
+case "$violations" in *scripts/raw.py*) ok 'reader guard detects a raw Python reader' ;; *) no 'reader guard missed a raw Python reader' ;; esac
 violations=$(reader_violations "$ROOT")
 [ -z "$violations" ] && ok 'workspace reader guard is clean' || no "workspace reader guard: $violations"
 
@@ -227,10 +276,10 @@ for platform in MINGW MSYS CYGWIN LINUX; do
   case "$platform" in
     MINGW) shell=$(shell_default MINGW64_NT); python=${python_nt-} ;;
     MSYS) shell=$(shell_default MSYS_NT); python=${python_nt-} ;;
-    CYGWIN) shell=$(shell_default CYGWIN_NT); python=${python_nt-} ;;
+    CYGWIN) shell=$(shell_default CYGWIN_NT hidden); python=${python_nt-} ;;
     LINUX) shell=$(shell_default Linux); python=${python_posix-} ;;
   esac
-  case "$shell" in /c/*) shell="C:/${shell#/c/}" ;; esac
+  case "$shell" in /c/*) shell="C:/${shell#/c/}" ;; /cygdrive/c/*) shell="C:/${shell#/cygdrive/c/}" ;; esac
   case "$python" in /c/*) python="C:/${python#/c/}" ;; esac
   [ "$shell" = "$python" ] && ok "shell and Python parity $platform" || no "shell and Python parity $platform"
 done
