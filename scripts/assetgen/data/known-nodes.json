@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.comfy-known-nodes/1",
- "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). The core image node entries (ImageScale through PrimitiveString) are written by nodesync.py from a saved object_info (live ComfyUI 0.45.2; fixture tests/fixtures/assetgen/object_info.json); the 9router and IO entries stay hand-kept. Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json. ui_only nodes (Note, MarkdownNote) exist only on the frontend canvas: lint rejects them in an API workflow.",
+ "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). The core image node entries (ImageScale through PrimitiveString) are written by nodesync.py from a saved object_info (live ComfyUI 0.45.2; fixture tests/fixtures/assetgen/object_info.json); the 9router and IO entries stay hand-kept. Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json. ui_only nodes (Note, MarkdownNote) exist only on the frontend canvas: lint rejects them in an API workflow. The 13 local core entries come from live ComfyUI 0.45.2 object_info (fixture tests/fixtures/assetgen/object_info.json); model-file combos are empty there, so ckpt_name, lora_name, control_net_name and model_name are STRING. The pack entries come from pack source at the pinned commits (fixture tests/fixtures/assetgen/object_info-packs.json) because no saved object_info from a machine with the packs exists. packs maps each hardware.json pack id to its nodes; local_model_nodes lists the nodes that need a template requires block. UNTESTED on RTX 5060: the local nodes have not run on the target machine.",
  "nodes": {
   "NineRouterImage": {
    "inputs": {
@@ -470,6 +470,667 @@
      200
     ]
    }
+  },
+  "CheckpointLoaderSimple": {
+   "inputs": {
+    "ckpt_name": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "MODEL",
+    "CLIP",
+    "VAE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     126
+    ]
+   }
+  },
+  "CLIPTextEncode": {
+   "inputs": {
+    "text": {
+     "type": "STRING",
+     "required": true,
+     "multiline": true
+    },
+    "clip": {
+     "type": "CLIP",
+     "required": true
+    }
+   },
+   "outputs": [
+    "CONDITIONING"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "CLIPTextEncodeSDXL": {
+   "inputs": {
+    "clip": {
+     "type": "CLIP",
+     "required": true
+    },
+    "width": {
+     "type": "INT",
+     "required": true
+    },
+    "height": {
+     "type": "INT",
+     "required": true
+    },
+    "crop_w": {
+     "type": "INT",
+     "required": true
+    },
+    "crop_h": {
+     "type": "INT",
+     "required": true
+    },
+    "target_width": {
+     "type": "INT",
+     "required": true
+    },
+    "target_height": {
+     "type": "INT",
+     "required": true
+    },
+    "text_g": {
+     "type": "STRING",
+     "required": true,
+     "multiline": true
+    },
+    "text_l": {
+     "type": "STRING",
+     "required": true,
+     "multiline": true
+    }
+   },
+   "outputs": [
+    "CONDITIONING"
+   ],
+   "ui": {
+    "size": [
+     320,
+     246
+    ]
+   }
+  },
+  "EmptyLatentImage": {
+   "inputs": {
+    "width": {
+     "type": "INT",
+     "required": true
+    },
+    "height": {
+     "type": "INT",
+     "required": true
+    },
+    "batch_size": {
+     "type": "INT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "LATENT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     126
+    ]
+   }
+  },
+  "VAEEncode": {
+   "inputs": {
+    "pixels": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "vae": {
+     "type": "VAE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "LATENT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "VAEDecode": {
+   "inputs": {
+    "samples": {
+     "type": "LATENT",
+     "required": true
+    },
+    "vae": {
+     "type": "VAE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "VAEDecodeTiled": {
+   "inputs": {
+    "samples": {
+     "type": "LATENT",
+     "required": true
+    },
+    "vae": {
+     "type": "VAE",
+     "required": true
+    },
+    "tile_size": {
+     "type": "INT",
+     "required": true
+    },
+    "overlap": {
+     "type": "INT",
+     "required": true
+    },
+    "temporal_size": {
+     "type": "INT",
+     "required": true
+    },
+    "temporal_overlap": {
+     "type": "INT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     174
+    ]
+   }
+  },
+  "KSampler": {
+   "inputs": {
+    "model": {
+     "type": "MODEL",
+     "required": true
+    },
+    "seed": {
+     "type": "INT",
+     "required": true
+    },
+    "steps": {
+     "type": "INT",
+     "required": true
+    },
+    "cfg": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "sampler_name": {
+     "type": "COMBO",
+     "options": [
+      "euler",
+      "euler_cfg_pp",
+      "euler_ancestral",
+      "euler_ancestral_cfg_pp",
+      "heun",
+      "heunpp2",
+      "exp_heun_2_x0",
+      "exp_heun_2_x0_sde",
+      "dpm_2",
+      "dpm_2_ancestral",
+      "lms",
+      "dpm_fast",
+      "dpm_adaptive",
+      "dpmpp_2s_ancestral",
+      "dpmpp_2s_ancestral_cfg_pp",
+      "dpmpp_sde",
+      "dpmpp_sde_gpu",
+      "dpmpp_2m",
+      "dpmpp_2m_cfg_pp",
+      "dpmpp_2m_sde",
+      "dpmpp_2m_sde_gpu",
+      "dpmpp_2m_sde_heun",
+      "dpmpp_2m_sde_heun_gpu",
+      "dpmpp_3m_sde",
+      "dpmpp_3m_sde_gpu",
+      "ddpm",
+      "lcm",
+      "ipndm",
+      "ipndm_v",
+      "deis",
+      "cfgpp_ud10_ab",
+      "res_multistep",
+      "res_multistep_cfg_pp",
+      "res_multistep_ancestral",
+      "res_multistep_ancestral_cfg_pp",
+      "gradient_estimation",
+      "gradient_estimation_cfg_pp",
+      "er_sde",
+      "seeds_2",
+      "seeds_3",
+      "sa_solver",
+      "sa_solver_pece",
+      "ddim",
+      "uni_pc",
+      "uni_pc_bh2"
+     ],
+     "required": true
+    },
+    "scheduler": {
+     "type": "COMBO",
+     "options": [
+      "simple",
+      "sgm_uniform",
+      "karras",
+      "exponential",
+      "ddim_uniform",
+      "beta",
+      "normal",
+      "linear_quadratic",
+      "kl_optimal"
+     ],
+     "required": true
+    },
+    "positive": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "negative": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "latent_image": {
+     "type": "LATENT",
+     "required": true
+    },
+    "denoise": {
+     "type": "FLOAT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "LATENT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     270
+    ]
+   }
+  },
+  "LoraLoader": {
+   "inputs": {
+    "model": {
+     "type": "MODEL",
+     "required": true
+    },
+    "clip": {
+     "type": "CLIP",
+     "required": true
+    },
+    "lora_name": {
+     "type": "STRING",
+     "required": true
+    },
+    "strength_model": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "strength_clip": {
+     "type": "FLOAT",
+     "required": true
+    }
+   },
+   "outputs": [
+    "MODEL",
+    "CLIP"
+   ],
+   "ui": {
+    "size": [
+     320,
+     150
+    ]
+   }
+  },
+  "ControlNetLoader": {
+   "inputs": {
+    "control_net_name": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "CONTROL_NET"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "ControlNetApplyAdvanced": {
+   "inputs": {
+    "positive": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "negative": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "control_net": {
+     "type": "CONTROL_NET",
+     "required": true
+    },
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "strength": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "start_percent": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "end_percent": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "vae": {
+     "type": "VAE",
+     "required": false
+    }
+   },
+   "outputs": [
+    "CONDITIONING",
+    "CONDITIONING"
+   ],
+   "ui": {
+    "size": [
+     320,
+     222
+    ]
+   }
+  },
+  "UpscaleModelLoader": {
+   "inputs": {
+    "model_name": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "UPSCALE_MODEL"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "ImageUpscaleWithModel": {
+   "inputs": {
+    "upscale_model": {
+     "type": "UPSCALE_MODEL",
+     "required": true
+    },
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     80
+    ]
+   }
+  },
+  "IPAdapterUnifiedLoader": {
+   "inputs": {
+    "model": {
+     "type": "MODEL",
+     "required": true
+    },
+    "preset": {
+     "type": "COMBO",
+     "options": [
+      "LIGHT - SD1.5 only (low strength)",
+      "STANDARD (medium strength)",
+      "VIT-G (medium strength)",
+      "PLUS (high strength)",
+      "PLUS FACE (portraits)",
+      "FULL FACE - SD1.5 only (portraits stronger)"
+     ],
+     "required": true
+    },
+    "ipadapter": {
+     "type": "IPADAPTER",
+     "required": false
+    }
+   },
+   "outputs": [
+    "MODEL",
+    "IPADAPTER"
+   ],
+   "ui": {
+    "size": [
+     320,
+     102
+    ]
+   }
+  },
+  "IPAdapterAdvanced": {
+   "inputs": {
+    "model": {
+     "type": "MODEL",
+     "required": true
+    },
+    "ipadapter": {
+     "type": "IPADAPTER",
+     "required": true
+    },
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "weight": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "weight_type": {
+     "type": "COMBO",
+     "options": [
+      "linear",
+      "ease in",
+      "ease out",
+      "ease in-out",
+      "reverse in-out",
+      "weak input",
+      "weak output",
+      "weak middle",
+      "strong middle",
+      "style transfer",
+      "composition",
+      "strong style transfer",
+      "style and composition",
+      "style transfer precise",
+      "composition precise"
+     ],
+     "required": true
+    },
+    "combine_embeds": {
+     "type": "COMBO",
+     "options": [
+      "concat",
+      "add",
+      "subtract",
+      "average",
+      "norm average"
+     ],
+     "required": true
+    },
+    "start_at": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "end_at": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "embeds_scaling": {
+     "type": "COMBO",
+     "options": [
+      "V only",
+      "K+V",
+      "K+V w/ C penalty",
+      "K+mean(V) w/ C penalty"
+     ],
+     "required": true
+    },
+    "image_negative": {
+     "type": "IMAGE",
+     "required": false
+    },
+    "attn_mask": {
+     "type": "MASK",
+     "required": false
+    },
+    "clip_vision": {
+     "type": "CLIP_VISION",
+     "required": false
+    }
+   },
+   "outputs": [
+    "MODEL"
+   ],
+   "ui": {
+    "size": [
+     320,
+     318
+    ]
+   }
+  },
+  "CannyEdgePreprocessor": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "low_threshold": {
+     "type": "INT",
+     "required": false
+    },
+    "high_threshold": {
+     "type": "INT",
+     "required": false
+    },
+    "resolution": {
+     "type": "INT",
+     "required": false
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     126
+    ]
+   }
+  },
+  "InspyrenetRembg": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "torchscript_jit": {
+     "type": "COMBO",
+     "options": [
+      "default",
+      "on"
+     ],
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE",
+    "MASK"
+   ],
+   "ui": {
+    "size": [
+     320,
+     102
+    ]
+   }
   }
- }
+ },
+ "packs": {
+  "comfyui_ipadapter_plus": {
+   "nodes": [
+    "IPAdapterUnifiedLoader",
+    "IPAdapterAdvanced"
+   ],
+   "provider": "ComfyUI_IPAdapter_plus (cubiq)",
+   "signatures": "pack source IPAdapterPlus.py at commit a0f451a5113c, no saved object_info"
+  },
+  "comfyui_controlnet_aux": {
+   "nodes": [
+    "CannyEdgePreprocessor"
+   ],
+   "provider": "comfyui_controlnet_aux (Fannovel16)",
+   "signatures": "pack source node_wrappers/canny.py at commit a587a4c15945, no saved object_info"
+  },
+  "cut-out (BiRefNet or rembg)": {
+   "nodes": [
+    "InspyrenetRembg"
+   ],
+   "provider": "ComfyUI-Inspyrenet-Rembg (InSPyReNet through transparent-background; matches the rembg pack match)",
+   "signatures": "pack source Inspyrenet_Rembg.py at commit 87ac452ef118, no saved object_info"
+  }
+ },
+ "local_model_nodes": [
+  "CheckpointLoaderSimple",
+  "CLIPTextEncode",
+  "CLIPTextEncodeSDXL",
+  "EmptyLatentImage",
+  "VAEEncode",
+  "VAEDecode",
+  "VAEDecodeTiled",
+  "KSampler",
+  "LoraLoader",
+  "ControlNetLoader",
+  "ControlNetApplyAdvanced",
+  "UpscaleModelLoader",
+  "ImageUpscaleWithModel"
+ ]
 }

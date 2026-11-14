@@ -1,0 +1,190 @@
+{
+ "schema": "rpg-factory.assetgen-hardware/1",
+ "description": "UNTESTED on RTX 5060: hardware profiles for asset-gen's local branch use planning thresholds, not measured values; the user tests on the RTX 5060 8 GB machine after the merge. comfy-desktop-setup.py --check prints the best profile the machine meets; it never applies it, never downloads models and never installs packs.",
+ "units": "GiB: VRAM = nvidia-smi memory.total MiB / 1024; RAM and free disk = bytes / 1024^3. A threshold sits a little under the nominal size because an 8 GB card reports about 7.9 GiB and a 32 GB machine about 31.8 GiB.",
+ "torch_arch": [
+  {
+   "min_compute_cap": "12.0",
+   "arch": "sm_120",
+   "min_cuda": "12.8",
+   "why": "Blackwell GPUs (RTX 50xx, compute capability 12.0) have sm_120 kernels only in torch CUDA 12.8+ builds"
+  }
+ ],
+ "profiles": [
+  {
+   "id": "api-only",
+   "rank": 0,
+   "nominal": "any machine; images come from the ChatGPT image API through the 9router node",
+   "requires": {
+    "gpu": false,
+    "min_vram_gb": 0,
+    "min_ram_gb": 0,
+    "min_free_disk_gb": 1,
+    "torch": null
+   },
+   "allows": [
+    "ChatGPT image API through the 9router node"
+   ],
+   "excludes": [
+    "any local model"
+   ],
+   "optional_later": [],
+   "packs": [],
+   "models": []
+  },
+  {
+   "id": "local-4gb",
+   "rank": 1,
+   "nominal": "NVIDIA card with 4 GB VRAM, 16 GB RAM (SD1.5 class)",
+   "requires": {
+    "gpu": true,
+    "min_vram_gb": 3.5,
+    "min_ram_gb": 15,
+    "min_free_disk_gb": 20,
+    "torch": {
+     "cuda_build": true,
+     "min_cuda": null
+    }
+   },
+   "allows": [
+    "SD1.5-class checkpoint at 512 px, batch 1",
+    "one SD1.5 ControlNet at a time",
+    "IPAdapter (SD1.5)",
+    "tiled VAE decode",
+    "4x upscaler",
+    "BiRefNet or rembg cut-out"
+   ],
+   "excludes": [
+    "SDXL",
+    "Flux (any precision)",
+    "3D mesh generation"
+   ],
+   "optional_later": [],
+   "packs": [
+    {
+     "id": "comfyui_ipadapter_plus",
+     "purpose": "IPAdapter reference/style conditioning",
+     "match": [
+      "ipadapter_plus"
+     ]
+    },
+    {
+     "id": "comfyui_controlnet_aux",
+     "purpose": "ControlNet preprocessors",
+     "match": [
+      "controlnet_aux"
+     ]
+    },
+    {
+     "id": "cut-out (BiRefNet or rembg)",
+     "purpose": "background removal",
+     "match": [
+      "birefnet",
+      "rmbg",
+      "rembg"
+     ]
+    }
+   ],
+   "models": [
+    {
+     "kind": "checkpoints",
+     "need": "an SD1.5 checkpoint"
+    },
+    {
+     "kind": "controlnet",
+     "need": "an SD1.5 ControlNet"
+    },
+    {
+     "kind": "ipadapter",
+     "need": "an SD1.5 IPAdapter model"
+    },
+    {
+     "kind": "clip_vision",
+     "need": "a CLIP vision model compatible with the IPAdapter"
+    },
+    {
+     "kind": "upscale_models",
+     "need": "a 4x upscaler model"
+    }
+   ]
+  },
+  {
+   "id": "local-8gb",
+   "rank": 2,
+   "nominal": "NVIDIA RTX 5060 8 GB, 32 GB RAM (target machine; UNTESTED on RTX 5060)",
+   "requires": {
+    "gpu": true,
+    "min_vram_gb": 7.5,
+    "min_ram_gb": 30,
+    "min_free_disk_gb": 40,
+    "torch": {
+     "cuda_build": true,
+     "min_cuda": "12.8"
+    }
+   },
+   "allows": [
+    "SDXL checkpoint, pruned fp16 or fp8, at 1024 px, batch 1",
+    "one SDXL ControlNet at a time",
+    "IPAdapter (SDXL)",
+    "tiled VAE decode",
+    "4x upscaler",
+    "BiRefNet or rembg cut-out"
+   ],
+   "excludes": [
+    "Flux fp16",
+    "two or more SDXL ControlNets at once",
+    "3D mesh generation"
+   ],
+   "optional_later": [
+    "Flux GGUF (quantized), only as an optional later step"
+   ],
+   "packs": [
+    {
+     "id": "comfyui_ipadapter_plus",
+     "purpose": "IPAdapter reference/style conditioning",
+     "match": [
+      "ipadapter_plus"
+     ]
+    },
+    {
+     "id": "comfyui_controlnet_aux",
+     "purpose": "ControlNet preprocessors",
+     "match": [
+      "controlnet_aux"
+     ]
+    },
+    {
+     "id": "cut-out (BiRefNet or rembg)",
+     "purpose": "background removal",
+     "match": [
+      "birefnet",
+      "rmbg",
+      "rembg"
+     ]
+    }
+   ],
+   "models": [
+    {
+     "kind": "checkpoints",
+     "need": "an SDXL checkpoint, pruned fp16 or fp8"
+    },
+    {
+     "kind": "controlnet",
+     "need": "an SDXL ControlNet"
+    },
+    {
+     "kind": "ipadapter",
+     "need": "an SDXL IPAdapter model"
+    },
+    {
+     "kind": "clip_vision",
+     "need": "a CLIP vision model compatible with the IPAdapter"
+    },
+    {
+     "kind": "upscale_models",
+     "need": "a 4x upscaler model"
+    }
+   ]
+  }
+ ]
+}

@@ -22,7 +22,8 @@ requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sort
   hashes and the relevant rejections (id and content hash), so a review made before the family or the rejection set
   changed is stale too; a spec or run.md written before the style lock hashes exactly as it did.
 generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
-  workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
+  workflow.json graph when a NineRouterImage or KSampler is present, prompts included (a workflow re-rendered with
+  another prompt is stale; the plugin also checks
   that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
   path of the run's copy references/<name> (None or a missing file -> null); style-lock anchors are LoadImage inputs
   anchor-<id>.png, so their copies are bound by content. With spec.style_lock it also holds {"anchors": [{anchor_id,
@@ -34,8 +35,9 @@ typed_param(name, decl, value) -> value coerced to its template param type (Valu
 style_lock_binding(spec) -> {"style", "family", "references": [anchor sha256...], "rejections": [{id, sha256}]} of
   spec.style_lock (sha256 of a rejection: canonical JSON of its spec.style_lock entry), or None for a spec without it.
 style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] without it).
-workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
-  (PrimitiveStringMultiline) it links to.
+workflow_prompts(workflow) -> 9router prompts followed by linked primitive CLIP texts, excluding negative-only nodes.
+local_generation(workflow, spec, hashes=None) -> local model, LoRA and sampler provenance and requires hash, or None
+  without local nodes. Local generation is UNTESTED on RTX 5060.
 run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
 save_image_prefixes(workflow) -> SaveImage node IDs and filename prefixes from the rendered workflow.
 comfy_jobs_dir() -> the configured or platform-default comfy-cli jobs directory.
@@ -46,9 +48,12 @@ required_checks(purpose_qa) -> the QA check names every output must carry for th
   Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
-requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
-  the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
-  (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
+requested_size(workflow, spec) -> the size the run asked for: the size input of the template's primary_node
+  (NineRouterImage; a KSampler gives <w>x<h> of its EmptyLatentImage). A declared primary that gives no size falls
+  back to the resolved spec's size param. Without a usable declared node, use the NineRouterImage with the lowest node
+  id (never dict order), else the resolved spec's size param, else "auto". qa.json records it next to the purpose
+  content hash it graded with (purpose_sha256), so a QA report made before the size or the purpose qa block changed
+  is stale.
 qa_style_binding(spec, locate) -> what the style consistency rows of qa.py evaluate besides the purpose and the output
   bytes, or None for a spec without style_lock (no style rows): {"style": spec.style_lock.style (the style ref: id,
   version, sha256), "style_sha256": sha256 of the canonical JSON of the effective style data spec.style.data (what
@@ -146,6 +151,13 @@ def qa_errors(qa):
 
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
 TEXT_NODES = ("PrimitiveStringMultiline", "PrimitiveString")  # a prompt node: its "value" is the text it outputs
+GENERATION_NODES = ("NineRouterImage", "KSampler")
+CLIP_TEXT_INPUTS = {"CLIPTextEncode": ("text",), "CLIPTextEncodeSDXL": ("text_g", "text_l")}
+MODEL_LOADERS = {"CheckpointLoaderSimple": ("ckpt_name", "checkpoints"),
+                 "LoraLoader": ("lora_name", "loras"), "ControlNetLoader": ("control_net_name", "controlnet"),
+                 "UpscaleModelLoader": ("model_name", "upscale_models")}
+PRESET_LOADERS = {"IPAdapterUnifiedLoader": ("preset", "ipadapter")}
+LOCAL_NODES = ("KSampler",) + tuple(MODEL_LOADERS) + tuple(PRESET_LOADERS)
 RUN_PREFIX = "assetgen/"
 
 
@@ -344,7 +356,7 @@ def run_filename_prefix(run_id):
 
 def workflow_prompts(workflow):
     """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent); a link to a prompt node
-    (TEXT_NODES) gives that node's value, any other link stays as the link."""
+    gives its value. Also include linked primitive CLIP texts except negative-only encoders."""
     if not isinstance(workflow, dict):
         return []
     out = []
@@ -356,6 +368,45 @@ def workflow_prompts(workflow):
         if isinstance(src, dict) and src.get("class_type") in TEXT_NODES and isinstance(src.get("inputs"), dict):
             v = src["inputs"].get("value")
         out.append(v)
+    polarities, visited, pending = {}, set(), []
+    for n in workflow.values():
+        if isinstance(n, dict) and n.get("class_type") == "KSampler" and isinstance(n.get("inputs"), dict):
+            pending.extend((n["inputs"].get(p), p) for p in ("positive", "negative"))
+    while pending:
+        link, polarity = pending.pop()
+        if not (isinstance(link, list) and len(link) == 2 and isinstance(link[0], str)):
+            continue
+        nid, index = link
+        if (nid, polarity) in visited:
+            continue
+        visited.add((nid, polarity))
+        node = workflow.get(nid)
+        if not isinstance(node, dict):
+            continue
+        cls = node.get("class_type")
+        if isinstance(cls, str) and cls in CLIP_TEXT_INPUTS:
+            polarities.setdefault(nid, set()).add(polarity)
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if "positive" in inputs and "negative" in inputs and type(index) is int and index in (0, 1):
+            pending.append((inputs["positive" if index == 0 else "negative"], polarity))
+        else:
+            pending.extend((v, polarity) for v in inputs.values())
+    for nid, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        cls, inputs = node.get("class_type"), node.get("inputs")
+        if not isinstance(cls, str) or cls not in CLIP_TEXT_INPUTS or not isinstance(inputs, dict):
+            continue
+        if polarities.get(nid) == {"negative"}:
+            continue
+        for key in CLIP_TEXT_INPUTS[cls]:
+            link = inputs.get(key)
+            src = workflow.get(link[0]) if isinstance(link, list) and len(link) == 2 and isinstance(link[0], str) else None
+            if isinstance(src, dict) and src.get("class_type") in TEXT_NODES and isinstance(src.get("inputs"), dict):
+                out.append(src["inputs"].get("value"))
     return out
 
 
@@ -378,7 +429,7 @@ def _file_sha256(path):
 
 
 def generation_inputs(workflow, spec, locate=None):
-    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") == "NineRouterImage"
+    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") in GENERATION_NODES
                                           for n in workflow.values()):
         graph = {}
         for nid, node in workflow.items():
@@ -410,6 +461,84 @@ def style_lock_references(spec):
 def _canonical_sha256(obj):
     text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def local_record_key(row):
+    """Return the cache key for a model or LoRA row, if its name and kind are strings."""
+    if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+        return None
+    kind = row.get("kind", "loras")
+    return kind + "/" + row["name"] if isinstance(kind, str) else None
+
+
+def local_generation(workflow, spec, hashes=None):
+    """Record local loaders and sampling settings, resolving linked seed values; no local nodes means no record."""
+    if not isinstance(workflow, dict):
+        return None
+    nodes = [(str(nid), node) for nid, node in workflow.items()
+             if isinstance(node, dict) and node.get("class_type") in LOCAL_NODES]
+    if not nodes:
+        return None
+    def node_order(item):
+        nid = item[0]
+        if nid.isascii() and nid.isdigit():
+            number = nid.lstrip("0") or "0"
+            return (0, len(number), number, nid)
+        return (1, 0, nid, nid)
+    nodes.sort(key=node_order)
+    hashes = hashes if isinstance(hashes, dict) else {}
+    spec = spec if isinstance(spec, dict) else {}
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = template.get("data") if isinstance(template.get("data"), dict) else {}
+    template_graph = data.get("workflow") if isinstance(data.get("workflow"), dict) else {}
+    try:
+        requires = _canonical_sha256(data["requires"]) if "requires" in data else None
+    except (TypeError, ValueError, RecursionError):
+        requires = None
+    result = {"models": [], "loras": [], "samplers": [], "requires_sha256": requires}
+
+    def digest(kind, name, preset=False):
+        value = hashes.get(kind + "/" + name) if isinstance(name, str) and not preset else None
+        return value if isinstance(value, str) and SHA256.fullmatch(value) else None
+
+    def seed_param(nid):
+        node = template_graph.get(nid)
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        value = inputs.get("seed") if isinstance(inputs, dict) else None
+        if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str):
+            source = template_graph.get(value[0])
+            source_inputs = source.get("inputs") if isinstance(source, dict) else None
+            value = source_inputs.get("value") if isinstance(source_inputs, dict) else None
+        match = PLACEHOLDER.fullmatch(value.strip()) if isinstance(value, str) else None
+        return match.group(1) if match else None
+
+    for nid, node in nodes:
+        cls = node["class_type"]
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        if cls == "KSampler":
+            seed = inputs.get("seed")
+            if isinstance(seed, list) and len(seed) == 2 and isinstance(seed[0], str):
+                source = workflow.get(seed[0])
+                source_inputs = source.get("inputs") if isinstance(source, dict) else None
+                if isinstance(source_inputs, dict) and "value" in source_inputs:
+                    seed = source_inputs["value"]
+            row = {"node": nid, "class_type": cls, "seed": seed, "seed_param": seed_param(nid)}
+            row.update({key: inputs.get(key) for key in ("sampler_name", "scheduler", "steps", "cfg", "denoise")})
+            result["samplers"].append(row)
+        elif cls == "LoraLoader":
+            name = inputs.get("lora_name")
+            sha = digest("loras", name)
+            result["loras"].append({"node": nid, "name": name, "strength_model": inputs.get("strength_model"),
+                                    "strength_clip": inputs.get("strength_clip"), "sha256": sha,
+                                    "verified": sha is not None})
+        else:
+            preset = cls in PRESET_LOADERS
+            key, kind = (PRESET_LOADERS if preset else MODEL_LOADERS)[cls]
+            name = inputs.get(key)
+            sha = digest(kind, name, preset)
+            result["models"].append({"node": nid, "class_type": cls, "kind": kind, "name": name,
+                                     "sha256": sha, "verified": sha is not None})
+    return result
 
 
 def style_lock_binding(spec):
@@ -518,12 +647,41 @@ def requirements_sha256(spec, generation=None):
 
 
 def requested_size(workflow, spec):
+    spec = spec if isinstance(spec, dict) else {}
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = template.get("data") if isinstance(template.get("data"), dict) else {}
+    primary = data.get("primary_node")
+    node = None
     if isinstance(workflow, dict):
-        for node in workflow.values():
-            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
-                inputs = node.get("inputs")
-                return inputs.get("size", "auto") if isinstance(inputs, dict) else "auto"
-    params = spec.get("params") if isinstance(spec, dict) else None
+        if isinstance(primary, str) and isinstance(workflow.get(primary), dict):
+            node = workflow[primary]
+        else:
+            candidates = [(nid, n) for nid, n in workflow.items()
+                          if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
+            if candidates:
+                def order(item):
+                    nid = str(item[0])
+                    if nid.isdigit():
+                        try:
+                            return (0, int(nid))
+                        except ValueError:
+                            pass
+                    return (1, nid)
+                node = min(candidates, key=order)[1]
+        if isinstance(node, dict):
+            inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+            if node.get("class_type") == "NineRouterImage":
+                return inputs.get("size", "auto")
+            if node.get("class_type") == "KSampler":
+                link = inputs.get("latent_image")
+                source = workflow.get(link[0]) if (isinstance(link, list) and len(link) == 2
+                                                   and isinstance(link[0], str)) else None
+                latent = source.get("inputs") if isinstance(source, dict) else None
+                if (isinstance(source, dict) and source.get("class_type") == "EmptyLatentImage"
+                        and isinstance(latent, dict) and type(latent.get("width")) is int
+                        and type(latent.get("height")) is int and latent["width"] > 0 and latent["height"] > 0):
+                    return "%dx%d" % (latent["width"], latent["height"])
+    params = spec.get("params")
     return params.get("size", "auto") if isinstance(params, dict) else "auto"
 
 

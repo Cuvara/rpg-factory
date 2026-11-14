@@ -325,7 +325,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -1044,7 +1044,8 @@ if case.startswith('stack-'):
             b_verdict('review', merged)
             assert record('b', 'review')['state'] == 'PASS' and record('b', 'review')['sha'] == merged
             assert not any(n.startswith('verify waits:') for n in status_row('b')['notes'])
-        elif case in ('stack-gate-order', 'stack-gate-correct'):
+        elif case in ('stack-gate-order', 'stack-gate-correct', 'stack-gate-delta', 'stack-gate-delta-both',
+                      'stack-gate-delta-late'):
             bh = stacked_b(True)
             assert m.stack_gate(plan, reg, info, tb, bh) is None
             b_verdict('review', bh)
@@ -1054,9 +1055,55 @@ if case.startswith('stack-'):
             assert any(n.startswith('integrate a first') and 'git merge --no-ff' in n for n in row['notes']), row
             assert row['next'] is None, row
             if case == 'stack-gate-order':
-                integrate('topic-b')  # the dependent first: it carries a in, unintegrated on its own
+                head = integrate('topic-b')  # the dependent first: it carries a in, unintegrated on its own
                 g = blockers()
                 assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+                # a delta review of a at the integration HEAD does not hide the order: the dependency PASS b contains
+                # is the one at a, and its merge point is still after b's
+                git('switch', 'topic')
+                verdict('a', 'review', head)
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+                # b's own delta review at that HEAD (its earlier PASS is on its task branch) keeps the blocker: b's
+                # merge brings a's PASS in at the same first-parent position, so the merge points tie
+                b_verdict('review', head)
+                assert record('b', 'review')['sha'] == head, record('b', 'review')
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+            elif case == 'stack-gate-delta-late':
+                # the dependent integrated first (it carries a in), one more commit on topic, then b reviewed again at
+                # that later HEAD without re-reviewing a: the delta SHA is an integration commit, never b's own merge
+                # point, so the order blocker stays (b's earlier PASS merged at the same position as a's)
+                integrate('topic-b')
+                git('commit', '-q', '--allow-empty', '-m', 'chore: later integration commit')
+                late = git('rev-parse', 'HEAD')
+                b_verdict('review', late)
+                assert record('b', 'review')['sha'] == late, record('b', 'review')
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+            elif case == 'stack-gate-delta-both':
+                # a and b integrated in order, then delta reviews of BOTH at the integration HEAD: b's earlier PASS
+                # (on its task branch) contains a's PASS merged strictly earlier, so no stacked blocker remains
+                head = integrate('topic-a', 'topic-b')
+                verdict('a', 'review', head)
+                b_verdict('review', head)
+                assert record('a', 'review')['sha'] == head and record('b', 'review')['sha'] == head
+                g = blockers()
+                assert not any('integrated before its dependency' in x for x in g), g
+                assert not any("lacks a's review PASS" in x for x in g), g
+                assert not any(x.startswith('b: stacked on a') for x in g), g
+            elif case == 'stack-gate-delta':
+                # a and b integrated in order, then a delta review of a at the integration HEAD (a's latest review is
+                # no longer an ancestor of b's reviewed commit): the gate keeps using the PASS b actually contains
+                head = integrate('topic-a', 'topic-b')
+                g = blockers()
+                assert not any('integrated before its dependency' in x or "lacks a's review PASS" in x for x in g), g
+                verdict('a', 'review', head)
+                assert record('a', 'review')['sha'] == head, record('a', 'review')
+                g = blockers()
+                assert not any('integrated before its dependency' in x for x in g), g
+                assert not any("lacks a's review PASS" in x for x in g), g
+                assert not any(x.startswith('b: stacked on a') for x in g), g
             else:
                 integrate('topic-a', 'topic-b')
                 g = blockers()
@@ -4524,9 +4571,50 @@ else fail=$((fail + 1)); echo "FAIL  a verdict by another model than the dispatc
 expect "the dispatched fallback reviewer's verdict is stamped (both models back)" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS
 expect "gate accepts the dispatched fallback" 1 "NOTE    k: SAME_MODEL \(fallback: codex unavailable\)" gate "$RP" --no-run-checks
 gi "$R" commit -q --allow-empty -m "chore: next"; RS2=$(git -C "$R" rev-parse HEAD)
+# a first review of a task (q) with no review dispatch record at its SHA stamps no fallback and still blocks; --implementer
+# names the claude implementation a claude-only session made
+RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task q --phase review --sha "$RS2" --by claude --state PASS --implementer claude >/dev/null
+QK="$RVD/q__review__${RS2:0:12}__claude.json"
+if [ -f "$QK" ] && ! grep -q '"fallback": "' "$QK"; then pass=$((pass + 1)); echo "PASS  a first review without a dispatch record stamps no fallback"
+else fail=$((fail + 1)); echo "FAIL  a first review without a dispatch record stamps no fallback"; fi
+expect "a first review without a dispatch record still blocks" 1 "BLOCKER q: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
+# a delta review: a later SHA of an already reviewed task keeps the fallback its earlier review's dispatch recorded
+RPG_FACTORY_AGENTS=claude expect "claude-only review dispatch of k at the next candidate is a SAME_MODEL fallback" 0 "review -> claude \(SAME_MODEL \(fallback: codex unavailable\)\)" dispatch "$RP" --task k --phase review --sha "$RS2" --runner orca
 RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task k --phase review --sha "$RS2" --by claude --state PASS >/dev/null
-if ! grep -q '"fallback": "' "$RVD/k__review__${RS2:0:12}__claude.json"; then pass=$((pass + 1)); echo "PASS  a fallback dispatch of another candidate stamps no fallback"
-else fail=$((fail + 1)); echo "FAIL  a fallback dispatch of another candidate stamps no fallback"; fi
+KK="$RVD/k__review__${RS2:0:12}__claude.json"
+if [ -f "$KK" ] && grep -q '"fallback": "' "$KK"; then pass=$((pass + 1)); echo "PASS  the dispatched fallback review of k at the next candidate is stamped"
+else fail=$((fail + 1)); echo "FAIL  the dispatched fallback review of k at the next candidate is stamped"; fi
+gi "$R" commit -q --allow-empty -m "chore: delta"; RS5=$(git -C "$R" rev-parse HEAD)
+if [ ! -e "$RVD/k__reviewer__${RS5:0:12}.model.json" ]; then pass=$((pass + 1)); echo "PASS  no review dispatch exists at the delta SHA"
+else fail=$((fail + 1)); echo "FAIL  no review dispatch exists at the delta SHA"; fi
+RPG_FACTORY_AGENTS=claude expect "a delta review of k by the implementer's model is recorded without a dispatch at its SHA" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS5" --by claude --state PASS
+KD="$RVD/k__review__${RS5:0:12}__claude.json"
+if [ -f "$KD" ] && jq -e '(.fallback == "codex" or .fallback == "codex unavailable") and (.fallback_from | length > 0)' "$KD" >/dev/null; then pass=$((pass + 1)); echo "PASS  a delta review keeps the earlier dispatch-recorded fallback (fallback and fallback_from)"
+else fail=$((fail + 1)); echo "FAIL  a delta review keeps the earlier dispatch-recorded fallback (fallback and fallback_from)"; fi
+expect "gate accepts the delta review as a SAME_MODEL note" 1 "NOTE    k: SAME_MODEL \(fallback: codex unavailable\)" gate "$RP" --no-run-checks
+refute "a delta review with a recorded fallback is not a cross-model blocker" "BLOCKER k: reviewed by claude" gate "$RP" --no-run-checks
+# a review dispatch at the SHA that was not a fallback (codex available again) decides alone: a claude verdict after it is
+# not a delta review and never inherits the earlier fallback
+gi "$R" commit -q --allow-empty -m "chore: delta dispatched"; RS6=$(git -C "$R" rev-parse HEAD)
+expect "both models available: the review dispatch of k at the next candidate goes to codex without a fallback" 0 "review -> codex" dispatch "$RP" --task k --phase review --sha "$RS6" --runner orca
+expect "a claude verdict at a SHA whose review dispatch went to codex is recorded" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS6" --by claude --state PASS
+KX="$RVD/k__review__${RS6:0:12}__claude.json"
+if [ -f "$KX" ] && ! grep -q '"fallback": "' "$KX"; then pass=$((pass + 1)); echo "PASS  a claude verdict after a non-fallback codex review dispatch does not inherit the earlier fallback"
+else fail=$((fail + 1)); echo "FAIL  a claude verdict after a non-fallback codex review dispatch does not inherit the earlier fallback"; fi
+expect "that claude verdict stays a cross-model blocker" 1 "BLOCKER k: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
+# negative: an earlier fallback review whose SHA is not an ancestor of the new SHA (a commit on a side line) is not inherited
+RPG_FACTORY_AGENTS=claude expect "claude-only: the code task q is implemented by claude (fallback)" 0 "implement -> claude" dispatch "$RP" --task q --phase implement --runner orca
+SS=$(gi "$R" commit-tree "$RS^{tree}" -p "$RS" -m "side line")
+RPG_FACTORY_AGENTS=claude expect "claude-only review dispatch of q on a side-line commit is a SAME_MODEL fallback" 0 "review -> claude \(SAME_MODEL \(fallback: codex unavailable\)\)" dispatch "$RP" --task q --phase review --sha "$SS" --runner orca
+RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task q --phase review --sha "$SS" --by claude --state PASS >/dev/null
+QS="$RVD/q__review__${SS:0:12}__claude.json"
+if [ -f "$QS" ] && grep -q '"fallback": "' "$QS"; then pass=$((pass + 1)); echo "PASS  the side-line fallback review of q is stamped"
+else fail=$((fail + 1)); echo "FAIL  the side-line fallback review of q is stamped"; fi
+RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task q --phase review --sha "$RS5" --by claude --state PASS >/dev/null
+QN="$RVD/q__review__${RS5:0:12}__claude.json"
+if [ -f "$QN" ] && ! grep -q '"fallback' "$QN"; then pass=$((pass + 1)); echo "PASS  an earlier fallback review that is not an ancestor of the new SHA is not inherited"
+else fail=$((fail + 1)); echo "FAIL  an earlier fallback review that is not an ancestor of the new SHA is not inherited"; fi
+expect "a review without an ancestral fallback review still blocks" 1 "BLOCKER q: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
 # a subtask fallback is never laundered by the task review: subtask s by claude (codex down), codex back, task review by
 # claude paired against the lead's explicitly declared codex implementation
 RSP=$(plan recsub '{"schema":"rpg-factory.pipeline-plan/1","id":"recsub","title":"Recorded subtasks","topic":"feat/core/rec","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[

@@ -1,0 +1,14 @@
+{
+ "schema": "rpg-factory.assetgen-template-profiles/1",
+ "description": "UNTESTED on RTX 5060: the template resolve --profile picks per purpose and hardware profile (data/hardware.json). A purpose with no entry for the chosen profile, or whose entry names a template that no core or game layer has yet, falls back to the next lower profile and finally to the purpose's default_template (the API route). A game layer may add or replace entries in <authoring>/assetgen/template-profiles.json. Nothing here was generated or measured; the user tests the local branch on the RTX 5060 8 GB machine after the merge.",
+ "routes": {
+  "concept-2d": {"local-8gb": "hybrid-environment"},
+  "icon": {"local-8gb": "hybrid-icon-ui"},
+  "ref-3d-character": {"local-8gb": "hybrid-character"},
+  "ref-3d-turnaround": {"local-8gb": "hybrid-character"},
+  "scene-2d": {"local-8gb": "hybrid-environment"},
+  "sprite-2d": {"local-8gb": "hybrid-character"},
+  "texture-tileable": {"local-8gb": "hybrid-environment"},
+  "ui-element": {"local-8gb": "hybrid-icon-ui"}
+ }
+}

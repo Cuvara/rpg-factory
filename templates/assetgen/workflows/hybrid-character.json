@@ -1,0 +1,534 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Hybrid character (Prompt -> NineRouterImage base -> local SDXL refine with IPAdapter and one ControlNet -> upscale, cut-out -> SaveImage)",
+ "description": "UNTESTED on RTX 5060: hybrid character template for ref-3d-character, ref-3d-turnaround and sprite-2d under the local-8gb profile, a static declaration only (never generated, never measured). The API image node makes the base sheet or pose; one SDXL checkpoint refines it locally at 1024 px wide with IPAdapter conditioning from the approved character anchors and one Canny ControlNet (batch 1, tiled VAE decode); a 4x upscale model, a resize to the output width and a cut-out follow. Sampler, IPAdapter and ControlNet values are starting points to tune in the live task, not claims. Credentials are read by the node at run time, never stored here.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file)."
+  },
+  "model": {
+   "type": "string",
+   "default": "cx/gpt-5.6-sol-image",
+   "description": "Image model id served through the NineRouterImage node."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "1024x1024",
+    "1536x1024"
+   ],
+   "default": "1024x1024",
+   "description": "Requested size of the API base; only square and landscape, so the local stage stays at 1024 px wide. The gateway may return another size (QA checks per purpose)."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "auto",
+   "description": "Image quality."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "auto",
+   "description": "Background mode of the API base."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  },
+  "seed": {
+   "type": "int",
+   "default": 0,
+   "description": "Seed of the local refine sampler (recorded in the run)."
+  },
+  "output_width": {
+   "type": "int",
+   "default": 2048,
+   "description": "Width in px of the saved image after the upscale; the height keeps the aspect."
+  }
+ },
+ "requires": {
+  "profile": "local-8gb",
+  "peak_vram_gb": 7.0,
+  "ram_gb": 24,
+  "packs": [
+   "comfyui_ipadapter_plus",
+   "comfyui_controlnet_aux",
+   "cut-out (BiRefNet or rembg)"
+  ],
+  "models": [
+   {
+    "kind": "checkpoints",
+    "name": "sd_xl_base_1.0.safetensors",
+    "size_gb": 6.9
+   },
+   {
+    "kind": "controlnet",
+    "name": "controlnet-canny-sdxl-1.0.safetensors",
+    "size_gb": 2.5
+   },
+   {
+    "kind": "ipadapter",
+    "name": "ip-adapter-plus_sdxl_vit-h.safetensors",
+    "size_gb": 0.8
+   },
+   {
+    "kind": "clip_vision",
+    "name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+    "size_gb": 2.5
+   },
+   {
+    "kind": "upscale_models",
+    "name": "RealESRGAN_x4plus.pth",
+    "size_gb": 0.07
+   }
+  ]
+ },
+ "anchor_target": {
+  "node": "9",
+  "input": "image"
+ },
+ "primary_node": "2",
+ "output_node": "21",
+ "workflow": {
+  "1": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
+   }
+  },
+  "2": {
+   "class_type": "NineRouterImage",
+   "inputs": {
+    "user_prompt": [
+     "1",
+     0
+    ],
+    "model": "{{model}}",
+    "size": "{{size}}",
+    "quality": "{{quality}}",
+    "background": "{{background}}"
+   },
+   "_meta": {
+    "title": "Generate base sheet or pose"
+   }
+  },
+  "3": {
+   "class_type": "CheckpointLoaderSimple",
+   "inputs": {
+    "ckpt_name": "sd_xl_base_1.0.safetensors"
+   },
+   "_meta": {
+    "title": "Load SDXL checkpoint"
+   }
+  },
+  "4": {
+   "class_type": "IPAdapterUnifiedLoader",
+   "inputs": {
+    "model": [
+     "3",
+     0
+    ],
+    "preset": "PLUS (high strength)"
+   },
+   "_meta": {
+    "title": "Load IPAdapter PLUS"
+   }
+  },
+  "5": {
+   "class_type": "ControlNetLoader",
+   "inputs": {
+    "control_net_name": "controlnet-canny-sdxl-1.0.safetensors"
+   },
+   "_meta": {
+    "title": "Load Canny ControlNet"
+   }
+  },
+  "6": {
+   "class_type": "UpscaleModelLoader",
+   "inputs": {
+    "model_name": "RealESRGAN_x4plus.pth"
+   },
+   "_meta": {
+    "title": "Load 4x upscale model"
+   }
+  },
+  "7": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "2",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": 1024,
+    "height": 0,
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Scale base to 1024 wide"
+   }
+  },
+  "8": {
+   "class_type": "CannyEdgePreprocessor",
+   "inputs": {
+    "image": [
+     "7",
+     0
+    ],
+    "low_threshold": 100,
+    "high_threshold": 200,
+    "resolution": 1024
+   },
+   "_meta": {
+    "title": "Extract base outlines"
+   }
+  },
+  "9": {
+   "class_type": "IPAdapterAdvanced",
+   "inputs": {
+    "model": [
+     "4",
+     0
+    ],
+    "ipadapter": [
+     "4",
+     1
+    ],
+    "image": [
+     "7",
+     0
+    ],
+    "weight": 0.6,
+    "weight_type": "linear",
+    "combine_embeds": "concat",
+    "start_at": 0.0,
+    "end_at": 1.0,
+    "embeds_scaling": "V only"
+   },
+   "_meta": {
+    "title": "Apply character anchor"
+   }
+  },
+  "10": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": [
+     "1",
+     0
+    ],
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode reviewed prompt"
+   }
+  },
+  "11": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "text": "blurry, low quality, jpeg artifacts, watermark, signature, text, extra limbs, deformed hands, cropped",
+    "clip": [
+     "3",
+     1
+    ]
+   },
+   "_meta": {
+    "title": "Encode negative prompt"
+   }
+  },
+  "12": {
+   "class_type": "ControlNetApplyAdvanced",
+   "inputs": {
+    "positive": [
+     "10",
+     0
+    ],
+    "negative": [
+     "11",
+     0
+    ],
+    "control_net": [
+     "5",
+     0
+    ],
+    "image": [
+     "8",
+     0
+    ],
+    "strength": 0.5,
+    "start_percent": 0.0,
+    "end_percent": 0.8,
+    "vae": [
+     "3",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Hold the base outlines"
+   }
+  },
+  "13": {
+   "class_type": "VAEEncode",
+   "inputs": {
+    "pixels": [
+     "7",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Encode scaled base"
+   }
+  },
+  "14": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "9",
+     0
+    ],
+    "seed": "{{seed}}",
+    "steps": 24,
+    "cfg": 5.5,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+    "positive": [
+     "12",
+     0
+    ],
+    "negative": [
+     "12",
+     1
+    ],
+    "latent_image": [
+     "13",
+     0
+    ],
+    "denoise": 0.4
+   },
+   "_meta": {
+    "title": "Refine locally (img2img)"
+   }
+  },
+  "15": {
+   "class_type": "VAEDecodeTiled",
+   "inputs": {
+    "samples": [
+     "14",
+     0
+    ],
+    "vae": [
+     "3",
+     2
+    ],
+    "tile_size": 512,
+    "overlap": 64,
+    "temporal_size": 64,
+    "temporal_overlap": 8
+   },
+   "_meta": {
+    "title": "Decode in tiles"
+   }
+  },
+  "16": {
+   "class_type": "ImageUpscaleWithModel",
+   "inputs": {
+    "upscale_model": [
+     "6",
+     0
+    ],
+    "image": [
+     "15",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Upscale 4x"
+   }
+  },
+  "17": {
+   "class_type": "ImageScale",
+   "inputs": {
+    "image": [
+     "16",
+     0
+    ],
+    "upscale_method": "lanczos",
+    "width": "{{output_width}}",
+    "height": 0,
+    "crop": "disabled"
+   },
+   "_meta": {
+    "title": "Resize to output width"
+   }
+  },
+  "18": {
+   "class_type": "InspyrenetRembg",
+   "inputs": {
+    "image": [
+     "17",
+     0
+    ],
+    "torchscript_jit": "default"
+   },
+   "_meta": {
+    "title": "Cut out the character"
+   }
+  },
+  "19": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "2",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview API base"
+   }
+  },
+  "20": {
+   "class_type": "PreviewImage",
+   "inputs": {
+    "images": [
+     "15",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview refined image"
+   }
+  },
+  "21": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "18",
+     0
+    ],
+    "filename_prefix": "{{filename_prefix}}-character"
+   },
+   "_meta": {
+    "title": "Save character image"
+   }
+  }
+ },
+ "ui": {
+  "groups": [
+   {
+    "title": "Prompt",
+    "color": "pale_blue",
+    "nodes": [
+     "1"
+    ]
+   },
+   {
+    "title": "Generate",
+    "color": "green",
+    "nodes": [
+     "2"
+    ]
+   },
+   {
+    "title": "Models",
+    "color": "brown",
+    "nodes": [
+     "3",
+     "4",
+     "5",
+     "6"
+    ]
+   },
+   {
+    "title": "Refine (local)",
+    "color": "blue",
+    "nodes": [
+     "7",
+     "8",
+     "9",
+     "10",
+     "11",
+     "12",
+     "13",
+     "14",
+     "15"
+    ]
+   },
+   {
+    "title": "Post-process",
+    "color": "yellow",
+    "nodes": [
+     "16",
+     "17",
+     "18"
+    ]
+   },
+   {
+    "title": "Preview",
+    "color": "red",
+    "nodes": [
+     "19",
+     "20"
+    ]
+   },
+   {
+    "title": "Output",
+    "color": "purple",
+    "nodes": [
+     "21"
+    ]
+   }
+  ],
+  "notes": [
+   {
+    "text": "The reviewed prompt; render fills it from prompt.md. It feeds the image node and the positive encoder, so every sent prompt equals the recorded one. Edit prompt.md and re-review, never this node.",
+    "group": "Prompt"
+   },
+   {
+    "text": "The one API image node makes the high-quality base: the character sheet (ref-3d purposes) or the pose (sprite-2d). Only square and landscape sizes are offered, so the local stage works at 1024 px wide.",
+    "group": "Generate"
+   },
+   {
+    "text": "Local loaders (UNTESTED on RTX 5060): one SDXL checkpoint, the IPAdapter PLUS preset with its CLIP vision model, one Canny ControlNet and a 4x upscale model. The requires block lists these model files by name. The cut-out pack fetches its own InSPyReNet weight on its first run, so get the user's yes or place the weight before the first run.",
+    "group": "Models"
+   },
+   {
+    "text": "Local refine pass (UNTESTED on RTX 5060): the base is scaled to 1024 px wide, then refined by img2img at batch 1 with a tiled VAE decode. IPAdapter takes the scaled base and, at render, the approved character anchors of the style lock batched after it. One ControlNet holds the base outlines: Canny is the shipped choice, a pose or depth ControlNet is the intended swap once known-nodes has that preprocessor. Sampler, denoise, IPAdapter and ControlNet values are starting points to tune in the live task, not claims. If the gateway returns a portrait base, stop: the scaled image would be taller than 1024 px.",
+    "group": "Refine (local)"
+   },
+   {
+    "text": "Upscale the RGB decode with the 4x model, resize to output_width (aspect kept), then cut out the background last: an upscale model cannot take RGBA. The cut-out also runs on ref-3d sheets; their QA accepts alpha. The cut-out pack fetches its own InSPyReNet weight on its first run (not listed in requires.models), so get the user's yes or place the weight before the first run. UNTESTED on RTX 5060.",
+    "group": "Post-process"
+   },
+   {
+    "text": "Compare the API base with the refined decode before the upscale: same character, pose and views, no drift from the anchor. Neither preview is the deliverable.",
+    "group": "Preview"
+   },
+   {
+    "text": "The only saved file: the run prefix plus the -character suffix (the cut-out image with alpha).",
+    "group": "Output"
+   }
+  ]
+ }
+}

@@ -5,10 +5,10 @@ Usage:
   assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
   assetgen.py show ID [--kind K] [--authoring DIR] [--json]
   assetgen.py resolve --purpose P [--style S] [--template T] [--family F] [--style-override REASON] [--authoring DIR]
-                      [--max-outputs N] [--out FILE] [--verbose] [--json]
+                      [--profile api-only|local-4gb|local-8gb|auto] [--max-outputs N] [--out FILE] [--verbose] [--json]
   assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
-  assetgen.py graph-lint [PATH...] [--run RUN] [--authoring DIR] [--json]
+  assetgen.py graph-lint [PATH...] [--run RUN] [--profile PROFILE] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
@@ -32,16 +32,24 @@ warnings: a selected anchor of another family than the run's, or the anchors anc
 also recorded as spec.warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
 
 Workflow style guide (scripts/assetgen/graphstyle.py): every API node has a title and sits in exactly one group;
-group titles come from Prompt, References, Generate, Post-process, Preview, Output, left to right in that order, each
-with a Note; the reviewed prompt is linked directly from PrimitiveStringMultiline to NineRouterImage.user_prompt (in a
-template that node holds {{prompt}}); exactly one NineRouterImage; every SaveImage sits in Output with an inline
-filename suffix (intermediates use PreviewImage); no static LoadImage file name. lint adds one assetgen-graph-style row
-per template (a legacy template without a ui block WARNs). graph-lint checks only that: each PATH is a template (layer
-or standalone) or a ComfyUI frontend workflow (a JSON object with a "nodes" list, e.g. a run's workflow.ui.json);
---run RUN adds <run>/workflow.ui.json with SaveImage suffixes checked against assetgen/<run directory name> (a frontend
-PATH uses its extra.assetgen.run_id; without one each SaveImage FAILs as unchecked); neither: every core and game
-template. Exit 1 when a row FAILs, 0 otherwise (WARN included),
-2 for usage (a PATH missing, not JSON or neither kind, a --run without workflow.ui.json).
+group titles come from Prompt, References, Generate, Models, Refine (local), Post-process, Preview, Output, left to
+right in that order (any subsequence), each with a Note; the reviewed prompt is one PrimitiveStringMultiline (in a
+template it holds {{prompt}}) linked directly into NineRouterImage.user_prompt and every positive text input of a
+local encoder (CLIPTextEncode, CLIPTextEncodeSDXL); exactly one NineRouterImage, or none when a local KSampler
+generates; every SaveImage sits in Output with an inline filename suffix (intermediates use PreviewImage); no static
+LoadImage file name. Profile rules (template form; UNTESTED on RTX 5060: static checks of the template's declarations
+against the planning thresholds of data/hardware.json, nothing is generated or measured): requires.peak_vram_gb fits
+the profile, no two distinct checkpoints without requires.offload true, at most one ControlNet per sampler path, batch
+size 1, VAEDecodeTiled for images above 1024 px, no fp16 or unquantized Flux under local-8gb (no Flux under
+local-4gb), and a --profile below the template's requires.profile; each names the node and the profile. lint adds one
+assetgen-graph-style row per template (its own requires.profile; a legacy template without a ui block WARNs).
+graph-lint checks only that: each PATH is a template (layer or standalone) or a ComfyUI frontend workflow (a JSON
+object with a "nodes" list, e.g. a run's workflow.ui.json); --run RUN adds <run>/workflow.ui.json with SaveImage
+suffixes checked against assetgen/<run directory name> (a frontend PATH uses its extra.assetgen.run_id; without one
+each SaveImage FAILs as unchecked); neither: every core and game template. --profile PROFILE (a data/hardware.json
+profile id) lints template rows under that profile instead of their requires.profile; frontend rows are unchanged.
+Exit 1 when a row FAILs, 0 otherwise (WARN included), 2 for usage (a PATH missing, not JSON or neither kind, a --run
+without workflow.ui.json, a --profile that is not a hardware profile id).
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
@@ -52,6 +60,15 @@ params before the first render), and each review is bound to exactly those param
 Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
 style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
 
+Profile routing (UNTESTED on RTX 5060: nothing was generated or measured on the target machine): resolve --profile
+picks the template per purpose and hardware profile (data/hardware.json) from scripts/assetgen/data/template-profiles.json
+(a game layer adds or replaces entries in <authoring>/assetgen/template-profiles.json; a routed template that no layer
+has yet falls back to the next lower profile, finally to the purpose's default_template). --profile auto reads
+<state>/assetgen/hardware-profile.json (the persistent state dir), the saved output of comfy-desktop-setup.py --check
+--json, else api-only. A template whose requires.profile is above the chosen profile is refused (exit 1), a --template
+too; --template still overrides the route. The spec records spec.profile = {id, requested, source, template,
+template_from, requires} and resolve prints a "profile ..." line; without --profile nothing changes.
+
 Style lock (scripts/assetgen/stylelock.py): resolve picks the family (--family, else the purpose's default_family) and
 the style (stylelock.choose: <authoring>/assetgen/project.json, its allowed_styles and families; a style outside them
 or a deprecated style is refused unless --style-override REASON, recorded as spec.style_lock.override and in run.md;
@@ -59,10 +76,16 @@ without project.json the purpose default_style as before) and records spec.style
 family_source, style: {style_id, version, sha256}, override, max_references, references: the selected anchors (valid
 active anchors of that style version, deterministic order, capped) with reason[] per pick, rejections: the relevant
 ones}. render wires each selected anchor as a LoadImage (anchor-<id>.png) and a chain of ImageBatch nodes into
-NineRouterImage.reference_images (an image-edit reference stays first). promote-anchor writes a proposed anchor from a
-manifested run output (a person approves it); reject records a rejected asset or direction; drift lists gen-runs,
-anchors and rejections recorded on an older style version or another style hash, and with project.json those under a
-style id that is neither the project style nor a family style (style-id-mismatch, naming the project style).
+the template's anchor_target (NineRouterImage.reference_images by default, or IPAdapterAdvanced.image); an existing
+image link stays first (an image-edit reference); the local IPAdapter path is UNTESTED on RTX 5060. render refuses an
+anchor_target or primary_node that names no such node or input (template_target_errors, from lint.py; lint FAILs such
+a template too). primary_node names the
+generation node whose size the run requests (requested_size); render requires it when the graph has more than one
+NineRouterImage (graph-lint one-image-node still wants exactly one in a staged template). promote-anchor writes a
+proposed anchor from a manifested run output (a person approves it); reject records a rejected asset or direction;
+drift lists gen-runs, anchors and rejections recorded on an older style version or another style hash, and with
+project.json those under a style id that is neither the project style nor a family style (style-id-mismatch, naming
+the project style).
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
@@ -104,8 +127,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       pixels are no longer the ones defringe wrote; embed keeps them)
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   references/anchor-<id>.png  render --run: a copy of each style-lock anchor spec.style_lock.references selected
-                      (refused when the anchor's image no longer has the sha256 resolve selected); the agent uploads
-                      every references/* file with comfy-mcp upload_file under its name before running
+                      for the anchor_target input (refused when the anchor's image no longer has the sha256 resolve
+                      selected); the agent uploads every references/* file with comfy-mcp upload_file under its name
+                      before running
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
@@ -143,6 +167,12 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest()). A re-run keeps
                       an approved status while nothing the approval binds changed (approval.keep_status: the same
                       run.md bytes, so the record's rev still matches), else resets to proposed and names the change
+                      Local stages are UNTESTED on RTX 5060: spec.generation.local records models, LoRAs, sampler
+                      settings and the requires hash. Model sha256 values come only from the read-only JSON cache
+                      <persistent state dir>/comfy/model-hashes.json (or ASSETGEN_MODEL_HASHES when set): schema
+                      rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256; missing entries are
+                      unverified. The record follows the machine's cache: re-running manifest with a different cache
+                      changes run.md and resets an approved run to proposed. This record makes no measured or quality claim.
   approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
                       (approval.approve_record: refuses an agent or model name and names the run records as agents or
                       reviewers; sets run.md status approved; rev = the git blob id of that run.md). An agent runs it
@@ -205,6 +235,8 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))  # fstate; engine modules win
+import fstate  # noqa: E402
 import approval  # noqa: E402
 import budget  # noqa: E402
 import finalize  # noqa: E402
@@ -268,14 +300,61 @@ def read_prompt(path):
 
 # -- resolve ---------------------------------------------------------------------------------------------------
 
-def resolve_spec(purpose, style, template, authoring, family=None, override=None):
+RECORDED_PROFILE = ("assetgen", "hardware-profile.json")  # under fstate.persistent(): saved comfy-desktop-setup --check --json
+
+
+def recorded_profile_path():
+    """Where --profile auto reads the machine's profile (the saved comfy-desktop-setup.py --check --json output)."""
+    return os.path.abspath(os.path.join(fstate.persistent(), *RECORDED_PROFILE))
+
+
+def choose_profile(requested):
+    """({"id", "requested", "source"}, warnings) for resolve --profile: a profile id as given, or auto: the recorded
+    profile (recorded_profile_path), else api-only (with a warning when the file exists but cannot be used)."""
+    if requested != "auto":
+        return {"id": requested, "requested": requested, "source": "--profile"}, []
+    path = recorded_profile_path().replace(os.sep, "/")
+    if not os.path.exists(path):
+        return {"id": "api-only", "requested": "auto", "source": "auto: no recorded profile at " + path}, []
+    reason = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, ValueError):
+        reason = "is not readable JSON"
+    if reason is None:
+        prof = obj.get("profile") if isinstance(obj, dict) else None
+        ident = prof.get("id") if isinstance(prof, dict) else prof
+        if not isinstance(ident, str) or not ident:
+            reason = "has no profile id"
+        elif ident not in [p["id"] for p in layers.hardware_profiles()]:
+            reason = "names unknown profile %r" % ident
+        else:
+            return {"id": ident, "requested": "auto", "source": "recorded " + path}, []
+    return ({"id": "api-only", "requested": "auto", "source": "auto: " + path + " " + reason},
+            ["auto profile: %s; using api-only" % reason])
+
+
+def resolve_spec(purpose, style, template, authoring, family=None, override=None, profile=None):
     """layers.resolve with the style lock: stylelock.choose picks the family and style (project.json, refusals and
     the override), then spec.style_lock records the project, family, style ref, override, the selected anchors and
     the relevant rejections. stylelock.family_fallback (purpose, else project.json anchor_family_fallback) decides
     whether anchors of another family may fill the selection; spec.warnings names each such pick (and the anchors a
-    false fallback left out)."""
+    false fallback left out). profile (a choose_profile record; UNTESTED on RTX 5060): without a template the route
+    of layers.route_template picks it (its warnings go first); a template above the profile is refused (SpecError);
+    spec.profile records the choice. profile None: the spec is exactly as without profile routing."""
+    route_warnings, template_from = [], None
+    if profile is not None:
+        if template:
+            template_from = "--template"
+        else:
+            template, template_from, route_warnings = layers.route_template(purpose, profile["id"], authoring)
     choice = stylelock.choose(layers.load("purpose", purpose, authoring), authoring, family, style, override)
     spec = layers.resolve(purpose, choice["style_id"], template, authoring)
+    if profile is not None:
+        error = layers.profile_fit_error(spec["template"], profile["id"])
+        if error:
+            raise layers.SpecError(error)
     ref = stylelock.style_ref(spec["style"])
     cap = stylelock.max_references(spec["purpose"]["data"], spec["template"]["data"])
     picks, warnings = stylelock.select_with_warnings(
@@ -287,7 +366,19 @@ def resolve_spec(purpose, style, template, authoring, family=None, override=None
                           "style": ref, "override": choice["override"], "max_references": cap, "references": picks,
                           "rejections": rejections}
     spec["warnings"] = warnings  # cross-family anchor picks (resolve prints them; not part of the style lock record)
+    if profile is not None:
+        spec["warnings"] = route_warnings + spec["warnings"]
+        spec["profile"] = {"id": profile["id"], "requested": profile["requested"], "source": profile["source"],
+                           "template": spec["template"]["id"], "template_from": template_from,
+                           "requires": layers.template_requires_profile(spec["template"])}
     return spec
+
+
+def profile_line(prof):
+    """resolve's text line for spec.profile."""
+    return ("profile %s [%s], template %s [%s], requires %s" % (
+        prof["id"], prof["source"], prof["template"], prof["template_from"], prof["requires"])
+        + (" (local profiles are UNTESTED on RTX 5060)" if prof["id"] != "api-only" else ""))
 
 
 def style_lock_lines(lock):
@@ -391,7 +482,10 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewe
     if errors:
         return None, errors
     workflow = fill(tmpl.get("workflow", {}), values)
-    errors = wire_references(workflow, runfiles.style_lock_references(spec))
+    errors = template_target_errors(tmpl, workflow)
+    if errors:
+        return None, errors
+    errors = wire_references(workflow, runfiles.style_lock_references(spec), tmpl.get("anchor_target"))
     if errors:
         return None, errors
     for node in workflow.values():
@@ -402,23 +496,31 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewe
     return workflow, e
 
 
-def wire_references(workflow, picks):
+# anchor_target / primary_node validation lives in lint.py (lint runs it on the template, render on every filled workflow)
+ANCHOR_TARGETS = lint.ANCHOR_TARGETS
+template_target_errors = lint.template_target_errors
+
+
+def wire_references(workflow, picks, target=None):
     """Adds the selected style-lock anchors to workflow in place: one LoadImage per pick (image anchor-<id>.png) and
-    a chain of ImageBatch nodes feeding NineRouterImage.reference_images. An existing reference_images link (image-edit)
+    a chain of ImageBatch nodes feeding the target input (default NineRouterImage.reference_images). An existing link
     stays the first image. New node ids are the next free integers. Returns errors ([] when nothing to wire)."""
     if not picks:
         return []
-    targets = [n for n in workflow.values() if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
-    if len(targets) != 1:
-        return ["style lock: the template needs exactly one NineRouterImage node to take reference images, found %d" % len(targets)]
-    inputs = targets[0]["inputs"]
+    if target is None:
+        targets = [n for n in workflow.values() if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
+        if len(targets) != 1:
+            return ["style lock: the template needs exactly one NineRouterImage node to take reference images, found %d" % len(targets)]
+        inputs, input_name = targets[0]["inputs"], "reference_images"
+    else:
+        inputs, input_name = workflow[target["node"]].setdefault("inputs", {}), target["input"]
     next_id = [max([int(k) for k in workflow if str(k).isdigit()] or [0])]
 
     def add(node):
         next_id[0] += 1
         workflow[str(next_id[0])] = node
         return [str(next_id[0]), 0]
-    images = [inputs["reference_images"]] if lint.is_link(inputs.get("reference_images")) else []
+    images = [inputs[input_name]] if lint.is_link(inputs.get(input_name)) else []
     for pick in picks:
         aid = pick.get("anchor_id")
         if not isinstance(aid, str) or not stylelock.ID.match(aid):
@@ -429,16 +531,17 @@ def wire_references(workflow, picks):
     for i, image in enumerate(images[1:], 1):
         link = add({"class_type": "ImageBatch", "inputs": {"image1": link, "image2": image},
                     "_meta": {"title": "Reference batch %d" % i}})
-    inputs["reference_images"] = link
+    inputs[input_name] = link
     return []
 
 
 REFERENCES = "References"
 REFERENCES_NOTE = ("Style-lock anchors added by render: references/anchor-<id>.png, batched into the image node "
                    "reference_images.")
+REFERENCES_NOTE_TARGET = "Style-lock anchors added by render: references/anchor-<id>.png, batched into %s.%s."
 
 
-def ui_with_references(ui, workflow, template_workflow):
+def ui_with_references(ui, workflow, template_workflow, note=REFERENCES_NOTE):
     """The template ui block for to_ui with the nodes render added to the template workflow (wire_references: style-lock
     anchors and their ImageBatch chain) in the References group: the existing group of that title, else a new one
     (palette color cyan, one Note) inserted at its graphstyle.STAGES position. A copy; spec and template data are never
@@ -458,7 +561,7 @@ def ui_with_references(ui, workflow, template_workflow):
     at = next((i for i, g in enumerate(groups) if isinstance(g, dict) and g.get("title") in graphstyle.STAGES
                and graphstyle.STAGES.index(g["title"]) > rank), len(groups))
     groups.insert(at, {"title": REFERENCES, "color": "cyan", "nodes": added})
-    ui["notes"] = list(ui.get("notes") or []) + [{"text": REFERENCES_NOTE, "group": REFERENCES}]
+    ui["notes"] = list(ui.get("notes") or []) + [{"text": note, "group": REFERENCES}]
     return ui
 
 
@@ -528,10 +631,35 @@ def review_requirements_sha256(run_dir, spec, phase, params=None):
 def workflow_model(run_dir, spec):
     wf = os.path.join(run_dir, "workflow.json")
     if os.path.isfile(wf):
-        for node in read_json(wf, "workflow").values():
+        workflow = read_json(wf, "workflow")
+        for node in workflow.values():
             if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
                 return node.get("inputs", {}).get("model")
+        for node_id in sorted(workflow, key=lambda n: (0, int(n), n) if str(n).isdigit() else (1, str(n))):
+            node = workflow[node_id]
+            if isinstance(node, dict) and node.get("class_type") == "CheckpointLoaderSimple":
+                inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+                model = inputs.get("ckpt_name")
+                return model if isinstance(model, str) else spec.get("params", {}).get("model")
     return spec.get("params", {}).get("model")
+
+
+def model_hashes():
+    """Read verified model hashes from the optional comfy-desktop-setup cache; ignore malformed entries."""
+    path = os.environ.get("ASSETGEN_MODEL_HASHES") or os.path.join(fstate.persistent(), "comfy", "model-hashes.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    if not isinstance(cache, dict) or cache.get("schema") != "rpg-factory.comfy-model-hashes/1":
+        return {}
+    rows = cache.get("models")
+    if not isinstance(rows, list):
+        return {}
+    return {row["kind"] + "/" + row["name"]: row["sha256"] for row in rows
+            if isinstance(row, dict) and isinstance(row.get("kind"), str) and isinstance(row.get("name"), str)
+            and isinstance(row.get("sha256"), str) and runfiles.SHA256.fullmatch(row["sha256"])}
 
 
 # -- review-cmd ------------------------------------------------------------------------------------------------
@@ -1211,6 +1339,11 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
             "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
+    wf_path = os.path.join(run_dir, "workflow.json")
+    workflow = read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None
+    local = runfiles.local_generation(workflow, spec, model_hashes())
+    if local is not None:
+        front["spec"]["generation"]["local"] = local
     if isinstance(spec.get("style_lock"), dict):  # a spec from before the style lock keeps its run.md shape
         front["spec"]["style_lock"] = spec["style_lock"]
     front["status"] = approval.keep_status(old, front)
@@ -1257,6 +1390,19 @@ def manifest_text(front, run_dir=None, newline="\n"):
             "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
                                                      ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
             "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none")]
+    local = s["generation"].get("local")
+    if local is not None:
+        models = local["models"]
+        loras = local["loras"]
+        rows = models + loras
+        model_text = ", ".join("`%s/%s`" % (r["kind"], r["name"]) for r in models) or "none"
+        lora_text = ", ".join("`%s` %s/%s" % (r["name"], r["strength_model"], r["strength_clip"]) for r in loras) or "none"
+        sampler_text = "; ".join("`%s`/`%s` steps %s cfg %s denoise %s seed %s (%s)" % (
+            r["sampler_name"], r["scheduler"], r["steps"], r["cfg"], r["denoise"], r["seed"],
+            "param " + r["seed_param"] if r["seed_param"] is not None else "not a rendered param")
+            for r in local["samplers"]) or "none"
+        body.insert(5, "- Local stage (UNTESTED on RTX 5060): models %s (%d of %d sha256 unverified), LoRAs %s, sampler %s"
+                    % (model_text, sum(not r["verified"] for r in rows), len(rows), lora_text, sampler_text))
     fringe = defringe_line(run_dir, s["outputs"]) if run_dir else None
     if fringe:
         body.append(fringe)
@@ -1482,6 +1628,8 @@ def resolve_text(spec, verbose):
     """resolve's text output: a short summary; verbose adds the source of every param, hint and field."""
     head = ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(
         x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
+    if spec.get("profile"):
+        head.append(profile_line(spec["profile"]))
     if verbose:
         return "\n".join(head
                          + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
@@ -1534,11 +1682,25 @@ def read_graph_json(path, what):
         fail("graph-lint: %s %s is not readable JSON (%s)" % (what, path, exc), 2)
 
 
-def graph_lint_rows(paths, run, authoring):
+def graph_lint_hardware(profile):
+    """The hardware profiles graph-lint passes to template rows (lint.hardware_or_none). A --profile must be one of
+    their ids, else exit 2 (usage) naming them; with a malformed data/hardware.json a --profile exits 2 too."""
+    hardware = lint.hardware_or_none()
+    if profile is not None and hardware is None:
+        fail("graph-lint --profile %s: data/hardware.json is missing or malformed; no profile can be checked" % profile, 2)
+    if profile is not None and profile not in hardware:
+        fail("graph-lint --profile %s: one of %s (data/hardware.json)" % (profile, ", ".join(hardware)), 2)
+    return hardware
+
+
+def graph_lint_rows(paths, run, authoring, profile=None):
     """assetgen-graph-style rows of graph-lint: each PATH (a template file or a ComfyUI frontend workflow), the run's
     workflow.ui.json, or with neither every core and game template. Exits 2 for a PATH that is missing, not JSON or
-    neither kind, and for a --run without workflow.ui.json. The --run row checks SaveImage suffixes against the run's
-    own prefix (runfiles.run_filename_prefix of the run directory name), not the file's extra.assetgen.run_id."""
+    neither kind, for a --run without workflow.ui.json and for a --profile that is not a data/hardware.json profile id.
+    Template rows get profile (None: each template's own requires.profile) and the hardware profiles; frontend rows
+    are unchanged. The --run row checks SaveImage suffixes against the run's own prefix (runfiles.run_filename_prefix
+    of the run directory name), not the file's extra.assetgen.run_id."""
+    hardware = graph_lint_hardware(profile)
     known, rows = lint.known_nodes(), []
 
     def template(path):
@@ -1546,7 +1708,9 @@ def graph_lint_rows(paths, run, authoring):
         shown = lint.display(path, authoring)
         if err is not None:  # a layer template that does not load: no graph to lint
             return {"path": shown, "check": graphstyle.CHECK, "state": "FAIL", "reasons": ["layout: " + err]}
-        return graphstyle.template_row(data, known, shown) if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        return graphstyle.template_row(data, known, shown, profile=profile, hardware=hardware)
 
     def frontend(path, raw, prefix=None):
         if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
@@ -1585,6 +1749,9 @@ def main(argv=None):
     c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
     c.add_argument("--family"); c.add_argument("--style-override", metavar="REASON")
     c.add_argument("--authoring"); c.add_argument("--out")
+    c.add_argument("--profile", metavar="PROFILE", help="pick the template for this hardware profile: api-only, "
+                   "local-4gb, local-8gb or auto (the profile saved from comfy-desktop-setup.py --check --json, else "
+                   "api-only); local profiles are UNTESTED on RTX 5060")
     c.add_argument("--max-outputs", metavar="N", help="advisory limit of generations per run series, recorded as "
                    "spec.budget.max_outputs (default %d)" % budget.DEFAULT_MAX_OUTPUTS)
     c.add_argument("--verbose", action="store_true", help="also print the source of every param, hint and field")
@@ -1600,6 +1767,8 @@ def main(argv=None):
     c.add_argument("--param", action="append", default=[])
     c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
     c = sp("graph-lint"); c.add_argument("paths", nargs="*"); run_arg(c, False); c.add_argument("--json", action="store_true")
+    c.add_argument("--profile", metavar="PROFILE", help="lint template rows under this data/hardware.json profile "
+                   "instead of their requires.profile (static checks, UNTESTED on RTX 5060)")
     c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); run_arg(c)
     c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
     c = sp("embed"); run_arg(c); c.add_argument("--json", action="store_true")
@@ -1654,7 +1823,15 @@ def main(argv=None):
                     max_outputs = budget.parse_max(a.max_outputs)
                 except ValueError as exc:
                     fail("--max-outputs %s: %s" % (a.max_outputs, exc), 2)
-            spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override)
+            profile, profile_warnings = None, []
+            if a.profile is not None:
+                ids = [p["id"] for p in layers.hardware_profiles()] + ["auto"]
+                if a.profile not in ids:
+                    fail("--profile %s: one of %s (data/hardware.json)" % (a.profile, ", ".join(ids)), 2)
+                profile, profile_warnings = choose_profile(a.profile)
+            spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override, profile)
+            if profile is not None:
+                spec["warnings"] += profile_warnings
             spec["budget"] = {"max_outputs": max_outputs}
             run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
             if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
@@ -1683,9 +1860,12 @@ def main(argv=None):
             if not errors:
                 try:
                     tmpl = spec["template"]["data"]
+                    target = tmpl.get("anchor_target")
+                    note = (REFERENCES_NOTE_TARGET % (workflow[target["node"]]["class_type"], target["input"])
+                            if target is not None else REFERENCES_NOTE)
                     ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
                                           {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}},
-                                          ui_with_references(tmpl.get("ui"), workflow, tmpl.get("workflow")))
+                                          ui_with_references(tmpl.get("ui"), workflow, tmpl.get("workflow"), note))
                 except ValueError as exc:
                     errors.append("workflow.ui.json: %s" % exc)
             if errors:
@@ -1699,7 +1879,8 @@ def main(argv=None):
             results = [row for p in (a.paths or lint.default_paths(authoring)) for row in lint.lint_rows(p, authoring)]
             return validation_report(results, "assetgen-lint", "lint", a.json)
         if a.cmd == "graph-lint":
-            return validation_report(graph_lint_rows(a.paths, a.run, authoring), "assetgen-graph-lint", "graph-lint", a.json)
+            return validation_report(graph_lint_rows(a.paths, a.run, authoring, a.profile), "assetgen-graph-lint",
+                                     "graph-lint", a.json)
         if a.cmd == "review-cmd":
             cmd = review_cmd(a.run, a.phase, a.codex, not a.no_write)
             emit(cmd, a.json, cmd["shell"])

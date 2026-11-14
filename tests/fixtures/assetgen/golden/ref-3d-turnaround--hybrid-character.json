@@ -1,0 +1,332 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for ref-3d-turnaround: one subject, centered."
+  }
+ },
+ "10": {
+  "_meta": {
+   "title": "Encode reviewed prompt"
+  },
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    1
+   ],
+   "text": [
+    "1",
+    0
+   ]
+  }
+ },
+ "11": {
+  "_meta": {
+   "title": "Encode negative prompt"
+  },
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    1
+   ],
+   "text": "blurry, low quality, jpeg artifacts, watermark, signature, text, extra limbs, deformed hands, cropped"
+  }
+ },
+ "12": {
+  "_meta": {
+   "title": "Hold the base outlines"
+  },
+  "class_type": "ControlNetApplyAdvanced",
+  "inputs": {
+   "control_net": [
+    "5",
+    0
+   ],
+   "end_percent": 0.8,
+   "image": [
+    "8",
+    0
+   ],
+   "negative": [
+    "11",
+    0
+   ],
+   "positive": [
+    "10",
+    0
+   ],
+   "start_percent": 0.0,
+   "strength": 0.5,
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ },
+ "13": {
+  "_meta": {
+   "title": "Encode scaled base"
+  },
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "7",
+    0
+   ],
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ },
+ "14": {
+  "_meta": {
+   "title": "Refine locally (img2img)"
+  },
+  "class_type": "KSampler",
+  "inputs": {
+   "cfg": 5.5,
+   "denoise": 0.4,
+   "latent_image": [
+    "13",
+    0
+   ],
+   "model": [
+    "9",
+    0
+   ],
+   "negative": [
+    "12",
+    1
+   ],
+   "positive": [
+    "12",
+    0
+   ],
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "karras",
+   "seed": 0,
+   "steps": 24
+  }
+ },
+ "15": {
+  "_meta": {
+   "title": "Decode in tiles"
+  },
+  "class_type": "VAEDecodeTiled",
+  "inputs": {
+   "overlap": 64,
+   "samples": [
+    "14",
+    0
+   ],
+   "temporal_overlap": 8,
+   "temporal_size": 64,
+   "tile_size": 512,
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ },
+ "16": {
+  "_meta": {
+   "title": "Upscale 4x"
+  },
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "image": [
+    "15",
+    0
+   ],
+   "upscale_model": [
+    "6",
+    0
+   ]
+  }
+ },
+ "17": {
+  "_meta": {
+   "title": "Resize to output width"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "disabled",
+   "height": 0,
+   "image": [
+    "16",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 2048
+  }
+ },
+ "18": {
+  "_meta": {
+   "title": "Cut out the character"
+  },
+  "class_type": "InspyrenetRembg",
+  "inputs": {
+   "image": [
+    "17",
+    0
+   ],
+   "torchscript_jit": "default"
+  }
+ },
+ "19": {
+  "_meta": {
+   "title": "Preview API base"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ]
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate base sheet or pose"
+  },
+  "class_type": "NineRouterImage",
+  "inputs": {
+   "background": "opaque",
+   "model": "cx/gpt-5.6-sol-image",
+   "quality": "high",
+   "size": "1536x1024",
+   "user_prompt": [
+    "1",
+    0
+   ]
+  }
+ },
+ "20": {
+  "_meta": {
+   "title": "Preview refined image"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "15",
+    0
+   ]
+  }
+ },
+ "21": {
+  "_meta": {
+   "title": "Save character image"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-ref-3d-turnaround--hybrid-character-001-character",
+   "images": [
+    "18",
+    0
+   ]
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Load SDXL checkpoint"
+  },
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "sd_xl_base_1.0.safetensors"
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Load IPAdapter PLUS"
+  },
+  "class_type": "IPAdapterUnifiedLoader",
+  "inputs": {
+   "model": [
+    "3",
+    0
+   ],
+   "preset": "PLUS (high strength)"
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Load Canny ControlNet"
+  },
+  "class_type": "ControlNetLoader",
+  "inputs": {
+   "control_net_name": "controlnet-canny-sdxl-1.0.safetensors"
+  }
+ },
+ "6": {
+  "_meta": {
+   "title": "Load 4x upscale model"
+  },
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "RealESRGAN_x4plus.pth"
+  }
+ },
+ "7": {
+  "_meta": {
+   "title": "Scale base to 1024 wide"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "disabled",
+   "height": 0,
+   "image": [
+    "2",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 1024
+  }
+ },
+ "8": {
+  "_meta": {
+   "title": "Extract base outlines"
+  },
+  "class_type": "CannyEdgePreprocessor",
+  "inputs": {
+   "high_threshold": 200,
+   "image": [
+    "7",
+    0
+   ],
+   "low_threshold": 100,
+   "resolution": 1024
+  }
+ },
+ "9": {
+  "_meta": {
+   "title": "Apply character anchor"
+  },
+  "class_type": "IPAdapterAdvanced",
+  "inputs": {
+   "combine_embeds": "concat",
+   "embeds_scaling": "V only",
+   "end_at": 1.0,
+   "image": [
+    "7",
+    0
+   ],
+   "ipadapter": [
+    "4",
+    1
+   ],
+   "model": [
+    "4",
+    0
+   ],
+   "start_at": 0.0,
+   "weight": 0.6,
+   "weight_type": "linear"
+  }
+ }
+}

@@ -1,0 +1,340 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Primary node is missing",
+  "description": "UNTESTED on RTX 5060: primary_node names node 99, which the workflow does not have; a lint FAIL fixture, nothing generated or measured.",
+  "params": {
+    "prompt": {
+      "type": "string",
+      "required": true,
+      "description": "Final reviewed prompt (filled from --prompt-file)."
+    },
+    "model": {
+      "type": "string",
+      "default": "cx/gpt-5.6-sol-image",
+      "description": "Image model id served through the NineRouterImage node."
+    },
+    "size": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+      ],
+      "default": "1024x1024",
+      "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+    },
+    "quality": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "auto",
+      "description": "Image quality."
+    },
+    "background": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "opaque",
+        "transparent"
+      ],
+      "default": "auto",
+      "description": "Background mode."
+    },
+    "filename_prefix": {
+      "type": "string",
+      "default": "assetgen/run",
+      "description": "SaveImage filename prefix in the ComfyUI output folder."
+    },
+    "seed": {
+      "type": "int",
+      "default": 123
+    }
+  },
+  "output_node": "2",
+  "workflow": {
+    "1": {
+      "class_type": "NineRouterImage",
+      "inputs": {
+        "user_prompt": [
+          "3",
+          0
+        ],
+        "model": "{{model}}",
+        "size": "{{size}}",
+        "quality": "{{quality}}",
+        "background": "{{background}}"
+      },
+      "_meta": {
+        "title": "Generate image"
+      }
+    },
+    "2": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "{{filename_prefix}}-final",
+        "images": [
+          "10",
+          0
+        ]
+      },
+      "_meta": {
+        "title": "Save image"
+      }
+    },
+    "3": {
+      "class_type": "PrimitiveStringMultiline",
+      "inputs": {
+        "value": "{{prompt}}"
+      },
+      "_meta": {
+        "title": "Prompt (Claude, Codex review <state>)"
+      }
+    },
+    "4": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "sdxl.safetensors"
+      },
+      "_meta": {
+        "title": "Load checkpoint"
+      }
+    },
+    "5": {
+      "class_type": "LoraLoader",
+      "inputs": {
+        "model": [
+          "4",
+          0
+        ],
+        "clip": [
+          "4",
+          1
+        ],
+        "lora_name": "style.safetensors",
+        "strength_model": 0.8,
+        "strength_clip": 0.7
+      },
+      "_meta": {
+        "title": "Apply style LoRA"
+      }
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": [
+          "3",
+          0
+        ],
+        "clip": [
+          "5",
+          1
+        ]
+      },
+      "_meta": {
+        "title": "Encode positive prompt"
+      }
+    },
+    "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry",
+        "clip": [
+          "5",
+          1
+        ]
+      },
+      "_meta": {
+        "title": "Encode negative prompt"
+      }
+    },
+    "8": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": [
+          "1",
+          0
+        ],
+        "vae": [
+          "4",
+          2
+        ]
+      },
+      "_meta": {
+        "title": "Encode base image"
+      }
+    },
+    "9": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "12",
+          0
+        ],
+        "seed": "{{seed}}",
+        "steps": 20,
+        "cfg": 5.5,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "positive": [
+          "6",
+          0
+        ],
+        "negative": [
+          "7",
+          0
+        ],
+        "latent_image": [
+          "8",
+          0
+        ],
+        "denoise": 0.45
+      },
+      "_meta": {
+        "title": "Refine image"
+      }
+    },
+    "10": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "9",
+          0
+        ],
+        "vae": [
+          "4",
+          2
+        ]
+      },
+      "_meta": {
+        "title": "Decode refined image"
+      }
+    },
+    "11": {
+      "class_type": "IPAdapterUnifiedLoader",
+      "inputs": {
+        "model": [
+          "5",
+          0
+        ],
+        "preset": "PLUS (high strength)"
+      },
+      "_meta": {
+        "title": "Load adapter"
+      }
+    },
+    "12": {
+      "class_type": "IPAdapterAdvanced",
+      "inputs": {
+        "model": [
+          "11",
+          0
+        ],
+        "ipadapter": [
+          "11",
+          1
+        ],
+        "image": [
+          "1",
+          0
+        ],
+        "weight": 0.8,
+        "weight_type": "linear",
+        "combine_embeds": "concat",
+        "start_at": 0.0,
+        "end_at": 1.0,
+        "embeds_scaling": "V only"
+      },
+      "_meta": {
+        "title": "Apply anchor conditioning"
+      }
+    }
+  },
+  "requires": {
+    "profile": "local-8gb",
+    "peak_vram_gb": 7.0,
+    "ram_gb": 16,
+    "packs": [
+      "comfyui_ipadapter_plus"
+    ],
+    "models": [
+      {
+        "kind": "checkpoints",
+        "name": "sdxl.safetensors",
+        "size_gb": 6.5
+      },
+      {
+        "kind": "loras",
+        "name": "style.safetensors",
+        "size_gb": 0.2
+      },
+      {
+        "kind": "ipadapter",
+        "name": "ip-adapter-plus_sdxl_vit-h.safetensors",
+        "size_gb": 0.8
+      },
+      {
+        "kind": "clip_vision",
+        "name": "CLIP-ViT-H-14.safetensors",
+        "size_gb": 1.2
+      }
+    ]
+  },
+  "anchor_target": {
+    "node": "12",
+    "input": "image"
+  },
+  "primary_node": "99",
+  "ui": {
+    "groups": [
+      {
+        "title": "Prompt",
+        "color": "pale_blue",
+        "nodes": [
+          "3"
+        ]
+      },
+      {
+        "title": "Generate",
+        "color": "green",
+        "nodes": [
+          "1",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ]
+      },
+      {
+        "title": "Output",
+        "color": "purple",
+        "nodes": [
+          "2"
+        ]
+      }
+    ],
+    "notes": [
+      {
+        "group": "Prompt",
+        "text": "Reviewed prompt."
+      },
+      {
+        "group": "Generate",
+        "text": "Hybrid graph."
+      },
+      {
+        "group": "Output",
+        "text": "Save final image."
+      }
+    ]
+  }
+}

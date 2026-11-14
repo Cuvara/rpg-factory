@@ -1,0 +1,215 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Hybrid provenance fixture",
+  "description": "UNTESTED on RTX 5060: placeholder fixture; nothing generated or measured.",
+  "params": {
+    "prompt": {
+      "type": "string",
+      "required": true,
+      "description": "Final reviewed prompt (filled from --prompt-file)."
+    },
+    "model": {
+      "type": "string",
+      "default": "cx/gpt-5.6-sol-image",
+      "description": "Image model id served through the NineRouterImage node."
+    },
+    "size": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+      ],
+      "default": "1024x1024",
+      "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+    },
+    "quality": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "auto",
+      "description": "Image quality."
+    },
+    "background": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "opaque",
+        "transparent"
+      ],
+      "default": "auto",
+      "description": "Background mode."
+    },
+    "filename_prefix": {
+      "type": "string",
+      "default": "assetgen/run",
+      "description": "SaveImage filename prefix in the ComfyUI output folder."
+    },
+    "seed": {
+      "type": "int",
+      "default": 123
+    }
+  },
+  "output_node": "2",
+  "workflow": {
+    "1": {
+      "class_type": "NineRouterImage",
+      "inputs": {
+        "user_prompt": [
+          "3",
+          0
+        ],
+        "model": "{{model}}",
+        "size": "{{size}}",
+        "quality": "{{quality}}",
+        "background": "{{background}}"
+      },
+      "_meta": {
+        "title": "Generate image"
+      }
+    },
+    "2": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "{{filename_prefix}}",
+        "images": [
+          "10",
+          0
+        ]
+      },
+      "_meta": {
+        "title": "Save image"
+      }
+    },
+    "3": {
+      "class_type": "PrimitiveStringMultiline",
+      "inputs": {
+        "value": "{{prompt}}"
+      },
+      "_meta": {
+        "title": "Prompt (Claude, Codex review <state>)"
+      }
+    },
+    "4": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "sdxl.safetensors"
+      }
+    },
+    "5": {
+      "class_type": "LoraLoader",
+      "inputs": {
+        "model": [
+          "4",
+          0
+        ],
+        "clip": [
+          "4",
+          1
+        ],
+        "lora_name": "style.safetensors",
+        "strength_model": 0.8,
+        "strength_clip": 0.7
+      }
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": [
+          "3",
+          0
+        ],
+        "clip": [
+          "5",
+          1
+        ]
+      }
+    },
+    "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry",
+        "clip": [
+          "5",
+          1
+        ]
+      }
+    },
+    "8": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": [
+          "1",
+          0
+        ],
+        "vae": [
+          "4",
+          2
+        ]
+      }
+    },
+    "9": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "5",
+          0
+        ],
+        "seed": "{{seed}}",
+        "steps": 20,
+        "cfg": 5.5,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "positive": [
+          "6",
+          0
+        ],
+        "negative": [
+          "7",
+          0
+        ],
+        "latent_image": [
+          "8",
+          0
+        ],
+        "denoise": 0.45
+      }
+    },
+    "10": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "9",
+          0
+        ],
+        "vae": [
+          "4",
+          2
+        ]
+      }
+    }
+  },
+  "requires": {
+    "profile": "local-8gb",
+    "peak_vram_gb": 7.0,
+    "ram_gb": 16,
+    "packs": [],
+    "models": [
+      {
+        "kind": "checkpoints",
+        "name": "sdxl.safetensors",
+        "size_gb": 6.5
+      },
+      {
+        "kind": "loras",
+        "name": "style.safetensors",
+        "size_gb": 0.2
+      }
+    ]
+  }
+}

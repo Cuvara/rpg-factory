@@ -45,7 +45,12 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        unrecorded outputs/*.png (previews/ is never listed: preview files are not deliverables)
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present; run.md spec.params equal the rendered params
-                       (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest)
+                       (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest).
+                       UNTESTED on RTX 5060: local generation records must match the workflow; unverified model
+                       hashes WARN, and each sampler seed must be an integer rendered from a template param.
+                       An IPAdapterUnifiedLoader preset names no model file, so it always stays unverified and WARNs;
+                       the approver weighs it. verified and sha256 are checked for consistency only, never against
+                       the machine-local cache (CI has none).
   gen-run-style        the style lock (spec.style_lock, resolve with project.json, anchors and rejections): the style ref
                        is well formed, names the run's style and resolves (a newer version or another hash is a WARN:
                        anchors of the recorded version stay valid), run.md equals spec.json, an override carries a
@@ -410,7 +415,7 @@ def check(artifact, ctx):
 
     prov = artifact.get("provenance") if isinstance(artifact.get("provenance"), dict) else {}
     gen = spec.get("generation") if isinstance(spec.get("generation"), dict) else {}
-    fails, todo = [], []
+    fails, todo, warns = [], [], []
     if prov.get("tool") != "comfyui":
         fails.append("provenance.tool must be comfyui, found %r" % prov.get("tool"))
     for key in ("generated_by", "model"):
@@ -438,7 +443,56 @@ def check(artifact, ctx):
                       if (recorded_params or {}).get(k, "<absent>") != rendered.get(k, "<absent>"))
         fails.append("run.md spec.params differ from the rendered params (workflow.json over spec.json) in %s; re-run "
                      "assetgen.py manifest" % (", ".join(diff) or "type"))
-    grade("gen-run-provenance", fails, todo)
+    expected = runfiles.local_generation(workflow, spec_json if isinstance(spec_json, dict) else spec, None) \
+        if workflow is not None else None
+    local = gen.get("local")
+    if workflow is not None and expected is None and local is not None:
+        fails.append("run.md spec.generation.local is recorded but workflow.json runs no local node; re-run "
+                     "assetgen.py manifest")
+    elif expected is not None and not isinstance(local, dict):
+        fails.append("workflow.json runs local nodes (KSampler or a model loader) but run.md records no "
+                     "spec.generation.local; re-run assetgen.py manifest")
+    elif expected is not None and isinstance(local, dict):
+        def comparable(value, key):
+            if key not in ("models", "loras", "samplers") or not isinstance(value, list):
+                return value
+            omitted = {"sha256", "verified"} if key in ("models", "loras") else set()
+            if key == "samplers" and not isinstance(spec_json, dict):
+                omitted.add("seed_param")
+            return [{k: v for k, v in row.items() if k not in omitted} if isinstance(row, dict) else row
+                    for row in value]
+
+        missing = object()
+        for key in ("models", "loras", "samplers", "requires_sha256"):
+            if key == "requires_sha256" and not isinstance(spec_json, dict):
+                continue
+            if comparable(local.get(key, missing), key) != comparable(expected.get(key, missing), key):
+                fails.append("run.md spec.generation.local differs from workflow.json in %s; re-run assetgen.py "
+                             "manifest" % key)
+    if isinstance(local, dict):
+        for group in ("models", "loras"):
+            rows = local.get(group)
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                name = row.get("name")
+                label = runfiles.local_record_key(row)
+                if label is None:
+                    label = "%s/%r" % ("loras" if group == "loras" else row.get("kind"), name)
+                verified, digest = row.get("verified"), row.get("sha256")
+                if (verified is True and (not isinstance(digest, str) or not runfiles.SHA256.fullmatch(digest))) \
+                        or (verified is False and digest is not None):
+                    fails.append("spec.generation.local %s claims a verified sha256 it does not carry" % label)
+                if verified is False:
+                    warns.append("model %s sha256 unverified (no comfy-desktop-setup model hash cache entry): "
+                                 "the approver weighs it" % label)
+    if expected is not None and isinstance(spec_json, dict):
+        for sampler in expected["samplers"]:
+            seed = sampler.get("seed")
+            if sampler.get("seed_param") is None or not isinstance(seed, int) or isinstance(seed, bool):
+                todo.append("KSampler %s seed is not a rendered param (the template must place it as a {{param}}; "
+                            "a random seed widget cannot be reproduced)" % sampler.get("node"))
+    grade("gen-run-provenance", fails, todo, warns)
 
     fails, todo, warns = [], [], []
     lay = layers()

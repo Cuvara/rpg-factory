@@ -1,0 +1,317 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for icon: one subject, centered."
+  }
+ },
+ "10": {
+  "_meta": {
+   "title": "Encode fitted base"
+  },
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "6",
+    0
+   ],
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ },
+ "11": {
+  "_meta": {
+   "title": "Refine base at low denoise"
+  },
+  "class_type": "KSampler",
+  "inputs": {
+   "cfg": 5.5,
+   "denoise": 0.35,
+   "latent_image": [
+    "10",
+    0
+   ],
+   "model": [
+    "7",
+    0
+   ],
+   "negative": [
+    "9",
+    0
+   ],
+   "positive": [
+    "8",
+    0
+   ],
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "karras",
+   "seed": 123456,
+   "steps": 24
+  }
+ },
+ "12": {
+  "_meta": {
+   "title": "Decode in tiles"
+  },
+  "class_type": "VAEDecodeTiled",
+  "inputs": {
+   "overlap": 64,
+   "samples": [
+    "11",
+    0
+   ],
+   "temporal_overlap": 8,
+   "temporal_size": 64,
+   "tile_size": 512,
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ },
+ "13": {
+  "_meta": {
+   "title": "Upscale 4x"
+  },
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "image": [
+    "12",
+    0
+   ],
+   "upscale_model": [
+    "5",
+    0
+   ]
+  }
+ },
+ "14": {
+  "_meta": {
+   "title": "Downscale to 2048 px"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "disabled",
+   "height": 2048,
+   "image": [
+    "13",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 2048
+  }
+ },
+ "15": {
+  "_meta": {
+   "title": "Cut out background"
+  },
+  "class_type": "InspyrenetRembg",
+  "inputs": {
+   "image": [
+    "14",
+    0
+   ],
+   "torchscript_jit": "default"
+  }
+ },
+ "16": {
+  "_meta": {
+   "title": "Preview API base"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ]
+  }
+ },
+ "17": {
+  "_meta": {
+   "title": "Preview refined image"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "12",
+    0
+   ]
+  }
+ },
+ "18": {
+  "_meta": {
+   "title": "Downscale to 64 px"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "center",
+   "height": 64,
+   "image": [
+    "15",
+    0
+   ],
+   "upscale_method": "area",
+   "width": 64
+  }
+ },
+ "19": {
+  "_meta": {
+   "title": "Preview at 64 px"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "18",
+    0
+   ]
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate base image (API)"
+  },
+  "class_type": "NineRouterImage",
+  "inputs": {
+   "background": "transparent",
+   "model": "cx/gpt-5.6-sol-image",
+   "quality": "high",
+   "size": "1024x1024",
+   "user_prompt": [
+    "1",
+    0
+   ]
+  }
+ },
+ "20": {
+  "_meta": {
+   "title": "Save final image"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-icon--hybrid-icon-ui-001-final",
+   "images": [
+    "15",
+    0
+   ]
+  }
+ },
+ "21": {
+  "_meta": {
+   "title": "Drop base alpha"
+  },
+  "class_type": "SplitImageWithAlpha",
+  "inputs": {
+   "image": [
+    "2",
+    0
+   ]
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Load SDXL checkpoint"
+  },
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "sd_xl_base_1.0.safetensors"
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Load IPAdapter (SDXL)"
+  },
+  "class_type": "IPAdapterUnifiedLoader",
+  "inputs": {
+   "model": [
+    "3",
+    0
+   ],
+   "preset": "PLUS (high strength)"
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Load 4x upscale model"
+  },
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "4x-UltraSharp.pth"
+  }
+ },
+ "6": {
+  "_meta": {
+   "title": "Fit base to 1024 px"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "center",
+   "height": 1024,
+   "image": [
+    "21",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 1024
+  }
+ },
+ "7": {
+  "_meta": {
+   "title": "Apply anchor style"
+  },
+  "class_type": "IPAdapterAdvanced",
+  "inputs": {
+   "combine_embeds": "concat",
+   "embeds_scaling": "V only",
+   "end_at": 1.0,
+   "image": [
+    "6",
+    0
+   ],
+   "ipadapter": [
+    "4",
+    1
+   ],
+   "model": [
+    "4",
+    0
+   ],
+   "start_at": 0.0,
+   "weight": 0.6,
+   "weight_type": "style transfer"
+  }
+ },
+ "8": {
+  "_meta": {
+   "title": "Encode reviewed prompt"
+  },
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    1
+   ],
+   "text": [
+    "1",
+    0
+   ]
+  }
+ },
+ "9": {
+  "_meta": {
+   "title": "Encode negative prompt"
+  },
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    1
+   ],
+   "text": "text, watermark, frame, blurry, busy background"
+  }
+ }
+}

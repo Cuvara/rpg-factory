@@ -15,6 +15,9 @@ to_ui(graph, known, extra=None, ui=None) -> the UI-format workflow {"last_node_i
   title from the node title) gives the API graph again; tests/assetgen.test.sh checks that round trip.
 An optional template ui block supplies groups, notes (ui_only Note nodes), node colors and row hints; it never
   changes the API graph or workflow.json. Groups are laid out by stage with bounds around members and notes.
+  A stage fed by a link that skips stages stays on its source's row and skipped stages move down; x never changes
+  (the [order] rule sorts groups by x). Lanes are per stage: links inside a stage or into a later column of a
+  multi-column stage are not routed.
 Raises ValueError for invalid UI metadata or a graph it cannot lay out (non-digit id, unknown node type, a widget value after a missing one).
 """
 
@@ -248,6 +251,42 @@ def _layout(graph, known, nodes, depth, ui):
                           key=lambda n: (0, hints[n], int(n)) if n in hints else (1, 0, int(n))):
             nodes[nid]["pos"][1] = y
             y += nodes[nid]["size"][1] + NODE_TITLE + COLUMN_GAP
+
+    stage_order = sorted({stage for stage, _ in columns})
+    pos = {stage: i for i, stage in enumerate(stage_order)}
+    stage_links = [(stages[src], stages[dst], src) for dst, producers in upstream.items() for src in producers
+                   if stages[src] != stages[dst] and pos[stages[src]] < pos[stages[dst]]]
+    skips = [(a, b, src) for a, b, src in stage_links if pos[b] - pos[a] > 1]
+    lanes = {}
+    for stage in stage_order:
+        forbidden = {lanes[a] for a, b, _ in skips if pos[a] < pos[stage] < pos[b]}
+        incoming_skips = sorted(((a, src) for a, b, src in skips if b == stage),
+                                key=lambda link: (pos[link[0]], int(link[1])))
+        if incoming_skips:
+            lanes[stage] = lanes[incoming_skips[0][0]]
+        else:
+            incoming = [(a, src) for a, b, src in stage_links if b == stage]
+            preferred = lanes[max(incoming, key=lambda link: (pos[link[0]], -int(link[1])))[0]] if incoming else 0
+            lane = preferred
+            if lane in forbidden:
+                lane = 0
+                while lane in forbidden:
+                    lane += 1
+            lanes[stage] = lane
+
+    lane_contents = {}
+    for nid, stage in stages.items():
+        lane_contents.setdefault(lanes[stage], []).append(nodes[nid])
+    for stage, stage_notes in enumerate(grouped_notes):
+        if stage in lanes:
+            lane_contents[lanes[stage]].extend(stage_notes)
+    bottom = None
+    for lane in sorted(lane_contents):
+        contents = lane_contents[lane]
+        offset = 0 if bottom is None else bottom + COLUMN_GAP - MARGIN
+        for node in contents:
+            node["pos"][1] += offset
+        bottom = max(node["pos"][1] + node["size"][1] + PAD for node in contents)
     result = []
     for i, group in enumerate(groups):
         contents = [nodes[n] for n in group["nodes"]] + grouped_notes[i]

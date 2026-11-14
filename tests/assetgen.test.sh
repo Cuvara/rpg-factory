@@ -3,12 +3,23 @@
 # source, param precedence, purpose constraints over style hints), strict render of every core purpose
 # (templates/assetgen/purposes/*.json) against golden workflows (tests/fixtures/assetgen/golden/<purpose>.json
 # for the default template, <purpose>--<template>.json for a variant; extra render params from the optional
-# tests/fixtures/assetgen/cases/<purpose>.json),
+# tests/fixtures/assetgen/cases/<purpose>.json and a variant's cases/<purpose>--<template>.json; every variant's
+# workflow.ui.json converts back too; every core template declaring anchor_target gets its style-lock anchors there,
+# graph-lint --run PASS and a byte-identical repeat render; a core template with a local requires.profile FAILS
+# graph-lint --profile api-only naming the profile),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), a run filename_prefix (with optional inline output suffix),
 # lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
+# the local node registry (UNTESTED on RTX 5060: the 13 core SDXL nodes from the saved object_info, the 4 pack nodes
+# from object_info-packs.json, known-nodes packs and local_model_nodes against data/hardware.json) and the template
+# requires block (profile, peak_vram_gb, ram_gb, packs, models, offload: accepted complete, refused without a profile,
+# with an undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, a non-bool
+# offload, missing next to local nodes, or naming a profile without a GPU (api-only) next to a local or pack node;
+# hardware.json missing or malformed, a non-bool requires.gpu included, is one FAIL reason, no traceback),
 # the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
-# and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, assetgen-graph-style lint rows, legacy
+# and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, --profile (an unknown id exits 2, a
+# hybrid template under local-8gb PASSES and under api-only FAILS naming the profile, core templates keep their
+# result; UNTESTED on RTX 5060: static checks only), assetgen-graph-style lint rows, legacy
 # templates WARN; a style-locked render of a grouped template lays its anchors into References; the gen-run
 # quality check gen-run-workflow-style: WARN, never FAIL, no row without workflow.ui.json),
 # review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
@@ -19,13 +30,18 @@
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly), review
 # tiers (scripts/assetgen/data/review-tiers.json: a light purpose needs no Claude visual review but a present file is still
 # graded, style-lock anchors force full, no tier recorded in run.md or spec.json; review_tier unit cases and the data file),
+# local and hybrid provenance (UNTESTED on RTX 5060: graph binding, prompts, model hashes and sampler records),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
-# manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
-# the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
+# manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
+# errors for a missing node or input; lint FAILs a template whose anchor_target or primary_node is bad, render keeps
+# its messages; primary_node and requested_size; UNTESTED on RTX 5060),
+# profile routing (resolve --profile: route, fallback, refusal above the profile, auto; UNTESTED on RTX 5060), style lock QA rows
+# through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs the run's anchor copies, edges, canvas; older specs
+# without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
 # by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
 # the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
@@ -187,15 +203,40 @@ mkrun() { # mkrun NAME PURPOSE [resolve args...]
   printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
 }
 mkdir -p "$GOLD"
-# cases file (optional): tests/fixtures/assetgen/cases/<purpose>.json, see its README.md
+# cases files (optional): tests/fixtures/assetgen/cases/<purpose>.json and cases/<purpose>--<template>.json, see its README.md
 CASES="$ROOT/tests/fixtures/assetgen/cases"
-# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant TEMPLATE)
+# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant
+# TEMPLATE: the top-level render_params of cases/<purpose>--<template>.json, else variants.<template> of cases/<purpose>.json)
 case_params() {
-  local f="$CASES/$1.json"; [ -f "$f" ] || return 0
+  local f="$CASES/$1.json" v="$CASES/$1--${2:-}.json"
+  if [ -n "${2:-}" ] && [ -f "$v" ]; then
+    jq -r '(.render_params // {}) | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$v"; return 0
+  fi
+  [ -f "$f" ] || return 0
   jq -r --arg t "${2:-}" '(if $t == "" then .render_params else .variants[$t].render_params end) // {}
     | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$f"
 }
-case_variants() { local f="$CASES/$1.json"; [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f" | LC_ALL=C sort; return 0; }
+# case_variants PURPOSE: the variant template ids of the purpose, from variants in cases/<purpose>.json and from the
+# cases/<purpose>--<template>.json files, sorted, each once
+case_variants() {
+  local f="$CASES/$1.json" v
+  { [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f"
+    for v in "$CASES/$1--"*.json; do [ -f "$v" ] && { v=$(basename "$v" .json); echo "${v#"$1--"}"; }; done
+  } | LC_ALL=C sort -u; return 0
+}
+# a variant is declared once: either in cases/<purpose>.json variants or as cases/<purpose>--<template>.json
+for p in $CORE_PURPOSES; do
+  for t in $(case_variants "$p"); do
+    if [ -f "$CASES/$p--$t.json" ] && [ -f "$CASES/$p.json" ] && jq -e --arg t "$t" '(.variants // {}) | has($t)' "$CASES/$p.json" >/dev/null; then
+      no "cases: variant $p--$t is declared twice (cases/$p.json variants and cases/$p--$t.json)"
+    fi
+  done
+done
+for v in "$CASES"/*--*.json; do
+  [ -f "$v" ] || continue; b=$(basename "$v" .json)
+  [ -f "$CORE/purposes/${b%%--*}.json" ] && [ -f "$CORE/workflows/${b#*--}.json" ] \
+    || no "cases: $b.json names no core purpose and core template (cases/<purpose>--<template>.json)"
+done
 # golden_render RUN-NAME PURPOSE GOLDEN-NAME [TEMPLATE]: render the run and compare it with golden/<GOLDEN-NAME>.json
 golden_render() {
   local run="$1" p="$2" g="$3" t="${4:-}" out rc wf args=() targs=()
@@ -256,9 +297,16 @@ for pw in "legacy-shape-icon-001 1 3" "legacy-shape-edit-001 2 4"; do
     && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
     && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
 done
+# an API template links NineRouterImage.user_prompt; a local-only template (no NineRouterImage) links a CLIP encoder's
+# text; either way no input outside the prompt node inlines {{prompt}} (graphstyle checks the full fan-out)
 for t in $CORE_TEMPLATES; do
-  jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
-    && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
+  jq -e '([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
+    | (if $n > 0 then [.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]
+       else any(.workflow[] | select(.class_type | test("^CLIPTextEncode")) | .inputs | (.text, .text_g, .text_l); type == "array") end)
+    and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)' \
+    "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
+    && ok "core template $t: no inline prompt, $(jq -r 'if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end' "$ROOT/templates/assetgen/workflows/$t.json") is a link" \
+    || no "template $t user_prompt"
 done
 python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
@@ -360,6 +408,13 @@ for p in $CORE_PURPOSES; do
   out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
   [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
     && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
+  for t in $(case_variants "$p"); do
+    d="$RUNS/golden-$p--$t-001"; mapfile -t args < <(case_params "$p" "$t")
+    AG render --run "$d" "${args[@]}" >/dev/null 2>&1
+    out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+    [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p--$t-001|0.4" ] \
+      && ok "workflow.ui.json $p--$t: converts back to workflow.json; run id in extra" || no "ui workflow $p--$t" "$out"
+  done
 done
 u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
 [ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
@@ -374,6 +429,69 @@ u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
 
 echo "-- workflow.ui.json: ui block groups, notes, colors"
+python3 -B - "$ROOT" >"$TMP/staged-layout-check" 2>&1 <<'EOF'
+import json, math, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts/assetgen"))
+import uiworkflow
+
+known = json.loads((root / "scripts/assetgen/data/known-nodes.json").read_text(encoding="utf-8"))["nodes"]
+def rect(node):
+    x, y = node["pos"]
+    w, h = node["size"]
+    return (x, y - 30, x + w, y + h)
+def bounds(group):
+    x, y, w, h = group["bounding"]
+    return (x, y, x + w, y + h)
+def contains(a, b):
+    return a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
+def intersects(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+templates = sorted((root / "templates/assetgen/workflows").glob("staged-*.json"))
+assert templates, "no staged templates found"
+for path in templates:
+    t = json.loads(path.read_text(encoding="utf-8"))
+    ui = uiworkflow.to_ui(t["workflow"], known, None, t["ui"])
+    nodes = {n["id"]: n for n in ui["nodes"]}
+    for link in ui["links"]:
+        _, src, src_slot, dst, dst_slot, _ = link
+        source, target = nodes[src], nodes[dst]
+        a = (source["pos"][0] + source["size"][0], source["pos"][1] + 14 + 20 * src_slot)
+        b = (target["pos"][0], target["pos"][1] + 14 + 20 * dst_slot)
+        d = math.hypot(b[0] - a[0], b[1] - a[1]) * 0.25
+        controls = (a, (a[0] + d, a[1]), (b[0] - d, b[1]), b)
+        for i in range(1, 65):
+            u = i / 65
+            x, y = (sum(weight * point[axis] for weight, point in zip(
+                ((1-u)**3, 3*(1-u)**2*u, 3*(1-u)*u*u, u**3), controls)) for axis in (0, 1))
+            for nid, node in nodes.items():
+                if nid in (src, dst):
+                    continue
+                x1, y1, x2, y2 = rect(node)
+                assert not (x1 < x < x2 and y1 < y < y2), (path.name, link, nid)
+    notes = [n for n in ui["nodes"] if n["type"] == "Note"]
+    assert len(notes) == len(t["ui"].get("notes", [])), path.name
+    assert len(ui["groups"]) == len(t["ui"]["groups"]), path.name
+    for group, decl in zip(ui["groups"], t["ui"]["groups"]):
+        members = {int(n) for n in decl["nodes"]}
+        members.update(n["id"] for n, note in zip(notes, t["ui"].get("notes", [])) if note["group"] == group["title"])
+        box = bounds(group)
+        assert all(contains(box, rect(nodes[n])) for n in members), (path.name, group)
+        assert all(not intersects(box, rect(n)) for nid, n in nodes.items() if nid not in members), (path.name, group)
+    for left, right in zip(ui["groups"], ui["groups"][1:]):
+        assert bounds(left)[0] <= bounds(right)[0], (path.name, left, right)
+    if path.name == "staged-icon.json":
+        save = next(n for n in nodes.values() if n["type"] == "SaveImage")
+        for node in (n for n in nodes.values() if n["type"] in ("ImageScale", "PreviewImage")):
+            assert rect(save)[3] <= rect(node)[1] or rect(node)[3] <= rect(save)[1], (path.name, save, node)
+print("ok")
+EOF
+staged_layout_rc=$?
+[ $staged_layout_rc -eq 0 ] && ok "workflow.ui.json staged templates: no wire crosses an unrelated node, Save off the preview row, groups hold members and notes" \
+  || no "workflow.ui.json staged templates layout rc=$staged_layout_rc" "$(cat "$TMP/staged-layout-check")"
 cp "$ROOT/tests/fixtures/assetgen/ui-layout.json" "$GL/templates/ui-layout.json"
 mkrun ui-layout-001 icon --style stylized-painterly --authoring "$AUTH" --template ui-layout
 ud="$RUNS/ui-layout-001"
@@ -478,7 +596,8 @@ expect_lint() { # expect_lint ID STATE TEXT LABEL
 
 echo "-- node registry"
 NS="$ROOT/scripts/assetgen/nodesync.py"; OI="$ROOT/tests/fixtures/assetgen/object_info.json"
-node_names=(ImageScale ImageSharpen ImageBlur ImageInvert ImageCrop PreviewImage SplitImageWithAlpha JoinImageWithAlpha ImageQuantize PrimitiveString)
+local_names=(CheckpointLoaderSimple CLIPTextEncode CLIPTextEncodeSDXL EmptyLatentImage VAEEncode VAEDecode VAEDecodeTiled KSampler LoraLoader ControlNetLoader ControlNetApplyAdvanced UpscaleModelLoader ImageUpscaleWithModel)
+node_names=(ImageScale ImageSharpen ImageBlur ImageInvert ImageCrop PreviewImage SplitImageWithAlpha JoinImageWithAlpha ImageQuantize PrimitiveString "${local_names[@]}")
 node_args=(); for name in "${node_names[@]}"; do node_args+=(--node "$name"); done
 python3 -B "$NS" "$OI" "${node_args[@]}" > "$TMP/nodes.json" 2>"$TMP/err"; rc=$?
 jq -c . "$TMP/nodes.json" > "$TMP/nodes-actual" 2>/dev/null
@@ -487,6 +606,42 @@ jq -c --slurpfile generated "$TMP/nodes.json" '.nodes as $nodes | reduce ($gener
   || no "nodesync fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
 python3 -B "$NS" "$OI" "${node_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && ok "nodesync --check accepts committed entries" || no "nodesync --check rc=$rc" "$(cat "$TMP/err")"
+# pack nodes: no saved object_info from a machine with the packs existed, so object_info-packs.json is written from the
+# pack sources (known-nodes packs[].signatures names each); the registry entries must still be nodesync's output of it
+OIP="$ROOT/tests/fixtures/assetgen/object_info-packs.json"; HW="$ROOT/scripts/assetgen/data/hardware.json"
+pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor InspyrenetRembg)
+pack_args=(); for name in "${pack_names[@]}"; do pack_args+=(--node "$name"); done
+python3 -B "$NS" "$OIP" "${pack_args[@]}" > "$TMP/pack-nodes.json" 2>"$TMP/err"; rc=$?
+jq -c . "$TMP/pack-nodes.json" > "$TMP/pack-nodes-actual" 2>/dev/null
+jq -c --slurpfile generated "$TMP/pack-nodes.json" '.nodes as $nodes | reduce ($generated[0] | keys_unsorted[]) as $name ({}; .[$name] = $nodes[$name])' "$KN" > "$TMP/pack-nodes-expected" 2>"$TMP/jqerr"
+[ $rc -eq 0 ] && [ "$(jq 'length' "$TMP/pack-nodes.json")" = "${#pack_names[@]}" ] && cmp -s "$TMP/pack-nodes-actual" "$TMP/pack-nodes-expected" \
+  && ok "nodesync pack fixture entries match registry including key order (${#pack_names[@]} pack nodes)" \
+  || no "nodesync pack fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
+python3 -B "$NS" "$OIP" "${pack_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "nodesync --check accepts committed pack entries" || no "nodesync --check packs rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+python3 -B - "$KN" "$HW" "${#local_names[@]}" "${local_names[@]}" "${pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
+import json, sys
+known_path, hardware_path, n_local = sys.argv[1], sys.argv[2], int(sys.argv[3])
+local_names, pack_names = sys.argv[4:4 + n_local], sys.argv[4 + n_local:]
+with open(known_path, encoding="utf-8") as f:
+    known = json.load(f)
+with open(hardware_path, encoding="utf-8") as f:
+    hardware = json.load(f)
+nodes, packs, local = known["nodes"], known["packs"], known["local_model_nodes"]
+profile_packs = [p["id"] for prof in hardware["profiles"] if prof["id"] == "local-8gb" for p in prof["packs"]]
+assert packs and profile_packs and all(pid in profile_packs for pid in packs), (list(packs), profile_packs)
+for pid, spec in packs.items():
+    assert spec["nodes"] and all(name in nodes for name in spec["nodes"]), pid
+    assert spec["provider"] and spec["signatures"], pid
+pack_nodes = [name for spec in packs.values() for name in spec["nodes"]]
+assert sorted(pack_nodes) == sorted(pack_names), pack_nodes
+assert local == local_names and all(name in nodes for name in local), local
+assert not set(local) & set(pack_nodes)
+assert "UNTESTED on RTX 5060" in known["note"]
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "known-nodes: every pack node and local_model_nodes name is a registry node, every pack id is a local-8gb pack of hardware.json, the note says UNTESTED on RTX 5060" \
+  || no "known-nodes packs / local_model_nodes" "$(cat "$TMP/o")"
 jq '.nodes.ImageScale.inputs.upscale_method.options[0] = "changed"' "$KN" > "$TMP/known-changed.json"
 python3 -B "$NS" "$OI" "${node_args[@]}" --known "$TMP/known-changed.json" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -qx ImageScale "$TMP/o" && ok "nodesync --check detects a changed combo option" || no "nodesync changed option rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
@@ -558,6 +713,167 @@ jq '.workflow["3"].inputs.scale_by = 2' "$LA/assetgen/templates/registry-chain.j
 expect_lint registry-input FAIL "unknown input scale_by" "unknown input on ImageScale"
 jq '.workflow["3"].class_type = "UnknownImageNode"' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/registry-unknown.json"
 expect_lint registry-unknown FAIL "unknown node type UnknownImageNode" "unknown node in image chain"
+
+# local nodes and the template requires block (UNTESTED on RTX 5060: the fixture declares, lint compares the
+# declaration with data/hardware.json; nothing here was generated or measured). File names and sizes are placeholders.
+LOCAL="$LA/assetgen/templates/local-full.json"
+cat > "$LOCAL" <<'EOF'
+{"schema": "rpg-factory.comfy-template/1", "title": "Local SDXL chain (lint fixture)",
+ "description": "UNTESTED on RTX 5060: lint fixture for the local node registry; no image was generated and no number measured.",
+ "output_node": "16",
+ "params": {"prompt": {"type": "string", "required": true}, "negative": {"type": "string", "default": "blurry"},
+  "checkpoint": {"type": "string", "default": "sdxl-checkpoint-fp16.safetensors"}, "seed": {"type": "int", "default": 1}},
+ "requires": {"profile": "local-8gb", "peak_vram_gb": 7.0, "ram_gb": 16,
+  "packs": ["comfyui_ipadapter_plus", "comfyui_controlnet_aux", "cut-out (BiRefNet or rembg)"],
+  "models": [{"kind": "checkpoints", "name": "sdxl-checkpoint-fp16.safetensors", "size_gb": 6.5},
+   {"kind": "controlnet", "name": "sdxl-controlnet-canny.safetensors", "size_gb": 2.5},
+   {"kind": "ipadapter", "name": "sdxl-ipadapter-plus.safetensors", "size_gb": 0.8},
+   {"kind": "clip_vision", "name": "clip-vision-vit-h.safetensors", "size_gb": 2.5},
+   {"kind": "upscale_models", "name": "upscaler-4x.safetensors", "size_gb": 0.1}]},
+ "workflow": {
+  "1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": "{{prompt}}", "model": "m", "size": "auto", "quality": "auto", "background": "auto"}},
+  "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{checkpoint}}"}},
+  "3": {"class_type": "IPAdapterUnifiedLoader", "inputs": {"model": ["2", 0], "preset": "PLUS (high strength)"}},
+  "4": {"class_type": "IPAdapterAdvanced", "inputs": {"model": ["3", 0], "ipadapter": ["3", 1], "image": ["1", 0], "weight": 0.8, "weight_type": "linear", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}},
+  "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["2", 1]}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative}}", "clip": ["2", 1]}},
+  "7": {"class_type": "CannyEdgePreprocessor", "inputs": {"image": ["1", 0], "low_threshold": 100, "high_threshold": 200, "resolution": 1024}},
+  "8": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "sdxl-controlnet-canny.safetensors"}},
+  "9": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["5", 0], "negative": ["6", 0], "control_net": ["8", 0], "image": ["7", 0], "strength": 0.6, "start_percent": 0.0, "end_percent": 1.0, "vae": ["2", 2]}},
+  "10": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "11": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "seed": "{{seed}}", "steps": 24, "cfg": 6.5, "sampler_name": "euler", "scheduler": "karras", "positive": ["9", 0], "negative": ["9", 1], "latent_image": ["10", 0], "denoise": 1.0}},
+  "12": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["11", 0], "vae": ["2", 2], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
+  "13": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "upscaler-4x.safetensors"}},
+  "14": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["13", 0], "image": ["12", 0]}},
+  "15": {"class_type": "InspyrenetRembg", "inputs": {"image": ["14", 0], "torchscript_jit": "default"}},
+  "16": {"class_type": "SaveImage", "inputs": {"images": ["15", 0], "filename_prefix": "assetgen/local"}}}}
+EOF
+lv() { local id=$1; shift; jq "$@" "$LOCAL" > "$LA/assetgen/templates/$id.json"; }  # lv ID JQ-ARGS: a variant of local-full
+expect_clean() { local got; got=$(lint_of "$1"); [ "$got" = "PASS " ] && ok "lint $2" || no "lint $2" "$got"; }  # PASS, no reason
+jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LOCAL" >/dev/null && expect_clean local-full "local template: a local SDXL chain with all four pack nodes and a complete requires block PASSES, no reasons" \
+  || no "local template fixture description must start with UNTESTED on RTX 5060:"
+hw_profiles=$(jq -r '[.profiles[].id] | join(", ")' "$HW")
+hw_lim() { jq -r --arg f "$1" '.profiles[] | select(.id == "local-8gb") | .requires[$f]' "$HW"; }
+vram_max=$(hw_lim min_vram_gb); ram_max=$(hw_lim min_ram_gb)
+lv local-vram-edge --argjson v "$vram_max" --argjson r "$ram_max" '.requires.peak_vram_gb = $v | .requires.ram_gb = $r'
+expect_clean local-vram-edge "requires: peak_vram_gb and ram_gb equal to the profile's values PASS"
+lv local-extra-kinds '.requires.models += [{"kind": "loras", "name": "style.safetensors", "size_gb": 0.2}, {"kind": "vae", "name": "sdxl-vae.safetensors", "size_gb": 0.3}]'
+expect_clean local-extra-kinds "requires.models: kinds loras and vae are accepted"
+jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/api-requires.json"
+expect_clean api-requires "requires on an API-only template: profile api-only, packs and models left out, PASS"
+# a local or pack node needs a profile with a GPU (hardware.json requires.gpu true): api-only excludes any local model
+# and stays valid for an API-only graph. local-core has core local nodes only, no pack node.
+tmpl local-core '' '{"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"sd15-checkpoint.safetensors"}},
+"2":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":"assetgen/local-core"}},
+"3":{"class_type":"CLIPTextEncode","inputs":{"text":"{{prompt}}","clip":["1",1]}},
+"4":{"class_type":"CLIPTextEncode","inputs":{"text":"blurry","clip":["1",1]}},
+"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512,"batch_size":1}},
+"6":{"class_type":"KSampler","inputs":{"model":["1",0],"seed":1,"steps":20,"cfg":7.0,"sampler_name":"euler","scheduler":"karras","positive":["3",0],"negative":["4",0],"latent_image":["5",0],"denoise":1.0}},
+"7":{"class_type":"VAEDecode","inputs":{"samples":["6",0],"vae":["1",2]}}}'
+lc() { local id=$1; shift; jq "$@" "$LA/assetgen/templates/local-core.json" > "$LA/assetgen/templates/$id.json"; }  # lc ID JQ-ARGS: a variant of local-core
+hw_gpu=$(jq -r '[.profiles[] | select(.requires.gpu == true) | .id] | join(", ")' "$HW")
+NO_GPU="runs a local model, but profile api-only has no GPU (hardware.json requires.gpu false); declare a local profile ($hw_gpu)"
+lc local-core-api '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}'
+got=$(lint_of local-core-api)
+case "$got" in "FAIL "*"node 1 (CheckpointLoaderSimple) $NO_GPU"*) : ;; *) false ;; esac \
+  && grep -qF "node 6 (KSampler) $NO_GPU" <<<"$got" && ! grep -qF "node 2 (SaveImage)" <<<"$got" && ! grep -qE "requires\.(profile|peak_vram_gb|ram_gb|packs|models)" <<<"$got" \
+  && ok "lint requires: core local nodes on profile api-only FAIL, every local node says the profile has no GPU and lists the local profiles" \
+  || no "lint requires: core local nodes on profile api-only" "$got"
+lc local-core-4gb --argjson r "$(jq -c '.profiles[] | select(.id == "local-4gb") | .requires | {profile: "local-4gb", peak_vram_gb: .min_vram_gb, ram_gb: .min_ram_gb}' "$HW")" '.requires = $r'
+expect_clean local-core-4gb "requires: the same core local nodes on profile local-4gb with fitting numbers PASS"
+tmpl api-plain '' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
+jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/api-plain.json" > "$LA/assetgen/templates/api-plain-requires.json"
+expect_clean api-plain-requires "requires: NineRouterImage + SaveImage on profile api-only (no local or pack node) PASS"
+lv local-no-profile 'del(.requires.profile)'
+expect_lint local-no-profile FAIL "requires.profile missing" "requires without profile"
+lv local-bad-profile '.requires.profile = "local-80gb"'
+expect_lint local-bad-profile FAIL "requires.profile 'local-80gb' is not a hardware profile ($hw_profiles" "requires: unknown profile, the ids are listed"
+lv local-pack-undeclared '.requires.packs -= ["comfyui_controlnet_aux"]'
+expect_lint local-pack-undeclared FAIL "node 7 uses CannyEdgePreprocessor from pack comfyui_controlnet_aux, not declared in requires.packs" "pack node whose pack is missing from requires.packs"
+lv local-pack-foreign '.requires.profile = "api-only" | .requires.peak_vram_gb = 0 | .requires.ram_gb = 0'
+expect_lint local-pack-foreign FAIL "requires.packs: 'comfyui_ipadapter_plus' is not a pack of profile api-only (it has no packs)" "requires.packs: a pack id that is not of the profile"
+expect_lint local-pack-foreign FAIL "node 15 (InspyrenetRembg) $NO_GPU" "requires: a pack node on profile api-only says the profile has no GPU"
+lv local-pack-twice '.requires.packs += ["comfyui_controlnet_aux"]'
+expect_lint local-pack-twice FAIL "requires.packs lists 'comfyui_controlnet_aux' more than once" "requires.packs: a pack listed twice"
+lv local-pack-unused 'del(.workflow["15"]) | .workflow["16"].inputs.images = ["14", 0]'
+expect_lint local-pack-unused WARN "requires.packs declares cut-out (BiRefNet or rembg), but no workflow node comes from that pack" "requires.packs: a declared pack no node uses (warning)"
+lv local-no-requires 'del(.requires)'
+got=$(lint_of local-no-requires)
+case "$got" in "FAIL "*"node 2 (CheckpointLoaderSimple) runs a local model: the template needs a requires block (profile, peak_vram_gb, ram_gb, packs, models, offload)"*) : ;; *) false ;; esac \
+  && grep -qF "node 15 (InspyrenetRembg) runs a local model" <<<"$got" && grep -qF "node 11 (KSampler) runs a local model" <<<"$got" \
+  && ! grep -qF "node 1 (NineRouterImage)" <<<"$got" && ! grep -qF "requires.packs" <<<"$got" \
+  && ok "lint local nodes with no requires block: every local and pack node is named, API nodes are not" || no "lint local nodes with no requires block" "$got"
+lv local-requires-list '.requires = ["local-8gb"]'
+expect_lint local-requires-list FAIL "requires must be an object (profile, peak_vram_gb, ram_gb, packs, models, offload)" "requires that is not an object"
+lv local-vram-over '.requires.peak_vram_gb = 7.6'
+expect_lint local-vram-over FAIL "requires.peak_vram_gb 7.6 is above min_vram_gb $vram_max of profile local-8gb" "requires.peak_vram_gb 7.6 above profile local-8gb"
+lv local-ram-over '.requires.ram_gb = 64'
+expect_lint local-ram-over FAIL "requires.ram_gb 64 is above min_ram_gb $ram_max of profile local-8gb" "requires.ram_gb above the profile"
+lv local-vram-bool '.requires.peak_vram_gb = true'
+expect_lint local-vram-bool FAIL "requires.peak_vram_gb must be a number >= 0" "requires.peak_vram_gb true (a bool is not a number)"
+lv local-ram-missing 'del(.requires.ram_gb)'
+expect_lint local-ram-missing FAIL "requires.ram_gb missing" "requires without ram_gb"
+lv local-model-url --arg u "$scheme://models.example.invalid/sdxl-checkpoint-fp16.safetensors" '.requires.models[0].name = $u'
+MODEL_NAME="requires.models[0].name must be a model file name; source links live in docs/hardware.md, never in templates"
+expect_lint local-model-url FAIL "$MODEL_NAME" "requires.models name that is a URL: not a file name"
+expect_lint local-model-url FAIL "requires contains a URL" "requires.models name that is a URL: the reason names requires"
+lv local-model-host '.requires.models[0].name = "huggingface.co/x/y.safetensors"'
+expect_lint local-model-host FAIL "$MODEL_NAME" "requires.models name with a host and path (no scheme)"
+lv local-model-path '.requires.models[0].name = "C:\\models\\sdxl-checkpoint-fp16.safetensors"'
+expect_lint local-model-path FAIL "$MODEL_NAME" "requires.models name that is a local path"
+lv local-model-extra '.requires.models[0].source = "see docs"'
+expect_lint local-model-extra FAIL "requires.models[0] must be an object with exactly kind, name, size_gb" "requires.models entry with an extra key"
+lv local-model-size '.requires.models[1].size_gb = 0'
+expect_lint local-model-size FAIL "requires.models[1].size_gb must be a number > 0" "requires.models size_gb 0"
+lv local-model-kind '.requires.models[0].kind = "diffusers"'
+expect_lint local-model-kind FAIL "requires.models[0].kind 'diffusers' is not a model kind (" "requires.models: unknown model kind"
+lv local-credential '.requires.api_key = "placeholder"'
+expect_lint local-credential FAIL "requires contains a credential or endpoint key" "credential key inside requires"
+lv local-unknown-key '.requires.notes = "fits"'
+expect_lint local-unknown-key FAIL "requires.notes: unknown key (a requires block holds only profile, peak_vram_gb, ram_gb, packs, models, offload)" "unknown requires key"
+# requires.offload (UNTESTED on RTX 5060: a declaration the graph-style checkpoints rule reads, nothing measured)
+lv local-offload-true '.requires.offload = true'
+expect_clean local-offload-true "requires.offload true is accepted"
+lv local-offload-false '.requires.offload = false'
+expect_clean local-offload-false "requires.offload false is accepted"
+lv local-offload-string '.requires.offload = "yes"'
+expect_lint local-offload-string FAIL "requires.offload must be true or false" "requires.offload that is not a bool (\"yes\")"
+lv local-offload-number '.requires.offload = 1'
+expect_lint local-offload-number FAIL "requires.offload must be true or false" "requires.offload that is not a bool (1)"
+lv local-bad-input '.workflow["11"].inputs.cfg_scale = 7'
+expect_lint local-bad-input FAIL "node 11 (KSampler): unknown input cfg_scale" "unknown input on KSampler"
+lv local-bad-combo '.workflow["11"].inputs.scheduler = "fastest"'
+expect_lint local-bad-combo FAIL "node 11.scheduler: 'fastest' is not one of" "combo value outside KSampler's scheduler options"
+lv local-unknown-node '.workflow["12"].class_type = "VAEDecodeTurbo"'
+expect_lint local-unknown-node FAIL "unknown node type VAEDecodeTurbo" "unknown node type in a local template"
+jq -c '.workflow' "$LOCAL" | sed 's/{{[a-z]*}}/x/g' > "$TMP/local-rendered.json"
+jq -c '.["12"].class_type = "VAEDecodeTurbo"' "$TMP/local-rendered.json" > "$TMP/local-rendered-unknown.json"
+got=$(AG lint "$TMP/local-rendered.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))')
+got2=$(AG lint "$TMP/local-rendered-unknown.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))')
+[ "$got" = "PASS " ] && case "$got2" in "FAIL "*"unknown node type VAEDecodeTurbo"*) : ;; *) false ;; esac \
+  && ok "rendered workflow lint unchanged: local nodes PASS without a requires rule, an unknown node type still FAILs" || no "rendered local workflow lint" "$got
+$got2"
+# hardware.json missing or malformed: one FAIL reason on a template with requires, never a traceback; a template
+# without requires and without local nodes does not read it
+printf 'not json\n' > "$TMP/hw-notjson.json"; echo '{"schema": "rpg-factory.assetgen-hardware/1", "profiles": [{"id": "local-8gb"}]}' > "$TMP/hw-shape.json"
+jq '.profiles[0].requires.gpu = "no"' "$HW" > "$TMP/hw-gpu.json"  # requires.gpu must be a bool
+python3 -B - "$ROOT" "$LA" "$TMP" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+root, authoring, tmp = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, "scripts", "assetgen"))
+import lint
+template = lambda name: os.path.join(authoring, "assetgen", "templates", name + ".json")
+for name in ("hw-none.json", "hw-notjson.json", "hw-shape.json", "hw-gpu.json"):
+    lint.HARDWARE = os.path.join(tmp, name)
+    row = lint.lint_file(template("local-full"), authoring)
+    assert row["state"] == "FAIL" and len(row["reasons"]) == 1, (name, row)
+    assert row["reasons"][0].startswith("data/hardware.json is missing or malformed ("), (name, row)
+    row = lint.lint_file(template("registry-chain"), authoring)
+    assert row["state"] == "PASS" and not row["reasons"], (name, row)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "lint requires: hardware.json missing, not JSON, malformed or with a non-bool requires.gpu is one FAIL reason, no traceback; a template without requires is unaffected" \
+  || no "lint requires with a bad hardware.json" "$(cat "$TMP/o")"
 LA=$lint_la
 
 expect_lint unknown-node FAIL "unknown node type FluxSampler" "unknown node type"
@@ -698,6 +1014,40 @@ gs_want=$(for t in $CORE_TEMPLATES; do if has_groups "$CORE/workflows/$t.json"; 
   && jq -e '.summary.FAIL == 0 and ([.results[] | select(.path | test("workflows/image-(generate|edit)\\.json$")) | .reasons[0] | startswith("legacy template without a ui block")] | length == 2 and all)' "$TMP/gl.json" >/dev/null \
   && ok "graph-lint without a path: one row per core template; legacy image-generate and image-edit WARN (never FAIL), exit 0" \
   || no "graph-lint core templates rc=$rc: $gs_rows (want $gs_want)" "$(cat "$TMP/err"; jq -c '.results[] | select(.state != "PASS")' "$TMP/gl.json")"
+# --profile (UNTESTED on RTX 5060: the profile rules are static checks of a template's declarations against
+# data/hardware.json; nothing is generated or measured)
+gl_rows() { jq -c '[.results[] | {path, state, reasons}]' "$1"; }
+AG graph-lint --profile api-only --json > "$TMP/gl-api.json" 2>"$TMP/err"; rc=$?
+# a core template declaring a local requires.profile (a hybrid or local template) FAILS under api-only with a profile:
+# reason naming api-only; every other core template keeps its row
+local_tpls=$(for t in $CORE_TEMPLATES; do
+  jq -e '(.requires.profile // "api-only") != "api-only"' "$CORE/workflows/$t.json" >/dev/null 2>&1 && echo "core:templates/assetgen/workflows/$t.json"; done)
+local_json=$(printf '%s\n' "$local_tpls" | jq -R . | jq -sc 'map(select(. != ""))')
+gl_api_rows() { jq -c --argjson l "$local_json" '[.results[] | select(.path as $p | $l | index($p) | not) | {path, state, reasons}]' "$1"; }
+want_rc=0; [ -n "$local_tpls" ] && want_rc=1
+[ $rc -eq $want_rc ] && [ "$(gl_api_rows "$TMP/gl-api.json")" = "$(gl_api_rows "$TMP/gl.json")" ] \
+  && ok "graph-lint --profile api-only over the core templates: the same rows as without --profile for every template without a local requires.profile (API-only staged templates keep their result), exit $want_rc" \
+  || no "graph-lint --profile api-only core templates rc=$rc (want $want_rc)" "$(cat "$TMP/err"; diff <(gl_api_rows "$TMP/gl.json") <(gl_api_rows "$TMP/gl-api.json"))"
+for p in $local_tpls; do
+  jq -e --arg p "$p" '[.results[] | select(.path == $p)] | length == 1 and .[0].state == "FAIL"
+      and ([.[0].reasons[] | select(startswith("profile:") and contains("api-only"))] | length > 0)' "$TMP/gl-api.json" >/dev/null \
+    && ok "graph-lint --profile api-only: local template ${p##*/} FAILS with a profile: reason naming api-only" \
+    || no "graph-lint --profile api-only local template ${p##*/}" "$(jq -c --arg p "$p" '.results[] | select(.path == $p)' "$TMP/gl-api.json")"
+done
+AG graph-lint --profile bogus "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
+hw_ids=$(jq -r '[.profiles[].id] | join(", ")' "$ROOT/scripts/assetgen/data/hardware.json")
+[ $rc -eq 2 ] && ! grep -q '^assetgen graph-lint:' "$TMP/o" && grep -qF -- "--profile bogus: one of $hw_ids (data/hardware.json)" "$TMP/err" \
+  && ok "graph-lint --profile bogus: usage error naming the hardware profile ids, exit 2" || no "graph-lint --profile bogus rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG graph-lint --profile auto "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && ok "graph-lint --profile auto: not a hardware profile id (auto is resolve only), exit 2" || no "graph-lint --profile auto rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG graph-lint --profile local-8gb "$GS/hybrid-clean.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS .*tests/fixtures/assetgen/graph-style/hybrid-clean.json$' "$TMP/o" \
+  && ok "graph-lint --profile local-8gb: the clean hybrid template PASSES, exit 0" || no "graph-lint hybrid local-8gb rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint --profile api-only "$GS/hybrid-clean.json" --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && [ "$(jq -r '.results[0].state' "$TMP/o")" = FAIL ] \
+  && jq -e '[.results[0].reasons[] | select(startswith("profile:") and contains("api-only"))] | length > 0' "$TMP/o" >/dev/null \
+  && ok "graph-lint --profile api-only: the hybrid template FAILS with a profile: reason naming api-only, exit 1" \
+  || no "graph-lint hybrid api-only rc=$rc" "$(cat "$TMP/o")"
 AG lint --authoring "$AUTH" --json > "$TMP/o" 2>&1
 want_paths=$( { for t in $CORE_TEMPLATES; do echo "core:templates/assetgen/workflows/$t.json"; done
   for f in "$GL"/templates/*.json; do echo "game:assetgen/templates/$(basename "$f")"; done; } | LC_ALL=C sort)
@@ -2628,6 +2978,157 @@ T2="$TMP/tmpl"; mkdir -p "$T2" && cp "$ROOT/templates/assetgen/gen-run.md" "$T2/
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T2" --registry "$ROOT/registry.json" | grep -q '^PASS AGEN-example-icon-001$' \
   && ok "kind template templates/assetgen/gen-run.md is a schema-valid draft" || no "gen-run template lint"
 
+echo "-- local and hybrid provenance (UNTESTED on RTX 5060)"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-template.json" "$GL/templates/hybrid-provenance.json"
+cp "$ROOT/tests/fixtures/assetgen/local/literal-seed-template.json" "$GL/templates/literal-seed.json"
+python3 -B - "$ROOT" > "$TMP/local-unit" 2>&1 <<'EOF'
+import copy, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import runfiles as r
+root = sys.argv[1]
+t = json.load(open(os.path.join(root, 'tests/fixtures/assetgen/local/hybrid-template.json'), encoding='utf-8'))
+golden = json.load(open(os.path.join(root, 'tests/fixtures/assetgen/golden/icon--image-generate.json'), encoding='utf-8'))
+spec = {'params': {'seed': 123}, 'template': {'data': t}}
+def old_generation_inputs(workflow, spec, locate=None):
+    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") == "NineRouterImage"
+                                          for n in workflow.values()):
+        graph = {}
+        for nid, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = dict(node["inputs"]) if isinstance(node.get("inputs"), dict) else {}
+            graph[str(nid)] = {"class_type": node.get("class_type"), "inputs": inputs}
+        refs = {}
+        for name in r.reference_names(workflow):
+            try:
+                refs[name] = r._file_sha256(locate(os.path.basename(name)) if locate else None)
+            except (OSError, TypeError, ValueError):
+                refs[name] = None
+        out = {"graph": graph, "references": refs}
+        lock = r.style_lock_binding(spec)
+        if lock is not None:
+            out["anchors"] = [{"anchor_id": x.get("anchor_id"), "sha256": x.get("sha256")} for x in r.style_lock_references(spec)]
+        return out
+    params = spec.get("params") if isinstance(spec, dict) else None
+    return params if isinstance(params, dict) else {}
+def check(label, f):
+    try:
+        assert f()
+        print('ok ' + label)
+    except Exception as e:
+        print('no ' + label + ' | ' + repr(e))
+check('generation inputs bind local graphs and preserve legacy hashes', lambda: set(r.generation_inputs({'9': {'class_type': 'KSampler'}}, spec)) == {'graph', 'references'} and all(r.generation_inputs(g, spec) == old_generation_inputs(g, spec) and r._canonical_sha256(r.generation_inputs(g, spec)) == r._canonical_sha256(old_generation_inputs(g, spec)) for g in (golden, {'1': {'class_type': 'SaveImage'}})))
+def prompts():
+    g={'1': {'class_type':'PrimitiveString','inputs':{'value':'hello'}}, '2': {'class_type':'PrimitiveStringMultiline','inputs':{'value':'world'}}, '3': {'class_type':'CLIPTextEncode','inputs':{'text':['1',0]}}, '4': {'class_type':'CLIPTextEncodeSDXL','inputs':{'text_g':['1',0], 'text_l':['2',0]}}, '5': {'class_type':'CLIPTextEncode','inputs':{'text':'literal'}}, '6': {'class_type':'CLIPTextEncode','inputs':{'text':['2',0]}}, '7': {'class_type':'ControlNetApplyAdvanced','inputs':{'positive':['3',0], 'negative':['6',0]}}, '8': {'class_type':'KSampler','inputs':{'positive':['7',0], 'negative':['7',1]}}, '9': {'class_type':'CLIPTextEncode','inputs':{'text':['2',0]}}, '10': {'class_type':'KSampler','inputs':{'negative':['9',0]}}}
+    return r.workflow_prompts(g) == ['hello','hello','world'] and all(isinstance(r.workflow_prompts(x), list) for x in (None, [], {'x': None}, {'x': {'class_type':'KSampler','inputs':{'negative':['x',0]}}}))
+check('CLIP prompts include linked positive text and exclude literals and negative-only paths', prompts)
+def local():
+    wf=copy.deepcopy(t['workflow']); wf['9']['inputs']['seed']=123
+    a=r.local_generation(wf,spec); b=r.local_generation(wf,spec,{'checkpoints/sdxl.safetensors':'a'*64,'loras/style.safetensors':'b'*64})
+    literal=copy.deepcopy(spec); literal['template']['data']['workflow']['9']['inputs']['seed']=123
+    return (a['models'][0]['name']=='sdxl.safetensors' and not a['models'][0]['verified'] and a['loras'][0]['strength_model']==0.8 and a['loras'][0]['strength_clip']==0.7 and a['samplers'][0] == {'node':'9','class_type':'KSampler','seed':123,'seed_param':'seed','sampler_name':'dpmpp_2m','scheduler':'karras','steps':20,'cfg':5.5,'denoise':0.45} and a['requires_sha256']==r._canonical_sha256(t['requires']) and all(x['verified'] for x in b['models']+b['loras']) and r.local_generation(golden,spec) is None and r.local_generation(wf,literal)['samplers'][0]['seed_param'] is None)
+check('local record shape, cache, requires and seed provenance', local)
+def linked_seed():
+    wf = copy.deepcopy(t['workflow']); linked_spec = copy.deepcopy(spec)
+    wf['9']['inputs']['seed'] = ['12', 0]; wf['12'] = {'inputs': {'value': 123}}
+    linked_spec['template']['data']['workflow']['9']['inputs']['seed'] = ['12', 0]
+    linked_spec['template']['data']['workflow']['12'] = {'inputs': {'value': '{{seed}}'}}
+    sampler = r.local_generation(wf, linked_spec)['samplers'][0]
+    return sampler['seed'] == 123 and sampler['seed_param'] == 'seed'
+check('linked rendered seed records its value and parameter', linked_seed)
+def local_model():
+    import assetgen, tempfile
+    with tempfile.TemporaryDirectory() as run_dir:
+        with open(os.path.join(run_dir, 'workflow.json'), 'w', encoding='utf-8') as f:
+            json.dump({'10': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'second.safetensors'}},
+                       '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'first.safetensors'}},
+                       '9': {'class_type': 'KSampler', 'inputs': {}}}, f)
+        return assetgen.workflow_model(run_dir, {'params': {'model': 'fallback'}}) == 'first.safetensors'
+check('local-only workflow provenance uses the first checkpoint', local_model)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "local unit unexpected output" "$line" ;; esac
+done < "$TMP/local-unit"
+[ "$(grep -c '^ok ' "$TMP/local-unit")" -eq 5 ] || no "local unit cases stopped early" "$(cat "$TMP/local-unit")"
+
+localrun="$RUNS/local-hybrid-001"
+local_step() { # Report setup failures so a refused render or manifest cannot make a case vacuous.
+  local label="$1" out rc; shift
+  out=$("$@" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || no "$label" "$out"
+}
+mkrun local-hybrid-001 sprite-2d --style stylized-painterly --template hybrid-provenance --authoring "$AUTH"
+local_step 'local hybrid render' AG render --run "$localrun" --param seed=123
+cp "$FX/icon-ok.png" "$localrun/outputs/local.png"; local_step 'local hybrid qa' AG qa --run "$localrun"
+bound "$localrun" prompt PASS codex > "$localrun/review-prompt.json"; bound "$localrun" image PASS codex > "$localrun/review-image.json"
+bound "$localrun" image PASS claude > "$localrun/review-image-claude.json"
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local hybrid unverified manifest' AG manifest --run "$localrun"
+cp "$localrun/run.md" "$TMP/local-unverified.md"
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" local_step 'local hybrid verified manifest' AG manifest --run "$localrun"
+cp "$localrun/run.md" "$TMP/local-verified.md"
+# Preserve independent variants for each plugin check.
+for id in local-cached-001 local-prompt-001 local-cfg-001 local-missing-001 local-hash-001 local-stale-001; do
+  cp -R "$localrun" "$RUNS/$id"; rm "$RUNS/$id/run.md"
+  python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + sys.argv[2]; json.dump(s, open(p, "w"))' "$RUNS/$id/spec.json" "$id"
+  ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step "$id manifest" AG manifest --run "$RUNS/$id"
+done
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" local_step 'local cached manifest' AG manifest --run "$RUNS/local-cached-001"
+jq ' .["11"] = {"class_type":"PrimitiveString", "inputs":{"value":"another prompt"}} | .["6"].inputs.text = ["11",0]' "$RUNS/local-prompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/local-prompt-001/workflow.json"
+fmset "$RUNS/local-cfg-001" 'obj["spec"]["generation"]["local"]["samplers"][0]["cfg"] = 99'
+fmset "$RUNS/local-missing-001" 'del obj["spec"]["generation"]["local"]'
+fmset "$RUNS/local-hash-001" 'obj["spec"]["generation"]["local"]["models"][0]["verified"] = True'
+stale="$RUNS/local-stale-001"
+local_step 'local stale initial render' AG render --run "$stale" --param seed=123
+local_step 'local stale qa' AG qa --run "$stale"
+bound "$stale" prompt PASS codex > "$stale/review-prompt.json" || no 'local stale prompt binding'
+bound "$stale" image PASS codex > "$stale/review-image.json" || no 'local stale image binding'
+bound "$stale" image PASS claude > "$stale/review-image-claude.json" || no 'local stale Claude binding'
+local_step 'local stale changed render' AG render --run "$stale" --param seed=456
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local stale manifest' AG manifest --run "$stale"
+literal="$RUNS/local-literal-001"; mkrun local-literal-001 sprite-2d --style stylized-painterly --template literal-seed --authoring "$AUTH"
+local_step 'local literal render' AG render --run "$literal" --param seed=123
+cp "$FX/icon-ok.png" "$literal/outputs/local.png"; local_step 'local literal qa' AG qa --run "$literal"
+bound "$literal" prompt PASS codex > "$literal/review-prompt.json"; bound "$literal" image PASS codex > "$literal/review-image.json"
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local literal manifest' AG manifest --run "$literal"
+cp "$TMP/local-unverified.md" "$localrun/run.md"
+python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2> "$TMP/err" <<'EOF'
+import importlib.util, json, re, sys
+from pathlib import Path
+root, auth = Path(sys.argv[1]), Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(root / 'scripts' / 'checks'))
+from domains._api import Context
+s = importlib.util.spec_from_file_location('assetgen_plugin', root / 'scripts/checks/domains/assetgen.py')
+p = importlib.util.module_from_spec(s); s.loader.exec_module(p)
+reg = json.load(open(root / 'registry.json', encoding='utf-8')); rows = []
+for path in sorted((auth / 'assetgen/runs').glob('*/run.md')):
+    obj = json.loads(re.match(r'\A---json\s*\n(.*?)\n---', path.read_text(encoding='utf-8'), re.S).group(1))
+    ctx = Context(str(auth), reg, path.relative_to(auth).as_posix(), {}, None, {'authoring': auth})
+    rows += [{'artifact': obj['id'], 'check': x.check, 'state': x.state, 'reasons': x.reasons} for x in p.check(obj, ctx)]
+print(json.dumps({'results':rows}))
+EOF
+case_ local-stale-001 gen-run-image-review FAIL 'bound to other requirements' 'local seed change invalidates image review binding'
+case_ local-hybrid-001 gen-run-provenance WARN 'sha256 unverified' 'local unverified hashes warn'
+python3 -B - "$TMP/local-unverified.md" "$TMP/local-verified.md" <<'EOF' > "$TMP/local-record"
+import json, re, sys
+def read(p):
+    s=open(p,encoding='utf-8').read(); return json.loads(re.match(r'\A---json\s*\n(.*?)\n---',s,re.S).group(1)),s
+a, text=read(sys.argv[1]); b,_=read(sys.argv[2]); x=a['spec']['generation']['local']; y=b['spec']['generation']['local']
+assert x['models'][0]['name']=='sdxl.safetensors' and x['loras'][0]['name']=='style.safetensors' and x['samplers'][0]['seed']==123 and x['samplers'][0]['cfg']==5.5
+assert all(not v['verified'] and v['sha256'] is None for v in x['models']+x['loras'])
+assert [v['sha256'] for v in y['models']+y['loras']]==['a'*64,'b'*64] and all(v['verified'] for v in y['models']+y['loras'])
+assert 'Local stage (UNTESTED on RTX 5060)' in text
+EOF
+[ $? -eq 0 ] && ok "local manifest records models, LoRA, sampler, cache and untested body" || no "local manifest record" "$(cat "$TMP/local-record")"
+case_ local-cached-001 gen-run-provenance PASS '' 'cache verifies all model hashes and provenance passes'
+case_ local-prompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' 'CLIP prompt mismatch fails provenance'
+case_ local-cfg-001 gen-run-provenance FAIL 'spec.generation.local differs' 'tampered sampler fails provenance'
+case_ local-missing-001 gen-run-provenance FAIL 'records no spec.generation.local' 'missing local record fails provenance'
+case_ local-hash-001 gen-run-provenance FAIL 'claims a verified sha256 it does not carry' 'invalid verified hash fails provenance'
+case_ local-literal-001 gen-run-provenance FAIL 'seed is not a rendered param' 'literal seed fails provenance'
+! grep -q '"local"\|Local stage' "$good/run.md" && [ "$(st AGEN-qp-icon-001 gen-run-provenance)" = PASS ] && ok 'old run retains provenance PASS without local record' || no 'old run changed' "$(why AGEN-qp-icon-001 gen-run-provenance)"
+python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$AUTH" --registry "$ROOT/registry.json" > "$TMP/local-lint" 2>&1
+grep -q '^PASS AGEN-local-hybrid-001$' "$TMP/local-lint" && ok 'hybrid manifest passes artifact schema lint' || no 'hybrid artifact lint' "$(grep 'AGEN-local-hybrid-001' "$TMP/local-lint")"
+
 echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
 SL="$TMP/stylelock-authoring"
 python3 -B - "$ROOT" "$SL" > "$TMP/sl" 2>&1 <<'EOF'
@@ -3202,6 +3703,277 @@ AG lint --authoring "$SC" "$SG/styles/rpg-base/rejections/too-detailed-001.json"
   && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "reject: written rejections lint clean" || no "rejection lint" "$(cat "$TMP/o")"
 slrun sl-icon-004 icon && [ "$(lk '[.style_lock.rejections[].id] | join(",")' sl-icon-004)" = "palette-off-001,r-props,too-detailed-001,too-detailed-002" ] \
   && ok "resolve records the new relevant rejections (family props, any version)" || no "rejections after reject" "$(lk .style_lock.rejections sl-icon-004)"
+
+echo "-- anchor_target: anchors into NineRouterImage or IPAdapterAdvanced (UNTESTED on RTX 5060)"
+mkdir -p "$SG/templates"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$SG/templates/hybrid-anchor.json"
+echo '{"extends": "icon", "title": "Icon, two references", "max_references": 2}' > "$SG/purposes/icon-two.json"
+dh="$SR/hybrid-anchor-001"
+slrun hybrid-anchor-001 icon-two --template hybrid-anchor && AG render --run "$dh" > "$TMP/anchor-out" 2>&1; rc=$?
+python3 -B - "$dh/workflow.json" "$dh/workflow.ui.json" "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" > "$TMP/anchor-check" 2>&1 <<'EOF'
+import json, sys
+wf, ui, tmpl = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:])
+def walk(link):
+    node = wf[link[0]]
+    if node['class_type'] == 'ImageBatch':
+        return walk(node['inputs']['image1']) + walk(node['inputs']['image2'])
+    if node['class_type'] == 'NineRouterImage':
+        return ['base:' + link[0]]
+    return [node['inputs']['image']]
+assert walk(wf['12']['inputs']['image']) == ['base:1', 'anchor-b-strong.png', 'anchor-a-canon.png']
+assert 'reference_images' not in wf['1']['inputs']
+added = set(wf) - set(tmpl['workflow'])
+assert len(added) == 4
+box = next(g['bounding'] for g in ui['groups'] if g['title'] == 'References')
+nodes = {str(n['id']): n for n in ui['nodes']}
+def inside(n):
+    x, y = n['pos']; w, h = n['size']
+    return x >= box[0] and y - 30 >= box[1] and x + w <= box[0] + box[2] and y + h <= box[1] + box[3]
+assert all(inside(nodes[n]) for n in added)
+assert any(n['type'] == 'Note' and n['widgets_values'][0] == 'Style-lock anchors added by render: references/anchor-<id>.png, batched into IPAdapterAdvanced.image.' and inside(n) for n in ui['nodes'])
+print('ok')
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/anchor-check" && ok "hybrid render: base and two anchors into IPAdapterAdvanced, References group and target note" \
+  || no "hybrid anchor wiring rc=$rc" "$(cat "$TMP/anchor-out" "$TMP/anchor-check")"
+cp "$dh/workflow.json" "$TMP/hybrid-first.json"; cp "$dh/workflow.ui.json" "$TMP/hybrid-first.ui.json"
+AG render --run "$dh" > "$TMP/anchor-out" 2>&1; rc=$?
+[ $rc -eq 0 ] && cmp -s "$TMP/hybrid-first.json" "$dh/workflow.json" && cmp -s "$TMP/hybrid-first.ui.json" "$dh/workflow.ui.json" \
+  && ok "hybrid render --run: both workflow files byte-identical on repeat" || no "hybrid render determinism rc=$rc" "$(cat "$TMP/anchor-out")"
+slrun anchor-api-001 icon-two --template image-generate && AG render --run "$SR/anchor-api-001" > "$TMP/anchor-out" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(wiring "$SR/anchor-api-001/workflow.json")" = 'anchor-b-strong.png>anchor-a-canon.png' ] \
+  && ok "API-only template keeps NineRouterImage reference_images wiring" || no "API-only anchor wiring rc=$rc" "$(cat "$TMP/anchor-out")"
+
+# Mutate a resolved spec, so render validates even without selected anchors and never writes a workflow on failure.
+anchor_bad() { # label jq-filter expected-message
+  local label="$1" filter="$2" expected="$3" dir="$SR/anchor-bad-$1"
+  mkdir -p "$dir"; jq --arg p "assetgen/anchor-bad-$label" "$filter | .style_lock.references = [] | .params.filename_prefix = \$p" "$dh/spec.json" > "$dir/spec.json"
+  cp "$dh/prompt.md" "$dir/prompt.md"; rm -f "$dir/workflow.json" "$dir/workflow.ui.json"
+  AG render --run "$dir" > "$TMP/anchor-bad" 2>&1; local status=$?
+  [ "$status" -ne 0 ] && grep -Fq "$expected" "$TMP/anchor-bad" && [ ! -e "$dir/workflow.json" ] && [ ! -e "$dir/workflow.ui.json" ] \
+    && ok "render rejects $label before writing workflows" || no "render $label rc=$status" "$(cat "$TMP/anchor-bad")"
+}
+anchor_bad missing-node '.template.data.anchor_target.node = "missing"' "FAIL anchor_target.node 'missing' is not a node of the workflow"
+anchor_bad missing-input '.template.data.anchor_target.input = "images"' "FAIL anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)"
+anchor_bad disallowed '.template.data.anchor_target = {"node":"9","input":"latent_image"}' 'FAIL anchor_target KSampler.latent_image cannot take anchors'
+anchor_bad primary-missing '.template.data.primary_node = "missing"' "FAIL primary_node 'missing' is not a node of the workflow"
+anchor_bad primary-class '.template.data.primary_node = "4"' 'FAIL primary_node 4 (CheckpointLoaderSimple) is not a generation node'
+anchor_bad primary-ambiguous 'del(.template.data.primary_node) | .template.data.workflow["13"] = .template.data.workflow["1"]' 'FAIL the template has 2 NineRouterImage nodes: declare primary_node'
+# lint runs the same check on the template's own workflow: a bad anchor_target or primary_node FAILs lint, not only render
+LF="$ROOT/tests/fixtures/assetgen/local"
+lint_target() { AG lint "$LF/$1.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))'; }
+got=$(lint_target hybrid-anchor-template)
+[ "$got" = "PASS " ] && ok "lint: the hybrid anchor template (anchor_target 12.image, primary_node 1) PASSES" || no "lint hybrid anchor template" "$got"
+for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of the workflow" \
+         "target-anchor-missing-input|anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)" \
+         "target-anchor-disallowed|anchor_target KSampler.latent_image cannot take anchors" \
+         "target-primary-missing|primary_node '99' is not a node of the workflow" \
+         "target-primary-not-generation|primary_node 4 (CheckpointLoaderSimple) is not a generation node"; do
+  f=${c%%|*}; got=$(lint_target "$f")
+  jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LF/$f.json" >/dev/null \
+    && case "$got" in "FAIL ${c#*|}"*) : ;; *) false ;; esac \
+    && ok "lint FAILs $f: ${c#*|}" || no "lint $f" "$got"
+done
+# every core template that declares anchor_target, rendered in the style lock repo for the purpose its cases file
+# names (the first cases/<purpose>--<template>.json), family props: its anchors reach anchor_target after the template's
+# own link, graph-lint --run passes (anchor nodes laid into References) and render --run is byte-identical on repeat.
+# Discovery finds nothing while no core template declares anchor_target. UNTESTED on RTX 5060: nothing is generated.
+cat > "$TMP/anchor-core.py" <<'EOF'
+import json, sys
+wf, spec, tmpl = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:4])
+target = tmpl['anchor_target']
+def walk(link):
+    node = wf[link[0]]
+    if link[0] not in tmpl['workflow'] and node['class_type'] == 'ImageBatch':
+        return walk(node['inputs']['image1']) + walk(node['inputs']['image2'])
+    if link[0] not in tmpl['workflow'] and node['class_type'] == 'LoadImage':
+        return [node['inputs']['image']]
+    return ['node:' + link[0]]
+want = ['anchor-%s.png' % r['anchor_id'] for r in spec['style_lock']['references']]
+assert want, 'the purpose selected no anchor in the style lock repo'
+own = tmpl['workflow'][target['node']]['inputs'].get(target['input'])
+head = ['node:' + own[0]] if isinstance(own, list) else []
+got = walk(wf[target['node']]['inputs'][target['input']])
+assert got == head + want, (got, head + want)
+print('ok %d' % len(want))
+EOF
+for t in $CORE_TEMPLATES; do
+  jq -e 'has("anchor_target")' "$CORE/workflows/$t.json" >/dev/null 2>&1 || continue
+  p=""; for v in "$CASES"/*--"$t".json; do [ -f "$v" ] && { p=$(basename "$v" .json); p=${p%--"$t"}; break; }; done
+  [ -n "$p" ] || { no "anchor_target $t: no cases/<purpose>--$t.json names a purpose to render it with"; continue; }
+  da="$SR/anchor-core-$t-001"; mapfile -t args < <(case_params "$p" "$t")
+  # family props: the fixture's anchors are props anchors of rpg-base (a purpose's own family may select none)
+  if slrun "anchor-core-$t-001" "$p" --template "$t" --family props; then
+    AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  else rc=1; { echo "resolve failed:"; cat "$TMP/err"; } > "$TMP/anchor-out"; fi
+  out=$(python3 -B "$TMP/anchor-core.py" "$da/workflow.json" "$da/spec.json" "$CORE/workflows/$t.json" 2>&1)
+  AG graph-lint --run "$da" > "$TMP/anchor-gl" 2>&1; rc2=$?
+  [ $rc -eq 0 ] && [ "${out%% *}" = ok ] && [ $rc2 -eq 0 ] \
+    && ok "anchor_target $t ($p): ${out#ok } style-lock anchors reach $(jq -r '.anchor_target | .node + "." + .input' "$CORE/workflows/$t.json") after the template's own link; graph-lint --run PASS" \
+    || no "anchor_target $t ($p) rc=$rc graph-lint rc=$rc2" "$(cat "$TMP/anchor-out" "$TMP/anchor-gl"; echo "$out")"
+  cp "$da/workflow.json" "$TMP/anchor-core-first.json"; cp "$da/workflow.ui.json" "$TMP/anchor-core-first.ui.json"
+  AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  [ $rc -eq 0 ] && cmp -s "$TMP/anchor-core-first.json" "$da/workflow.json" && cmp -s "$TMP/anchor-core-first.ui.json" "$da/workflow.ui.json" \
+    && ok "anchor_target $t: render --run byte-identical on repeat (workflow.json and workflow.ui.json)" || no "anchor_target $t determinism rc=$rc" "$(cat "$TMP/anchor-out")"
+done
+
+python3 -B - "$ROOT" > "$TMP/anchor-size" 2>&1 <<'EOF'
+import glob, json, os, sys
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+import runfiles
+def nine(size): return {'class_type': 'NineRouterImage', 'inputs': {'size': size}}
+workflow = {'10': nine('ten'), '2': nine('two')}
+spec = {'template': {'data': {'primary_node': '10'}}, 'params': {'size': 'fallback'}}
+assert runfiles.requested_size(workflow, spec) == 'ten'
+assert runfiles.requested_size(workflow, {}) == 'two'
+local = {'1': {'class_type': 'KSampler', 'inputs': {'latent_image': ['2', 0]}},
+         '2': {'class_type': 'EmptyLatentImage', 'inputs': {'width': 832, 'height': 1216}}}
+assert runfiles.requested_size(local, {'template': {'data': {'primary_node': '1'}}}) == '832x1216'
+for bad in (None, [], {'template': None}, {'template': {'data': []}}, {'template': {'data': {'primary_node': []}}}, {'params': []}):
+    assert runfiles.requested_size({}, bad) == 'auto'
+for path in glob.glob(os.path.join(root, 'tests', 'fixtures', 'assetgen', 'golden', '*.json')):
+    graph = json.load(open(path, encoding='utf-8'))
+    nodes = [n for n in graph.values() if isinstance(n, dict) and n.get('class_type') == 'NineRouterImage']
+    if len(nodes) == 1:
+        assert runfiles.requested_size(graph, {}) == nodes[0].get('inputs', {}).get('size', 'auto'), path
+print('ok')
+EOF
+grep -qx ok "$TMP/anchor-size" && ok "requested_size: declared primary, numeric fallback, latent dimensions, malformed specs and golden graphs" \
+  || no "requested_size cases" "$(cat "$TMP/anchor-size")"
+rm -f "$SG/templates/hybrid-anchor.json" "$SG/purposes/icon-two.json"
+
+echo "-- profile routing: resolve --profile (UNTESTED on RTX 5060)"
+# Nothing here generates or measures anything: routing picks a template id and refuses one above the chosen profile.
+PR="$TMP/profile-authoring"; PF="$TMP/profile-fallback"; PB="$TMP/profile-badroutes"
+mkdir -p "$PR/assetgen/templates" "$PR/assetgen/runs" "$PF/assetgen" "$PB/assetgen"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$PR/assetgen/templates/hybrid-icon-ui.json"
+echo '{"schema": "rpg-factory.assetgen-template-profiles/1", "routes": {"icon": {"local-8gb": "no-such-template"}}}' > "$PF/assetgen/template-profiles.json"
+echo '{"schema": "rpg-factory.assetgen-template-profiles/1", "routes": {"icon": {"gpu-99": "x"}}}' > "$PB/assetgen/template-profiles.json"
+# AGS STATE-DIR ARGS...: assetgen with its own state dir (auto cases never read or write the suite's $TMP/state)
+AGS() { local s="$1"; shift; RPG_FACTORY_STATE_DIR="$s" python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+pq() { jq -r "$1" "$TMP/prof.json"; }
+
+# 1. the data file
+python3 -B - "$ROOT" > "$TMP/prof-data" 2>&1 <<'EOF'
+import json, os, sys
+root = sys.argv[1]
+data = json.load(open(os.path.join(root, 'scripts', 'assetgen', 'data', 'template-profiles.json'), encoding='utf-8'))
+hw = json.load(open(os.path.join(root, 'scripts', 'assetgen', 'data', 'hardware.json'), encoding='utf-8'))
+ids = {p['id'] for p in hw['profiles']}
+assert data['schema'] == 'rpg-factory.assetgen-template-profiles/1', data.get('schema')
+assert data['description'].startswith('UNTESTED on RTX 5060:'), data.get('description')
+assert isinstance(data['routes'], dict) and data['routes']
+for purpose, routes in data['routes'].items():
+    assert os.path.isfile(os.path.join(root, 'templates', 'assetgen', 'purposes', purpose + '.json')), purpose
+    for profile, template in routes.items():
+        assert profile in ids, (purpose, profile)
+        assert isinstance(template, str) and template, (purpose, profile)
+print('ok')
+EOF
+grep -qx ok "$TMP/prof-data" && ok "template-profiles.json: schema, UNTESTED description, core purposes, hardware profile ids" \
+  || no "template-profiles.json data file" "$(cat "$TMP/prof-data")"
+
+# 2. local-8gb on icon picks the hybrid template
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+cp "$TMP/prof.json" "$TMP/prof-8gb.json"
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = hybrid-icon-ui ] && [ "$(pq .profile.id)" = local-8gb ] && [ "$(pq .profile.source)" = --profile ] \
+  && [ "$(pq .profile.requires)" = local-8gb ] && jq -e '.profile.template_from | endswith("routes.icon.local-8gb")' "$TMP/prof.json" >/dev/null \
+  && ok "resolve --profile local-8gb on icon picks hybrid-icon-ui from routes.icon.local-8gb" \
+  || no "profile local-8gb rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 3. api-only keeps the staged API template
+AG resolve --purpose icon --style pixel-art --profile api-only --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+cp "$TMP/prof.json" "$TMP/prof-api.json"
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.template_from)" = "purpose default_template" ] \
+  && [ "$(pq .profile.requires)" = api-only ] && ok "resolve --profile api-only on icon keeps staged-icon (purpose default_template)" \
+  || no "profile api-only rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 4. a 4 GB machine is never handed the local-8gb template
+AG resolve --purpose icon --style pixel-art --profile local-4gb --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.id)" = local-4gb ] \
+  && ok "resolve --profile local-4gb on icon falls back to staged-icon, never the local-8gb template" \
+  || no "profile local-4gb rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 5. --template above the chosen profile is refused with the VRAM reason
+AG resolve --purpose icon --style pixel-art --profile local-4gb --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF VRAM "$TMP/err" && grep -qF "requires profile local-8gb" "$TMP/err" && grep -qF "chosen profile local-4gb" "$TMP/err" \
+  && ok "--profile local-4gb --template hybrid-icon-ui: refused with the VRAM reason (exit 1)" || no "local-4gb refusal rc=$rc" "$(cat "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --profile api-only --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF "chosen profile api-only" "$TMP/err" \
+  && ok "--profile api-only --template hybrid-icon-ui: refused (exit 1)" || no "api-only refusal rc=$rc" "$(cat "$TMP/err")"
+
+# 6. without --profile nothing changes
+AG resolve --purpose icon --style pixel-art --authoring "$PR" --json > "$TMP/prof-none.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e 'has("profile") | not' "$TMP/prof-none.json" >/dev/null && [ "$(jq -r .template.id "$TMP/prof-none.json")" = staged-icon ] \
+  && diff <(jq -S . "$TMP/prof-none.json") <(jq -S 'del(.profile)' "$TMP/prof-api.json") > "$TMP/prof-diff" 2>&1 \
+  && ok "without --profile: no profile key, staged-icon, equal to the --profile api-only spec minus .profile" \
+  || no "no --profile spec rc=$rc" "$(cat "$TMP/err" "$TMP/prof-diff" 2>&1)"
+AG resolve --purpose icon --style pixel-art --authoring "$PR" > "$TMP/prof-none.txt" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ! grep -q '^profile ' "$TMP/prof-none.txt" && ok "without --profile: no profile line in the text output" \
+  || no "no --profile text rc=$rc" "$(cat "$TMP/prof-none.txt" "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "without --profile: --template hybrid-icon-ui still resolves (today's behaviour)" || no "no --profile --template rc=$rc" "$(cat "$TMP/err")"
+
+# 7. purpose files unchanged: the same purpose hash with and without --profile
+[ -n "$(jq -r .purpose.sha256 "$TMP/prof-none.json")" ] && [ "$(jq -r .purpose.sha256 "$TMP/prof-8gb.json")" = "$(jq -r .purpose.sha256 "$TMP/prof-none.json")" ] \
+  && ok "--profile local-8gb keeps the purpose sha256 (no purpose file change)" \
+  || no "purpose sha256 $(jq -r .purpose.sha256 "$TMP/prof-8gb.json") vs $(jq -r .purpose.sha256 "$TMP/prof-none.json")"
+
+# 8. --template still overrides the route
+AG resolve --purpose icon --style pixel-art --profile local-8gb --template staged-icon --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.template_from)" = --template ] \
+  && ok "--profile local-8gb --template staged-icon: --template overrides the route" || no "template override rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 9. a route naming a template no layer has falls back with a warning
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PF" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] \
+  && jq -e 'any(.warnings[]; contains("no-such-template") and contains("falling back"))' "$TMP/prof.json" >/dev/null \
+  && ok "route to a missing template falls back to staged-icon with a warning" || no "fallback rc=$rc" "$(cat "$TMP/err"; jq -c .warnings "$TMP/prof.json" 2>&1)"
+
+# 10. auto: no recorded file, a recorded local-8gb, a recorded unknown profile (each with its own state dir)
+AGS "$TMP/pstate-10a" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .profile.id)" = api-only ] && [ "$(pq .profile.requested)" = auto ] \
+  && jq -e '.profile.source | startswith("auto: no recorded profile")' "$TMP/prof.json" >/dev/null \
+  && ok "auto without a recorded profile: api-only (requested auto)" || no "auto no file rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+mkdir -p "$TMP/pstate-10b/assetgen" "$TMP/pstate-10c/assetgen"
+echo '{"profile": {"id": "local-8gb"}}' > "$TMP/pstate-10b/assetgen/hardware-profile.json"
+echo '{"profile": {"id": "gpu-99"}}' > "$TMP/pstate-10c/assetgen/hardware-profile.json"
+AGS "$TMP/pstate-10b" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = hybrid-icon-ui ] && [ "$(pq .profile.id)" = local-8gb ] \
+  && jq -e '.profile.source | startswith("recorded ")' "$TMP/prof.json" >/dev/null \
+  && ok "auto with a recorded local-8gb profile picks hybrid-icon-ui" || no "auto recorded rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+AGS "$TMP/pstate-10c" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .profile.id)" = api-only ] && jq -e 'any(.warnings[]; contains("gpu-99"))' "$TMP/prof.json" >/dev/null \
+  && ok "auto with a recorded unknown profile: api-only and a warning" || no "auto unknown rc=$rc" "$(cat "$TMP/err"; jq -c '.profile, .warnings' "$TMP/prof.json" 2>&1)"
+[ ! -e "$TMP/state/assetgen/hardware-profile.json" ] && ok "auto cases leave the suite's state dir untouched" \
+  || no "suite state dir has assetgen/hardware-profile.json"
+
+# 11. an unknown profile value
+AG resolve --purpose icon --style pixel-art --profile bogus >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "api-only, local-4gb, local-8gb, auto" "$TMP/err" && ok "--profile bogus: exit 2 naming the profiles" \
+  || no "--profile bogus rc=$rc" "$(cat "$TMP/err")"
+
+# 12. a malformed game routes file is blamed on the game file
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PB" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF "game:assetgen/template-profiles.json" "$TMP/err" && grep -qF gpu-99 "$TMP/err" \
+  && ok "malformed game template-profiles.json: exit 1 naming the file and the bad profile" || no "bad routes rc=$rc" "$(cat "$TMP/err")"
+
+# 13. --out keeps spec.profile
+mkdir -p "$PR/assetgen/runs/prof-001"
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" --out "$PR/assetgen/runs/prof-001/spec.json" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .profile.id "$PR/assetgen/runs/prof-001/spec.json")" = local-8gb ] \
+  && [ "$(jq -r .profile.template "$PR/assetgen/runs/prof-001/spec.json")" = hybrid-icon-ui ] \
+  && ok "resolve --out writes spec.profile (local-8gb, hybrid-icon-ui)" || no "--out profile rc=$rc" "$(cat "$TMP/err")"
+
+# 14. the text output names the profile; local profiles are marked UNTESTED
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" > "$TMP/prof.txt" 2>"$TMP/err"; rc=$?
+line=$(awk 'index($0, "profile local-8gb [--profile], template hybrid-icon-ui") == 1' "$TMP/prof.txt")
+[ $rc -eq 0 ] && [ -n "$line" ] && printf '%s\n' "$line" | grep -qF "UNTESTED on RTX 5060" \
+  && ok "text output: profile local-8gb line marked UNTESTED on RTX 5060" || no "local-8gb text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --profile api-only --authoring "$PR" > "$TMP/prof.txt" 2>"$TMP/err"; rc=$?
+line=$(grep '^profile api-only ' "$TMP/prof.txt")
+[ $rc -eq 0 ] && [ -n "$line" ] && ! printf '%s\n' "$line" | grep -qF UNTESTED \
+  && ok "text output: profile api-only line without UNTESTED" || no "api-only text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
 
 echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
 # fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc
