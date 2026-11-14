@@ -18,6 +18,9 @@ A suite runs when one of these holds (anything unsure runs):
     runs its mapped suites (two for the pipeline files; english-only, file-guard, git-guard for english.py) and a
     suite that itself names the file (exact path in its text or an EXTRA pattern), not the ~19 suites its import
     closure reaches; only selection is narrowed, hashes (suite reuse) keep the conservative closure;
+  - a change to scripts/lib/workspace.sh (CALLER_SUITES) runs the suites that are one of its direct callers, or name it
+    or one of them, not the ~43 its transitive callers reach (factory-cmd.py runs check-registry.sh); only selection
+    is narrowed, hashes keep the conservative closure;
   - a library or Python module change reaches a named script or suite through static imports, followed through
     every tracked Python module on the way (unresolved/dynamic libraries and unnamed leaves run all; a leaf a
     suite's EXTRA patterns cover counts as named by that suite, e.g. tests/fixtures/assetgen/* for the assetgen suite);
@@ -80,6 +83,11 @@ PIPELINE_SUITES = {
     # shared English-only detection: the check (global, scripts/checks/english-only.py) and the guards import it
     "scripts/lib/english.py": {"tests/english-only.test.sh", "tests/file-guard.test.sh", "tests/git-guard.test.sh"},
 }
+
+# shell libraries whose transitive callers fan out (factory-cmd.py runs check-registry.sh, which sources the library):
+# selection stops at one hop, the file's direct callers (one_hop), and the suites that are or name one of them; the
+# reuse hashes (hashes) still use the conservative closure
+CALLER_SUITES = {"scripts/lib/workspace.sh"}
 
 SKILL_TEXT = ["skills/*", ".claude/skills/*"]
 # indirect inputs: what a suite reads without naming the file
@@ -431,6 +439,11 @@ def names(path, suite):
     return path == suite or path in suite_patterns(suite) or hit(path, EXTRA.get(suite, []))
 
 
+def one_hop(path):
+    """The file and its direct importers/callers (one edge of the graph, no transitive closure)."""
+    return frozenset([path]) | frozenset(library_graph()[0].get(path, ()))
+
+
 def always(path):
     return hit(path, GLOBAL) or "/" not in path
 
@@ -447,6 +460,10 @@ def needed(files, suite):
             continue
         if f in PIPELINE_SUITES:
             if suite in PIPELINE_SUITES[f] or names(f, suite):
+                return True
+            continue
+        if f in CALLER_SUITES:
+            if any(names(p, suite) for p in one_hop(f)):
                 return True
             continue
         reached = closure(f)
@@ -485,7 +502,12 @@ def affected_cases(files, suite):
     for path in files:
         if not needed([path], suite):
             continue
-        reached = frozenset([path]) if path in PIPELINE_SUITES else closure(path)
+        if path in PIPELINE_SUITES:
+            reached = frozenset([path])
+        elif path in CALLER_SUITES:
+            reached = one_hop(path)
+        else:
+            reached = closure(path)
         if reached is None:
             return "ALL"
         # a shared module reaches every file that imports it: each reached file the suite selects must be mapped

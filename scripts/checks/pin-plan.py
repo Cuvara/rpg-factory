@@ -25,6 +25,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+from plugin_registry import load_registry
 from workspace import default_workspace
 
 PKGS = {
@@ -49,8 +50,7 @@ def pkg_json_at(repo, ref, path):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    reg = json.load(open(os.path.join(root, "registry.json"), encoding="utf-8"))
+    reg = load_registry()
     ws = default_workspace(registry=reg)
     if "--workspace" in sys.argv:
         ws = sys.argv[sys.argv.index("--workspace") + 1]

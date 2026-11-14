@@ -1082,6 +1082,7 @@ run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/net
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
 run "workspace default by platform (shell + Python helper, stubbed uname)" env -u TMPDIR tests/workspace-default.test.sh
+run "plugin registry loader (CLAUDE_PLUGIN_ROOT set and unset)" env -u TMPDIR tests/plugin-registry.test.sh
 # plan paths (task checks-lows): skipped while the suite is absent; the run line stays visible to list_suites
 if [ -f tests/plan-paths.test.sh ]; then run "plan paths (portable plan path validation)" env -u TMPDIR tests/plan-paths.test.sh; fi
 fi
