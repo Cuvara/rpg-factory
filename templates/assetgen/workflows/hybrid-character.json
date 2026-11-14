@@ -510,7 +510,7 @@
     "group": "Generate"
    },
    {
-    "text": "Local loaders (UNTESTED on RTX 5060): one SDXL checkpoint, the IPAdapter PLUS preset with its CLIP vision model, one Canny ControlNet and a 4x upscale model. The requires block lists the files by name; the template fetches nothing.",
+    "text": "Local loaders (UNTESTED on RTX 5060): one SDXL checkpoint, the IPAdapter PLUS preset with its CLIP vision model, one Canny ControlNet and a 4x upscale model. The requires block lists these model files by name. The cut-out pack fetches its own InSPyReNet weight on its first run, so get the user's yes or place the weight before the first run.",
     "group": "Models"
    },
    {
@@ -518,7 +518,7 @@
     "group": "Refine (local)"
    },
    {
-    "text": "Upscale the RGB decode with the 4x model, resize to output_width (aspect kept), then cut out the background last: an upscale model cannot take RGBA. The cut-out also runs on ref-3d sheets; their QA accepts alpha. UNTESTED on RTX 5060.",
+    "text": "Upscale the RGB decode with the 4x model, resize to output_width (aspect kept), then cut out the background last: an upscale model cannot take RGBA. The cut-out also runs on ref-3d sheets; their QA accepts alpha. The cut-out pack fetches its own InSPyReNet weight on its first run (not listed in requires.models), so get the user's yes or place the weight before the first run. UNTESTED on RTX 5060.",
     "group": "Post-process"
    },
    {
