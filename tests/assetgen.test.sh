@@ -66,6 +66,11 @@
 # matches image_sha256 is skipped; --apply merges only into a draft style (an active style or one without anchors exits 1
 # and stays byte-identical), after it lint has 0 FAIL and the style-palette, style-tone and style-canvas rows are ok in
 # field_states and available in qa; a canvas entry with only min_side passes lint),
+# style bump (style_cmd.py: an active game style gets a draft version N+1 under styles/<id>/versions/ and carried anchors
+# written only as proposed copies; nothing active is edited, no anchor is written active; the report names every anchor,
+# run and rejection that needs re-approval; no new artifact-quality FAIL on the bumped fixture; a quality rejection or a
+# check that cannot run removes the carried anchors and limits the verb to listing; --list-only writes nothing; a draft
+# style, a core-only id and a second bump exit 1, a malformed --id exits 2),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -4580,6 +4585,202 @@ EOF
 [ "$(cat "$TMP/sd.fs")" = "ok []" ] && ok "a min_side-only canvas: field_states style-canvas ok and stylelock.style_errors empty" || no "min_side-only canvas states" "$(cat "$TMP/sd.fs")"
 [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
   && ok "style derive changed nothing under templates/assetgen" || no "templates/assetgen changed by derive" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+echo "-- style bump: draft version N+1, proposed anchor copies and the re-approval report (style_cmd.py)"
+# fixture: an ACTIVE game style at version 1 (init, anchors, derive --apply into the draft, then activated), anchors
+# chars-a and props-a-v1 (active), props-p (proposed), props-old (retired), a run of the style at version 1, and the
+# rejections rej-v1 (version 1) and rej-any (version null); built once in SB0, every case works on a copy
+SB0="$TMP/style-bump-base"; mkdir -p "$SB0"; git init -q -b main "$SB0"
+AG style init --id demo-game --extends pixel-art --authoring "$SB0" > "$TMP/sb.out" 2> "$TMP/sb.err" || no "style bump setup: style init" "$(cat "$TMP/sb.err")"
+sb_setup() {   # sb_setup MODE: anchors (draft ref, before derive) | final (every record and the run carry the active style ref)
+python3 -B - "$ROOT" "$SB0" "$1" 2>&1 <<'EOF' | tr -d '\r'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, png, stylelock
+A, mode = sys.argv[2], sys.argv[3]
+G = os.path.join(A, "assetgen")
+D = os.path.join(G, "styles", "demo-game")
+AD, RD = os.path.join(D, "anchors"), os.path.join(D, "rejections")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def jdump(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+def front(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("---json\n%s\n---\n# run\n" % json.dumps(obj))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+if mode == "anchors":
+    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved"})
+    for aid, family, w, h, a, b, status in (
+            ("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40), "active"),
+            ("props-a-v1", "props", 256, 256, (200, 40, 40), (40, 160, 60), "active"),
+            ("props-p", "props", 256, 256, (180, 40, 40), (40, 160, 60), "proposed"),
+            ("props-old", "props", 256, 256, (200, 40, 40), (60, 160, 40), "retired")):
+        data = disc(w, h, a, b)
+        os.makedirs(AD, exist_ok=True)
+        with open(os.path.join(AD, aid + ".png"), "wb") as f:
+            f.write(data)
+        person = status != "proposed"
+        jdump(os.path.join(AD, aid + ".json"),
+              {"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": status, "style": ref, "family": family,
+               "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+               "image_sha256": hashlib.sha256(data).hexdigest(),
+               "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+               "approved_by": "Dana" if person else None, "approved_on": "2026-11-01" if person else None})
+else:
+    for name in sorted(os.listdir(AD)):
+        if name.endswith(".json"):
+            p = os.path.join(AD, name)
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+            data["style"] = ref
+            jdump(p, data)
+    jdump(os.path.join(RD, "rej-v1.json"),
+          {"schema": "rpg-factory.assetgen-rejection/1", "id": "rej-v1", "type": "direction", "style": ref,
+           "family": None, "reason": "other", "text": "no neon glow on version 1 props"})
+    jdump(os.path.join(RD, "rej-any.json"),
+          {"schema": "rpg-factory.assetgen-rejection/1", "id": "rej-any", "type": "direction",
+           "style": {"style_id": "demo-game", "version": None, "sha256": "0" * 64},
+           "family": None, "reason": "other", "text": "no text or logos on any version"})
+    front(os.path.join(G, "runs", "bump-run-001", "run.md"),
+          {"id": "AGEN-bump-001", "status": "approved",
+           "spec": {"style": {"id": "demo-game", "sha256": ref["sha256"]}, "style_lock": {"style": ref}}})
+print("ok")
+EOF
+}
+sb_setup anchors > "$TMP/sb.setup"; grep -qx ok "$TMP/sb.setup" || no "style bump setup: anchors" "$(cat "$TMP/sb.setup")"
+AG style derive --style demo-game --authoring "$SB0" --apply > "$TMP/sb.out" 2> "$TMP/sb.err" || no "style bump setup: style derive --apply" "$(cat "$TMP/sb.err")"
+jq '.status = "active"' "$SB0/assetgen/styles/demo-game.json" > "$TMP/sb-active.json" && cp "$TMP/sb-active.json" "$SB0/assetgen/styles/demo-game.json"
+sb_setup final > "$TMP/sb.setup"; grep -qx ok "$TMP/sb.setup" || no "style bump setup: records" "$(cat "$TMP/sb.setup")"
+# tsig DIR: one hash over every file below DIR but .git; sb_files DIR: the sorted file list; sb_changed PRE POST: files of PRE that differ or vanished
+tsig() { (cd "$1" && find . -type f -not -path './.git/*' -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1); }
+sb_files() { (cd "$1" && find . -type f -not -path './.git/*' | LC_ALL=C sort); }
+sb_changed() { local f; sb_files "$1" | while read -r f; do cmp -s "$1/$f" "$2/$f" || echo "$f"; done; }
+sb_copy() { rm -rf "$1"; cp -r "$SB0" "$1"; }
+
+SBP="$TMP/style-bump-pre"; sb_copy "$SBP"          # the authoring repo as it was before the bump
+SB="$TMP/style-bump"; sb_copy "$SB"; SBS="$SB/assetgen/styles"; SBD="$SBS/demo-game/versions/2.json"
+AG style bump --id demo-game --authoring "$SB" --json > "$TMP/sb1.json" 2> "$TMP/sb.err"; rc=$?
+# (1) the draft is a copy at version 2, nothing that existed changed
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sb1.json")" = "rpg-factory.assetgen-style-bump/1" ] && [ "$(jq -r .draft.written "$TMP/sb1.json")" = true ] \
+  && [ "$(jq -r .draft.path "$TMP/sb1.json")" = "assetgen/styles/demo-game/versions/2.json" ] && [ -f "$SBD" ] \
+  && [ "$(jq -c '[.version, .status]' "$SBD")" = '[2,"draft"]' ] \
+  && [ "$(jq -cS 'del(.version, .status)' "$SBD")" = "$(jq -cS 'del(.version, .status)' "$SBS/demo-game.json")" ] \
+  && ok "style bump --json exits 0 and writes versions/2.json: version 2, status draft, every other key of the active file" || no "style bump rc=$rc" "$(cat "$TMP/sb.err"; cat "$SBD" 2>&1)"
+[ "$(jq -c '[.version, .status]' "$SBS/demo-game.json")" = '[1,"active"]' ] && [ -z "$(sb_changed "$SBP" "$SB")" ] \
+  && ok "the active style file, project.json and every pre-existing anchor, rejection and run file are byte-identical after the bump" \
+  || no "a pre-existing file changed" "$(sb_changed "$SBP" "$SB")"
+sb_files "$SBP" > "$TMP/sb.before"; sb_files "$SB" > "$TMP/sb.after"
+[ "$(LC_ALL=C comm -13 "$TMP/sb.before" "$TMP/sb.after" | tr '\n' ' ')" = "./assetgen/styles/demo-game/anchors/chars-a-v2.json ./assetgen/styles/demo-game/anchors/chars-a-v2.png ./assetgen/styles/demo-game/anchors/props-a-v2.json ./assetgen/styles/demo-game/anchors/props-a-v2.png ./assetgen/styles/demo-game/versions/2.json " ] \
+  && ok "the bump added exactly the draft and two carried anchors (json + png each), no file was removed" || no "files added by the bump" "$(LC_ALL=C comm -3 "$TMP/sb.before" "$TMP/sb.after")"
+# (2) carried anchors are proposed copies for version 2
+AGD="$SBS/demo-game/anchors"; carried_ok=true; carried_why=""
+for pair in "chars-a chars-a-v2" "props-a-v1 props-a-v2"; do
+  read -r old new <<<"$pair"
+  [ "$(jq -c '[.status, .approved_by, .approved_on, .style.version, .style.sha256, .id, .image]' "$AGD/$new.json")" \
+    = "[\"proposed\",null,null,2,\"$(jq -r .draft.style.sha256 "$TMP/sb1.json")\",\"$new\",\"$new.png\"]" ] \
+    && [ "$(jq -r .image_sha256 "$AGD/$new.json")" = "$(jq -r .image_sha256 "$AGD/$old.json")" ] && cmp -s "$AGD/$old.png" "$AGD/$new.png" \
+    || { carried_ok=false; carried_why="$carried_why $new: $(cat "$AGD/$new.json" 2>&1 | head -c 400)"; }
+done
+$carried_ok && [ ! -e "$AGD/props-a-v1-v2.json" ] && [ ! -e "$AGD/props-a-v1-v2.png" ] \
+  && ok "carried anchors chars-a-v2 and props-a-v2 are proposed, approved_by null, style.version 2, same image sha256 and bytes (the -v1 suffix is replaced: no props-a-v1-v2)" \
+  || no "carried anchors" "$carried_why"
+[ "$(jq -r 'select(.status == "active") | .id' "$AGD"/*.json | LC_ALL=C sort | tr '\n' ' ')" = "chars-a props-a-v1 " ] \
+  && ok "no anchor is written active: only the two pre-existing active anchors have status active" || no "anchor statuses" "$(jq -c '[.id, .status]' "$AGD"/*.json)"
+# (3) the report names what needs re-approval
+[ "$(jq -c '.needs_reapproval | [.anchors, .runs, .rejections]' "$TMP/sb1.json")" = '[["chars-a","props-a-v1","props-p"],["AGEN-bump-001"],["rej-v1"]]' ] \
+  && ok "needs_reapproval lists the carried and proposed anchors, the version 1 run and the version 1 rejection" \
+  || no "needs_reapproval" "$(jq -c .needs_reapproval "$TMP/sb1.json")"
+[ "$(jq -r '[.anchors[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "chars-a=carried,props-a-v1=carried,props-old=none,props-p=reapprove" ] \
+  && [ "$(jq -r '[.anchors[] | select(.new_id != null) | "\(.id)>\(.new_id)"] | join(",")' "$TMP/sb1.json")" = "chars-a>chars-a-v2,props-a-v1>props-a-v2" ] \
+  && [ "$(jq -r '[.rejections[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "rej-any=applies,rej-v1=rerecord" ] \
+  && [ "$(jq -r '[.runs[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "AGEN-bump-001=reapprove" ] \
+  && ok "report rows: anchors carried/reapprove/none with new_id on carried rows, the version null rejection applies, the retired anchor is none" \
+  || no "report rows" "$(jq -c '[.anchors, .runs, .rejections]' "$TMP/sb1.json")"
+SBT="$TMP/style-bump-text"; sb_copy "$SBT"
+AG style bump --id demo-game --authoring "$SBT" > "$TMP/sb1.txt" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "^anchor props-p " "$TMP/sb1.txt" && grep -q "^anchor chars-a " "$TMP/sb1.txt" && grep -q "^anchor props-a-v1 " "$TMP/sb1.txt" \
+  && grep -q "^run AGEN-bump-001 " "$TMP/sb1.txt" && grep -q "^rejection rej-v1 .*rerecord" "$TMP/sb1.txt" && grep -q "^rejection rej-any .*applies" "$TMP/sb1.txt" \
+  && grep -q "nothing active was edited" "$TMP/sb1.txt" && ! grep -q "limited to listing" "$TMP/sb1.txt" \
+  && ok "the text report names every anchor, run and rejection and says nothing active was edited" || no "text report rc=$rc" "$(cat "$TMP/sb1.txt" "$TMP/sb.err")"
+# (4) quality: the bump's own check passes, and artifact-quality shows no FAIL that was not there before
+aq_fails() { python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$1" --registry "$ROOT/registry.json" --domain assetgen --json > "$2" 2>> "$TMP/err"
+  jq -r '.results[] | select(.state == "FAIL") | "\(.artifact)|\(.check)"' "$2" | LC_ALL=C sort -u; }
+aq_fails "$SBP" "$TMP/sb-aq-before.json" > "$TMP/sb-fails-before"; aq_fails "$SB" "$TMP/sb-aq-after.json" > "$TMP/sb-fails-after"
+[ "$(jq -r .quality.state "$TMP/sb1.json")" = PASS ] && [ "$(jq -c .quality.new_fails "$TMP/sb1.json")" = '[]' ] \
+  && [ "$(jq '.results | length' "$TMP/sb-aq-before.json")" -gt 0 ] && [ "$(jq '.results | length' "$TMP/sb-aq-after.json")" -gt 0 ] \
+  && [ -z "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after")" ] \
+  && ok "quality.state PASS, and artifact-quality --domain assetgen shows no FAIL on the bumped authoring that was not there before ($(wc -l < "$TMP/sb-fails-before" | tr -d ' ') FAIL before, $(wc -l < "$TMP/sb-fails-after" | tr -d ' ') after)" \
+  || no "quality after the bump: $(jq -r .quality.state "$TMP/sb1.json")" "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after"; jq -c .quality "$TMP/sb1.json")"
+# (5) a second bump of the same style: the draft exists, nothing is written
+h_sb=$(tsig "$SB")
+AG style bump --id demo-game --authoring "$SB" > "$TMP/sb2.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/sb.err" && [ "$(tsig "$SB")" = "$h_sb" ] \
+  && ok "a second style bump exits 1 (the draft exists) and writes nothing" || no "second bump rc=$rc" "$(cat "$TMP/sb.err")"
+# (6) --list-only writes nothing and still lists
+SBL="$TMP/style-bump-list"; sb_copy "$SBL"; h_sbl=$(tsig "$SBL"); g_sbl=$(git -C "$SBL" status --porcelain)
+AG style bump --id demo-game --authoring "$SBL" --list-only --json > "$TMP/sbl.json" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(tsig "$SBL")" = "$h_sbl" ] && [ "$(git -C "$SBL" status --porcelain)" = "$g_sbl" ] && [ ! -e "$SBL/assetgen/styles/demo-game/versions" ] \
+  && [ "$(jq -r .draft.written "$TMP/sbl.json")" = false ] && [ "$(jq -r .list_only "$TMP/sbl.json")" = true ] && [ "$(jq -r .quality.state "$TMP/sbl.json")" = SKIPPED ] \
+  && [ "$(jq -c .needs_reapproval "$TMP/sbl.json")" = "$(jq -c .needs_reapproval "$TMP/sb1.json")" ] \
+  && ok "style bump --list-only writes nothing (tree and git status unchanged), skips the quality check and lists the same re-approvals" \
+  || no "list-only rc=$rc" "$(cat "$TMP/sb.err"; jq -c '[.draft, .quality, .needs_reapproval]' "$TMP/sbl.json")"
+AG style bump --id demo-game --authoring "$SBL" --list-only > "$TMP/sbl.txt" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "nothing written" "$TMP/sbl.txt" && grep -q "^anchor props-p " "$TMP/sbl.txt" && [ "$(tsig "$SBL")" = "$h_sbl" ] \
+  && ok "the --list-only text says nothing was written and still names the anchors" || no "list-only text rc=$rc" "$(cat "$TMP/sbl.txt" "$TMP/sb.err")"
+# (7) refusals
+SBDR="$TMP/style-bump-draft"; rm -rf "$SBDR"; mkdir -p "$SBDR"
+AG style init --id demo-game --extends pixel-art --authoring "$SBDR" > /dev/null 2>&1; h_dr=$(tsig "$SBDR")
+AG style bump --id demo-game --authoring "$SBDR" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only works on an active style" "$TMP/sb.err" && [ "$(tsig "$SBDR")" = "$h_dr" ] \
+  && ok "style bump of a draft style exits 1 and writes nothing" || no "draft bump rc=$rc" "$(cat "$TMP/sb.err")"
+SBC="$TMP/style-bump-core"; sb_copy "$SBC"; h_c=$(tsig "$SBC")
+AG style bump --id pixel-art --authoring "$SBC" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "has no game file" "$TMP/sb.err" && [ "$(tsig "$SBC")" = "$h_c" ] \
+  && ok "style bump of a core-only style id exits 1 and writes nothing" || no "core-only bump rc=$rc" "$(cat "$TMP/sb.err")"
+AG style bump --id "Bad_Id" --authoring "$SBC" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "must be a lowercase id" "$TMP/sb.err" && [ "$(tsig "$SBC")" = "$h_c" ] \
+  && ok "style bump with a malformed --id exits 2 and writes nothing" || no "malformed --id rc=$rc" "$(cat "$TMP/sb.err")"
+# (8) the quality plugin rejects the carried anchors (a stub FAILs once any *-v2.json anchor exists) or cannot run (non-JSON)
+cat > "$TMP/sb-quality-stub.py" <<'EOF'
+import glob, json, os, sys
+fail = glob.glob(os.path.join(sys.argv[1], "assetgen", "styles", "*", "anchors", "*-v2.json"))
+print(json.dumps({"results": [{"artifact": "AGEN-stub", "check": "gen-run-style", "state": "FAIL" if fail else "PASS",
+                               "reasons": ["a carried anchor broke the stub"] if fail else []}]}))
+EOF
+printf 'print("this is not json")\n' > "$TMP/sb-quality-garbage.py"
+for kind in "stub REJECTED" "garbage NOT_RUN"; do
+  read -r k want <<<"$kind"
+  SBQ="$TMP/style-bump-q-$k"; sb_copy "$SBQ"; sb_files "$SBQ" > "$TMP/sb.before"
+  ( export RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT="$TMP/sb-quality-$k.py"; AG style bump --id demo-game --authoring "$SBQ" --json > "$TMP/sbq.json" 2> "$TMP/sb.err" ); rc=$?
+  sb_files "$SBQ" > "$TMP/sb.after"
+  [ $rc -eq 0 ] && [ "$(jq -r .quality.state "$TMP/sbq.json")" = "$want" ] && [ -f "$SBQ/assetgen/styles/demo-game/versions/2.json" ] && [ "$(jq -r .draft.written "$TMP/sbq.json")" = true ] \
+    && [ -z "$(find "$SBQ/assetgen/styles/demo-game/anchors" -name '*-v2.*')" ] \
+    && [ "$(LC_ALL=C comm -13 "$TMP/sb.before" "$TMP/sb.after")" = "./assetgen/styles/demo-game/versions/2.json" ] && [ -z "$(sb_changed "$SBP" "$SBQ")" ] \
+    && [ "$(jq '[.anchors[] | select(.action == "carried" or .new_id != null)] | length' "$TMP/sbq.json")" = 0 ] \
+    && [ "$(jq -c '.needs_reapproval.anchors' "$TMP/sbq.json")" = '["chars-a","props-a-v1","props-p"]' ] \
+    && ok "quality $want ($k stub): exit 0, the draft stays, no carried anchor file remains, every anchor is still listed for re-approval" \
+    || no "quality $want ($k) rc=$rc" "$(cat "$TMP/sb.err"; jq -c '[.quality, .anchors]' "$TMP/sbq.json"; find "$SBQ/assetgen/styles/demo-game" -type f)"
+  [ "$want" != REJECTED ] || { [ "$(jq -c '[.quality.new_fails[] | [.artifact, .check]]' "$TMP/sbq.json")" = '[["AGEN-stub","gen-run-style"]]' ] \
+    && ok "a quality rejection names the new FAIL (artifact and check)" || no "new_fails" "$(jq -c .quality "$TMP/sbq.json")"; }
+  sb_copy "$SBQ"
+  ( export RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT="$TMP/sb-quality-$k.py"; AG style bump --id demo-game --authoring "$SBQ" > "$TMP/sbq.txt" 2> "$TMP/sb.err" ); rc=$?
+  [ $rc -eq 0 ] && grep -q "^quality: $want" "$TMP/sbq.txt" && grep -q "the verb was limited to listing" "$TMP/sbq.txt" && grep -q "nothing active was edited" "$TMP/sbq.txt" \
+    && ! grep -q "^wrote assetgen/styles/demo-game/anchors/" "$TMP/sbq.txt" \
+    && ok "quality $want ($k stub): the text output says the verb was limited to listing" || no "limited-to-listing text ($k) rc=$rc" "$(cat "$TMP/sbq.txt" "$TMP/sb.err")"
+done
+# (9) style derive keeps passing its own cases above (unchanged); (10) core data untouched
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style bump changed nothing under templates/assetgen" || no "templates/assetgen changed by bump" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
 echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
