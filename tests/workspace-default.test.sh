@@ -160,7 +160,8 @@ reader_violations() {
 }
 # Negative self-test: a raw reader is reported, a converted one is not.
 mkdir -p "$T/rguard/scripts" "$T/rguard/tests"
-printf '%s\n' 'root=$(jq -r .workspace.root_default registry.json)' > "$T/rguard/scripts/raw.sh"
+# The fixture text is assembled with %s so this source line does not itself match the reader guard regex.
+printf 'root=$(jq -r .workspace.%s registry.json)\n' 'root_default' > "$T/rguard/scripts/raw.sh"
 printf '%s\n' 'root=$(rpgf_platform_path "$(jq -r .workspace.root_default registry.json)")' > "$T/rguard/scripts/ok.sh"
 printf '%s\n' "root = registry['workspace']['root_default']" > "$T/rguard/scripts/raw.py"
 violations=$(reader_violations "$T/rguard")
