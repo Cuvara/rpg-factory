@@ -3955,7 +3955,7 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot 
 # (codex/<task branch>--qa in a sibling directory) and a plan branch known only through Orca's lineage (any
 # directory); a slot in a checkout that is neither stays unnamed
 git -C "$S" worktree add -q "$TMP/slot-pfx-child" -b codex/feat/core/demo-gw--qa "$SG" 2>/dev/null
-git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b feat/core/demo-slot-lineage "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b codex/feat/core/demo-slot-lineage "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/slot-unrelated" -b slot-unrelated-br "$SG" 2>/dev/null
 mkdir -p "$SLOTS/5" "$SLOTS/6" "$SLOTS/7"
 for n in 5:slot-pfx-child:7001 6:slot-lineage-child:7002 7:slot-unrelated:7003; do
@@ -3978,7 +3978,7 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error oref "orca failing: line
 unset FAKE_ORCA_WT
 git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
 git -C "$S" worktree remove --force "$TMP/slot-unrelated"
-git -C "$S" branch -q -D codex/feat/core/demo-gw--qa feat/core/demo-slot-lineage slot-unrelated-br
+git -C "$S" branch -q -D codex/feat/core/demo-gw--qa codex/feat/core/demo-slot-lineage slot-unrelated-br
 rm -rf "$SLOTS"
 
 case_end settled-workers
