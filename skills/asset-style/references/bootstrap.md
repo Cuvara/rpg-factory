@@ -67,8 +67,9 @@ them.
 Once active anchors exist, propose the structured fields with `style derive` and report the result (`style-fields.md`).
 Setting the confirmed fields, `version: 1` and `status: active` in the game style, and the `project.json` refs, is the
 person's decision: do it only on their explicit request. Then `assetgen.py lint --authoring <A>` must show 0 FAIL and no
-`WARN` that the active game style lacks a usable `palette`, `tone` or `canvas` field (`canvas: {}` does not count);
-otherwise every `style-*` QA row is `NOT_AVAILABLE`, so ask the person for the missing fields.
+`WARN` that the active game style has no usable structured field at all (`palette.colors`, `tone`, `canvas`,
+`outline.edge_darkness`; `canvas: {}` does not count). A field that is missing gives its own `style-*` row
+`NOT_AVAILABLE`, so ask the person for the missing fields.
 
 Anchors feed only runs of their own style id and version. Anchors promoted under another exploration style id feed
 nothing of the game style; `drift` lists them as `style-id-mismatch`. Either promote again from approved runs under the

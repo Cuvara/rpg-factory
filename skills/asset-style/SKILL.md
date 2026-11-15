@@ -26,7 +26,8 @@ repo (`<A>` below). `assetgen.py` is `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/asse
   template, node or comfy-mcp side (`comfyui`).
 - **Human gates, never yours:** setting an anchor `active`, writing `approved_by` or `approved_on`, activating a bumped
   style version (replacing the style file, `status: active`, `project.json` `style.version`), and approving a run
-  (`approve-record`). Prepare, list and report; name what awaits the person.
+  (the person approves; `approve-record` runs only on their explicit word, per `asset-gen`). Prepare, list and
+  report; name what awaits the person.
 
 ## Scope
 
@@ -78,8 +79,8 @@ lead's workflow asks for in the game layer (`<A>/assetgen/`).
 ## Idioms
 
 - **Lint the game layer:** `assetgen.py lint --authoring <A>` must show 0 FAIL; a `WARN` that the active game style has
-  no usable `palette`, `tone` or `canvas` field means every `style-*` row is `NOT_AVAILABLE`, so ask the person for
-  the fields.
+  no usable structured field (`palette.colors`, `tone`, `canvas`, `outline.edge_darkness`) means no `style-*` row can
+  grade an output, so ask the person for the fields (`scripts/assetgen/lint.py` `style_warnings`).
 - **Read a verb before you run it:** each `style` verb's docstring in `scripts/assetgen/style_cmd.py`,
   `scripts/assetgen/style_derive.py` and `scripts/assetgen/style_report.py` is the reference. `--list-only` and no
   `--apply` first; a refusal exits 1 with nothing written.
