@@ -76,13 +76,16 @@
         "changelog.d/language-policy.md",
         "changelog.d/policy-language-line.md",
         "skills/factory-core/references/plugin-review.md",
-        "docs/codex.md"
+        "docs/codex.md",
+        "scripts/lib/context.py",
+        "tests/domains-routing.test.sh"
       ],
       "exclusions": [],
       "deps": [],
       "checks": [
         "tests/factory-status.test.sh",
-        "tests/skills-lint.sh"
+        "tests/skills-lint.sh",
+        "tests/domains-routing.test.sh"
       ],
       "acceptance": [
         "the --domain and --graph snapshot views print the Language line",
