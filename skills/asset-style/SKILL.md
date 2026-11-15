@@ -98,11 +98,14 @@ lead's workflow asks for in the game layer (`<A>/assetgen/`).
   `AGENT_FAMILIES`, `SAME_MODEL:*`) fails `gen-run-style` (`docs/architecture/domains/assetgen.md` section "Anchors and
   approval").
 - **A carried anchor is not an approved one:** `style bump` writes `proposed` anchors with `approved_by` null; until a
-  person activates them the new version has no anchors and the `style-tone` row is `NOT_AVAILABLE`.
-- **`derive --apply` refuses an active style:** derive into the draft (a `bump` draft, or a `style init` draft).
+  person activates them the new version has no anchors and the `style-tone` row is `NOT_AVAILABLE`
+  (`scripts/assetgen/style_cmd.py` `bump`).
+- **`derive --apply` refuses an active style:** derive into the draft (a `bump` or `style init` draft;
+  `scripts/assetgen/style_derive.py` `_run`).
 - **An empty field is not a field:** `canvas: {}` or `tone: {}` counts as absent, so the row stays `NOT_AVAILABLE`
   (`scripts/assetgen/consistency.py` docstring).
-- **Reference images need a licence:** never use an image the person has not confirmed as theirs or licensed.
+- **Reference images need a licence:** never use an image the person has not confirmed as theirs or licensed
+  (`references/bootstrap.md` section "2. Reference set").
 
 ## Testing
 
