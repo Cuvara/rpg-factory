@@ -7,7 +7,7 @@ import sys
 from .common import MAX_COMMAND, load_registry
 from .gates import human_gate_hits, skill_read_hits
 from .git import evaluate
-from .language import AGENT_TOOLS, agent_prompt_hits, language_hits
+from .language import AGENT_TOOLS, agent_prompt_hits, is_agent_input, language_hits
 from .mode import _needs_mode, mode_hits
 from .process import process_kill_hits
 
@@ -35,11 +35,10 @@ def main():
 
 
 def agent_main(payload):
-    """The Agent tool hook: the prompt is a brief for a subagent, so it is English. No prompt, or an ASCII one,
-    returns before the registry is loaded."""
+    """Check Agent-shaped inputs: their prompt is a subagent brief. Other inputs and ASCII prompts return
+    before the registry is loaded."""
     tool_input = payload.get("tool_input")
-    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
-    if not isinstance(prompt, str) or prompt.isascii():
+    if not is_agent_input(tool_input) or tool_input["prompt"].isascii():
         return 0
     registry = load_registry()
     reasons = agent_prompt_hits(payload, registry) if registry else []
