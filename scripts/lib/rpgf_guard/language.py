@@ -68,7 +68,14 @@ def targets(argv):
             label = f"gh {words[1]} {words[2]} text"
             return [(label, t) for t in option_values(words[3:], {"--title", "--body"}, {"t", "b"})]
     elif name == "orca":
-        positional = [a for a in argv[1:] if not a.startswith("-")][:2]
+        positional, i = [], 1
+        while i < len(argv) and len(positional) < 2:
+            arg = argv[i]
+            i += 1
+            if arg in {"--environment", "--pairing-code"}:
+                i += 1  # global option value is not a subcommand
+            elif not arg.startswith("-"):
+                positional.append(arg)
         if positional == ["orchestration", "send"]:
             return [("orca orchestration send text", t) for t in option_values(argv[1:], {"--subject", "--body"}, set())]
         if positional == ["agent", "launch"]:
@@ -118,10 +125,19 @@ def language_hits(payload, registry):
     return hits[:MAX_HITS]
 
 
+def is_agent_input(tool_input):
+    """Agent and legacy Task inputs both require string prompt and description fields."""
+    return (isinstance(tool_input, dict) and isinstance(tool_input.get("prompt"), str)
+            and isinstance(tool_input.get("description"), str))
+
+
 def agent_prompt_hits(payload, registry):
-    """The Agent tool: a prompt for a subagent is a brief, so it is English."""
-    prompt = (payload.get("tool_input") or {}).get("prompt")
-    if not isinstance(prompt, str) or prompt.isascii() or not in_scope(payload.get("cwd"), registry):
+    """An Agent-shaped input has a subagent brief as its prompt, so it is English."""
+    tool_input = payload.get("tool_input")
+    if not is_agent_input(tool_input):
+        return []
+    prompt = tool_input["prompt"]
+    if prompt.isascii() or not in_scope(payload.get("cwd"), registry):
         return []
     hit = finding("Agent tool prompt", prompt)
     return [hit] if hit else []
