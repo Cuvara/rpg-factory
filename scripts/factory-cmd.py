@@ -23,11 +23,13 @@
   ui-figma | ui-components | ui-screen | ui-review  [same options] <request...>
                                           the same plan with the intent family forced (Figma import,
                                           component selection, screen implementation, review)
-  assetgen list|show|resolve|lint|review-cmd|drift [args]
+  assetgen list|show|resolve|lint|review-cmd|drift|style report [args]
                                           scripts/assetgen/assetgen.py, read-only verbs: asset-gen purposes, styles
                                           and ComfyUI templates (core + game layer), a resolved spec, data lint,
                                           the Codex review command (printed, never run), style drift of gen-runs
-                                          and anchors; --authoring defaults to the workspace authoring repo when
+                                          and anchors, the style report (spread and QA rates over approved runs,
+                                          suggested thresholds with their data; other style verbs stay refused);
+                                          --authoring defaults to the workspace authoring repo when
                                           it has assetgen/ (also where a review-cmd --run <run-id> resolves);
                                           resolve prints a summary, --verbose adds the field sources
   help [--json]                           every command with its arguments, an example, the Claude form
@@ -258,15 +260,22 @@ def cmd_ui(verb, raw):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "ui", "ui_plan.py"), "--verb", verb, *opts, text])
 
 
-ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd", "drift")
+ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd", "drift", "style report")
 
 
 def cmd_assetgen(raw):
     """Read-only assetgen.py verbs; render, defringe, embed, qa, finalize and manifest write into a run directory,
     promote-anchor and reject write style-lock records into the authoring repo, approve-record writes a person's
-    approval record and publish uploads to ComfyUI: they stay with the asset-gen skill."""
+    approval record, publish uploads to ComfyUI and the style verbs other than `style report` (init, bump, derive)
+    write or propose style data: they stay with the asset-gen skill."""
     args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
-    if not args or args[0] not in ASSETGEN_VERBS:
+    if args and args[0] == "style" and not (len(args) >= 2 and args[1] == "report"):
+        sub = args[1] if len(args) >= 2 and not args[1].startswith("-") else ""
+        raise ValueError("assetgen needs %s (style %s writes into the authoring repo or proposes and merges style data: "
+                         "only `style report` is read-only; the asset-gen skill runs scripts/assetgen/assetgen.py directly)"
+                         % ("|".join(ASSETGEN_VERBS), sub or "without `report`"))
+    verb = "style report" if args and args[0] == "style" else (args[0] if args else "")
+    if not args or (args[0] != "style" and args[0] not in ASSETGEN_VERBS):
         hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
                 if args and args[0] in ("render", "defringe", "embed", "qa", "finalize", "manifest") else
                 " (%s writes a style-lock record into the authoring repo: the asset-gen skill runs "
@@ -283,7 +292,7 @@ def cmd_assetgen(raw):
     if any(len(a.split("=", 1)[0]) >= 3 and "--out".startswith(a.split("=", 1)[0]) for a in args):
         raise ValueError("assetgen --out (or an abbreviation of it) writes a file: run scripts/assetgen/assetgen.py directly "
                          "(the asset-gen skill)")
-    if args[0] in ("list", "show", "resolve", "lint", "drift", "review-cmd") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
+    if verb in ("list", "show", "resolve", "lint", "drift", "review-cmd", "style report") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
         reg = registry()
         game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
         if os.path.isdir(os.path.join(game, "assetgen")):
@@ -433,9 +442,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "UI plan forced to screen implementation"},
     {"verb": "ui-review", "args": "[ui options] <request>", "read_only": True, "example": "ui-review Review the HUD",
      "summary": "UI plan forced to review"},
-    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd|drift [args]", "read_only": True,
+    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd|drift|style report [args]", "read_only": True,
      "example": "assetgen list --kind purpose",
-     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed), style drift"},
+     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed), style drift, style report (read-only; style init|bump|derive stay with the skill)"},
     {"verb": "help", "args": "[--json]", "read_only": True, "example": "help --json",
      "summary": "this list; no slash command - agents and Codex discover the commands here"},
 ]

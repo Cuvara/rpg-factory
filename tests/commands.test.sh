@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen finalize --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen finalize --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json" "assetgen style" "assetgen style init --id x --extends pixel-art" "assetgen style bump --id x" "assetgen style derive --style x --apply"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -223,6 +223,23 @@ for v in promote-anchor reject; do
     && grep -q "$v writes a style-lock record into the authoring repo: the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err" \
     && ok "assetgen $v is not exposed through factory-cmd (exit 2, nothing written)" || no "assetgen $v rc=$rc: $(head -2 "$TMP/err")"
 done
+# style report is the only read-only style verb: forwarded (--authoring defaulted), writes nothing; the other style verbs
+# (init and bump write into the authoring repo, derive proposes and merges style data) stay refused, also with --apply
+ga="$WS/game-authoring"
+before=$(find "$ga" | sort | md5sum); gbefore=$(git -C "$ga" status --porcelain 2>/dev/null | md5sum)
+out=$(python3 -B "$CMD" assetgen style report --json); rc=$?
+after=$(find "$ga" | sort | md5sum); gafter=$(git -C "$ga" status --porcelain 2>/dev/null | md5sum)
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-style-report/1"' <<<"$out" >/dev/null && [ "$before" = "$after" ] && [ "$gbefore" = "$gafter" ]   && ok "assetgen style report forwarded (exit 0, style report JSON, --authoring defaulted, nothing written)" || no "assetgen style report rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" assetgen "style report --json"); rc=$?
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-style-report/1"' <<<"$out" >/dev/null   && ok "assetgen style report as one quoted string (exit 0)" || no "assetgen style report (quoted) rc=$rc: $(head -c 300 <<<"$out")"
+for sv in "style" "style init --id x --extends pixel-art" "style bump --id x" "style derive --style x" "style derive --style x --apply" "style --apply"; do
+  before=$(find "$ga" | sort | md5sum)
+  python3 -B "$CMD" assetgen $sv >/dev/null 2>"$TMP/err"; rc1=$?
+  python3 -B "$CMD" assetgen "$sv" >/dev/null 2>>"$TMP/err"; rc2=$?
+  after=$(find "$ga" | sort | md5sum)
+  [ $rc1 -eq 2 ] && [ $rc2 -eq 2 ] && [ "$before" = "$after" ]     && grep -q "only .style report. is read-only; the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err"     && ok "assetgen $sv is not exposed through factory-cmd (exit 2, nothing written)" || no "assetgen $sv rc=$rc1/$rc2" "$(head -2 "$TMP/err")"
+done
+python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen") | (.args | test("style report")) and (.args | test("style (init|bump|derive)") | not) and .read_only' >/dev/null   && ok "help lists style report as the only style verb of assetgen (read-only)" || no "help assetgen args name a writing style verb or lack style report"
 python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen") | (.args | test("publish|embed|promote-anchor|reject") | not) and (.args | test("drift")) and .read_only' >/dev/null \
   && ! grep -qE "publish|embed|promote-anchor|reject" "$ROOT/commands/assetgen.md" && grep -q "|drift " "$ROOT/commands/assetgen.md" \
   && ok "help and /rpg-factory:assetgen list assetgen as read-only with drift, without publish, embed, promote-anchor or reject" \

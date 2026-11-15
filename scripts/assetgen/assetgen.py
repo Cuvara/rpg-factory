@@ -26,6 +26,7 @@ Usage:
   assetgen.py style init --id ID --extends CORE [--family FAM=STYLE]... --authoring DIR [--title T] [--json]
   assetgen.py style derive --authoring DIR --style ID [--family FAM] [--apply] [--json]
   assetgen.py style bump --authoring DIR --id ID [--list-only] [--json]
+  assetgen.py style report --authoring DIR [--style ID] [--json]
 
 RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
 <authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
@@ -204,8 +205,11 @@ Failed attempts: a run whose generation, QA or review failed for good keeps its 
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
-Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
-these), graph-lint and budget. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
+Read-only verbs: list, show, resolve (without --out), lint, drift, style report and review-cmd --no-write (factory-cmd
+forwards only these), graph-lint and budget. style report (scripts/assetgen/style_report.py) prints per style and family the
+tone and palette spread over the approved runs' outputs, the WARN and FAIL rate of each style-* QA row, the rejections by
+reason and suggested thresholds (palette.max_distance, tone.tolerance) with the numbers behind each; it is deterministic
+and never applies a suggestion. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
 references/anchor-*.png), defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json),
 finalize (all of those), manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
@@ -260,6 +264,7 @@ import qa  # noqa: E402
 import runfiles  # noqa: E402
 import style_cmd  # noqa: E402
 import style_derive  # noqa: E402
+import style_report  # noqa: E402
 import stylelock  # noqa: E402
 import uiworkflow  # noqa: E402
 
@@ -1810,8 +1815,10 @@ def main(argv=None):
     c.add_argument("--any-version", action="store_true"); c.add_argument("--id"); c.add_argument("--json", action="store_true")
     c = sp("drift"); c.add_argument("--authoring", required=True); c.add_argument("--json", action="store_true")
     style_parser = sp("style")
-    # style_cmd owns `style init` and `style bump` and returns the nested subparsers action; `derive` joins it
-    style_derive.add_parser(style_cmd.add_parsers(style_parser))
+    # style_cmd owns `style init` and `style bump` and returns the nested subparsers action; `derive` and `report` join it
+    style_subs = style_cmd.add_parsers(style_parser)
+    style_derive.add_parser(style_subs)
+    style_report.add_parser(style_subs)
     c = sp("manifest"); run_arg(c); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
@@ -1968,7 +1975,9 @@ def main(argv=None):
             emit(report, a.json, drift_text(report))
             return 0
         if a.cmd == "style":
-            return style_derive.run(a) if a.style_cmd == "derive" else style_cmd.run(a)
+            if a.style_cmd == "derive":
+                return style_derive.run(a)
+            return style_report.run(a) if a.style_cmd == "report" else style_cmd.run(a)
         if a.cmd == "manifest":
             front, reset, changes = manifest(a.run, a.title, a.prompt_author, a.generated_by)
             newline = run_md_newline(a.run)
