@@ -11,6 +11,6 @@ Each item names its source: a rule in `.claude/CLAUDE.md` or the test or script 
 - Hooks never block and never crash: every `hooks/hooks.json` command ends with `; exit 0`, and a hook emits `additionalContext` advisories only, never `permissionDecision` (CLAUDE.md "Rules for changing this repo"; `tests/git-guard.test.sh`, `tests/file-guard.test.sh`).
 - Read-only scripts (`scripts/factory-context.sh`, `scripts/factory-status.py`, `scripts/checks/`) write nothing into a product repo and fetch nothing (CLAUDE.md "Rules for changing this repo", `scripts/lib/procrun.py` pollution check).
 - State paths go through `scripts/lib/fstate.py`, never `$TMPDIR` or a relative path (CLAUDE.md "Rules for changing this repo").
-- English only, in code, comments, docs, changelog and commit messages (`scripts/checks/english-only.py`, `tests/english-only.test.sh`).
+- Everything written is English (code, comments, docs, changelog fragments, commits, PR and issue text, plans, briefs, inter-session messages, memory); only the report to the owner uses the registry `workspace.report_language` (CLAUDE.md "Rules for changing this repo"; `scripts/checks/english-only.py`, `tests/english-only.test.sh`).
 - A skill `path:line` citation names the symbol it shows and passes `python3 -B scripts/checks/skill-citations.py` (CLAUDE.md "Rules for changing this repo").
 - No machine-specific absolute path (a user home, the drive letter of one machine) in docs or plans (`tests/parallel-policy.test.sh`, check "docs/plans contains no machine-specific absolute paths").
