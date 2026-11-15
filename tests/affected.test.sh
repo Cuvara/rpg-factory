@@ -23,6 +23,11 @@ sel 1 "library skips unrelated suite" tests/changelog.test.sh scripts/lib/plan_p
 # suite; the "dynamic stays global" property is covered by the computed/importlib/bytes modules of the fixture below
 sel 0 "a static-idiom library selects its importer suite" tests/git-guard.test.sh scripts/lib/gitguard.py
 sel 1 "a static-idiom library skips an unrelated suite" tests/changelog.test.sh scripts/lib/gitguard.py
+# the rpgf_guard package is loaded by gitguard.py through a static spec_from_file_location path: its __init__.py gets an
+# importer edge from the loader, so a change selects the suites that reach the git guard, not every suite
+sel 0 "rpgf_guard/__init__.py selects the git-guard suite" tests/git-guard.test.sh scripts/lib/rpgf_guard/__init__.py
+sel 0 "rpgf_guard/__init__.py selects the file-guard suite" tests/file-guard.test.sh scripts/lib/rpgf_guard/__init__.py
+sel 1 "rpgf_guard/__init__.py skips an unrelated suite" tests/changelog.test.sh scripts/lib/rpgf_guard/__init__.py
 sel 0 "unknown top-level path runs everything" tests/changelog.test.sh new-unknown-file
 sel 0 "skill text reaches skills-lint (EXTRA)" tests/skills-lint.sh skills/vfx/SKILL.md
 sel 0 "an agent file reaches skills-lint (EXTRA)" tests/skills-lint.sh agents/factory-explorer.md
@@ -419,6 +424,20 @@ files = {
     # an entry script that imports every dynamic module (so only dynamic() can make them unsure), named by a suite
     "scripts/comp-entry.py": "import comp_argv, comp_env, comp_name, comp_fn, two_paths, imp_mod, imp_dunder, imp_mixed, imp_bytes\n",
     "tests/comp.test.sh": "python scripts/comp-entry.py\n",
+    # a package loaded by a static spec_from_file_location path: the loader gives its __init__.py and member modules an
+    # importer edge; the same package loaded by a computed file stays unsure
+    "scripts/lib/ld_pkg/__init__.py": "X = 1\n", "scripts/lib/ld_pkg/member.py": "Y = 1\n",
+    "scripts/lib/ld_loader.py": "import importlib.util, os\nHERE = os.path.dirname(os.path.abspath(__file__))\n"
+                                "PKG = os.path.join(HERE, 'ld_pkg')\n"
+                                "spec = importlib.util.spec_from_file_location('ld_pkg', os.path.join(PKG, '__init__.py'),\n"
+                                "                                              submodule_search_locations=[PKG])\n"
+                                "mod = importlib.util.module_from_spec(spec)\n"
+                                "from ld_pkg.member import Y\n",
+    "scripts/ld-entry.py": "import ld_loader\n", "tests/ld.test.sh": "python scripts/ld-entry.py\n",
+    "scripts/lib/cp_pkg/__init__.py": "X = 1\n",
+    "scripts/lib/cp_loader.py": "import importlib.util, sys\nspec = importlib.util.spec_from_file_location('cp_pkg', sys.argv[1])\n"
+                                "mod = importlib.util.module_from_spec(spec)\n",
+    "scripts/cp-entry.py": "import cp_loader\n", "tests/cp.test.sh": "python scripts/cp-entry.py\n",
     # an unrelated suite
     "scripts/unrel/unrelated.py": "x = 1\n", "tests/other.test.sh": "python scripts/unrel/unrelated.py\n",
 }
@@ -463,6 +482,21 @@ stat_before, other_before = h("tests/stat.test.sh"), h("tests/other.test.sh")
 (root / "scripts/lib/stat_mod.py").write_text((root / "scripts/lib/stat_mod.py").read_text() + "# touched\n")
 check("hashes stay conservative: a change to a static-idiom module changes the hash of every suite",
       stat_before != h("tests/stat.test.sh") and other_before != h("tests/other.test.sh"))
+check("the static loader is not dynamic for selection and is dynamic for the conservative rule",
+      m.dynamic("scripts/lib/ld_loader.py", conservative=False) is False and m.dynamic("scripts/lib/ld_loader.py", conservative=True) is True)
+check("a package __init__.py loaded by a static path selects the loader's suite",
+      m.needed(["scripts/lib/ld_pkg/__init__.py"], "tests/ld.test.sh"))
+check("a package __init__.py loaded by a static path skips an unrelated suite",
+      not m.needed(["scripts/lib/ld_pkg/__init__.py"], "tests/other.test.sh") and not m.needed(["scripts/lib/ld_pkg/__init__.py"], "tests/cp.test.sh"))
+check("a package member imported by the loader selects the loader's suite and skips an unrelated suite",
+      m.needed(["scripts/lib/ld_pkg/member.py"], "tests/ld.test.sh") and not m.needed(["scripts/lib/ld_pkg/member.py"], "tests/other.test.sh"))
+check("a package loaded by a computed file stays dynamic", m.dynamic("scripts/lib/cp_loader.py", conservative=False) is True)
+check("a package __init__.py loaded by a computed file stays unsure: it selects an unrelated suite",
+      m.needed(["scripts/lib/cp_pkg/__init__.py"], "tests/other.test.sh"))
+ld_before, other_before = h("tests/ld.test.sh"), h("tests/other.test.sh")
+(root / "scripts/lib/ld_pkg/__init__.py").write_text("X = 2\n")
+check("hashes stay conservative: a change to a statically loaded package __init__.py changes the hash of every suite",
+      ld_before != h("tests/ld.test.sh") and other_before != h("tests/other.test.sh"))
 check("the sys.path fixture block ran to its end", True)
 PY
 )
@@ -483,5 +517,18 @@ done
 if [ -z "$missing" ] && ! grep -qxE 'tests/(changelog|release-check)[.]test[.]sh' <<<"$got" && [ "$(grep -c . <<<"$got")" -lt "${#suites[@]}" ]; then
   pass=$((pass + 1)); echo "PASS  workspace.py selects its importers' suites (workspace-default, routing, session-state, file-guard), not every suite"
 else fail=$((fail + 1)); echo "FAIL  workspace.py selection: missing [$missing] got $(grep -c . <<<"$got") of ${#suites[@]} [$(tr '\n' ' ' <<<"$got")]"; fi
+# the real repository: scripts/lib/rpgf_guard/ is loaded by path from scripts/lib/gitguard.py; a change to its __init__.py
+# or to a member module selects the suites that reach the git guard (git-guard, file-guard), not every suite
+for f in scripts/lib/rpgf_guard/__init__.py scripts/lib/rpgf_guard/shell.py; do
+  printf '%s\n' "$f" > "$TMP/many"
+  got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort -u)
+  missing=""
+  for s in tests/git-guard.test.sh tests/file-guard.test.sh; do
+    grep -qxF "$s" <<<"$got" || missing="$missing $s"
+  done
+  if [ -z "$missing" ] && ! grep -qxE 'tests/(changelog|release-check)[.]test[.]sh' <<<"$got" && [ "$(grep -c . <<<"$got")" -lt "${#suites[@]}" ]; then
+    pass=$((pass + 1)); echo "PASS  $f selects the git-guard and file-guard suites, not every suite"
+  else fail=$((fail + 1)); echo "FAIL  $f selection: missing [$missing] got $(grep -c . <<<"$got") of ${#suites[@]} [$(tr '\n' ' ' <<<"$got")]"; fi
+done
 total=$((pass + fail)); echo "affected tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

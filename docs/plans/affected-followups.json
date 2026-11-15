@@ -1,0 +1,39 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "affected-followups",
+  "title": "Backlog affected-selection-followups: suite selection for the path-loaded rpgf_guard package, affected.py line lengths",
+  "topic": "affected-followups",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "rpgf-guard-selection",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "suite selection logic; a selection that is too narrow lets a regression through CI",
+      "objective": "Backlog topic affected-selection-followups items 1 and 3. (a) tests/affected.py: a change to scripts/lib/rpgf_guard/__init__.py still selects every suite, because the package is loaded by path (scripts/lib/gitguard.py, the loader near line 47, spec_from_file_location of the package directory) and the import graph has no importer edge for __init__.py. Since plan leftovers-followups, affected.py already accepts that static loader; give the loaded package's __init__.py (and the package modules reached through `from rpgf_guard.<m> import`) an importer edge from the module that loads it, so a change there selects the suites that reach gitguard.py, not all suites. A module loaded only by a computed path stays unsure. Measure with `python3 -B tests/affected.py select-many` for scripts/lib/rpgf_guard/__init__.py and one rpgf_guard module before and after and report both. Keep hashes (suite reuse) conservative. (b) tests/affected.py has lines over 120 characters (the docstring line near 57 is 145): wrap the docstring and comment lines to 120 or less without changing behaviour. Tests in tests/affected.test.sh: a change to rpgf_guard/__init__.py selects git-guard and file-guard and not an unrelated suite (e.g. changelog). Changelog fragment changelog.d/affected-rpgf-guard.md (### Changed). CI runs on Linux: no test may depend on host tools of this Windows machine.",
+      "paths": [
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "changelog.d/affected-rpgf-guard.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "a change to scripts/lib/rpgf_guard/__init__.py no longer selects every suite",
+        "every suite that reaches the git guard is still selected",
+        "tests/affected.py has no line over 120 characters",
+        "suite reuse hashes stay conservative"
+      ]
+    }
+  ]
+}
