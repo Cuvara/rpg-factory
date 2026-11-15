@@ -68,6 +68,14 @@ reach the guard and a backtick-escaped `;` is not taken for a separator. Runtime
 detection (`scripts/lib/pluginroot.py` `is_codex()`) uses `CODEX_THREAD_ID` or `PLUGIN_ROOT` and is always false
 under Claude Code (`CLAUDECODE`): a Claude session that inherits `CODEX_HOME` keeps the Claude install check.
 
+## Hooks trust prompt
+
+Codex asks for a one-time "Hooks need review" trust decision in a checkout (a task worktree included) whose hooks it
+has not seen. The session stops at that prompt, while `factory-pipeline.py agents` still reports Codex as available:
+the detection does not look at hook trust. After launching a Codex session, the run lead (or the task lead) reads the session terminal. If it waits at the prompt, it either
+accepts the trust for the plugin's own hooks (`hooks/codex-hooks.json`, this repo's advisory hooks) or marks Codex down
+for the run and dispatches the work again on Claude. Never accept hooks this repo does not own.
+
 ## Versions
 
 A release bumps `.codex-plugin/plugin.json` together with `VERSION`, `.claude-plugin/plugin.json`, the Claude
