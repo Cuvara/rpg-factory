@@ -1022,7 +1022,7 @@ if has_case language; then
 vi_msg='sửa lỗi đăng nhập của người dùng'
 lang() { # yes|no cwd command [tool-name] [field]  (field: command, or prompt for the Agent tool)
   local expect="$1" cwd="$2" cmd="$3" tool="${4:-Bash}" field="${5:-command}" payload out rc got=no
-  payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" --arg f "$field" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{($f):$c}, cwd:$d, session_id:"guardtest"}')
+  payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" --arg f "$field" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:({($f):$c} + (if $f == "prompt" then {description:"delegate work"} else {} end)), cwd:$d, session_id:"guardtest"}')
   out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
   [[ "$out" == *'english-only'* ]] && got=yes
   if [ "$rc" -eq 0 ] && [ "$got" = "$expect" ] && [[ "$out" != *permissionDecision* ]] && { [ "$got" = no ] || [[ "$out" == *'advisory (warn)'* ]]; }; then pass=$((pass + 1))
@@ -1049,6 +1049,14 @@ lang yes "$FEATURE" "gh --repo o/r pr create -t \"$vi_msg\" -b x"
 lang yes "$FEATURE" "orca orchestration send --from t --type worker_done --subject done --body \"$vi_msg\""
 lang yes "$FEATURE" "orca orchestration send --from t --subject \"$vi_msg\" --body done"
 lang yes "$FEATURE" "orca agent launch --agent claude --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment prod orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --pairing-code CODE orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment=prod orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --json orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment prod agent launch --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --pairing-code CODE agent launch --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment=prod agent launch --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --json agent launch --prompt \"$vi_msg\""
 lang yes "$FEATURE" "echo ok && git commit -m \"$vi_msg\""           # inside a command list
 lang yes "$FEATURE" "bash -c 'git commit -m \"$vi_msg\"'"             # inside a nested shell
 lang yes "$FEATURE" "git commit -m \"$vi_msg\"" PowerShell
@@ -1068,6 +1076,15 @@ lang no  "$FEATURE" '' Agent prompt
 # A command outside every workspace (and not a worktree of one) gets no opinion.
 lang no  "$OUT" "git commit -m \"$vi_msg\""
 lang no  "$OUT" "$vi_msg" Agent prompt
+# Names alone do not imply an Agent tool: both required string fields must be present.
+for tool in Task Agent; do
+  payload=$(jq -cn --arg t "$tool" --arg p "$vi_msg" --arg d "$FEATURE" '{tool_name:$t, tool_input:{prompt:$p}, cwd:$d}')
+  out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL non-Agent %s input: rc=%s out=%s\n' "$tool" "$rc" "$out"; fi
+done
+payload=$(jq -cn --arg p "$vi_msg" --arg d "$FEATURE" '{tool_name:"Task", tool_input:{subject:$p, description:$p}, cwd:$d}')
+out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL task-list input: rc=%s out=%s\n' "$rc" "$out"; fi
 # Malformed payloads and an unrelated tool are no opinion (rc 0, no output).
 for bad in '{"tool_name":"Agent","tool_input":{"prompt":42},"cwd":"/"}' '{"tool_name":"Agent","tool_input":null}' '{"tool_name":"Agent"}'; do
   out=$(guard_command <<<"$bad" 2>/dev/null); rc=$?
