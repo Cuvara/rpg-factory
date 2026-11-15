@@ -266,7 +266,12 @@ quota, idle terminal, a 401), then dispatch the role again.
 
 - `status plan.json` re-derives where the plan stands (a pending task's next command is its `--phase lead`
   dispatch); `--orca-run <run id>` lists the Run's settled workers that are not released. `status` and `cleanup` list
-  each leftover child ("child of <task>") with its merge state.
+  each leftover child ("child of <task>") with its merge state. A lineage-only child must have a branch belonging
+  to the plan topic or its tasks; foreign and detached sibling worktrees are excluded. Named child branches still match
+  the `<parent branch>--` rule.
+- Worker listing requests `--full` and retries without it when Orca reports that flag as unknown, keeping the concise
+  form for later pages. Concise rows use `terminalState` for release and `state` for settledness; the Run line names
+  missing fields and the checks they prevent. Other Orca failures remain NOT_AVAILABLE.
 - Stacked notes on a task row: `stackable on <dep>@<sha>` (a pending task, ready: next is its `--phase lead`),
   `stacked on <dep>@<sha>`, `<dep> now at <sha> not in HEAD: merge it (never rebase), then continue` (next: the
   `git merge`), `sync: <dep> moved to <sha> (<at>)` (from the `sync` record, only for the current dependency, until

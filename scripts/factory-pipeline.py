@@ -202,8 +202,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         their `orca orchestration worker-release --dispatch <id>` first in `next`; a running worker is no finding;
         no orca or a failing call is a NOT_AVAILABLE line, never an error. With --json the "Workers:" lines go to
         stderr (stdout stays the status schema). The worker-list call asks for --full rows (the concise row lacks the
-        resource); a worker counts as released by terminalState, resource.releaseState or ownershipState `released`, a
-        releaseCompletedAt, or the projection's resource state.
+        resource); on an unknown --full flag it retries without it for the remaining pages. Concise rows use only
+        terminalState for release and state for settledness; missing fields are noted as checks that could not run.
+        Full rows also use resource release/ownership state, releaseCompletedAt, and projection resource state.
+        Lineage-only children must have a plan topic or task branch; foreign and detached siblings are excluded.
         Per task (notes, so the schema is unchanged): `lead report: <at> @<sha10> <summary>` from the `report` record
         (plus `(stale: task HEAD is <sha10>)` when the task HEAD moved on), and once the task has commits
         `READY_FOR_PR: yes` (lead report, PASS review and PASS QA at the task HEAD) or `READY_FOR_PR: no (<first
@@ -224,7 +226,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         lists local and origin branch deletion for plan branches contained in main. Otherwise prints removal commands and
         `orca orchestration worker-release --dispatch <id>` per unreleased worker, names each leftover child worktree
         as "child of <task>" (`orca worktree rm` once merged), names the rest, and reminds to
-        release every worker session. Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
+        release every worker session. The same concise worker fallback and plan-branch lineage filter as status apply.
+        Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
         A task worktree git lists as prunable (its directory is gone), a leftover task directory (empty or not, named
         <topic>-<id> with / as -, no longer a git worktree) and an Orca record of such a removed worktree are
         LEFTOVER, never CLEAN: `git -C <repo> worktree prune`, then `orca worktree rm --worktree path:<dir>` once the
@@ -3614,36 +3617,61 @@ def orca_runs(plan, extra=None):
 
 
 def orca_workers(run):
-    """(workers, None) from `orca orchestration worker-list --run RUN --full --json` (every page), or (None, why).
+    """(workers, why, concise) from worker-list, falling back to concise rows if --full is unknown.
     --full: the concise row has only state/liveness/terminal/terminalState; the full row adds the resource (release
     state, ownership, release time), the projection and workerState/dispatchStatus."""
     exe = shutil.which("orca")
     if not exe:
-        return None, "orca is not on PATH"
-    workers, cursor = [], None
+        return None, "orca is not on PATH", False
+    workers, cursor, concise = [], None, False
     for _ in range(50):
-        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100", "--full", "--json"]
+        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100"]
+        if not concise:
+            argv.append("--full")
+        argv.append("--json")
         if cursor:
             argv += ["--cursor", cursor]
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
                                stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as e:
-            return None, f"orca worker-list failed: {e}"
+            return None, f"orca worker-list failed: {e}", concise
         try:
             doc = json.loads(r.stdout or "")
         except ValueError:
             doc = None
         if r.returncode != 0 or not isinstance(doc, dict) or doc.get("ok") is False or not isinstance(doc.get("result"), dict):
-            why = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())[:200]
-            return None, f"orca worker-list exited {r.returncode}" + (f": {why}" if why else "")
+            error = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())
+            if not concise and re.search(r"unknown\s+(?:option|flag).*?--full\b", error, re.I):
+                concise = True
+                # Retry this page without --full, then retain that form for subsequent pages.
+                try:
+                    argv.remove("--full")
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8",
+                                       errors="replace", stdin=subprocess.DEVNULL)
+                    doc = json.loads(r.stdout or "")
+                except (OSError, subprocess.SubprocessError) as e:
+                    return None, f"orca worker-list failed: {e}", concise
+                except ValueError:
+                    doc = None
+                if r.returncode == 0 and isinstance(doc, dict) and doc.get("ok") is not False and isinstance(doc.get("result"), dict):
+                    res = doc["result"]
+                    workers += [w for w in res.get("workers") or [] if isinstance(w, dict)]
+                    page = res.get("page") if isinstance(res.get("page"), dict) else {}
+                    cursor = page.get("nextCursor") if page.get("hasMore") else None
+                    if cursor:
+                        continue
+                    return workers, None, concise
+                error = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())
+            why = error[:200]
+            return None, f"orca worker-list exited {r.returncode}" + (f": {why}" if why else ""), concise
         res = doc["result"]
         workers += [w for w in res.get("workers") or [] if isinstance(w, dict)]
         page = res.get("page") if isinstance(res.get("page"), dict) else {}
         cursor = page.get("nextCursor") if page.get("hasMore") else None
         if not cursor:
-            return workers, None
-    return workers, None
+            return workers, None, concise
+    return workers, None, concise
 
 
 def worker_settled(w):
@@ -3677,19 +3705,25 @@ def orca_sessions(runs):
     Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here."""
     out = []
     for run in runs:
-        workers, why = orca_workers(run)
+        workers, why, concise = orca_workers(run)
         if workers is None:
             out.append({"run": run, "state": "NOT_AVAILABLE", "reason": why, "unreleased": [], "released": 0, "running": 0})
             continue
         unreleased, released, running = [], 0, 0
+        missing_release = missing_state = 0
         for w in workers:
+            if concise:
+                missing_release += not bool(w.get("terminalState"))
+                missing_state += not bool(w.get("state"))
+                if not w.get("terminalState") or (w.get("terminalState") != "released" and not w.get("state")):
+                    continue
             res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
             term = w.get("terminalState") or res.get("releaseState") or "unknown"
-            if worker_released(w):
+            if (w.get("terminalState") == "released" if concise else worker_released(w)):
                 released += 1
-            elif not worker_settled(w):
+            elif not (str(w.get("state", "")).lower() in SETTLED_STATES if concise else worker_settled(w)):
                 running += 1
-            elif worker_no_terminal(w):
+            elif not concise and worker_no_terminal(w):
                 continue    # settled without ever owning a terminal (terminal_create failed or never materialized): nothing to release
             else:
                 did = str(w.get("dispatchId") or "?")
@@ -3698,7 +3732,8 @@ def orca_sessions(runs):
                 unreleased.append({"dispatch": did, "worker": w.get("workerState") or w.get("state"), "terminal": term, "note": note,
                                    "command": orca_cmd.quote(["orca", "orchestration", "worker-release", "--dispatch", did])})
         out.append({"run": run, "state": "UNRELEASED" if unreleased else "OK", "reason": None, "unreleased": unreleased,
-                    "released": released, "running": running})
+                    "released": released, "running": running, "concise": concise,
+                    "missing_release": missing_release, "missing_state": missing_state})
     return out
 
 
@@ -3709,8 +3744,16 @@ def session_lines(sessions):
         if s["state"] == "NOT_AVAILABLE":
             lines.append(f"NOT_AVAILABLE  run {s['run']}: {s['reason']} (worker release not checked)")
             continue
+        note = ""
+        if s.get("concise"):
+            checks = []
+            if s["missing_release"]:
+                checks.append(f"{s['missing_release']} worker(s) without terminalState, release not checked")
+            if s["missing_state"]:
+                checks.append(f"{s['missing_state']} worker(s) without state, settledness not checked")
+            note = " (concise rows (orca has no --full)" + (": " + "; ".join(checks) if checks else "") + ")"
         lines.append(f"{s['state']}  run {s['run']}: {len(s['unreleased'])} settled worker(s) not released, "
-                     f"{s['released']} released, {s['running']} running")
+                     f"{s['released']} released, {s['running']} running{note}")
         for u in s["unreleased"]:
             lines.append(f"  UNRELEASED {u['dispatch']} ({u['worker']}, terminal {u['terminal']}"
                          + (f", {u['note']}" if u["note"] else "") + f"): {u['command']}")
@@ -3826,7 +3869,7 @@ def _canon(p):
 def plan_checkouts(plan, reg):
     """The checkouts of the plan's worktrees (task worktrees and the integration checkout: branch <topic> or <topic>-*;
     their Orca children, as `children_of` and `status` find them: a branch or directory `<task branch>--*` with any
-    Orca prefix, or a child by Orca's lineage in any directory), plus the main checkout of a no-worktree repo.
+    Orca prefix, or a plan-owned child by Orca's lineage in any directory), plus the main checkout of a no-worktree repo.
     {canonical path: path}. Read-only; Orca's lineage is read (once) only when a worktree is not named by the rule."""
     out, topic = {}, plan["topic"]
     tasks = [t for t in plan.get("tasks", []) if isinstance(t, dict) and t.get("repo")]
@@ -3847,7 +3890,7 @@ def plan_checkouts(plan, reg):
                 rest.append(wt)
         if not info["worktrees"] or not rest:
             continue
-        lineage = lineage or Lineage([topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key])
+        lineage = lineage or Lineage([topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key], topic)
         for parent in [topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key]:
             home = next((t["path"] for t in trees if t.get("branch") == parent), None)
             for wt in rest:
@@ -3984,7 +4027,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         parents = [(t["id"], task_branch(plan, info, t)) for t in plan["tasks"] if t.get("repo") == key]
         parents.append((f"integration:{key}", topic))
         parents = [(tid, pb, worktree_for(info["path"], pb)[0]) for tid, pb in parents]
-        lineage = Lineage(pb for _, pb, _ in parents)
+        lineage = Lineage((pb for _, pb, _ in parents), topic)
         prune = orca_cmd.quote(["git", "-C", command_repo, "worktree", "prune"])
         for wt in trees:
             if wt.get("prunable") and str(wt.get("branch", "")).startswith(topic + "-"):
@@ -4192,8 +4235,8 @@ class Lineage:
     read once and only when a worktree is not already a child by name. Orca unavailable or failing: empty (the
     naming rule alone), never an error."""
 
-    def __init__(self, own_branches=()):
-        self._map, self._own = None, set(own_branches)
+    def __init__(self, own_branches=(), topic=None):
+        self._map, self._own, self.topic = None, set(own_branches), topic
 
     def parent(self, wt):
         if wt.get("branch") in self._own:  # a task worktree or the integration checkout is no child: no orca call
@@ -4232,13 +4275,15 @@ class Lineage:
 def is_child(wt, parent_branch, parent_path=None, lineage=None):
     """An Orca child of the worktree on `parent_branch`: its branch (Orca may add a prefix) or directory name starts
     with `<parent branch>--` (dispatch names children `<task branch>--...`, child_branch()), or Orca's lineage names
-    the worktree at `parent_path` as its parent (`orca worktree create --parent-worktree` with any name)."""
+    the worktree at `parent_path` as its parent and the branch belongs to the plan topic."""
     mark = parent_branch + "--"
     br = str(wt.get("branch") or "")
     base = os.path.basename(str(wt.get("path") or "").replace("\\", "/").rstrip("/"))
     if br.startswith(mark) or ("/" + mark) in br or base.startswith(mark.replace("/", "-")):
         return True
-    return bool(parent_path and lineage and lineage.parent(wt) == norm_wt(parent_path))
+    return bool(parent_path and lineage and lineage.topic and br
+                and (br in lineage._own or any(br.startswith(b + "--") for b in lineage._own))
+                and lineage.parent(wt) == norm_wt(parent_path))
 
 
 def children_of(repo, trees, parent_branch, parent_path=None, lineage=None):
@@ -4533,11 +4578,11 @@ def status(plan, reg, orca_run=None):
     count = {k: serial_count(plan, reg, k) for k in keys}  # a no-worktree checkout counts every plan alias of it
     rows, infos = {}, {}
     own = [task_branch(plan, repo_info(plan, reg, t["repo"]), t) for t in tasks] + [plan["topic"]]
-    lineage = Lineage(own)  # one read-only `orca worktree list` for every task, only when needed
+    lineage = Lineage(own, plan["topic"])  # one read-only `orca worktree list` for every task, only when needed
     for t in tasks:
         rows[t["id"]], infos[t["id"]] = task_status(plan, reg, t, count[t["repo"]], lineage)
     # children of the integration checkout (integration QA or a helper in `<topic>--*`, or any name by Orca's
-    # lineage), once per repo
+    # lineage with a plan-owned branch), once per repo
     int_children = []
     for key in keys:
         info = repo_info(plan, reg, key)
