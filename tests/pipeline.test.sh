@@ -3702,15 +3702,15 @@ refute "no Run named: no worker line" "WORKERS " cleanup "$G"
 # a plan-owned branch in a differently named directory: Orca's
 # lineage (parentWorktreeId, or the parent's childWorktreeIds) names it; orca unavailable means the naming rule only
 git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
-git -C "$S" worktree add -q "$TMP/isolated-qa" -b feat/core/demo--helper feat/core/demo-gw 2>/dev/null
+git -C "$S" worktree add -q "$TMP/isolated-qa" -b feat/core/demo-gw-isolated feat/core/demo-gw 2>/dev/null
 wtp() { git -C "$1" rev-parse --show-toplevel; }
 export FAKE_ORCA_WT="$TMP/orca-wt.json"
 jq -n --arg p "$(wtp "$TMP/srv-gw")" --arg c "$(wtp "$TMP/isolated-qa")" --arg o "$TMP/other-child"   '{ok:true,result:{worktrees:[{id:"r::gw",path:$p,parentWorktreeId:null,childWorktreeIds:[]},
    {id:"r::qa",path:$c,parentWorktreeId:"r::gw",childWorktreeIds:[]},{id:"r::o",path:$o,parentWorktreeId:"r::gw"}]}}' > "$FAKE_ORCA_WT"
 : > "$FAKE_ORCA_LOG"
-opath "Orca lineage: a child named isolated-qa is a child of its task" 1 "KEPT  srv: child of gw: leftover child worktree .*isolated-qa \(feat/core/demo--helper\): merged, then remove it" cleanup "$G"
+opath "Orca lineage: a child named isolated-qa is a child of its task" 1 "KEPT  srv: child of gw: leftover child worktree .*isolated-qa \(feat/core/demo-gw-isolated\): merged, then remove it" cleanup "$G"
 opath "Orca lineage: the merged child gets its orca worktree rm command" 1 "^  orca worktree rm --worktree '?path:[^ ]*isolated-qa'?$" cleanup "$G"
-if PATH="$fpath" python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.tasks[] | select(.id == "gw") | (.children | length) == 1 and .children[0].branch == "feat/core/demo--helper"' >/dev/null
+if PATH="$fpath" python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.tasks[] | select(.id == "gw") | (.children | length) == 1 and .children[0].branch == "feat/core/demo-gw-isolated"' >/dev/null
 then pass=$((pass + 1)); echo "PASS  Orca lineage: status lists the isolated-qa child"
 else fail=$((fail + 1)); echo "FAIL  Orca lineage: status children"; fi
 if grep -q "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && ! grep -qvE "^(worktree list --limit 10000 --json|terminal list --worktree path:[^ ]+ --limit 100 --json|orchestration worker-list .*)$" "$FAKE_ORCA_LOG"
@@ -3724,7 +3724,7 @@ PATH="$noorca" refute "orca missing: the naming rule only, never an error" "chil
 PATH="$noorca" expect "orca missing: status still exits 0 with a child by lineage only" 0 "^Pipeline demo" status "$G"
 unset FAKE_ORCA_WT
 git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
-git -C "$S" branch -q -D feat/core/demo--helper feat/core/demo-gw
+git -C "$S" branch -q -D feat/core/demo-gw-isolated feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
 NOKILL="kill|taskkill|Stop-Process|--force"
@@ -3890,15 +3890,16 @@ unset FAKE_ORCA_REPOS
 # once per repo in integration_children with cleanup guidance, cleanup names them "child of integration:srv"
 opath "integration QA --placement child (orca on PATH): worker-start --worktree new-child at the SHA" 0 "^orca orchestration worker-start .*--worktree new-child --name feat/core/demo--qa-${SG:0:7} --base-branch $SG " dispatch "$G" --task integration:srv --phase qa --sha "$SG" --placement child --runner orca
 git -C "$S" worktree add -q "$TMP/feat-core-demo--qa" -b feat/core/demo--qa "$SG" 2>/dev/null
-git -C "$S" worktree add -q "$TMP/int-helper" -b feat/core/demo--helper "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/int-helper" -b feat/core/demo-int-helper "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/foreign-sibling" -b feat/skills/vfx-graph "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/foreign-lineage" -b isolated-qa "$SG" 2>/dev/null
 export FAKE_ORCA_WT="$TMP/orca-wt.json"
-jq -n --arg p "$(wtp "$S")" --arg h "$(wtp "$TMP/int-helper")" --arg f "$(wtp "$TMP/foreign-sibling")" \
-  '{ok:true,result:{worktrees:[{id:"r::int",path:$p,parentWorktreeId:null},{id:"r::h",path:$h,parentWorktreeId:"r::int"},{id:"r::f",path:$f,parentWorktreeId:"r::int"}]}}' > "$FAKE_ORCA_WT"
+jq -n --arg p "$(wtp "$S")" --arg h "$(wtp "$TMP/int-helper")" --arg f "$(wtp "$TMP/foreign-sibling")" --arg x "$(wtp "$TMP/foreign-lineage")" \
+  '{ok:true,result:{worktrees:[{id:"r::int",path:$p,parentWorktreeId:null},{id:"r::h",path:$h,parentWorktreeId:"r::int"},{id:"r::f",path:$f,parentWorktreeId:"r::int"},{id:"r::x",path:$x,parentWorktreeId:"r::int"}]}}' > "$FAKE_ORCA_WT"
 PATH="$fpath" python3 -B "$P" status --json "$G" > "$TMP/status-int.json" 2>/dev/null
 if jq -e '(.integration_children | length) == 2 and all(.integration_children[]; .repo == "srv" and .merged
      and (.note | test("leftover child worktree .*merged, then remove it at once: orca worktree rm --worktree")))
-   and ([.integration_children[].branch] | sort) == ["feat/core/demo--qa", "feat/core/demo--helper"]
+   and ([.integration_children[].branch] | sort) == ["feat/core/demo--qa", "feat/core/demo-int-helper"]
    and all(.tasks[]; (.children | length) == 0)' "$TMP/status-int.json" >/dev/null && python3 - "$ROOT" "$TMP/status-int.json" <<'PY'
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
@@ -3908,10 +3909,13 @@ assert not m.schema_errors(json.load(open(sys.argv[2], encoding="utf-8")), schem
 PY
 then pass=$((pass + 1)); echo "PASS  status lists integration-checkout children once per repo (name and lineage), schema-valid"
 else fail=$((fail + 1)); echo "FAIL  status integration_children"; head -c 1500 "$TMP/status-int.json"; fi
+if jq -e 'all(.integration_children[]; .branch != "feat/skills/vfx-graph" and .branch != "isolated-qa")' "$TMP/status-int.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  status excludes foreign sibling and foreign lineage child"
+else fail=$((fail + 1)); echo "FAIL  status includes foreign lineage"; fi
 opath "status text names the integration child with its rm command" 0 "^  \[integration:srv\] child: leftover child worktree .*feat-core-demo--qa .*orca worktree rm" status "$G"
 opath "cleanup names the integration QA child" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*feat-core-demo--qa" cleanup "$G"
 opath "cleanup names the lineage helper of the integration checkout" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*int-helper" cleanup "$G"
-oref "foreign sibling is not a cleanup child" "child of integration:srv:.*foreign-sibling" cleanup "$G"
+oref "foreign siblings are not cleanup children" "child of integration:srv:.*(foreign-sibling|foreign-lineage)" cleanup "$G"
 unset FAKE_ORCA_WT
 # test slots (tests/run-all.sh lock_publish: <state>/locks/run-all-slots/<n>/{pid,winpid,checkout,started}) held by a run
 # in one of the plan's checkouts are named with PID, checkout, start and liveness; one elsewhere is not; nothing is stopped
@@ -3948,10 +3952,10 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "status names both PIDs when winpid dif
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "cleanup names both PIDs when winpid differs" 1 "^  SLOT slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot (1) still prints no Windows PID text" "slot 1 held by PID 4242 \(Windows PID" status "$G"
 # children of the plan's worktrees count as the plan's checkouts, as `children_of` finds them: a branch with an Orca prefix
-# (codex/<task branch>--qa in a sibling directory) and a child known only through Orca's lineage (any name, any
+# (codex/<task branch>--qa in a sibling directory) and a plan branch known only through Orca's lineage (any
 # directory); a slot in a checkout that is neither stays unnamed
 git -C "$S" worktree add -q "$TMP/slot-pfx-child" -b codex/feat/core/demo-gw--qa "$SG" 2>/dev/null
-git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b feat/core/demo--slot "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b feat/core/demo-slot-lineage "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/slot-unrelated" -b slot-unrelated-br "$SG" 2>/dev/null
 mkdir -p "$SLOTS/5" "$SLOTS/6" "$SLOTS/7"
 for n in 5:slot-pfx-child:7001 6:slot-lineage-child:7002 7:slot-unrelated:7003; do
@@ -3970,11 +3974,11 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "cleanup does not name the unrelated wor
 RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "child slot lines never carry a kill command" "$NOKILL" status "$G"
 # Orca unavailable: the naming rule alone still names the prefixed child, never the lineage-only one
 RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error opath "orca failing: the prefixed child's slot is still named" 0 "^Slots: slot 5 held by PID 7001" status "$G"
-RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error opath "orca failing: a plan branch slot remains visible" 0 "slot 6 held" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error oref "orca failing: lineage-only slot is not named and no traceback" "slot 6 held|Traceback" status "$G"
 unset FAKE_ORCA_WT
 git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
 git -C "$S" worktree remove --force "$TMP/slot-unrelated"
-git -C "$S" branch -q -D codex/feat/core/demo-gw--qa feat/core/demo--slot slot-unrelated-br
+git -C "$S" branch -q -D codex/feat/core/demo-gw--qa feat/core/demo-slot-lineage slot-unrelated-br
 rm -rf "$SLOTS"
 
 case_end settled-workers
@@ -4007,8 +4011,8 @@ PATH="${noorca%:}" ORCA_WORKTREE_ID=x expect "Orca env set, orca not on PATH: --
 inorca expect "--orca-unavailable with --runner orca is a usage error" 2 "--orca-unavailable REASON goes with --runner agent only" planner --request "add a thing" --runner orca --orca-unavailable x
 expect "--orca-unavailable without --runner is a usage error" 2 "goes with --runner agent only" planner --request "add a thing" --orca-unavailable x
 expect "--orca-unavailable with a blank reason is a usage error" 2 "--orca-unavailable needs a REASON" planner --request "add a thing" --runner agent --orca-unavailable "  "
-git -C "$S" worktree remove "$TMP/feat-core-demo--qa"; git -C "$S" worktree remove "$TMP/int-helper"; git -C "$S" worktree remove "$TMP/foreign-sibling"
-git -C "$S" branch -q -D feat/core/demo--qa feat/core/demo--helper feat/skills/vfx-graph
+git -C "$S" worktree remove "$TMP/feat-core-demo--qa"; git -C "$S" worktree remove "$TMP/int-helper"; git -C "$S" worktree remove "$TMP/foreign-sibling"; git -C "$S" worktree remove "$TMP/foreign-lineage"
+git -C "$S" branch -q -D feat/core/demo--qa feat/core/demo-int-helper feat/skills/vfx-graph isolated-qa
 if python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.integration_children == []' >/dev/null
 then pass=$((pass + 1)); echo "PASS  integration children removed: status lists none"
 else fail=$((fail + 1)); echo "FAIL  integration_children after removal"; fi

@@ -205,7 +205,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         resource); on an unknown --full flag it retries without it for the remaining pages. Concise rows use only
         terminalState for release and state for settledness; missing fields are noted as checks that could not run.
         Full rows also use resource release/ownership state, releaseCompletedAt, and projection resource state.
-        Lineage-only children must have a plan topic or task branch; foreign and detached siblings are excluded.
+        Lineage-only children must have the topic or a <topic>-* branch (also with an Orca prefix);
+        foreign and detached siblings are excluded.
         Per task (notes, so the schema is unchanged): `lead report: <at> @<sha10> <summary>` from the `report` record
         (plus `(stale: task HEAD is <sha10>)` when the task HEAD moved on), and once the task has commits
         `READY_FOR_PR: yes` (lead report, PASS review and PASS QA at the task HEAD) or `READY_FOR_PR: no (<first
@@ -3623,8 +3624,8 @@ def orca_workers(run):
     exe = shutil.which("orca")
     if not exe:
         return None, "orca is not on PATH", False
-    workers, cursor, concise = [], None, False
-    for _ in range(50):
+    workers, cursor, concise, pages = [], None, False, 0
+    while pages < 50:
         argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100"]
         if not concise:
             argv.append("--full")
@@ -3644,28 +3645,11 @@ def orca_workers(run):
             error = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())
             if not concise and re.search(r"unknown\s+(?:option|flag).*?--full\b", error, re.I):
                 concise = True
-                # Retry this page without --full, then retain that form for subsequent pages.
-                try:
-                    argv.remove("--full")
-                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8",
-                                       errors="replace", stdin=subprocess.DEVNULL)
-                    doc = json.loads(r.stdout or "")
-                except (OSError, subprocess.SubprocessError) as e:
-                    return None, f"orca worker-list failed: {e}", concise
-                except ValueError:
-                    doc = None
-                if r.returncode == 0 and isinstance(doc, dict) and doc.get("ok") is not False and isinstance(doc.get("result"), dict):
-                    res = doc["result"]
-                    workers += [w for w in res.get("workers") or [] if isinstance(w, dict)]
-                    page = res.get("page") if isinstance(res.get("page"), dict) else {}
-                    cursor = page.get("nextCursor") if page.get("hasMore") else None
-                    if cursor:
-                        continue
-                    return workers, None, concise
-                error = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())
+                continue  # retry the same cursor in concise form, including later pages
             why = error[:200]
             return None, f"orca worker-list exited {r.returncode}" + (f": {why}" if why else ""), concise
         res = doc["result"]
+        pages += 1
         workers += [w for w in res.get("workers") or [] if isinstance(w, dict)]
         page = res.get("page") if isinstance(res.get("page"), dict) else {}
         cursor = page.get("nextCursor") if page.get("hasMore") else None
@@ -4272,6 +4256,12 @@ class Lineage:
         return out
 
 
+def plan_branch(branch, topic):
+    """Whether a branch belongs to the topic, including an Orca-prefixed plan branch."""
+    return bool(branch and topic and (branch == topic or branch.startswith(topic + "-")
+                                      or ("/" + topic + "-") in branch))
+
+
 def is_child(wt, parent_branch, parent_path=None, lineage=None):
     """An Orca child of the worktree on `parent_branch`: its branch (Orca may add a prefix) or directory name starts
     with `<parent branch>--` (dispatch names children `<task branch>--...`, child_branch()), or Orca's lineage names
@@ -4281,8 +4271,7 @@ def is_child(wt, parent_branch, parent_path=None, lineage=None):
     base = os.path.basename(str(wt.get("path") or "").replace("\\", "/").rstrip("/"))
     if br.startswith(mark) or ("/" + mark) in br or base.startswith(mark.replace("/", "-")):
         return True
-    return bool(parent_path and lineage and lineage.topic and br
-                and (br in lineage._own or any(br.startswith(b + "--") for b in lineage._own))
+    return bool(parent_path and lineage and plan_branch(br, lineage.topic)
                 and lineage.parent(wt) == norm_wt(parent_path))
 
 
