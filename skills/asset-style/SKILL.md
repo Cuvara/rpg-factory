@@ -61,6 +61,11 @@ lead's workflow asks for in the game layer (`<A>/assetgen/`).
 - **Style QA rows** (`scripts/assetgen/consistency.py` docstring): `style-palette`, `style-tone`, `style-edges`,
   `style-canvas`; a miss is `WARN`, or `FAIL` when the field sets `severity` `fail`; `NOT_AVAILABLE` without the
   structured field, anchors (tone), the purpose's `qa.outlines` (edges) or a canvas entry for the family.
+- **Pixel art finalizes on the grid:** a `pixel-art` run (or any pixel style) finalizes with `--pixel-grid [--max-colors N]`
+  (`scripts/assetgen/pixelgrid.py` docstring, `scripts/assetgen/finalize.py` `pixelgrid_step`): the style's structured
+  `palette.colors` wins over `--max-colors`, so a palette change changes the output; the `png-pixel-grid` QA row grades
+  it; no grid found is a WARN and the output stays untouched; defringe is skipped for gridded outputs; originals in
+  `outputs-raw/pixelgrid/`.
 
 ## Workflow
 
