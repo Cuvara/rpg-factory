@@ -277,6 +277,48 @@
         "backlog.md carries the core-style bump item with its reason",
         "no machine-specific absolute path appears under docs/plans/"
       ]
+    },
+    {
+      "id": "style-review-fixes",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the findings of the Codex cross-model review of the style tasks (review files are named in the task lead spec). Confirm each finding against the code first; fix the real ones with a test each, and for a finding that is wrong say why in the report. (1) style init: the acceptance asks for a WARN when the new style lacks structured fields, but the test demands zero WARNs and a draft produces none. (2) style bump: carrying an active external anchor into the new version keeps external_source.attested_by and attested_on, which must be null on a proposed anchor, so validation rejects the copy; reset them with the approval fields. (3) style report: the suggested palette distance is clamped to 441 although an output can need about 441.67, and min_share 0 forces rank 1; report that no permitted threshold fits instead of an ineffective suggestion and handle min_share 0. (4) asset-style skill: 'derive into a bumped draft' is not supported (derive reads styles/<ID>.json, bump writes styles/<ID>/versions/<N+1>.json); document the real flow. Also two wording fixes: backlog core-style-v2 says hash-changed where a v1 to v2 bump reports older-version, and bootstrap.md section 2 defines an anchor only as an approved gen-run output although external anchors exist.",
+      "paths": [
+        "scripts/assetgen/style_cmd.py",
+        "scripts/assetgen/style_report.py",
+        "scripts/assetgen/stylelock.py",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "skills/asset-style/SKILL.md",
+        "skills/asset-style/references/style-fields.md",
+        "skills/asset-style/references/bootstrap.md",
+        "docs/plans/backlog.md",
+        "changelog.d/assetgen-style-review-fixes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-init",
+        "style-derive",
+        "style-bump",
+        "style-report",
+        "style-skill-scaffold",
+        "style-skill-content",
+        "style-skill-scenarios",
+        "nokill-word-match",
+        "external-anchor",
+        "style-docs"
+      ],
+      "checks": [
+        "tests/run-all.sh --only-suites tests/assetgen.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "each confirmed finding has a fix and a test that fails without it",
+        "a bumped style that carries an active external anchor validates, with the copy proposed and unattested",
+        "style report never suggests a threshold that still fails QA",
+        "the asset-style skill describes only flows the verbs support; skills-lint passes",
+        "existing style tests keep passing"
+      ]
     }
   ]
 }
