@@ -32,6 +32,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `domains/assetgen.py` - gen-run quality plugin: reviewer model differs from the prompt author (`SAME_MODEL:<model>` fallback grades WARN), review files bound to the current prompt and outputs, `qa.json` PASS with every required check, output hashes, provenance, refs; the workflow-style check of the run's `workflow.ui.json` (WARN only, never FAIL); the light review tier (`assetgen/data/review-tiers.json`: icon, ui-element, texture-tileable without selected anchors) makes Claude's own image review optional, the Codex reviews stay required. `tests/assetgen.test.sh`
 - `asset-manifest.py` - asset manifest records against registered repos. `tests/asset-manifest.test.sh`
 - `registry-ownership.py` - cross-domain ownership and handoff invariants. `tests/handoff-e2e.test.sh`
+- `portable-paths.py` - report tracked machine-specific paths; `--enforce` fails on findings. `tests/portable-paths.test.sh`
 - `english-only.py` - English-only content policy (`--enforce`). `tests/english-only.test.sh`, `tests/skills-lint.sh`
 - `skill-citations.py` - skill `path:line` citations against the integration branches. `tests/skill-citations.test.sh`
 - `netcode-headless.sh` - Netcode headless tests without writing into the repo. `tests/netcode-headless.test.sh`

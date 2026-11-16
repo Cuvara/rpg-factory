@@ -9,19 +9,9 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None. Plan `plugin-flow-5` is in PR review (`docs/plans/plugin-flow-5/report.md`).
+- None.
 
 ## Open
-
-### repo-path-audit
-
-The maintainer rule (2026-11-06): nothing the flow needs may live only on one machine.
-`tests/parallel-policy.test.sh` enforces portable paths under `docs/plans/` only. Extend the audit to the rest of
-the repo docs, skills and references: every machine-specific value comes from the environment or the registry
-(`RPG_FACTORY_WORKSPACE`, `scripts/lib/fstate.py`), and a test fails on a hard-coded user path. Fixtures and
-examples that need an absolute path use an obviously fake one. Fold in the lows of the `machine_path` pattern in
-`tests/parallel-policy.test.sh`: a WSL drive mount followed by punctuation (a comma, a closing parenthesis) is not
-matched, and the macOS user-home alternative also matches the path part of a URL.
 
 ### plan-edit-verb
 
@@ -174,7 +164,43 @@ From plan policy-followups (`docs/plans/policy-followups/report.md`), owner deci
   `state` is still counted in the "settledness not checked" note.
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
 
+### path-audit-followups
+
+Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
+
+- `MACHINE_PATH` (`scripts/lib/plan_paths.py`) does not flag a `file:` URL with a home or Users path (same as the
+  existing drive form); decide whether to reject `file:` URLs, and add an explicit allowed case for an inner path
+  segment named home.
+- `factory-pipeline.py cleanup` lists each leftover directory twice, once with forward slashes and once with
+  backslashes; normalise the path before the duplicate check.
+- A test slot stays recorded for a process that was stopped by the low-memory kill (`status`: "not running", "the user
+  decides"); a holder whose PID is gone could be released by the next run.
+- Task QA under memory pressure: verify sessions lost their tier run five times in plans policy-followups and
+  path-audit (Claude Code stops background shells of an idle session when memory is low). Write the lesson into
+  `parallel-work.md`: on a loaded machine the tier command runs with `-j 1`, one task QA at a time, and a task lead
+  reports NOT_RUN after one retry instead of looping.
+- A new script under `scripts/checks/` met two repo conventions only in CI (the UTF-8 stdio block of
+  `tests/compat.test.sh`, the workspace reader guard of `tests/workspace-default.test.sh`). Name both in
+  `scripts/README.md` next to the checks list, or give `scripts/checks/` a template.
+- An Orca Codex worker can start with an empty prompt and idle with no escalation (task citation-drift: about 4.5
+  hours), and a Claude implementer ended its turn without sending `worker_done`. Same class as agent-runtime-quirks:
+  the task lead should time out a dispatch that shows no turn start and re-dispatch it.
+- In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
+  spelling worked (not reproduced).
+- `tests/run-all.sh` keeps no log of a run: a caller that keeps only the tail of the output loses the FAIL lines
+  (integration QA had to be rerun to see one failure). Write the FAIL blocks to a file under the state dir and print
+  its path in the summary.
+- Under heavy load the snapshot reports a product repo as "not a git work tree" (seen once in `tests/routing.test.sh`,
+  scenario "Redis servers:id -> wire-contract leads"; `git_out` in `scripts/lib/workspace.py` has a 5 s timeout). A
+  timeout should be reported as a timeout, not as a missing work tree, and the scenario should retry once.
+- testlab `test_lab.py` case `test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small` fails under load
+  (sampler CPU 1.56 % against a 1.0 % bound); it measures the live host. Make the bound load-tolerant or skip on a
+  busy machine.
+
 ## Covered
+
+- **repo-path-audit**: shipped in plan path-audit (`changelog.d/path-audit-pattern.md`,
+  `changelog.d/path-audit-check.md`, `changelog.d/path-audit-affected.md`); the lows moved to path-audit-followups.
 
 - **language-policy-followups**: shipped in plan policy-followups (`changelog.d/policy-file-guard-allowlist.md`,
   `changelog.d/policy-git-guard-lows.md`, `changelog.d/policy-language-line.md`, `changelog.d/policy-pipeline-orca.md`);

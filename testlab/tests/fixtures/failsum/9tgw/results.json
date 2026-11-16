@@ -104,8 +104,8 @@
      "events": 312,
      "errors": [],
      "paths": {
-      "ad_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\ad.trace",
-      "connection_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\connection_trace.txt"
+      "ad_trace": "C:\\Users\\person\\AppData\\Roaming\\AnyDesk\\ad.trace",
+      "connection_trace": "C:\\Users\\person\\AppData\\Roaming\\AnyDesk\\connection_trace.txt"
      },
      "baseline_pids": [
       17808,

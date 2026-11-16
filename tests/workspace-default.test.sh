@@ -214,6 +214,11 @@ for nt, expected in ((True, 'D:/Other/WS'), (False, '/mnt/d/Other/WS')):
     check(f'Python registry environment wins nt={nt}',
           workspace.default_workspace({root_env: 'registry override'}, nt, test_registry) == 'registry override')
 
+check('registry_workspace_default returns the value as written, unconverted',
+      workspace.registry_workspace_default(test_registry) == '/mnt/d/Other/WS')
+check('registry_workspace_default is None without the key or the workspace section',
+      workspace.registry_workspace_default({'workspace': {}}) is None and workspace.registry_workspace_default({}) is None)
+
 previous_env = os.environ.pop(root_env, None)
 previous_cwd = os.getcwd()
 temp_dir = tempfile.TemporaryDirectory()
