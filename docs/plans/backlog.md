@@ -34,8 +34,8 @@ the copy, validation and replace in one step, with a test that an invalid edit n
 Bump the six core styles under `templates/assetgen/styles/` to structured v2 (`palette.colors`, `tone`, `canvas`),
 and only after a game project has real derived values from `assetgen.py style derive`. Reason: the bump changes every
 core style hash, so every existing run, anchor and rejection recorded against a core style drifts
-(`assetgen.py drift` reports `hash-changed` for them; a version 1 to 2 bump of a game style reports `older-version`,
-because the version is checked before the hash).
+(`assetgen.py drift` reports `older-version`: the bump moves the six core styles from version 1 to version 2, and the
+version is checked before the hash).
 
 ### external-path-uri
 

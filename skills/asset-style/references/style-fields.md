@@ -58,8 +58,8 @@ drift) and lists what needs re-approval:
   carried anchors this call wrote and limits the verb to listing (the draft stays). `--list-only` writes nothing.
 
 A person activates the draft: replaces `assetgen/styles/<ID>.json` with it, sets status `active`, updates
-`project.json` `style.version`, and activates the proposed anchors. Do none of that on your own. A draft or deprecated
-style is refused: edit the draft by hand (`derive --apply` does not write into it, see `style derive`).
+`project.json` `style.version`, and activates the proposed anchors. Do none of that on your own. A draft style
+is refused (edit it, or run `style derive --apply` into it), and so is a deprecated one.
 
 ## style report
 
