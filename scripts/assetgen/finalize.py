@@ -1,4 +1,4 @@
-"""assetgen finalize: filter, fit, defringe (alpha purposes only), embed and qa in order, after fetch_outputs.
+"""assetgen finalize: filter, slice, fit, defringe, pixel-grid, embed and qa in order, after fetch_outputs.
 
 filter comes first: fetch_outputs also downloads PreviewImage files into outputs/, so every outputs/*.png that
 runfiles.output_origins classifies as a preview (not written by a SaveImage node of the rendered workflow.json) is moved
@@ -14,12 +14,17 @@ ag.fail() exits the process, so every condition a callee would fail() on is chec
 anything is written; after that a step ends in a state, never in an exit. Steps stop at the first FAIL, naming it.
 
 Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE.
+With --discard-qa-fail, move failing outputs to outputs-rejected/ and grade the remaining outputs again.
 """
 import glob
 import hashlib
 import json
 import os
 import shutil
+
+import consistency
+import pixelgrid
+import slicer
 
 SCHEMA = "rpg-factory.assetgen-finalize/1"
 RAW_DIR = "raw"
@@ -55,7 +60,14 @@ def precheck(ag, run_dir):
     path = os.path.join(run_dir, ag.DEFRINGE_FILE)
     if os.path.isfile(path):
         record = ag.read_json(path, "defringe record")
-    return spec, record
+    pixel_record = None
+    path = os.path.join(run_dir, "pixelgrid.json")
+    if os.path.isfile(path):
+        pixel_record = ag.read_json(path, "pixel grid record")
+    sheet_path = os.path.join(run_dir, "sheet.json")
+    if os.path.isfile(sheet_path):
+        ag.read_json(sheet_path, "sheet record")
+    return spec, record, pixel_record
 
 
 def free_target(directory, name):
@@ -83,8 +95,12 @@ def filter_step(ag, run_dir):
             workflow = None
     origins = ag.runfiles.output_origins(run_dir, workflow)
     pngs = ["outputs/" + os.path.basename(p) for p in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))]
-    previews = [o for o in pngs if origins.get(o, {}).get("kind") == "preview"]
-    unknown = [o for o in pngs if origins.get(o, {}).get("kind", "unknown") not in ("save", "preview")]
+    sheet_path = os.path.join(run_dir, "sheet.json")
+    record = ag.read_json(sheet_path, "sheet record") if os.path.isfile(sheet_path) else {}
+    recorded = {cell.get("output") for sheet in record.get("sheets", []) if isinstance(sheet, dict)
+                for cell in sheet.get("cells", []) if isinstance(cell, dict)} if isinstance(record, dict) else set()
+    previews = [o for o in pngs if o not in recorded and origins.get(o, {}).get("kind") == "preview"]
+    unknown = [o for o in pngs if o not in recorded and origins.get(o, {}).get("kind", "unknown") not in ("save", "preview")]
     if not previews:
         step["reason"] = "no preview file in outputs/"
     elif len(previews) == len(pngs):
@@ -105,6 +121,95 @@ def filter_step(ag, run_dir):
         step["results"].append({"state": "kept", "output": output,
                                 "reason": "no SaveImage or preview evidence, left in outputs/: %s"
                                 % origins.get(output, {}).get("reason", "not classified")})
+    return step
+
+
+def slice_step(ag, run_dir, rows, cols, force):
+    """Slice all sheets only after every sheet has been decoded and validated."""
+    step = {"step": "slice", "state": "skipped", "reason": "", "results": []}
+    record_path = os.path.join(run_dir, "sheet.json")
+    if os.path.isfile(record_path):
+        record = ag.read_json(record_path, "sheet record")
+        if not isinstance(record, dict) or (record.get("rows"), record.get("cols")) != (rows, cols):
+            step.update(state="FAIL", reason="sheet.json records %sx%s; start a new attempt" % (
+                record.get("rows") if isinstance(record, dict) else "?", record.get("cols") if isinstance(record, dict) else "?"))
+            return step
+        sheets = [s for s in record.get("sheets", []) if isinstance(s, dict)]
+        # cells may since be discarded or rewritten by later steps; the recorded sheets themselves must still be there
+        if sheets and all(isinstance(s.get("sheet"), str) and s["sheet"].startswith("sheets/")
+                          and os.path.basename(s["sheet"]) == s["sheet"][7:]
+                          and os.path.isfile(os.path.join(run_dir, *s["sheet"].split("/"))) for s in sheets):
+            step["reason"] = "already sliced (sheet.json)"
+            return step
+        step.update(state="FAIL", reason="sheet.json names a sheet missing from sheets/; start a new attempt")
+        return step
+    bound = ag.bound_records(run_dir, outputs_of(ag, run_dir))
+    if bound and not force:
+        step.update(state="FAIL", reason="%s already bind(s) the current outputs and slice would change them; "
+                    "pass --force to slice anyway (then those records are stale: re-run them)" % ", ".join(bound))
+        return step
+    todo = []
+    for path in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png"))):
+        row = {"output": "outputs/" + os.path.basename(path), "state": "skipped"}
+        step["results"].append(row)
+        try:
+            with open(path, "rb") as f:
+                source = f.read()
+            refusal = ag.depth_refusal(source, "sliced")
+            if refusal:
+                raise slicer.SliceError(refusal)
+            img = ag.png.decode(path)
+            cells, info = slicer.slice_image(img, rows, cols)
+            encoded = []
+            for cell in cells:
+                width, height, rgba = slicer.crop(img, cell["box"])
+                encoded.append(ag.rebuild(ag.png.encode(width, height, rgba), lambda t, b: True, ag.text_chunks(source)))
+            todo.append((path, source, cells, info, encoded, row))
+            row["reason"] = "sheet validated"
+        except (ag.png.Invalid, ag.png.Unsupported, OSError, slicer.SliceError) as exc:
+            row.update(state="FAIL", reason=str(exc))
+    if any(row["state"] == "FAIL" for row in step["results"]):
+        step.update(state="FAIL", reason="sheet validation failed; nothing sliced")
+        return step
+    sheets_dir = os.path.join(run_dir, "sheets")
+    records = []
+    written, moved, pending = [], [], None
+    try:
+        os.makedirs(sheets_dir, exist_ok=True)
+        for path, source, cells, info, encoded, row in todo:
+            entries = []
+            for cell, data in zip(cells, encoded):
+                name = "%s-r%sc%s.png" % (os.path.splitext(os.path.basename(path))[0], cell["row"], cell["col"])
+                out = free_target(os.path.join(run_dir, "outputs"), name)
+                pending = out + ".slice.tmp"
+                ag.write_atomic(out, data, ".slice.tmp")
+                written.append(out)
+                pending = None
+                entries.append(dict(cell, output="outputs/" + os.path.basename(out), sha256=hashlib.sha256(data).hexdigest()))
+            records.append({"source": row["output"], "sha256": hashlib.sha256(source).hexdigest(),
+                            "size": info["size"], "background": info["background"], "cells": entries})
+        for (path, _, _, _, _, row), record in zip(todo, records):
+            target = free_target(sheets_dir, os.path.basename(path))
+            os.rename(path, target)
+            moved.append((path, target))
+            record["sheet"] = "sheets/" + os.path.basename(target)
+        data = (json.dumps({"schema": "rpg-factory.assetgen-sheet/1", "run": os.path.basename(os.path.normpath(run_dir)),
+                            "rows": rows, "cols": cols, "sheets": records}, indent=1, sort_keys=True) + "\n").encode("utf-8")
+        pending = record_path + ".slice.tmp"
+        ag.write_atomic(record_path, data, ".slice.tmp")
+        pending = None
+    except OSError as exc:
+        for original, target in reversed(moved):
+            os.rename(target, original)
+        for path in written + ([pending] if pending else []):
+            if os.path.exists(path):
+                os.remove(path)
+        step.update(state="FAIL", reason="sheet write failed: %s" % exc)
+        step["results"].append({"state": "FAIL", "reason": str(exc)})
+        return step
+    for (_, _, _, _, _, row), record in zip(todo, records):
+        row.update(state="sliced", reason="-> %s, %d outputs" % (record["sheet"], len(record["cells"])))
+    step.update(state="sliced", reason="%d sheet(s) sliced" % len(records))
     return step
 
 
@@ -220,9 +325,22 @@ def needs_defringe(ag, path):
     return bool(img.has_alpha) and min(img.rgba[3::4]) < 255
 
 
-def defringe_step(ag, run_dir, spec, record, force):
+def defringe_step(ag, run_dir, spec, record, force, pixel_grid=False, pixel_record=None):
     """The defringe step: {step, state: defringed|skipped|FAIL, reason, results}."""
     step = {"step": "defringe", "state": "skipped", "reason": "", "results": []}
+    if pixel_grid:
+        step["reason"] = "pixel grid requested: alpha is binarized, nothing to defringe"
+        return step
+    recorded = pixel_record.get("outputs", []) if isinstance(pixel_record, dict) else []
+    for row in recorded if isinstance(recorded, list) else []:
+        if not isinstance(row, dict) or row.get("state") != "pixelated":
+            continue
+        output = row.get("output")
+        if (isinstance(output, str) and output.startswith("outputs/")
+                and os.path.basename(output) == output[8:] and row.get("after_pixels_sha256")
+                and ag.pixels_sha256(os.path.join(run_dir, *output.split("/"))) == row["after_pixels_sha256"]):
+            step["reason"] = "pixel-gridded outputs (pixelgrid.json): not defringed"
+            return step
     if not wants_alpha(spec):
         step["reason"] = "not an alpha purpose (qa.alpha is not required)"
         return step
@@ -254,6 +372,88 @@ def defringe_step(ag, run_dir, spec, record, force):
     return step
 
 
+def pixelgrid_step(ag, run_dir, spec, record, force, max_colors):
+    """Reduce outputs to their detected grid, preserving the source and recording every result."""
+    style = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    style_data = style.get("data") if isinstance(style.get("data"), dict) else {}
+    state, config = consistency.palette_config(style_data)
+    palette = config[1] if state == "ok" else None
+    limit = 16 if max_colors is None else max_colors
+    params = {"max_colors": limit, "palette": "style" if palette else "quantized",
+              "palette_colors": ["#%02x%02x%02x" % color for color in palette] if palette else None}
+    old_params = record.get("params") if isinstance(record, dict) else None
+    old_rows = record.get("outputs", []) if isinstance(record, dict) else []
+    old = {r.get("output"): r for r in old_rows if isinstance(r, dict)} if isinstance(old_rows, list) else {}
+    step = {"step": "pixel-grid", "state": "skipped", "reason": "", "results": []}
+    todo = []
+    for path in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png"))):
+        output = "outputs/" + os.path.basename(path)
+        prev = old.get(output, {})
+        row = {"output": output, "state": "skipped"}
+        step["results"].append(row)
+        try:
+            with open(path, "rb") as f:
+                current = f.read()
+            refusal = ag.depth_refusal(current, "pixel-gridded")
+            if refusal:
+                row["reason"] = refusal
+                continue
+            img = ag.png.decode(path)
+            if (prev.get("state") == "pixelated" and prev.get("after_pixels_sha256")
+                    and ag.pixels_sha256(path) == prev["after_pixels_sha256"] and old_params == params):
+                row.update(prev)
+                row.update(state="skipped", reason="already pixel-gridded")
+                continue
+            raw_rel = prev.get("raw")
+            raw = os.path.join(run_dir, *raw_rel.split("/")) if isinstance(raw_rel, str) and raw_rel.startswith("outputs-raw/pixelgrid/") and os.path.basename(raw_rel) == raw_rel[len("outputs-raw/pixelgrid/"):] else None
+            source = current
+            if raw and os.path.isfile(raw) and ag.qa.sha256(raw) == prev.get("before_sha256"):
+                with open(raw, "rb") as f:
+                    source = f.read()
+                refusal = ag.depth_refusal(source, "pixel-gridded")
+                if refusal:
+                    row["reason"] = refusal
+                    continue
+                img = ag.png.decode(raw)
+            else:
+                raw = None
+            width, height, rgba, info = pixelgrid.process(img, palette=palette, max_colors=limit)
+        except (ag.png.Invalid, ag.png.Unsupported, OSError, pixelgrid.NoGrid) as exc:
+            row["reason"] = str(exc)
+            continue
+        row["reason"] = "grid detected: not yet pixel-gridded"
+        todo.append((path, source, raw, width, height, rgba, info, row))
+    if todo:
+        bound = ag.bound_records(run_dir, outputs_of(ag, run_dir))
+        if bound and not force:
+            step.update(state="FAIL", reason="%s already bind(s) the current outputs and pixel-grid would change them; "
+                        "pass --force to pixel-grid anyway (then those records are stale: re-run them)" % ", ".join(bound))
+            return step
+    for path, source, raw, width, height, rgba, info, row in todo:
+        if raw is None:
+            raw_dir = os.path.join(run_dir, "outputs-raw", "pixelgrid")
+            os.makedirs(raw_dir, exist_ok=True)
+            raw = free_target(raw_dir, os.path.basename(path))
+            with open(raw, "xb") as f:
+                f.write(source)
+        new = ag.rebuild(ag.png.encode(width, height, rgba), lambda t, b: True, ag.text_chunks(source))
+        ag.write_atomic(path, new, ".pixelgrid.tmp")
+        row.update(state="pixelated", raw="outputs-raw/pixelgrid/" + os.path.basename(raw),
+                   source_size=info["source_size"], size=info["size"], scale=info["scale"], offset=info["offset"],
+                   colors=info["colors"], before_sha256=hashlib.sha256(source).hexdigest(),
+                   after_sha256=hashlib.sha256(new).hexdigest(), after_pixels_sha256=ag.pixels_sha256(path),
+                   reason="%s -> %s, scale %s, %d colors%s" % (info["source_size"], info["size"], info["scale"],
+                            info["colors"], "; max_colors ignored for style palette" if palette else ""))
+    step.update(state="pixelated" if todo else "skipped", reason="%d pixelated, %d skipped" % (
+        len(todo), len(step["results"]) - len(todo)))
+    ag.write_json(os.path.join(run_dir, "pixelgrid.json"), {
+        "schema": "rpg-factory.assetgen-pixelgrid/1", "run": os.path.basename(os.path.normpath(run_dir)),
+        "params": params, "outputs": [
+            dict(old[row["output"]], reason="already pixel-gridded")
+            if row.get("reason") == "already pixel-gridded" else row for row in step["results"]]})
+    return step
+
+
 def embed_step(ag, run_dir):
     rows = ag.embed(run_dir)
     counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("embedded", "replaced", "kept", "FAIL")}
@@ -276,41 +476,86 @@ def step_lines(step):
     return lines
 
 
-def run(ag, run_dir, force=False, as_json=False):
+def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_grid=False, max_colors=None, rows=None, cols=None):
     """The finalize verb: returns the exit code (0 PASS, 1 FAIL, 3 NOT_AVAILABLE) after printing the result."""
-    spec, record = precheck(ag, run_dir)
+    spec, record, pixel_record = precheck(ag, run_dir)
+    if discard_qa_fail:
+        ag.discard.records(ag, run_dir)  # an unreadable discards.json refuses here, before any write
     before = image_reviews(ag, run_dir)
-    steps, qa_text, code, failed = [], "", 0, None
+    steps, qa_text, code, failed = [], [], 0, None
+    discarded, discard_stale = [], []
     steps.append(filter_step(ag, run_dir))
     if steps[-1]["state"] == "FAIL":
         failed = "filter"
+    if not failed and rows is not None:
+        steps.append(slice_step(ag, run_dir, rows, cols, force))
+        if steps[-1]["state"] == "FAIL":
+            failed = "slice"
     if not failed:
         steps.append(fit_step(ag, run_dir, spec, force))
         if steps[-1]["state"] == "FAIL":
             failed = "fit"
     if not failed:
-        steps.append(defringe_step(ag, run_dir, spec, record, force))
+        steps.append(defringe_step(ag, run_dir, spec, record, force, pixel_grid, pixel_record))
         if steps[-1]["state"] == "FAIL":
             failed = "defringe"
+    if not failed and pixel_grid:
+        steps.append(pixelgrid_step(ag, run_dir, spec, pixel_record, force, max_colors))
+        if steps[-1]["state"] == "FAIL":
+            failed = "pixel-grid"
     if not failed:
         steps.append(embed_step(ag, run_dir))
         if steps[-1]["state"] == "FAIL":
             failed = "embed"
     if not failed:
-        step, qa_text, code = qa_step(ag, run_dir)
+        step, text, code = qa_step(ag, run_dir)
+        qa_text.append(text)
         steps.append(step)
+        if discard_qa_fail and step["state"] == "PASS":
+            steps.append({"step": "discard", "state": "skipped", "reason": "qa PASS: nothing to discard", "results": []})
+        elif discard_qa_fail and step["state"] == "FAIL":
+            current = ag.discard.outputs(run_dir)
+            checks = {}
+            for row in step["results"]:
+                if row.get("state") == "FAIL" and row.get("output") in current:
+                    checks.setdefault(row["output"], [])
+                    if row["check"] not in checks[row["output"]]:
+                        checks[row["output"]].append(row["check"])
+            if checks and len(checks) == len(current):
+                step["reason"] += "; every output failed QA: nothing discarded"
+            elif checks:
+                data = ag.discard.records(ag, run_dir)
+                discard_stale = ag.discard.stale_records(ag, run_dir, set(checks))
+                rows = []
+                for output in current:
+                    if output not in checks:
+                        continue
+                    names = ", ".join(checks[output])
+                    entry = ag.discard.move(ag, run_dir, output, "qa FAIL: " + names, "finalize", data)
+                    discarded.append(entry)
+                    rows.append({"state": "discarded", "output": output,
+                                 "reason": "-> %s: qa FAIL %s" % (entry["path"], names)})
+                steps.append({"step": "discard", "state": "discarded",
+                              "reason": "%d discarded to outputs-rejected/" % len(rows), "results": rows})
+                step, text, code = qa_step(ag, run_dir)
+                discard_stale = [n for n in discard_stale if n != "qa.json"]
+                qa_text.append(text)
+                steps.append(step)
         if step["state"] == "FAIL":
             failed = "qa"
     if failed:
         code = 1
-    state = "FAIL" if failed else steps[-1]["state"]
+    state = "FAIL" if failed else step["state"] if steps[-1]["step"] == "discard" else steps[-1]["state"]
     after = image_reviews(ag, run_dir)
-    stale = [n for n in before if n not in after]
+    stale = [n for n in ("qa.json", ag.REVIEW_FILES["image"], ag.CLAUDE_REVIEW)
+             if n in discard_stale or (n in before and n not in after)]
     summary = "assetgen finalize: %s" % state
     if failed:
         summary += " at %s: %s" % (failed, steps[-1]["reason"])
     obj = {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "steps": steps, "failed_at": failed,
            "stale": stale, "state": state, "exit": code}
+    if discard_qa_fail:
+        obj["discarded"] = discarded
     fields = ("output", "raw", "original_size", "fitted_size", "offset", "before_sha256", "after_sha256")
     fitted = [{key: row[key] for key in fields} for step in steps if step["step"] == "fit"
               for row in step["results"] if row["state"] == "padded"]
@@ -334,10 +579,11 @@ def run(ag, run_dir, force=False, as_json=False):
     obj["fitted"] = fitted
     ag.write_json(os.path.join(run_dir, "finalize.json"), obj)
     lines = []
+    qa_texts = iter(qa_text)
     for step in steps:
         lines += step_lines(step)
         if step["step"] == "qa":
-            lines.append(qa_text)
+            lines.append(next(qa_texts))
     if stale:
         lines.append("stale now (re-run them): " + ", ".join(stale))
     if fitted:

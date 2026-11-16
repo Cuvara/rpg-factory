@@ -41,8 +41,9 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        style inputs it graded with (style_binding = runfiles.qa_style_binding of spec.json and the run's
                        anchor copies: style ref, effective style data hash, family, anchor copy hashes), else FAIL as
                        stale (re-run qa and manifest); a report without style_binding counts as stale.
-  gen-run-outputs      outputs recorded, inside the run directory and under outputs/, on disk, sha256 equal; no
-                       unrecorded outputs/*.png (previews/ is never listed: preview files are not deliverables)
+  gen-run-outputs      outputs recorded, inside the run directory and under outputs/, on disk, sha256 equal; discarded
+                       outputs have a reason and matching bytes under outputs-rejected/ in spec.trace.discarded. No
+                       unrecorded PNGs in either directory (previews/ is never listed: preview files are not deliverables).
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present; run.md spec.params equal the rendered params
                        (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest).
@@ -332,6 +333,37 @@ def check(artifact, ctx):
         for name in sorted(os.listdir(out_dir)):
             if name.lower().endswith(".png") and "outputs/" + name not in recorded:
                 fails.append("outputs/%s is not recorded; re-run qa and manifest" % name)
+    trace = spec.get("trace") if isinstance(spec.get("trace"), dict) else {}
+    discarded = trace.get("discarded", [])
+    if not isinstance(discarded, list):
+        fails.append("spec.trace.discarded must be a list")
+        discarded = []
+    rejected_paths = set()
+    run_dir, rejected_dir = resolve("."), resolve("outputs-rejected")
+    for entry in discarded:
+        if not isinstance(entry, dict):
+            fails.append("spec.trace.discarded entries must be objects")
+            continue
+        path, output = entry.get("path"), entry.get("output")
+        if isinstance(path, str):
+            rejected_paths.add(path)
+        if isinstance(output, str) and recorded.get(output) is not None and recorded.get(output) == entry.get("sha256"):
+            fails.append("output %s is both recorded and discarded (same bytes)" % output)
+        if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
+            fails.append("discarded %s must have a non-empty reason" % path)
+        full = resolve(path) if isinstance(path, str) else None
+        if (full is None or run_dir is None or rejected_dir is None or run_dir not in rejected_dir.parents
+                or run_dir not in full.parents or rejected_dir not in full.parents):
+            fails.append("discarded %r is not a path inside the run directory under outputs-rejected/" % path)
+        elif not full.is_file():
+            todo.append("discarded %s is missing on disk: moved back to outputs/? re-run qa and manifest" % path)
+        elif sha256_file(full) != entry.get("sha256"):
+            fails.append("discarded %s: sha256 on disk differs from the record" % path)
+    if rejected_dir is not None and run_dir is not None and run_dir in rejected_dir.parents and rejected_dir.is_dir():
+        for name in sorted(os.listdir(rejected_dir)):
+            if name.lower().endswith(".png") and "outputs-rejected/" + name not in rejected_paths:
+                fails.append("outputs-rejected/%s is not recorded in spec.trace.discarded; record discards with "
+                             "assetgen.py discard, then manifest" % name)
     grade("gen-run-outputs", fails, todo)
 
     fails, todo = [], []

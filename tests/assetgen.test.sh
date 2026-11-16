@@ -51,13 +51,17 @@
 # proposed -> approved lifecycle, an uncommitted approval HUMAN_REQUIRED in gen-run-style, cross-family anchor
 # warnings and anchor_family_fallback false, drift style-id-mismatch, 1322x1190 square tolerance and allow_swap, the
 # embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
-# style_selftest.py), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
+# style_selftest.py, pixelgrid_selftest.py, slicer_selftest.py), sheet slicing at gateway sizes, failed cell counts,
+# repeat and discard behavior, opt-in finalize, slice and sheet-hint CLI; pixel-grid finalize (grid detection, palette limits, determinism,
+# unsupported depths and opt-in QA), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
 # the read-only budget verb: outputs + failed attempts against the limit, ok/at-limit/exceeded/unlimited/invalid and
 # their exits; finalize's budget line and --json key with its exit unchanged), the output filter (finalize's first step
 # moves the PreviewImage files fetch_outputs downloads into outputs/ to previews/, classified by fetch.json or job state
 # under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
 # preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
 # recorded previews/ path), finalize size fitting (transparent bands, original preservation, skips and refusals),
+# batch discard (QA failures, all-fail and opt-in behavior, manual selection, collisions, refusals, stale reviews,
+# reversible moves, manifest trace and quality checks for unrecorded or changed files; single-output compatibility),
 # style init (style_cmd.py: a draft game style, a family stub and project.json written into a fresh authoring dir; lint
 # 0 FAIL and no WARN for them, the expected WARN once the style is active, resolve locks it; an existing style or
 # project.json is never overwritten, exit 1; a non-core --extends or a malformed --family exits 2; templates/assetgen
@@ -96,6 +100,140 @@ bound() { AG review-cmd --phase "$2" --run "$1" --json | jq -c --arg s "$3" --ar
 GOLD="$ROOT/tests/fixtures/assetgen/golden"
 G=(-c user.email=t@t -c user.name=t -c commit.gpgsign=false)
 has_pil() { python3 -c "import PIL" 2>/dev/null; }
+
+# Sheet cases have their own fixtures so each can also run independently via --case.
+sh_setup() {
+  sh_run="$TMP/$1-001"; mkdir -p "$sh_run/outputs"
+  AG resolve --purpose icon --style stylized-painterly --template image-generate --out "$sh_run/spec.json" >/dev/null || return 1
+  printf 'A sheet of separate icons.\n' > "$sh_run/prompt.md"
+  AG render --run "$sh_run" >/dev/null || return 1
+  jq '.purpose.data.qa.size = {"mode":"any", "fit":"none"}' "$sh_run/spec.json" > "$TMP/sh-spec.json" && cp "$TMP/sh-spec.json" "$sh_run/spec.json"
+}
+sh_fixture() {
+  python3 -B - "$ROOT" "$sh_run/outputs/prop.png" "$1" "$2" "$3" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import png
+path, w, h, variant = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+data = bytearray(w * h * 4)
+for r, (ya, yb) in enumerate(((.05, .29), (.38, .61), (.70, .94))):
+    for c, (xa, xb) in enumerate(((.04, .38), (.43, .65), (.72, .96))):
+        if variant == 'missing' and (r, c) == (1, 1):
+            continue
+        x0, x1 = int(w * xa) + r * 3, int(w * xb) - r * 2
+        y0, y1 = int(h * ya) + c * 3, int(h * yb) - c * 2
+        row = (bytes((50 + r * 40, 60 + c * 40, 120, 255)) * ((x1 - x0) // 2)
+               + bytes((200, 190, 160, 255)) * ((x1 - x0 + 1) // 2))
+        for y in range(y0, y1):
+            data[(y * w + x0) * 4:(y * w + x1) * 4] = row
+if variant == 'merged':
+    for y in range(int(h * .17), int(h * .17) + 5):
+        x0, x1 = int(w * .37), int(w * .45)
+        data[(y * w + x0) * 4:(y * w + x1) * 4] = bytes((50, 60, 120, 255)) * (x1 - x0)
+open(path, 'wb').write(png.encode(w, h, data))
+EOF
+}
+sh_signature() { (cd "$1" && sha256sum ./*.png | LC_ALL=C sort); }
+sh_case() {
+  case "$1" in
+    sheet-sizes)
+      for sh_size in 1322x1190 1672x941 2172x724; do
+        sh_setup "sh-size-$sh_size" && sh_fixture "${sh_size%x*}" "${sh_size#*x}" good || { no "sheet setup $sh_size"; continue; }
+        cp "$sh_run/outputs/prop.png" "$TMP/sh-input.png"
+        AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+        AG manifest --run "$sh_run" > "$TMP/sh-manifest" 2>> "$TMP/sh-err"; sh_manifest_rc=$?
+        [ "$sh_rc" -eq 0 ] && [ "$sh_manifest_rc" -eq 0 ] \
+          && jq -e '[.steps[].step] == ["filter","slice","fit","defringe","embed","qa"] and any(.steps[]; .step == "slice" and .state == "sliced")' "$TMP/sh-result.json" >/dev/null \
+          && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 9 ] \
+          && jq -e '.rows == 3 and .cols == 3 and (.sheets | length) == 1 and (.sheets[0].cells | length) == 9' "$sh_run/sheet.json" >/dev/null \
+          && cmp -s "$TMP/sh-input.png" "$sh_run/sheets/prop.png" \
+          && grep -q '^- Sheet:' "$sh_run/run.md" \
+          && [ "$(sed -n '/^---json$/,/^---$/p' "$sh_run/run.md" | sed '1d;$d' | jq '[.spec.outputs[] | select(.path | test("^outputs/prop-r[1-3]c[1-3]\\.png$"))] | length')" -eq 9 ] \
+          && ok "sheet: $sh_size yields nine recorded cells and preserves the sheet" || no "sheet $sh_size rc=$sh_rc manifest=$sh_manifest_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      done ;;
+    sheet-failures)
+      for sh_variant in merged missing; do
+        sh_setup "sh-$sh_variant" && sh_fixture 600 450 "$sh_variant" || { no "sheet $sh_variant setup"; continue; }
+        sh_before=$(sh_signature "$sh_run/outputs")
+        AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+        [ "$sh_rc" -eq 1 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] && [ ! -e "$sh_run/sheets" ] && [ ! -e "$sh_run/sheet.json" ] \
+          && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL" and any(.results[]; .state == "FAIL" and (.reason | contains("2 cells found, 3 expected"))))' "$TMP/sh-result.json" >/dev/null \
+          && ok "sheet: $sh_variant cells fail atomically with counts" || no "sheet $sh_variant rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      done
+      sh_setup sh-write-failure && sh_fixture 600 450 good || { no "sheet write failure setup"; return; }
+      python3 -B - "$ROOT" "$sh_run" > "$TMP/sh-fault" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import assetgen, finalize
+original = assetgen.write_atomic
+calls = 0
+def fail_write(path, data, suffix):
+    global calls
+    calls += 1
+    if calls == 3:
+        raise OSError('injected write failure')
+    original(path, data, suffix)
+assetgen.write_atomic = fail_write
+result = finalize.slice_step(assetgen, sys.argv[2], 3, 3, False)
+assert result['state'] == 'FAIL', result
+assert os.listdir(os.path.join(sys.argv[2], 'outputs')) == ['prop.png']
+assert not os.path.exists(os.path.join(sys.argv[2], 'sheet.json'))
+EOF
+      sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && ok "sheet: write failure removes cells and preserves source" || no "sheet write failure rc=$sh_rc" "$(cat "$TMP/sh-fault")" ;;
+    sheet-repeat)
+      sh_setup sh-repeat && sh_fixture 600 450 good || { no "sheet repeat setup"; return; }
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-first.json" 2> "$TMP/sh-err"; sh_first_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget" 2>> "$TMP/sh-err"; sh_budget_rc=$?
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget.json" 2>> "$TMP/sh-err"; sh_budget_json_rc=$?
+      [ "$sh_budget_rc" -eq 0 ] && [ "$sh_budget_json_rc" -eq 0 ] \
+        && grep -q '^budget ok: 1 used ' "$TMP/sh-budget" \
+        && jq -e '.used == 1 and .outputs == 1 and .state == "ok" and .sheet_cells == 9' "$TMP/sh-budget.json" >/dev/null \
+        && ok "sheet: budget counts nine cells as one generation" || no "sheet budget rc=$sh_budget_rc json=$sh_budget_json_rc" "$(cat "$TMP/sh-budget" "$TMP/sh-budget.json" "$TMP/sh-err")"
+      sh_before=$(sh_signature "$sh_run/outputs")
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_first_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped" and (.reason | contains("already sliced")))' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: repeat finalize skips slicing and preserves cell bytes" || no "sheet repeat rc=$sh_rc first=$sh_first_rc" "$(jq -c '[.results[] | select(.state == "FAIL")]' "$sh_run/qa.json")"
+      AG finalize --run "$sh_run" --rows 2 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 1 ] && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL")' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: changed dimensions fail" || no "sheet changed dimensions rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      AG discard --run "$sh_run" --output prop-r1c1.png --reason 'discard one cell' > "$TMP/sh-discard" 2>> "$TMP/sh-err"; sh_discard_rc=$?
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_discard_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ ! -e "$sh_run/outputs/prop-r1c1.png" ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped" and (.reason | contains("already sliced")))' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: repeat after discarding a cell skips slicing" || no "sheet discard repeat rc=$sh_rc discard=$sh_discard_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")" ;;
+    sheet-cli)
+      sh_setup sh-plain && sh_fixture 600 450 good || { no "sheet plain setup"; return; }
+      AG finalize --run "$sh_run" --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ ! -e "$sh_run/sheet.json" ] && jq -e '[.steps[].step] | index("slice") | not' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: finalize without dimensions has no slice step" || no "sheet opt-in rc=$sh_rc" "$(cat "$TMP/sh-err")"
+      sh_setup sh-slice && sh_fixture 600 450 good || { no "sheet slice setup"; return; }
+      AG slice --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && jq -e '.state == "sliced"' "$TMP/sh-result.json" >/dev/null && [ -f "$sh_run/sheet.json" ] \
+        && ok "sheet: slice verb succeeds" || no "sheet slice rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_setup sh-slice-bad && sh_fixture 600 450 merged || { no "sheet slice bad setup"; return; }
+      AG slice --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 1 ] && jq -e '.state == "FAIL"' "$TMP/sh-result.json" >/dev/null && [ ! -e "$sh_run/sheet.json" ] \
+        && ok "sheet: slice verb rejects merged cells" || no "sheet slice failure rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_before=$(find "$TMP" -type f | LC_ALL=C sort)
+      sh_hint=$(AG sheet-hint --rows 3 --cols 3 2>&1); sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && [[ "$sh_hint" = *'3 rows and 3 columns'* ]] && [ "$sh_before" = "$(find "$TMP" -type f | LC_ALL=C sort)" ] \
+        && ok "sheet: hint prints the grid without writing files" || no "sheet hint rc=$sh_rc" "$sh_hint"
+      AG sheet-hint --rows 0 --cols 3 > /dev/null 2>&1; sh_zero=$?
+      AG sheet-hint --rows 9 --cols 3 > /dev/null 2>&1; sh_nine=$?
+      AG finalize --run "$sh_run" --rows 3 > /dev/null 2>&1; sh_partial=$?
+      [ "$sh_zero" -eq 2 ] && [ "$sh_nine" -eq 2 ] && [ "$sh_partial" -eq 2 ] \
+        && ok "sheet: invalid dimensions exit 2" || no "sheet invalid arguments: $sh_zero $sh_nine $sh_partial" ;;
+    *) echo "Unknown case: $1" >&2; return 2 ;;
+  esac
+}
+if [ "${1:-}" = --case ]; then
+  [ "$#" -eq 2 ] || { echo 'Usage: assetgen.test.sh --case NAME' >&2; exit 2; }
+  sh_case "$2" || exit $?
+  echo "assetgen: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ]; exit $?
+fi
 
 # -- temp authoring repo with a game layer
 AUTH="$TMP/game-authoring"; GL="$AUTH/assetgen"
@@ -2121,6 +2259,94 @@ finrun() {
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+
+echo "-- finalize: experimental sheet mode"
+for sh_name in sheet-sizes sheet-failures sheet-repeat sheet-cli; do sh_case "$sh_name"; done
+echo "-- finalize: pixel-grid detection, palette and opt-in QA"
+# A 128x128 pattern enlarged fourfold, with transparent corners and several opaque colours.
+python3 -B - "$ROOT" "$TMP" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+colors = [(220, 40, 30, 255), (30, 180, 70, 255), (40, 60, 220, 255),
+          (230, 190, 30, 255), (130, 40, 180, 255), (30, 190, 190, 255)]
+rgba = bytearray()
+for y in range(512):
+    for x in range(512):
+        xx, yy = x // 4, y // 4
+        rgba.extend(colors[(xx * 7 + yy * 11) % len(colors)] if 16 <= xx < 112 and 16 <= yy < 112 else (0, 0, 0, 0))
+open(os.path.join(sys.argv[2], "pg-source.png"), "wb").write(png.encode(512, 512, rgba))
+row = b"\x80\x00\x40\x00\xc0\x00" * 512
+open(os.path.join(sys.argv[2], "pg-depth.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row] * 512))
+EOF
+pg_first="$RUNS/pg-first-001"; pg_second="$RUNS/pg-second-001"
+finrun pg-first-001 icon icon-ok.png && finrun pg-second-001 icon icon-ok.png || no "pixel-grid run setup"
+cp "$pg_first/workflow.json" "$pg_second/workflow.json"
+cp "$pg_first/workflow.ui.json" "$pg_second/workflow.ui.json"
+cp "$TMP/pg-source.png" "$pg_first/outputs/prop.png"; cp "$TMP/pg-source.png" "$pg_second/outputs/prop.png"
+AG embed --run "$pg_first" > /dev/null 2>"$TMP/pg-err"
+AG embed --run "$pg_second" > /dev/null 2>>"$TMP/pg-err"
+cp "$pg_first/outputs/prop.png" "$TMP/pg-input.png"
+AG finalize --run "$pg_first" --pixel-grid --max-colors 4 --json > "$TMP/pg-first.json" 2>>"$TMP/pg-err"; pg_rc=$?
+python3 -B - "$ROOT" "$pg_first/outputs/prop.png" <<'EOF' > "$TMP/pg-pixels"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+image = png.decode(sys.argv[2])
+colors = {tuple(image.rgba[i:i+3]) for i in range(0, len(image.rgba), 4) if image.rgba[i+3]}
+print("ok" if (image.width, image.height) == (128, 128) and len(colors) <= 4 else "bad")
+EOF
+[ "$pg_rc" -eq 0 ] && grep -qx ok "$TMP/pg-pixels" \
+  && jq -e '[.steps[] | select(.step == "pixel-grid" and .state == "pixelated")] | length == 1' "$TMP/pg-first.json" >/dev/null \
+  && jq -e '.outputs[0].scale == 4 and .outputs[0].source_size == "512x512" and .outputs[0].size == "128x128"' "$pg_first/pixelgrid.json" >/dev/null \
+  && cmp -s "$TMP/pg-input.png" "$pg_first/outputs-raw/pixelgrid/prop.png" \
+  && jq -e 'any(.results[]; .check == "png-pixel-grid" and .state == "PASS") and any(.results[]; .check == "png-size" and .state == "PASS" and any(.reasons[]; contains("graded at source size 512x512")))' "$pg_first/qa.json" >/dev/null \
+  && ok "pixel-grid: scale 4, at most four colours, original preserved and QA grades source size" \
+  || no "pixel-grid first rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-first.json")"
+
+AG finalize --run "$pg_second" --pixel-grid --max-colors 4 --json > "$TMP/pg-second.json" 2>>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && cmp -s "$pg_first/outputs/prop.png" "$pg_second/outputs/prop.png" \
+  && [ "$(jq -c .outputs "$pg_first/pixelgrid.json")" = "$(jq -c .outputs "$pg_second/pixelgrid.json")" ] \
+  && ok "pixel-grid: fresh runs produce identical bytes and output records" || no "pixel-grid deterministic rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-second.json")"
+cp "$pg_first/outputs/prop.png" "$TMP/pg-result.png"
+AG finalize --run "$pg_first" --pixel-grid --max-colors 4 --json > "$TMP/pg-again.json" 2>>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && cmp -s "$TMP/pg-result.png" "$pg_first/outputs/prop.png" \
+  && jq -e 'any(.steps[]; .step == "pixel-grid" and .state == "skipped" and any(.results[]; .reason == "already pixel-gridded"))' "$TMP/pg-again.json" >/dev/null \
+  && ok "pixel-grid: repeat finalize skips already pixel-gridded output with bytes unchanged" || no "pixel-grid repeat rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-again.json")"
+
+pg_deep="$RUNS/pg-deep-001"; finrun pg-deep-001 icon icon-ok.png || no "pixel-grid depth setup"
+cp "$TMP/pg-depth.png" "$pg_deep/outputs/prop.png"
+AG embed --run "$pg_deep" > /dev/null 2>"$TMP/pg-err"
+cp "$pg_deep/outputs/prop.png" "$TMP/pg-deep-input.png"
+AG finalize --run "$pg_deep" --pixel-grid --json > "$TMP/pg-deep.json" 2>>"$TMP/pg-err"; pg_rc=$?
+cmp -s "$TMP/pg-deep-input.png" "$pg_deep/outputs/prop.png" && [ ! -e "$pg_deep/outputs-raw/pixelgrid/prop.png" ] \
+  && jq -e 'any(.outputs[]; .state == "skipped" and (.reason | contains("bit depth 16")))' "$pg_deep/pixelgrid.json" >/dev/null \
+  && ok "pixel-grid: 16-bit output skipped with reason, unchanged and no raw copy" || no "pixel-grid depth rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-deep.json")"
+
+pg_plain="$RUNS/pg-plain-001"; finrun pg-plain-001 icon icon-ok.png || no "pixel-grid opt-in setup"
+AG finalize --run "$pg_plain" --json > "$TMP/pg-plain.json" 2>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && [ ! -e "$pg_plain/pixelgrid.json" ] \
+  && jq -e '[.steps[].step] == ["filter", "fit", "defringe", "embed", "qa"]' "$TMP/pg-plain.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-pixel-grid")] | length == 0' "$pg_plain/qa.json" >/dev/null \
+  && ok "finalize without pixel-grid keeps the usual steps and no pixel-grid QA row" || no "pixel-grid opt-in rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-plain.json")"
+
+pg_style="$RUNS/pg-style-001"; finrun pg-style-001 icon icon-ok.png || no "pixel-grid style setup"
+cp "$TMP/pg-source.png" "$pg_style/outputs/prop.png"
+jq '.style.data.palette = {"text":"Two colours", "colors":[{"hex":"#ff0000"},{"hex":"#0000ff"}]}' "$pg_style/spec.json" > "$TMP/pg-spec.json" && cp "$TMP/pg-spec.json" "$pg_style/spec.json"
+AG finalize --run "$pg_style" --pixel-grid --max-colors 8 --json > "$TMP/pg-style.json" 2>"$TMP/pg-err"; pg_rc=$?
+python3 -B - "$ROOT" "$pg_style/outputs/prop.png" <<'EOF' > "$TMP/pg-style-pixels"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+image = png.decode(sys.argv[2])
+colors = {tuple(image.rgba[i:i+3]) for i in range(0, len(image.rgba), 4) if image.rgba[i+3]}
+print("ok" if colors and colors <= {(255, 0, 0), (0, 0, 255)} else "bad")
+EOF
+[ "$pg_rc" -eq 0 ] && grep -qx ok "$TMP/pg-style-pixels" && jq -e '.params.palette == "style"' "$pg_style/pixelgrid.json" >/dev/null \
+  && ok "pixel-grid: structured style palette supplies output colours" || no "pixel-grid style rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-style.json")"
+AG finalize --run "$pg_plain" --max-colors 4 > "$TMP/pg-invalid" 2>&1; pg_rc=$?
+[ "$pg_rc" -eq 2 ] && ok "finalize --max-colors without --pixel-grid exits 2" || no "pixel-grid missing flag rc=$pg_rc" "$(cat "$TMP/pg-invalid")"
+
 # Live fetch_outputs names encode the prompt and index, not the source type. Each run gets its own rendered prefix.
 filter_run() {
   local name="$1"
@@ -2384,6 +2610,72 @@ find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$
 f_help=$(AG finalize --help 2>&1); grep -q -- "--force" <<<"$f_help" && grep -q "finalize --run RUN" "$ROOT/scripts/assetgen/assetgen.py" \
   && ok "finalize is a subcommand (--run, --authoring, --force, --json) listed in the assetgen.py usage" || no "finalize usage" "$f_help"
 
+echo "-- batch discard and finalize QA failures"
+batch_run() {
+  finrun "$1" icon icon-ok.png || return 1
+  local run="$RUNS/$1"
+  cp "$FX/icon-ok.png" "$run/outputs/a.png"
+  cp "$FX/icon-ok.png" "$run/outputs/b.png"
+  cp "$FX/icon-opaque.png" "$run/outputs/bad.png"
+}
+batch_front() { sed -n '/^---json$/,/^---$/p' "$1/run.md" | sed '1d;$d'; }
+batch_run batch-plain-001
+bp="$RUNS/batch-plain-001"
+AG finalize --run "$bp" --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa"' "$TMP/batch.json" >/dev/null && [ "$(find "$bp/outputs" -name '*.png' | wc -l)" -eq 4 ] \
+  && [ ! -e "$bp/outputs-rejected" ] && [ ! -e "$bp/discards.json" ] \
+  && ok "batch finalize without discard flag fails QA and moves nothing" || no "batch without flag rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+batch_run batch-discard-001
+batchd="$RUNS/batch-discard-001"
+AG embed --run "$batchd" >/dev/null 2>"$TMP/err"
+cp "$batchd/outputs/bad.png" "$TMP/batch-bad.png"
+AG finalize --run "$batchd" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+AG manifest --run "$batchd" >/dev/null 2>>"$TMP/err"; mrc=$?
+[ $rc -eq 0 ] && [ $mrc -eq 0 ] && jq -e '.stale | index("qa.json") | not' "$TMP/batch.json" >/dev/null && [ "$(find "$batchd/outputs" -name '*.png' | wc -l)" -eq 3 ] \
+  && cmp -s "$TMP/batch-bad.png" "$batchd/outputs-rejected/bad.png" \
+  && jq -e '.discards | length == 1 and .[0].by == "finalize" and .[0].output == "outputs/bad.png"' "$batchd/discards.json" >/dev/null \
+  && jq -e '(.outputs | length == 3) and ([.results[].output] | unique | length == 3) and all(.results[]; .output != "outputs/bad.png")' "$batchd/qa.json" >/dev/null \
+  && batch_front "$batchd" | jq -e '(.spec.outputs | length == 3) and (.spec.trace.discarded | length == 1 and .[0].output == "outputs/bad.png" and .[0].path == "outputs-rejected/bad.png")' >/dev/null \
+  && grep -q '^- Discarded: outputs/bad.png' "$batchd/run.md" \
+  && ok "batch finalize discards one QA failure byte-identically and manifests the three passing outputs" \
+  || no "batch discard rc=$rc manifest=$mrc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+finrun batch-allfail-001 icon icon-opaque.png
+ba="$RUNS/batch-allfail-001"; cp "$FX/icon-opaque.png" "$ba/outputs/second.png"
+AG finalize --run "$ba" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa" and (.discarded | length == 0)' "$TMP/batch.json" >/dev/null \
+  && [ "$(find "$ba/outputs" -name '*.png' | wc -l)" -eq 2 ] && [ ! -e "$ba/outputs-rejected" ] && [ ! -e "$ba/discards.json" ] \
+  && ok "batch finalize leaves all outputs in place when all fail QA" || no "batch all fail rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+finrun discard-manual-001 icon icon-ok.png
+dm="$RUNS/discard-manual-001"; cp "$FX/icon-ok.png" "$dm/outputs/a.png"; cp "$FX/icon-ok.png" "$dm/outputs/z.png"
+AG qa --run "$dm" >/dev/null; bound "$dm" image PASS codex > "$dm/review-image.json"
+AG discard --run "$dm" --output 1 --reason 'first choice' --json > "$TMP/discard.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.discarded[0].output == "outputs/a.png" and (.stale | index("qa.json")) and (.stale | index("review-image.json"))' "$TMP/discard.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$dm/outputs-rejected/a.png" \
+  && ok "discard by index moves bytes and reports stale QA and image review" || no "discard index rc=$rc" "$(cat "$TMP/err" "$TMP/discard.json")"
+cp "$FX/icon-opaque.png" "$dm/outputs/a.png"
+AG discard --run "$dm" --output a.png --reason 'second choice' --json > "$TMP/discard.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.discarded[0].path == "outputs-rejected/a.1.png"' "$TMP/discard.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$dm/outputs-rejected/a.png" && cmp -s "$FX/icon-opaque.png" "$dm/outputs-rejected/a.1.png" \
+  && ok "discard by name preserves an existing rejected file with a numbered collision" || no "discard name rc=$rc" "$(cat "$TMP/err" "$TMP/discard.json")"
+AG discard --run "$dm" --output z.png --reason '  ' > "$TMP/o" 2>&1; rblank=$?
+AG discard --run "$dm" --output missing.png --reason missing > "$TMP/o2" 2>&1; rmissing=$?
+AG discard --run "$dm" --output z.png --reason valid >/dev/null 2>"$TMP/err"; rmove=$?
+AG discard --run "$dm" --output 1 --reason last > "$TMP/o3" 2>&1; rlast=$?
+[ $rblank -eq 2 ] && [ $rmissing -eq 1 ] && [ $rmove -eq 0 ] && [ $rlast -eq 1 ] \
+  && [ -f "$dm/outputs/prop.png" ] && [ "$(jq '.discards | length' "$dm/discards.json")" -eq 3 ] \
+  && ok "discard refuses blank reason, unknown output and last output without moving them" || no "discard refusals rc=$rblank/$rmissing/$rmove/$rlast" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3" "$TMP/err")"
+AG discard --run "$fa" --output 1 --reason approved > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q 'run.md is approved' "$TMP/o" && [ ! -e "$fa/outputs-rejected" ] && [ -f "$fa/outputs/prop.png" ] \
+  && ok "discard refuses an approved run without moving its output" || no "discard approved rc=$rc" "$(cat "$TMP/o")"
+
+finrun discard-single-001 icon icon-ok.png
+ds="$RUNS/discard-single-001"; AG finalize --run "$ds" >/dev/null; AG manifest --run "$ds" >/dev/null
+batch_front "$ds" | jq -e '.spec.trace | has("discarded") | not' >/dev/null && ! grep -q '^- Discarded:' "$ds/run.md" \
+  && ok "single-output manifest retains its existing trace and body without discards" || no "single-output discard compatibility"
+
 echo "-- budget: advisory spend guard (resolve --max-outputs, budget --run, finalize)"
 lf() { tr -d '\r' < "$1"; }
 # resolve records spec.budget.max_outputs: default 4 (--json and --out), --max-outputs N, invalid values are usage errors
@@ -2629,6 +2921,22 @@ variant qp-fallback-001 SAME_MODEL:claude              # explicit same-model fal
 variant qp-badmark-001 SAME_MODEL:codex                # marker on another model's review
 variant qp-tamper-001; printf 'x' >> "$RUNS/qp-tamper-001/outputs/qp-icon.png"
 variant qp-extra-001; cp "$FX/icon-ok.png" "$RUNS/qp-extra-001/outputs/second.png"
+# Copies of the manifested four-output batch isolate each rejected-file quality check.
+for name in qp-batch-001 qp-batch-extra-001 qp-rejected-extra-001 qp-rejected-sha-001 qp-reverse-001; do
+  cp -R "$batchd" "$RUNS/$name"; rm -f "$RUNS/$name/run.md"; AG manifest --run "$RUNS/$name" >/dev/null
+done
+cp "$FX/icon-ok.png" "$RUNS/qp-batch-extra-001/outputs/unrecorded.png"
+cp "$FX/icon-ok.png" "$RUNS/qp-rejected-extra-001/outputs-rejected/unrecorded.png"
+printf x >> "$RUNS/qp-rejected-sha-001/outputs-rejected/bad.png"
+reverse="$RUNS/qp-reverse-001"
+mv "$reverse/outputs-rejected/bad.png" "$reverse/outputs/bad.png"
+AG qa --run "$reverse" >/dev/null 2>"$TMP/err"; reverseqa=$?
+AG manifest --run "$reverse" >/dev/null 2>>"$TMP/err"; reversemanifest=$?
+[ $reverseqa -eq 1 ] && [ $reversemanifest -eq 0 ] && cmp -s "$TMP/batch-bad.png" "$reverse/outputs/bad.png" \
+  && batch_front "$reverse" | jq -e '(.spec.outputs | length == 4) and (.spec.trace | has("discarded") | not)' >/dev/null \
+  && ! grep -q '^- Discarded:' "$reverse/run.md" \
+  && ok "moving a discarded PNG back and rerunning QA and manifest removes its discard trace" \
+  || no "discard reversal qa=$reverseqa manifest=$reversemanifest" "$(cat "$TMP/err")"
 variant qp-qafail-001; cp "$FX/icon-opaque.png" "$RUNS/qp-qafail-001/outputs/qp-icon.png"
 AG qa --run "$RUNS/qp-qafail-001" >/dev/null; AG manifest --run "$RUNS/qp-qafail-001" >/dev/null
 variant qp-noqa-001; rm -f "$RUNS/qp-noqa-001/qa.json"; AG manifest --run "$RUNS/qp-noqa-001" >/dev/null
@@ -2830,6 +3138,12 @@ case_ qp-fallback-001 gen-run-prompt-review WARN 'same-model fallback' "explicit
 case_ qp-badmark-001 gen-run-prompt-review FAIL 'is not the prompt author' "SAME_MODEL marker on another model's review: FAIL"
 case_ qp-tamper-001 gen-run-outputs FAIL 'sha256 on disk differs' "output bytes changed after the record: FAIL"
 case_ qp-extra-001 gen-run-outputs FAIL 'outputs/second.png is not recorded' "unrecorded outputs/*.png: FAIL"
+batch_front "$RUNS/qp-batch-001" | jq -e '.spec.trace.discarded | length == 1' >/dev/null \
+  && ok "batch quality fixture records one discard" || no "batch quality fixture missing discard trace"
+case_ qp-batch-001 gen-run-outputs PASS '' "manifested batch with a recorded discard: gen-run-outputs PASS"
+case_ qp-batch-extra-001 gen-run-outputs FAIL 'outputs/unrecorded.png is not recorded' "batch with an unrecorded output: gen-run-outputs FAIL"
+case_ qp-rejected-extra-001 gen-run-outputs FAIL 'outputs-rejected/unrecorded.png is not recorded' "unlisted rejected PNG: gen-run-outputs FAIL"
+case_ qp-rejected-sha-001 gen-run-outputs FAIL 'sha256 on disk differs' "rejected PNG with changed bytes: gen-run-outputs FAIL"
 case_ qp-qafail-001 gen-run-qa FAIL 'QA is FAIL' "QA not PASS on a proposed run: FAIL"
 case_ qp-noqa-001 gen-run-qa FAIL 'qa.json is missing' "QA never run: FAIL"
 case_ qp-prov-001 gen-run-provenance FAIL 'provenance.model is not recorded' "provenance without model on a proposed run: FAIL"
@@ -5312,7 +5626,7 @@ python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2
 n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
 [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "consistency self-test: $n_ok cases passed" || no "consistency self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 
-for st_ in imaging_selftest style_selftest; do
+for st_ in imaging_selftest style_selftest pixelgrid_selftest slicer_selftest; do
   echo "-- $st_ (tests/fixtures/assetgen/$st_.py)"
   python3 -B "$ROOT/tests/fixtures/assetgen/$st_.py" > "$TMP/cs" 2>&1; rc=$?
   n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")

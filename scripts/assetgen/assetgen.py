@@ -12,8 +12,12 @@ Usage:
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
+  assetgen.py sheet-hint --rows R --cols C [--json]
+  assetgen.py slice --run RUN --rows R --cols C [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
-  assetgen.py finalize --run RUN [--force] [--authoring DIR] [--json]
+  assetgen.py finalize --run RUN [--force] [--rows R --cols C] [--discard-qa-fail] [--pixel-grid [--max-colors N]] [--authoring DIR]
+                      [--json]
+  assetgen.py discard --run RUN --output N --reason TEXT [--authoring DIR] [--json]
   assetgen.py budget --run RUN [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
@@ -118,7 +122,17 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       chunk kept; a PNG whose chunk is the current workflow.ui.json is kept byte for byte, a stale
                       chunk from an older render is replaced), so the file QA and the reviews hash is the embedded one
                       and dragging it into ComfyUI restores the graph
+  outputs-rejected/   discard and finalize --discard-qa-fail move rejected PNGs here without overwriting them
+  sheets/             slice preserves the original sheets here without overwriting them
+  sheet.json          slice records sheet hashes, cell bounds and outputs
+  discards.json       append-only history of discarded outputs and their hashes and reasons
   outputs-raw/<name>  defringe: the original of each output it rewrote (kept; never an output, never in a binding)
+  outputs-raw/pixelgrid/<name>  finalize --pixel-grid: the original of each output it reduced to its pixel grid
+  pixelgrid.json      finalize --pixel-grid: {"schema": "rpg-factory.assetgen-pixelgrid/1", "params", "outputs"}
+                      (scripts/assetgen/pixelgrid.py: grid detected, downsampled to one pixel per cell, alpha
+                      binarized, palette limited to the structured style palette or --max-colors N, default 16; 8-bit
+                      PNGs only, any other depth skipped untouched with the reason); qa adds png-pixel-grid rows only
+                      when it exists
   defringe.json       defringe: {"schema": "rpg-factory.assetgen-defringe/1", "params": {"alpha_floor", "rings",
                       "opaque"}, "outputs": [{"output", "raw", "before_sha256", "after_sha256", "after_pixels_sha256",
                       "stats"}]}
@@ -185,16 +199,20 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       only on the person's explicit word; the person commits run.md and the record in one SSH-signed
                       commit whose signer principal is NAME (until then: present but not committed/signed)
 
-finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. It runs defringe (only for a purpose with qa.alpha
-required), embed and qa in that fixed order, so embed can never be skipped before qa, and stops at the first FAIL naming
+finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. It runs filter, optional slice, fit, defringe
+(only for a purpose with qa.alpha required), optional pixel-grid, embed and qa in that order, and stops at the first FAIL naming
 the step. Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. It refuses (exit 1, nothing written) a run without
 spec.json, outputs/*.png or a readable workflow.ui.json, and an approved run (rewriting approved bytes would fail
 gen-run-outputs). A second finalize on an unchanged run is idempotent: defringe is skipped while defringe.json's
 after_pixels_sha256 still equals every output that needs it (or no output needs it), embed keeps every output, qa is
 rewritten. Outputs that qa.json or an image review already bind and that still need defringe stop it with FAIL at
-defringe (defringe's own refusal) unless --force; --force is passed to defringe only. It prints which image reviews
+defringe (defringe's own refusal) unless --force. It prints which image reviews
 (review-image.json, review-image-claude.json) it made stale ("stale now (re-run them): ..."; qa.json is rewritten, so
 never listed). --json: one object, schema rpg-factory.assetgen-finalize/1 (steps, stale, state, exit, budget).
+--pixel-grid adds a pixel-grid step after defringe (deterministic, no AI upscaling; defringe is skipped then);
+--max-colors N (2..256) needs --pixel-grid (exit 2 otherwise).
+sheet-hint prints a prompt snippet for review; slice --run or finalize --rows R --cols C slices each sheet by content,
+preserves the original in sheets/ and records the cells in sheet.json. Both dimensions are 1..8 with at least two cells.
 
 Spend guard (scripts/assetgen/budget.py): resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default
 4; not a whole number >= 1: exit 2). budget --run prints used (the run's outputs/*.png + the failed attempts of its
@@ -257,6 +275,8 @@ import fstate  # noqa: E402
 import approval  # noqa: E402
 import budget  # noqa: E402
 import finalize  # noqa: E402
+import slicer  # noqa: E402
+import discard  # noqa: E402
 import graphstyle  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
@@ -1187,7 +1207,7 @@ def defringe(run_dir, alpha_floor=None, force=False):
     return rows, bound
 
 
-def defringe_line(run_dir, outputs):
+def defringe_line(run_dir, outputs, discarded=()):
     """The run.md body line of defringe.json (None without it): what it did, and STALE when an output's pixels are no
     longer the ones defringe wrote (after_pixels_sha256; embed keeps them)."""
     path = os.path.join(run_dir, DEFRINGE_FILE)
@@ -1196,8 +1216,9 @@ def defringe_line(run_dir, outputs):
     rec = read_json(path, "defringe record")
     done = [o for o in rec.get("outputs") or [] if isinstance(o, dict)] if isinstance(rec, dict) else []
     recorded = {o["path"] for o in outputs}
-    stale = [str(o.get("output")) for o in done if o.get("output") not in recorded or pixels_sha256(
-        os.path.join(run_dir, *str(o.get("output")).split("/"))) != o.get("after_pixels_sha256")]
+    stale = [str(o.get("output")) for o in done if o.get("output") not in discarded and (
+        o.get("output") not in recorded or pixels_sha256(
+            os.path.join(run_dir, *str(o.get("output")).split("/"))) != o.get("after_pixels_sha256"))]
     params = rec.get("params") if isinstance(rec, dict) and isinstance(rec.get("params"), dict) else {}
     floor = params.get("alpha_floor")
     return "- Defringe: %d output(s), alpha floor %s, originals in %s/ (%s)%s" % (
@@ -1285,16 +1306,48 @@ def failed_attempts(run_dir):
 def run_budget(run_dir, spec):
     """budget.state of a run: its outputs plus the failed attempts of its series (none for a dir not <slug>-NNN)."""
     name = os.path.basename(os.path.normpath(run_dir))
-    return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
+    st = budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
+    try:
+        with open(os.path.join(run_dir, "sheet.json"), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        return st
+    if not isinstance(record, dict):
+        return st
+    sheets = record.get("sheets")
+    sheets = [s for s in sheets if isinstance(s, dict)] if isinstance(sheets, list) else []
+    paths = set()
+    for sheet in sheets:
+        cells = sheet.get("cells")
+        for cell in cells if isinstance(cells, list) else []:
+            output = cell.get("output") if isinstance(cell, dict) else None
+            if (isinstance(output, str) and output.startswith("outputs/")
+                    and os.path.basename(output) == output[8:]
+                    and output.endswith(".png") and os.path.isfile(os.path.join(run_dir, *output.split("/")))):
+                paths.add(output)
+    st["sheet_cells"] = len(paths)
+    adjustment = len(sheets) - len(paths)
+    st["outputs"] += adjustment
+    st["used"] += adjustment
+    if st["state"] not in ("invalid", "unlimited"):
+        used, allowed = st["used"], st["allowed"]
+        st["remaining"] = max(0, allowed - used)
+        if used < allowed:
+            st.update(state="ok", exit=0, reason="%d of %d generations left in this run series" % (st["remaining"], allowed))
+        elif used == allowed:
+            st.update(state="at-limit", exit=0, reason="the run series used all %d allowed generations: do not run run_workflow again" % allowed)
+        else:
+            st.update(state="exceeded", exit=1, reason="the run series used %d generations, more than the %d allowed" % (used, allowed))
+    return st
 
 
-def finalize_with_budget(run_dir, force, as_json):
+def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False, pixel_grid=False, max_colors=None, rows=None, cols=None):
     """finalize.run plus the budget state (text: a line before the summary line; --json: key "budget"). The exit code
     stays finalize's; a refusal (SystemExit from its precheck) prints what it printed and is re-raised unchanged."""
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            code = finalize.run(sys.modules[__name__], run_dir, force, as_json)
+            code = finalize.run(sys.modules[__name__], run_dir, force, as_json, discard_qa_fail, pixel_grid, max_colors, rows, cols)
     except BaseException:
         sys.stdout.write(buf.getvalue())
         sys.stdout.flush()
@@ -1359,6 +1412,9 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
             "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
+    discarded = discard.active(sys.modules[__name__], run_dir)
+    if discarded:
+        front["spec"]["trace"]["discarded"] = discarded
     wf_path = os.path.join(run_dir, "workflow.json")
     workflow = read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None
     local = runfiles.local_generation(workflow, spec, model_hashes())
@@ -1410,6 +1466,9 @@ def manifest_text(front, run_dir=None, newline="\n"):
             "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
                                                      ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
             "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none")]
+    discarded = s["trace"].get("discarded", [])
+    if discarded:
+        body.append("- Discarded: " + ", ".join("%s (%s)" % (r["output"], r["reason"]) for r in discarded))
     local = s["generation"].get("local")
     if local is not None:
         models = local["models"]
@@ -1423,9 +1482,22 @@ def manifest_text(front, run_dir=None, newline="\n"):
             for r in local["samplers"]) or "none"
         body.insert(5, "- Local stage (UNTESTED on RTX 5060): models %s (%d of %d sha256 unverified), LoRAs %s, sampler %s"
                     % (model_text, sum(not r["verified"] for r in rows), len(rows), lora_text, sampler_text))
-    fringe = defringe_line(run_dir, s["outputs"]) if run_dir else None
+    fringe = defringe_line(run_dir, s["outputs"], {r["output"] for r in discarded}) if run_dir else None
     if fringe:
         body.append(fringe)
+    sheet_path = os.path.join(run_dir, "sheet.json") if run_dir else None
+    if sheet_path and os.path.isfile(sheet_path):
+        record = read_json(sheet_path, "sheet record")
+        if isinstance(record, dict):
+            for sheet in record.get("sheets", []):
+                if not isinstance(sheet, dict):
+                    continue
+                name, digest = sheet.get("sheet", ""), sheet.get("sha256", "")
+                path = os.path.join(run_dir, *name.split("/"))
+                stale = not os.path.isfile(path) or qa.sha256(path) != digest
+                body.append("- Sheet: %sx%s, %s (sha256 %s) -> %d outputs (sheet.json)%s" % (
+                    record.get("rows"), record.get("cols"), name, digest[:12], len(sheet.get("cells", [])),
+                    "; STALE" if stale else ""))
     lock = s.get("style_lock")
     if isinstance(lock, dict):
         st = lock.get("style") or {}
@@ -1831,10 +1903,22 @@ def main(argv=None):
     c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("discard"); run_arg(c); c.add_argument("--output", required=True); c.add_argument("--reason", required=True)
+    c.add_argument("--json", action="store_true")
     c = sp("budget"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("sheet-hint"); c.add_argument("--rows", type=int, required=True); c.add_argument("--cols", type=int, required=True)
+    c.add_argument("--json", action="store_true")
+    c = sp("slice"); run_arg(c); c.add_argument("--rows", type=int, required=True); c.add_argument("--cols", type=int, required=True)
+    c.add_argument("--force", action="store_true"); c.add_argument("--json", action="store_true")
     c = sp("finalize"); run_arg(c)
+    c.add_argument("--rows", type=int); c.add_argument("--cols", type=int)
     c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
                    "already bind (they are stale afterwards: re-run them)")
+    c.add_argument("--discard-qa-fail", action="store_true", help="discard QA-FAIL outputs and re-run qa")
+    c.add_argument("--pixel-grid", action="store_true", help="reduce the outputs to their detected pixel grid and "
+                   "limit the palette (originals in outputs-raw/pixelgrid/, record pixelgrid.json)")
+    c.add_argument("--max-colors", type=int, metavar="N", help="with --pixel-grid and no structured style palette: "
+                   "at most N colours (2..256, default 16)")
     c.add_argument("--json", action="store_true")
     c = sp("promote-anchor"); run_arg(c, False); c.add_argument("--output")
     c.add_argument("--external"); c.add_argument("--origin"); c.add_argument("--rights-note"); c.add_argument("--style")
@@ -1854,6 +1938,11 @@ def main(argv=None):
     c = sp("manifest"); run_arg(c); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd in ("sheet-hint", "slice", "finalize"):
+        rows, cols = a.rows, a.cols
+        if (rows is None) != (cols is None) or (rows is not None and
+                (not 1 <= rows <= 8 or not 1 <= cols <= 8 or rows * cols < 2)):
+            fail("--rows and --cols must both be 1..8 with at least two cells", 2)
     authoring = getattr(a, "authoring", None)
     if authoring and not os.path.isdir(authoring):
         fail("--authoring %s is not a directory" % authoring, 2)
@@ -1870,6 +1959,23 @@ def main(argv=None):
     if getattr(a, "run", None):
         a.run = resolve_run(a.run, authoring)
     try:
+        if a.cmd == "sheet-hint":
+            snippet = slicer.hint(a.rows, a.cols)
+            emit({"schema": "rpg-factory.assetgen-sheet-hint/1", "rows": a.rows, "cols": a.cols,
+                  "snippet": snippet}, a.json, snippet)
+            return 0
+        if a.cmd == "slice":
+            if not os.path.isfile(os.path.join(a.run, "spec.json")):
+                fail("slice needs <run>/spec.json (resolve --out first)")
+            load_spec(os.path.join(a.run, "spec.json"))
+            if not glob.glob(os.path.join(a.run, "outputs", "*.png")):
+                fail("no outputs/*.png in %s to slice (fetch_outputs first)" % a.run)
+            front = existing_front(os.path.join(a.run, "run.md"))
+            if isinstance(front, dict) and front.get("status") == "approved":
+                fail("run.md is approved: slice would rewrite the approved outputs; start a new attempt")
+            step = finalize.slice_step(sys.modules[__name__], a.run, a.rows, a.cols, a.force)
+            emit(step, a.json, "\n".join(finalize.step_lines(step)))
+            return 1 if step["state"] == "FAIL" else 0
         if a.cmd == "list":
             items = layers.entries(a.kind, authoring)
             emit({"schema": "rpg-factory.assetgen-list/1", "entries": items}, a.json, "\n".join(
@@ -1995,6 +2101,8 @@ def main(argv=None):
             report, text, code = qa_run(a.run)
             emit(report, a.json, text)
             return code
+        if a.cmd == "discard":
+            return discard.run(sys.modules[__name__], a.run, a.output, a.reason, a.json)
         if a.cmd == "budget":
             if not os.path.isfile(os.path.join(a.run, "spec.json")):
                 fail("budget needs <run>/spec.json (resolve --out first)")
@@ -2002,7 +2110,11 @@ def main(argv=None):
             emit(st, a.json, budget.line(st))
             return st["exit"]
         if a.cmd == "finalize":
-            return finalize_with_budget(a.run, a.force, a.json)
+            if a.max_colors is not None and not a.pixel_grid:
+                fail("finalize --max-colors needs --pixel-grid", 2)
+            if a.max_colors is not None and not 2 <= a.max_colors <= 256:
+                fail("finalize --max-colors must be 2..256", 2)
+            return finalize_with_budget(a.run, a.force, a.json, a.discard_qa_fail, a.pixel_grid, a.max_colors, a.rows, a.cols)
         if a.cmd == "promote-anchor":
             if a.external is not None:
                 rec = promote_external_anchor(a.external, a.origin, a.rights_note, authoring, a.style, a.id,
