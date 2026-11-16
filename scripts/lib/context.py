@@ -44,7 +44,7 @@ import workspace  # noqa: E402
 from workspace import native_abs  # noqa: E402,F401  (public: run-checks.py imports it from here)
 from pluginroot import plugin_root
 from snapshot_render import (  # noqa: E402,F401 (public context helpers remain importable)
-    MODES, die, domain_result, explain, handoff_graph, intent_domain, print_domain, render,
+    MODES, die, domain_result, explain, handoff_graph, intent_domain, language_line, print_domain, render,
 )
 PLUGIN_ROOT = plugin_root()
 REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "registry.json")
@@ -330,9 +330,10 @@ def main():
             print(json.dumps({"cycle": cycle}) if args["json"] else line)
             sys.exit(3)
         if args["json"]:
-            print(json.dumps({"graph": order}))
+            print(json.dumps({"graph": order, "language": language_line(reg)}))
         else:
             print("Dependency graph: " + " -> ".join(order))
+            print("Language: " + language_line(reg))
         return
     route_requested = bool(args["repo"] or args["repo_path"] or args["paths"])
     if (args["domain"] or args["kind"]) and not route_requested:
@@ -340,7 +341,7 @@ def main():
             die("intent routing cannot use --repo-path")
         result = intent_domain(reg, args, ws)
         if result:
-            print_domain(result, args["json"])
+            print_domain(result, args["json"], reg)
             return
     if not ws:
         die("not inside the RPG MMO workspace (markers not found; set RPG_FACTORY_WORKSPACE)", 4)

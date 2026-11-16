@@ -155,6 +155,29 @@ lang none Write "$C/Assets/i18n/vi.txt" "$VI"
 lang none Write "$S/backend/deploy/messages.po" "$VI"
 lang none Write "$TMP/outside/vi.txt" "$VI"                                    # not governed: no opinion
 lang none Write "$HOME_DIR/.claude/projects/p/notes.md" "$VI"                  # only the memory directory of a project is governed
+# A temporary plugin checkout exercises the plugin allowlist without changing the real fixture.
+LP="$TMP/language-plugin"
+mkdir -p "$LP/.claude-plugin" "$LP/tests/fixtures" "$LP/docs"
+printf '{}\n' > "$LP/.claude-plugin/plugin.json"
+printf 'docs/sample.md:2 # fixture\n' > "$LP/tests/fixtures/english-allow.txt"
+printf 'first\nold\nlast\n' > "$LP/docs/sample.md"
+lang none Write "$LP/docs/sample.md" "$(jq -cn --argjson v "$VI" '"first\n" + $v')"
+lang warn Write "$LP/docs/sample.md" "$(jq -cn --argjson v "$VI" '$v + "\nsecond"')"
+lang warn Write "$LP/docs/sample.md" "$(jq -cn --argjson v "$VI" '"first\n" + $v + "\n" + $v')"
+# The generic helper uses old_string "a"; use the actual fragment for mapped Edit cases.
+lang_edit() { # expected old new-json [replace_all]
+  local o g; o=$(jq -cn --arg p "$LP/docs/sample.md" --arg old "$2" --argjson x "$3" --argjson all "${4:-false}" --arg d "$C" \
+    '{tool_name:"Edit",cwd:$d,session_id:"fg",tool_input:{file_path:$p,old_string:$old,new_string:$x,replace_all:$all}}' | python3 -B "$FG")
+  g=$(jq -r 'if ((.hookSpecificOutput.additionalContext // "") | test("rule english-only")) then "warn" else "none" end' <<<"${o:-{\}}")
+  if [ "$g" = "$1" ]; then pass=$((pass + 1)); echo "PASS  english-only Edit mapping $1"; else fail=$((fail + 1)); echo "FAIL  english-only Edit mapping expected $1 got $g: $o"; fi
+}
+lang_edit none old "$VI"
+lang_edit warn first "$VI"
+lang_edit warn old "$VI" true
+lang_edit warn missing "$VI"
+printf 'docs/sample.md:* # fixture\n' > "$LP/tests/fixtures/english-allow.txt"
+lang none Write "$LP/docs/sample.md" "$VI"
+lang_edit none old "$VI"
 o=$(jq -cn --arg p "$C/Assets/Scripts/Net/NewFile.cs" --arg d "$C" --argjson x "$VI" '{tool_name:"Write",tool_input:{file_path:$p,content:$x},cwd:$d,session_id:"fg"}' | python3 -B "$FG")
 jq -e '.hookSpecificOutput | (has("permissionDecision") | not) and (.additionalContext | test("line 1:"))' >/dev/null <<<"$o" \
   && { pass=$((pass + 1)); echo "PASS  english-only advisory names the first offending line, no permissionDecision"; } || { fail=$((fail + 1)); echo "FAIL  english-only advisory shape: $o"; }

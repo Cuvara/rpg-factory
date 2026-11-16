@@ -28,7 +28,8 @@ sets `severity` `fail`.
 writes a draft `assetgen/styles/<ID>.json` (version 1, status `draft`, no structured fields), draft stubs for family
 styles that do not exist yet, and the `assetgen/project.json` skeleton. It checks every target first and never
 overwrites. A family style that already exists must extend `ID`; a core-only family style is refused. Read its
-`note:` line: a draft style gets no lint WARN until it is made active.
+`WARN:` line (text output) or `warnings` list (`--json`): it names the missing structured fields, and no `style-*`
+QA row can grade an output until one is added. A draft style gets no lint WARN until it is made active.
 
 ## style derive
 
@@ -38,7 +39,10 @@ overwrites. A family style that already exists must extend `ID`; a core-only fam
 proposal into the game style file only when its status is exactly `draft`: it replaces `palette.colors` and
 `tone.tolerance` from that family's anchors only (`--family F`), and `canvas` merges per family, so other families and
 keys such as `palette.text`, `tone.severity` and `min_side` stay. Show the proposal and its numbers to the person
-before `--apply`. An active style is refused: derive into a bumped draft instead.
+before `--apply`. An active style is refused: `--apply` works only on a `draft` `assetgen/styles/<ID>.json` (a
+`style init` draft), never on the bump draft `assetgen/styles/<ID>/versions/<N+1>.json`. For an active style run
+`style derive` without `--apply` (a read-only proposal from the version-N anchors), then `style bump`, and the person
+merges the proposed values into the bump draft by hand before activating it.
 
 ## style bump
 
@@ -55,8 +59,8 @@ drift) and lists what needs re-approval:
   carried anchors this call wrote and limits the verb to listing (the draft stays). `--list-only` writes nothing.
 
 A person activates the draft: replaces `assetgen/styles/<ID>.json` with it, sets status `active`, updates
-`project.json` `style.version`, and activates the proposed anchors. Do none of that on your own. A draft or deprecated
-style is refused: edit the draft or `derive` into it.
+`project.json` `style.version`, and activates the proposed anchors. Do none of that on your own. A draft style
+is refused (edit it, or run `style derive --apply` into it), and so is a deprecated one.
 
 ## style report
 

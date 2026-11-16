@@ -101,8 +101,11 @@ lead's workflow asks for in the game layer (`<A>/assetgen/`).
 - **A carried anchor is not an approved one:** `style bump` writes `proposed` anchors with `approved_by` null; until a
   person activates them the new version has no anchors and the `style-tone` row is `NOT_AVAILABLE`
   (`scripts/assetgen/style_cmd.py` `bump`).
-- **`derive --apply` refuses an active style:** derive into the draft (a `bump` or `style init` draft;
-  `scripts/assetgen/style_derive.py` `_run`).
+- **`derive --apply` refuses an active style:** `style derive` reads and `--apply` writes only
+  `assetgen/styles/<ID>.json`, and only while its status is `draft` (a `style init` draft;
+  `scripts/assetgen/style_derive.py` `_run`). `style bump` writes `assetgen/styles/<ID>/versions/<N+1>.json`, which
+  derive never touches. For an active style: `style derive` without `--apply` (a read-only proposal from the version-N
+  anchors), `style bump`, then the person merges the proposed values into the bump draft by hand before activating it.
 - **An empty field is not a field:** `canvas: {}` or `tone: {}` counts as absent, so the row stays `NOT_AVAILABLE`
   (`scripts/assetgen/consistency.py` docstring).
 - **Reference images need a licence:** never use an image the person has not confirmed as theirs or licensed

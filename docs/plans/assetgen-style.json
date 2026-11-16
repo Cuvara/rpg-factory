@@ -32,7 +32,7 @@
         "tests/assetgen.test.sh"
       ],
       "acceptance": [
-        "style init creates the draft style and project.json; lint passes with 0 FAIL and the expected WARN for missing structured fields",
+        "style init creates the draft style and project.json; lint passes with 0 FAIL. Lint grades structured fields only on an active style (lint.style_warnings), so the draft gets no lint WARN: style init itself warns that the new style has no structured fields (text and a warnings list in --json), and the same style gives the lint missing-fields WARN once it is active",
         "an existing style or project.json is never overwritten (exit 1 with a message)",
         "no file under templates/assetgen/ changes"
       ]
@@ -276,6 +276,118 @@
         "the domain doc names style init, derive, bump, report and the external anchor with its human gate",
         "backlog.md carries the core-style bump item with its reason",
         "no machine-specific absolute path appears under docs/plans/"
+      ]
+    },
+    {
+      "id": "style-review-fixes",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the findings of the Codex cross-model review of the style tasks (review files are named in the task lead spec). Confirm each finding against the code first; fix the real ones with a test each, and for a finding that is wrong say why in the report. (1) style init: the acceptance asks for a WARN when the new style lacks structured fields, but the test demands zero WARNs and a draft produces none. (2) style bump: carrying an active external anchor into the new version keeps external_source.attested_by and attested_on, which must be null on a proposed anchor, so validation rejects the copy; reset them with the approval fields. (3) style report: the suggested palette distance is clamped to 441 although an output can need about 441.67, and min_share 0 forces rank 1; report that no permitted threshold fits instead of an ineffective suggestion and handle min_share 0. (4) asset-style skill: 'derive into a bumped draft' is not supported (derive reads styles/<ID>.json, bump writes styles/<ID>/versions/<N+1>.json); document the real flow. Also two wording fixes: backlog core-style-v2 says hash-changed where a v1 to v2 bump reports older-version, and bootstrap.md section 2 defines an anchor only as an approved gen-run output although external anchors exist.",
+      "paths": [
+        "scripts/assetgen/style_cmd.py",
+        "scripts/assetgen/style_report.py",
+        "scripts/assetgen/stylelock.py",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "skills/asset-style/SKILL.md",
+        "skills/asset-style/references/style-fields.md",
+        "skills/asset-style/references/bootstrap.md",
+        "docs/plans/backlog.md",
+        "changelog.d/assetgen-style-review-fixes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-init",
+        "style-derive",
+        "style-bump",
+        "style-report",
+        "style-skill-scaffold",
+        "style-skill-content",
+        "style-skill-scenarios",
+        "nokill-word-match",
+        "external-anchor",
+        "style-docs"
+      ],
+      "checks": [
+        "tests/run-all.sh --only-suites tests/assetgen.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "each confirmed finding has a fix and a test that fails without it",
+        "a bumped style that carries an active external anchor validates, with the copy proposed and unattested",
+        "style report never suggests a threshold that still fails QA",
+        "the asset-style skill describes only flows the verbs support; skills-lint passes",
+        "existing style tests keep passing"
+      ]
+    },
+    {
+      "id": "style-review-fixes-2",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the second-round findings of the Codex cross-model review (review files are named in the task lead spec). (1) style report: a suggested threshold must never fail QA. The palette rank is rounded before the sample is chosen (min_share 0.70000000001 with ten pixels suggests distance 6, which QA fails) and a tone suggestion can fail consistency.check_tone through float rounding (anchor grey 39, output grey 90 suggests 0.2 and QA WARNs). Derive each suggestion from, or validate it against, the same comparison QA makes (call the consistency check with the rounded value and step it until QA passes, or report that no permitted value fits), with regression tests for both cases and without an epsilon that hides the mismatch. (2) style bump: the quality integration assertion near the carried external anchor test is vacuous because the fixture runs omit kind, so artifact-quality only reports parse failures and never calls the assetgen domain plugin; use valid gen-run fixtures and assert the domain checks ran before comparing FAIL rows. (3) style-fields.md still tells the reader to read the note: line of style init, which now prints WARN: in text and a warnings list in JSON.",
+      "paths": [
+        "scripts/assetgen/style_report.py",
+        "tests/assetgen.test.sh",
+        "skills/asset-style/references/style-fields.md",
+        "changelog.d/assetgen-style-review-fixes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-init",
+        "style-derive",
+        "style-bump",
+        "style-report",
+        "style-skill-scaffold",
+        "style-skill-content",
+        "style-skill-scenarios",
+        "nokill-word-match",
+        "external-anchor",
+        "style-docs",
+        "style-review-fixes"
+      ],
+      "checks": [
+        "tests/run-all.sh --only-suites tests/assetgen.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "every threshold style report suggests passes the QA check it is for, proven by tests that call the QA comparison, including the two reported inputs",
+        "the bump quality test fails when the assetgen domain checks do not run",
+        "style-fields.md matches the style init output",
+        "existing style tests keep passing"
+      ]
+    },
+    {
+      "id": "style-review-fixes-3",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the round-three finding of the Codex cross-model review of style report: tone suggestions compare each output against the pooled anchors of the style, while QA (consistency.check_tone) grades an output against the anchor copies its own run selected, so a suggested tolerance can still WARN in QA. Reproduction from the review: a black props anchor, a white characters anchor, an approved grey (128,128,128) props output whose run selected the black anchor, and a white characters output give a total suggestion of 0.0, while QA needs 0.51 for the props output. Derive each requirement against the references that run actually selected, the way QA does, before aggregating per family and in total; check whether the palette, canvas and outline suggestions have the same pooled-versus-selected mismatch and fix them the same way if so.",
+      "paths": [
+        "scripts/assetgen/style_report.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-style-review-fixes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-init",
+        "style-derive",
+        "style-bump",
+        "style-report",
+        "style-skill-scaffold",
+        "style-skill-content",
+        "style-skill-scenarios",
+        "nokill-word-match",
+        "external-anchor",
+        "style-docs",
+        "style-review-fixes",
+        "style-review-fixes-2"
+      ],
+      "checks": [
+        "tests/run-all.sh --only-suites tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every tone suggestion, per family and total, passes consistency.check_tone for every approved output it covers when that output is graded against its own run's selected anchors; a test builds the reviewed two-family case and feeds the suggestion back into QA",
+        "the other suggestion kinds are checked for the same mismatch and the report says what was found",
+        "existing style report tests keep passing"
       ]
     }
   ]

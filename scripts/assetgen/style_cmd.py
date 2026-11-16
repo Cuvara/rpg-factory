@@ -8,7 +8,8 @@ draft, no structured fields) and the skeleton <authoring>/assetgen/project.json 
 an empty art_direction). Each --family FAM=STYLE maps a family to a style: STYLE equal to ID only maps; a game style
 that already exists must extend ID; a core-only STYLE is refused (a core style cannot extend the project style);
 any other STYLE gets a draft stub that extends ID. init never overwrites a file (exit 1, nothing written: every target is
-checked before the first write) and never edits core data (templates/assetgen/).
+checked before the first write) and never edits core data (templates/assetgen/). After a successful write, init warns
+that structured fields are missing and explains how to add them (also in the JSON warnings list).
 
 bump prepares version N+1 of an ACTIVE game style <authoring>/assetgen/styles/<ID>.json (version N) and lists what a
 person has to re-approve under the new version. It never edits an active version in place and never activates anything:
@@ -50,9 +51,10 @@ BUMP_SCHEMA = "rpg-factory.assetgen-style-bump/1"
 QUALITY_SCRIPT_ENV = "RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT"
 QUALITY_TIMEOUT = 600
 VERSION_SUFFIX = re.compile(r"-v\d+\Z")
-DRAFT_NOTE = ("note: the style is draft: lint does not WARN for a draft style; once status is active lint WARNs until a "
-              "usable structured field (palette.colors, tone, canvas, outline.edge_darkness) is set, so add those "
-              "(style derive) before activating")
+DRAFT_NOTE = ("WARN: the new style has no structured style fields (palette.colors, tone, canvas, "
+              "outline.edge_darkness); no style-* QA row can grade an output until one is added. "
+              "Lint WARNs once the style is active; add fields by hand or use style derive --apply "
+              "once valid active anchors exist.")
 
 
 class Refusal(Exception):
@@ -199,7 +201,7 @@ def init(a):
         raise
     if a.json:
         print(json.dumps({"schema": INIT_SCHEMA, "style": a.id, "extends": a.extends, "families": fams,
-                          "files": written, "project": project}, indent=1, sort_keys=True))
+                          "files": written, "project": project, "warnings": [DRAFT_NOTE]}, indent=1, sort_keys=True))
     else:
         print("\n".join(["wrote " + rel for rel in written] + [DRAFT_NOTE]))
     return 0
@@ -279,6 +281,8 @@ def _anchor_rows(authoring, style_id, version, new_version, draft_ref):
             continue
         new = dict(data, id=new_id, status="proposed", approved_by=None, approved_on=None, style=dict(draft_ref),
                    image=new_id + ".png")
+        if isinstance(data.get("external_source"), dict):
+            new["external_source"] = dict(data["external_source"], attested_by=None, attested_on=None)
         errs = stylelock.anchor_errors(new, style_id, new_id)
         if errs:
             row["reason"] = "the carried record would not be valid: " + "; ".join(errs)

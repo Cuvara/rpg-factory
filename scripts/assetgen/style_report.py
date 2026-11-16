@@ -11,18 +11,18 @@ is the family "(none)") plus the style-wide "total" it reports:
                is listed as skipped, never a crash): min, max and mean of the mean luminance and mean saturation
                (consistency.tone_stats)
   palette      when the merged style has a usable palette (consistency.palette_config): per output the share of opaque
-               samples within the current max_distance and d_needed, the smallest integer distance (capped at 441) at
+               samples within the current max_distance and d_needed, the smallest integer distance at
                which that share reaches min_share; min, median and max of both
   qa           for every run of the style with a readable qa.json, each style-* row (qa.is_style_row) counted by state
                PASS, WARN, FAIL and NOT_AVAILABLE per check, with warn_rate and fail_rate = count / rows of that check
                (3 decimals; null without rows)
   rejections   stylelock.load_rejections counted by reason (a malformed record under "malformed"), per family and total
-  suggestions  palette.max_distance = the largest d_needed over the approved outputs; tone.tolerance = the smallest
-               tolerance, rounded up to 2 decimals, that keeps every approved output's mean luminance and saturation
-               inside the range of the valid active anchors of the style's current version (the anchors of the family
-               when it has any, else all of the style's; an anchor whose PNG is missing, does not match its image_sha256
-               or has no opaque pixel is skipped). A suggestion is only ever printed with its supporting numbers and
-               is never applied: nothing here edits a style. It is null with a reason when it cannot be computed.
+  suggestions  palette.max_distance = the largest d_needed over the approved outputs, or null when it exceeds the
+               permitted maximum 441; tone.tolerance = the smallest
+               tolerance, rounded up to 2 decimals, that keeps each approved output's mean luminance and saturation
+               inside the range of its own run's selected anchor copies, as QA does. Outputs without usable selected
+               anchors are counted and excluded. Suggestions are never applied and are null with a reason when they
+               cannot be computed. The style's valid active anchors are listed for information only.
 Styles: --style ID, else every style with a game file assetgen/styles/<id>.json, named by a run's style ref or holding
 anchor or rejection records, sorted. --json prints schema rpg-factory.assetgen-style-report/1 (indent 1, sorted keys).
 Exit codes: 0 report printed (also when there is nothing to report), 1 refusal (a --style no data knows), 2 usage (a
@@ -39,6 +39,7 @@ import consistency
 import layers
 import png
 import qa
+import runfiles
 import style_cmd
 import style_derive
 import stylelock
@@ -124,7 +125,7 @@ def _runs(authoring):
         status = front.get("status")
         runs.append({"id": name, "dir": os.path.join(root, name), "status": status if isinstance(status, str) else "unknown",
                      "style_id": sid if isinstance(sid, str) and stylelock.ID.match(sid) else None,
-                     "family": _family(lock.get("family"))})
+                     "family": _family(lock.get("family")), "spec": spec})
     return runs, unreadable
 
 
@@ -148,9 +149,14 @@ def _output_record(img, palette):
                     for r, g, b, _ in consistency.opaque_samples(img))
         n = len(sq)
         rec["share"] = bisect.bisect_right(sq, max_distance * max_distance) / n
-        k = min(n, max(1, math.ceil(round(min_share * n, 9))))
-        d = math.isqrt(sq[k - 1])
-        rec["d_needed"] = min(MAX_DISTANCE_CAP, d + (1 if d * d < sq[k - 1] else 0))
+        lo, hi = 0, 442
+        while lo < hi:
+            d = (lo + hi) // 2
+            if bisect.bisect_right(sq, d * d) / n >= min_share:
+                hi = d
+            else:
+                lo = d + 1
+        rec["d_needed"] = lo
     return rec
 
 
@@ -160,6 +166,18 @@ def _approved_outputs(style_runs, palette):
     for run in style_runs:
         if run["status"] != "approved":
             continue
+        selected = qa.style_anchors(run["dir"], run["spec"])
+        copies = set()
+        for pick in runfiles.style_lock_references(run["spec"]):
+            image = pick.get("image")
+            if not isinstance(image, str) or not image:
+                continue
+            path = os.path.join(run["dir"], *image.split("/"))
+            try:
+                if consistency.tone_stats(png.decode(path)) is not None:
+                    copies.add(os.path.normcase(os.path.abspath(path)))
+            except (png.Invalid, png.Unsupported, OSError):
+                pass
         out_dir = os.path.join(run["dir"], "outputs")
         for name in sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []:
             if not name.lower().endswith(".png"):
@@ -173,7 +191,7 @@ def _approved_outputs(style_runs, palette):
             if rec is None:
                 skipped.append({"run": run["id"], "output": rel, "reason": "no opaque pixels"})
                 continue
-            used.append(dict(rec, run=run["id"], output=rel, family=run["family"]))
+            used.append(dict(rec, run=run["id"], output=rel, family=run["family"], selected_anchors=selected, selected_copies=copies))
     return used, skipped
 
 
@@ -221,6 +239,7 @@ def _qa_summary(rows):
 
 
 def _suggest_palette(outs, palette, reason):
+    # QA compares output pixels with the style palette, independently of selected anchors.
     if palette is None:
         return {"value": None, "reason": reason, "data": {"current": None}, "applied": False}
     _, _, max_distance, min_share = palette
@@ -230,36 +249,58 @@ def _suggest_palette(outs, palette, reason):
     needed = [o["d_needed"] for o in outs]
     data["d_needed"] = _spread(needed)
     data["pass_at_current"] = sum(1 for o in outs if o["share"] >= min_share)
-    return {"value": max(needed), "reason": None, "data": data, "applied": False}
+    largest = max(needed)
+    if largest > MAX_DISTANCE_CAP:
+        return {"value": None, "reason": "no permitted max_distance (0..441) makes every approved output pass; "
+                "largest needed distance is %d" % largest, "data": data, "applied": False}
+    return {"value": largest, "reason": None, "data": data, "applied": False}
 
 
-def _suggest_tone(outs, anchors, current):
-    data = {"current": _r(current), "anchors": len(anchors), "outputs": len(outs)}
-    if not anchors or not outs:
-        return {"value": None, "applied": False, "data": data,
-                "reason": "no valid active anchor of the current style version" if not anchors
-                else "no approved output with opaque pixels"}
+def _suggest_tone(outs, current):
+    graded = [o for o in outs if o["selected_anchors"]]
+    # Each run's selected copies are counted once, even when it has several outputs.
+    runs = {o["run"]: o["selected_anchors"] for o in graded}
+    anchors = [a for selected in runs.values() for a in selected]
+    copies = set().union(*(o.get("selected_copies", ()) for o in graded))
+    data = {"current": _r(current), "anchors": len(copies), "outputs": len(outs),
+            "outputs_without_anchors": len(outs) - len(graded)}
+    if not graded:
+        reason = "no approved output with opaque pixels" if not outs else "no approved output has usable selected anchors"
+        return {"value": None, "applied": False, "data": data, "reason": reason}
     need, anchor_range, output_range = 0.0, {}, {}
-    for key in ("luminance", "saturation"):
-        lo, hi = min(a[key] for a in anchors), max(a[key] for a in anchors)
-        vals = [o[key] for o in outs]
-        anchor_range[key] = [_r(lo), _r(hi)]
+    for i, key in enumerate(("luminance", "saturation")):
+        vals = [o[key] for o in graded]
+        anchor_range[key] = [_r(min(a[i] for a in anchors)), _r(max(a[i] for a in anchors))]
         output_range[key] = [_r(min(vals)), _r(max(vals))]
-        need = max(need, max(max(0.0, lo - v, v - hi) for v in vals))
-    inside = sum(1 for o in outs if all(
-        min(a[k] for a in anchors) - current <= o[k] <= max(a[k] for a in anchors) + current
-        for k in ("luminance", "saturation")))
-    data.update(anchor_range=anchor_range, output_range=output_range, inside_at_current=inside)
-    return {"value": min(1.0, _round_up_2(need)), "reason": None, "data": data, "applied": False}
+        for o in graded:
+            own = o["selected_anchors"]
+            need = max(need, max(0.0, min(a[i] for a in own) - o[key], o[key] - max(a[i] for a in own)))
+    def inside(o, tol):
+        return all(min(a[i] for a in o["selected_anchors"]) - tol <= o[key] <=
+                   max(a[i] for a in o["selected_anchors"]) + tol
+                   for i, key in enumerate(("luminance", "saturation")))
+    data.update(selected_anchor_range=anchor_range, output_range=output_range,
+                inside_at_current=sum(inside(o, current) for o in graded))
+    def fits(c):
+        return all(inside(o, round(c / 100, 2)) for o in graded)
+
+    c = min(100, round(_round_up_2(need) * 100))
+    while c > 0 and fits(c - 1):
+        c -= 1
+    while c <= 100 and not fits(c):
+        c += 1
+    if c > 100:
+        return {"value": None, "reason": "no permitted tolerance (0..1) keeps every approved output inside the anchor range",
+                "data": data, "applied": False}
+    return {"value": round(c / 100, 2), "reason": None, "data": data, "applied": False}
 
 
-def _group(fam, style_runs, outs, qa_rows, rejections, palette, palette_reason, anchors, tone_current):
+def _group(fam, style_runs, outs, qa_rows, rejections, palette, palette_reason, tone_current):
     """The statistics of one family (fam) or of the whole style (fam None)."""
     pick = (lambda f: True) if fam is None else (lambda f: f == fam)
     runs = [r for r in style_runs if pick(r["family"])]
     outs = [o for o in outs if pick(o["family"])]
     rej = [r for f, r in rejections if pick(f)]
-    scope = [a for a in anchors if fam is not None and a["family"] == fam] or anchors
     if palette is None:
         pal = {"state": palette_reason[0], "reason": palette_reason[1]}
     else:
@@ -273,7 +314,7 @@ def _group(fam, style_runs, outs, qa_rows, rejections, palette, palette_reason, 
             "qa": _qa_summary([r for r in qa_rows if pick(r[0])]),
             "rejections": {"total": len(rej), "by_reason": {x: rej.count(x) for x in sorted(set(rej))}},
             "suggestions": {"palette.max_distance": _suggest_palette(outs, palette, palette_reason[1]),
-                            "tone.tolerance": _suggest_tone(outs, scope, tone_current)}}
+                            "tone.tolerance": _suggest_tone(outs, tone_current)}}
 
 
 def _style_report(authoring, style_id, runs):
@@ -306,7 +347,7 @@ def _style_report(authoring, style_id, runs):
     qa_rows, qa_unreadable, with_qa = _qa_rows(style_runs)
     rejections = _rejections(authoring, style_id)
     families = sorted({r["family"] for r in style_runs} | {f for f, _ in rejections})
-    args = (style_runs, outs, qa_rows, rejections, palette, palette_reason, anchors, tone_current)
+    args = (style_runs, outs, qa_rows, rejections, palette, palette_reason, tone_current)
     out.update(anchors=anchor_rows, qa_runs=len(with_qa), qa_unreadable=qa_unreadable,
                skipped={"anchors": sorted(skipped_anchors, key=lambda s: s["id"]), "outputs": skipped_outputs},
                families={f: _group(f, *args) for f in families}, total=_group(None, *args))
@@ -332,11 +373,12 @@ def _suggestion_text(name, s):
         if "d_needed" in d:
             facts += ["d_needed %s" % _spread_text(d["d_needed"]), "%d pass at current" % d["pass_at_current"]]
     else:
-        facts = ["current %s" % _fmt(d["current"]), "%d anchor(s)" % d["anchors"], "%d approved output(s)" % d["outputs"]]
-        if "anchor_range" in d:
+        facts = ["current %s" % _fmt(d["current"]), "%d selected anchor copy/copies" % d["anchors"], "%d approved output(s)" % d["outputs"],
+                 "%d output(s) without anchors" % d["outputs_without_anchors"]]
+        if "selected_anchor_range" in d:
             for key in ("luminance", "saturation"):
-                facts.append("%s anchors [%s, %s] outputs [%s, %s]" % (
-                    key, _fmt(d["anchor_range"][key][0]), _fmt(d["anchor_range"][key][1]),
+                facts.append("%s selected anchors [%s, %s] outputs [%s, %s]" % (
+                    key, _fmt(d["selected_anchor_range"][key][0]), _fmt(d["selected_anchor_range"][key][1]),
                     _fmt(d["output_range"][key][0]), _fmt(d["output_range"][key][1])))
             facts.append("%d inside at current" % d["inside_at_current"])
     head = "%s = %s" % (name, _fmt(s["value"])) if s["value"] is not None else "%s: no suggestion (%s)" % (name, s["reason"])

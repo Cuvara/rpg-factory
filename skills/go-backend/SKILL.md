@@ -70,7 +70,7 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
 
 - **Errors:** wrap with `%w`; absence is `storage.ErrNotFound` tested with `errors.Is`
   (`interfaces.go:11`, `isRetriable()` `gateway/registry/registry.go:234-238`, the watcher's
-  `storage.ErrNotFound` check `registry/watcher.go:145`).
+  `storage.ErrNotFound` check `registry/watcher.go:164`).
 - **Logging:** gateway and shared use `log/slog` (`slog.Logger` `server.go:49`, `shared/logger/logger.go`);
   the Nakama plugin uses the printf-style `runtime.Logger` it is handed - no slog there.
 - **Nakama errors:** `runtime.NewError(msg, grpcCode)` (`economy/reward_batch.go:158`).

@@ -29,12 +29,23 @@ matched, and the macOS user-home alternative also matches the path part of a URL
 plan". Optional follow-up: a `factory-pipeline.py plan-edit` verb (or a `validate --replace <plan>` mode) that does
 the copy, validation and replace in one step, with a test that an invalid edit never replaces the plan.
 
+### core-style-v2
 
+Bump the six core styles under `templates/assetgen/styles/` to structured v2 (`palette.colors`, `tone`, `canvas`),
+and only after a game project has real derived values from `assetgen.py style derive`. Reason: the bump changes every
+core style hash, so every existing run, anchor and rejection recorded against a core style drifts
+(`assetgen.py drift` reports `older-version`: the bump moves the six core styles from version 1 to version 2, and the
+version is checked before the hash).
 
+### external-path-uri
 
+`stylelock.EXTERNAL_PATH` still accepts `file:` URIs (with a drive letter) and `$HOME` / `%USERPROFILE%` forms in the
+`external_source` `origin` and `rights_note`. Refuse a `file:` scheme and environment-variable paths, with a test.
 
+### review-base-topic
 
-
+`review_base` for a task with no deps that was cut from the topic branch uses the plan base (`main`) and so selects
+every suite. Use the topic branch as the review base.
 
 ### agent-runtime-quirks
 
@@ -146,30 +157,28 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
   spec template should use `"${S:?}"` or a literal path.
 
-### language-policy-followups
+### policy-followups-leftovers
 
-From plan language-policy (`docs/plans/language-policy/report.md`):
+From plan policy-followups (`docs/plans/policy-followups/report.md`), owner decisions first:
 
-- `changelog.d/language-policy.md` does not name the Agent-tool prompt check (`hooks/hooks.json` matcher `Agent|Task`).
-- `tests/installed-safety.sh` has no english-only case, and none for an Agent prompt.
-- The `--domain` and `--graph` views of the snapshot print no `Language:` line.
-- `skills/factory-core/references/plugin-review.md` still has the short "English only" bullet.
-- `scripts/file-guard.py` ignores `path:line` entries of the english-only allowlist (an Edit fragment has no file
-  line); only `path:*` works.
-- Git guard lows: the `orca` positional parse misses a global option that takes a value; the `Agent|Task` matcher
-  fires for any tool named Task; the plugin-checkout rule governs every plugin checkout.
-- `factory-pipeline.py status` and `cleanup` call `orca orchestration worker-list --full`, which Orca 1.4.244
-  rejects ("Unknown flag --full"), so the unreleased-worker check cannot run there.
-- `status` lists a sibling integration worktree of another plan as a "leftover child" of this plan's integration
-  checkout when its Orca parent is the main checkout (seen with `feat/skills/vfx-graph` while the main checkout held
-  `fix/core/language-policy`). Tell a child of the plan from a worktree of another topic.
-- A plan-scoped owner override cannot name a model outside `pipeline.models.scope` (the personal policy file may only
-  narrow it), so the run lead had to edit the printed launch command by hand. Decide whether a plan may widen the
-  scope for itself, with the owner's word recorded in the plan.
-- Codex stops at its "Hooks need review" trust prompt in a checkout whose hooks it has not seen; `agents` detection
-  still reports it available. Probe for the prompt, or document the one-time trust step in `docs/codex.md`.
+- Owner decision: a plan-scoped owner override cannot name a model outside `pipeline.models.scope` (the personal policy
+  file may only narrow it). Decide whether a plan may widen the scope for itself, with the owner's word recorded in the
+  plan.
+- Owner decision: the git guard's english-only check covers every command run inside the plugin checkout the guard
+  runs from (`in_scope()` in `scripts/lib/rpgf_guard/language.py`). Decide whether it should cover only that checkout
+  (current), every rpg-factory checkout and worktree (Orca task worktrees outside the workspace), or none.
+- `plan_branch` in `scripts/factory-pipeline.py` treats `<topic>-*` as this plan's, so a plan whose topic extends
+  this one (`<topic>-v2`) can count as a child when Orca's lineage names this plan's worktree as its parent; an
+  Orca-prefixed branch equal to the topic (`codex/<topic>`) is not matched by lineage.
+- With concise `worker-list` rows (Orca without `--full`), a worker released through `terminalState` but without
+  `state` is still counted in the "settledness not checked" note.
+- Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
 
 ## Covered
+
+- **language-policy-followups**: shipped in plan policy-followups (`changelog.d/policy-file-guard-allowlist.md`,
+  `changelog.d/policy-git-guard-lows.md`, `changelog.d/policy-language-line.md`, `changelog.d/policy-pipeline-orca.md`);
+  the two owner decisions and the low findings moved to policy-followups-leftovers.
 
 - **affected-selection-followups**: shipped in plan affected-followups (`changelog.d/affected-rpgf-guard.md`); the
   two-hop `workspace.sh` callers stay accepted (they run in a full run).

@@ -16,6 +16,7 @@
 - **Advisories.** `file-guard.py` (Write, Edit, MultiEdit, NotebookEdit into a registered repo, the plugin, a
   `docs/plans/` directory, or a harness plan or memory directory) and the git guard (`git commit` message, `gh pr` and
   `gh issue` text, `orca orchestration send` and `orca agent launch` text) emit an `rpg-factory advisory (warn)` naming
-  rule `english-only` and the first offending line. Advisory only: no hook blocks or asks.
+  rule `english-only` and the first offending line. The `hooks/hooks.json` PreToolUse matcher `Agent|Task` runs the same
+  check on the prompt an agent is launched with. Advisory only: no hook blocks or asks.
 - **Shared detection.** `scripts/lib/english.py` holds the english-only detection used by
   `scripts/checks/english-only.py`, `file-guard.py` and the git guard.
