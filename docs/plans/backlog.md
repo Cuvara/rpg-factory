@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None. Plan `plugin-flow-5` is in PR review (`docs/plans/plugin-flow-5/report.md`).
+- **repo-path-audit**: plan path-audit (`docs/plans/path-audit.json`).
 
 ## Open
 

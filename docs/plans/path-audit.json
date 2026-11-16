@@ -1,0 +1,69 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "path-audit",
+  "title": "Backlog repo-path-audit: a repo-wide check for machine-specific user paths, machine_path pattern lows",
+  "topic": "path-audit",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "machine-path-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one regex and its mutation cases",
+      "objective": "Backlog topic repo-path-audit, the lows of the plans check. MACHINE_PATH in scripts/lib/plan_paths.py (used by the portable-plans case of tests/parallel-policy.test.sh): (a) a WSL drive mount followed by punctuation (`/mnt/c,` or `(/mnt/c)`) is not matched; match a mount followed by any non-word character or the end. (b) The macOS user-home alternative (`/Users/`) and the Linux one (`/home/`) also match the path part of a URL (`https://example.com/Users/x`); do not match them right after a host name or another path segment, the same way the Git Bash drive alternative already avoids URLs. Add mutation cases to the portable-plans case: both punctuation forms rejected, both URL forms allowed; keep every existing case. Changelog fragment changelog.d/path-audit-pattern.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine.",
+      "paths": [
+        "scripts/lib/plan_paths.py",
+        "tests/parallel-policy.test.sh",
+        "changelog.d/path-audit-pattern.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/parallel-policy.test.sh --case portable-plans"
+      ],
+      "acceptance": [
+        "a WSL drive mount followed by a comma or a closing parenthesis is rejected under docs/plans",
+        "a URL whose path contains /Users/ or /home/ is allowed",
+        "every existing portable-plans case still passes"
+      ]
+    },
+    {
+      "id": "user-path-check",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a new repo-wide check registered in run-all; too wide fails every PR, too narrow lets a user path through",
+      "objective": "Backlog topic repo-path-audit, the audit. The maintainer rule (2026-11-06): nothing the flow needs may live only on one machine; today only docs/plans is checked. Add a read-only check scripts/checks/portable-paths.py (shape of scripts/checks/english-only.py: report by default, `--enforce` exits 1 on a finding, `path:line: match` output) over the tracked text files of the repo outside docs/plans (docs, skills, commands, agents, registry fragments and registry.json, README.md, .claude/CLAUDE.md, .claude/skills, evals, testlab docs and fixtures, scripts and tests). It flags a user-specific path: a user home with a user name (Windows `<drive>:\\Users\\<name>` or `/c/Users/<name>`, `/home/<name>`, macOS `/Users/<name>`), an expanded AppData path, and a machine-only scratch root (for example a drive-letter `tmp` directory such as the one in docs/architecture/ui-figma-real-test.md). It allows: environment-variable forms (`%LOCALAPPDATA%`, `$HOME`, `~`), the registry workspace default and its platform spellings (read `workspace.root_default` from registry.json, never hard-code it), obviously fake names (`person`, `example`, `user`, `<name>` placeholders, the CI runner short name in .github), URLs, and an allowlist file with one reason per entry (tests/fixtures/portable-paths-allow.txt). Fix every finding: scrub the real user name in testlab/tests/fixtures (ad_trace_sessions.txt, failsum/*/results.json) to an obviously fake one without breaking testlab's tests (check which assertions read those values), and rewrite the provenance paragraph of docs/architecture/ui-figma-real-test.md (section about the run host) without machine paths. Register in tests/run-all.sh next to the English-only lines: a suite tests/portable-paths.test.sh (fixture cases: each flagged form found, each allowed form not, the allowlist works, `--enforce` exit codes) and `python3 -B scripts/checks/portable-paths.py --enforce`; list the suite in tests/README.md and the check in scripts/README.md. Changelog fragment changelog.d/path-audit-check.md (### Added). Keep it fast (one pass over `git ls-files`). CI runs on Linux: no test may depend on host tools of this Windows machine.",
+      "paths": [
+        "scripts/checks/portable-paths.py",
+        "tests/portable-paths.test.sh",
+        "tests/fixtures/portable-paths-allow.txt",
+        "tests/run-all.sh",
+        "tests/README.md",
+        "scripts/README.md",
+        "testlab/tests/fixtures/",
+        "docs/architecture/ui-figma-real-test.md",
+        "changelog.d/path-audit-check.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/portable-paths.test.sh",
+        "python3 -B scripts/checks/portable-paths.py --enforce"
+      ],
+      "acceptance": [
+        "scripts/checks/portable-paths.py --enforce exits 0 on the repo and 1 on each flagged fixture form",
+        "the registry workspace default, environment-variable forms, fake names and URLs are allowed",
+        "no tracked file outside the allowlist carries a real user home, expanded AppData or machine-only scratch path",
+        "run-all runs the suite and the enforce line; testlab's own tests still pass with the scrubbed fixtures"
+      ]
+    }
+  ]
+}
