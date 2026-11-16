@@ -14,6 +14,7 @@ ag.fail() exits the process, so every condition a callee would fail() on is chec
 anything is written; after that a step ends in a state, never in an exit. Steps stop at the first FAIL, naming it.
 
 Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE.
+With --discard-qa-fail, move failing outputs to outputs-rejected/ and grade the remaining outputs again.
 """
 import glob
 import hashlib
@@ -276,11 +277,14 @@ def step_lines(step):
     return lines
 
 
-def run(ag, run_dir, force=False, as_json=False):
+def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False):
     """The finalize verb: returns the exit code (0 PASS, 1 FAIL, 3 NOT_AVAILABLE) after printing the result."""
     spec, record = precheck(ag, run_dir)
+    if discard_qa_fail:
+        ag.discard.records(ag, run_dir)  # an unreadable discards.json refuses here, before any write
     before = image_reviews(ag, run_dir)
-    steps, qa_text, code, failed = [], "", 0, None
+    steps, qa_text, code, failed = [], [], 0, None
+    discarded, discard_stale = [], []
     steps.append(filter_step(ag, run_dir))
     if steps[-1]["state"] == "FAIL":
         failed = "filter"
@@ -297,20 +301,54 @@ def run(ag, run_dir, force=False, as_json=False):
         if steps[-1]["state"] == "FAIL":
             failed = "embed"
     if not failed:
-        step, qa_text, code = qa_step(ag, run_dir)
+        step, text, code = qa_step(ag, run_dir)
+        qa_text.append(text)
         steps.append(step)
+        if discard_qa_fail and step["state"] == "PASS":
+            steps.append({"step": "discard", "state": "skipped", "reason": "qa PASS: nothing to discard", "results": []})
+        elif discard_qa_fail and step["state"] == "FAIL":
+            current = ag.discard.outputs(run_dir)
+            checks = {}
+            for row in step["results"]:
+                if row.get("state") == "FAIL" and row.get("output") in current:
+                    checks.setdefault(row["output"], [])
+                    if row["check"] not in checks[row["output"]]:
+                        checks[row["output"]].append(row["check"])
+            if checks and len(checks) == len(current):
+                step["reason"] += "; every output failed QA: nothing discarded"
+            elif checks:
+                data = ag.discard.records(ag, run_dir)
+                discard_stale = ag.discard.stale_records(ag, run_dir, set(checks))
+                rows = []
+                for output in current:
+                    if output not in checks:
+                        continue
+                    names = ", ".join(checks[output])
+                    entry = ag.discard.move(ag, run_dir, output, "qa FAIL: " + names, "finalize", data)
+                    discarded.append(entry)
+                    rows.append({"state": "discarded", "output": output,
+                                 "reason": "-> %s: qa FAIL %s" % (entry["path"], names)})
+                steps.append({"step": "discard", "state": "discarded",
+                              "reason": "%d discarded to outputs-rejected/" % len(rows), "results": rows})
+                step, text, code = qa_step(ag, run_dir)
+                discard_stale = [n for n in discard_stale if n != "qa.json"]
+                qa_text.append(text)
+                steps.append(step)
         if step["state"] == "FAIL":
             failed = "qa"
     if failed:
         code = 1
-    state = "FAIL" if failed else steps[-1]["state"]
+    state = "FAIL" if failed else step["state"] if steps[-1]["step"] == "discard" else steps[-1]["state"]
     after = image_reviews(ag, run_dir)
-    stale = [n for n in before if n not in after]
+    stale = [n for n in ("qa.json", ag.REVIEW_FILES["image"], ag.CLAUDE_REVIEW)
+             if n in discard_stale or (n in before and n not in after)]
     summary = "assetgen finalize: %s" % state
     if failed:
         summary += " at %s: %s" % (failed, steps[-1]["reason"])
     obj = {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "steps": steps, "failed_at": failed,
            "stale": stale, "state": state, "exit": code}
+    if discard_qa_fail:
+        obj["discarded"] = discarded
     fields = ("output", "raw", "original_size", "fitted_size", "offset", "before_sha256", "after_sha256")
     fitted = [{key: row[key] for key in fields} for step in steps if step["step"] == "fit"
               for row in step["results"] if row["state"] == "padded"]
@@ -334,10 +372,11 @@ def run(ag, run_dir, force=False, as_json=False):
     obj["fitted"] = fitted
     ag.write_json(os.path.join(run_dir, "finalize.json"), obj)
     lines = []
+    qa_texts = iter(qa_text)
     for step in steps:
         lines += step_lines(step)
         if step["step"] == "qa":
-            lines.append(qa_text)
+            lines.append(next(qa_texts))
     if stale:
         lines.append("stale now (re-run them): " + ", ".join(stale))
     if fitted:

@@ -699,6 +699,20 @@
       ],
       "additionalProperties": false,
       "properties": {
+        "discarded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["output", "path", "sha256", "reason"],
+            "properties": {
+              "output": {"type": "string", "pattern": "^outputs/[^/]+$"},
+              "path": {"type": "string", "pattern": "^outputs-rejected/[^/]+$"},
+              "sha256": {"$ref": "#/$defs/sha256"},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          }
+        },
         "failed_attempts": {
           "description": "Run ids of earlier attempts of the same series (<slug>-NNN, lower NNN) whose directory has no run.md.",
           "type": "array",
