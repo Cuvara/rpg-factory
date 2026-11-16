@@ -3695,6 +3695,64 @@ mkdir -p "$TMP/sl-wf-run-001"; AG promote-anchor --run "$TMP/sl-wf-run-001" --ou
 [ $rc -eq 1 ] && grep -q "must be <authoring>/assetgen/runs/<slug>-NNN" "$TMP/err" && ok "promote-anchor: a run outside <authoring>/assetgen/runs refused" || no "run layout rc=$rc" "$(cat "$TMP/err")"
 grep -rq '"status": "active"' "$pa.json" && no "promote-anchor wrote an active anchor" || ok "promote-anchor never writes status active"
 
+# External art is copied into the authoring repo without recording its original path.
+mkdir -p "$TMP/outside"; cp "$FX/icon-ok.png" "$TMP/outside/art.png"
+ext="$SG/styles/rpg-base/anchors/ext-1"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible v2 p.14' --rights-note 'studio-owned' --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong --json > "$TMP/ext.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.status == "proposed" and .approved_by == null and .approved_on == null and .external_source.attested_by == null and .external_source.attested_on == null and (has("source_run") | not) and .external_source.origin == "art bible v2 p.14" and .external_source.rights_note == "studio-owned" and .external_source.sha256 == .image_sha256' "$ext.json" >/dev/null \
+  && [ "$(jq -r .image_sha256 "$ext.json")" = "$(sha256sum "$ext.png" | cut -d' ' -f1)" ] && cmp -s "$ext.png" "$TMP/outside/art.png" \
+  && ! grep -Fq "$TMP/outside" "$ext.json" && ! grep -Fq 'outside' "$ext.json" \
+  && ok "external promote: proposed record, copied bytes and digest, no source path" || no "external promote rc=$rc" "$(cat "$TMP/err")"
+AG lint "$ext.json" --authoring "$SC" > "$TMP/o" 2>&1 && ok "external promote: proposed anchor lints clean" || no "external anchor lint" "$(cat "$TMP/o")"
+! grep -q '"status": "active"' "$ext.json" && ok "external promote: never writes an active anchor" || no "external promote wrote active status"
+AG promote-anchor --external "$TMP/outside/art.png" --run "$dp" --origin art --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && ok "external promote: --run conflicts with --external" || no "external with run rc=$rc" "$(cat "$TMP/err")"
+for missing in origin rights-note id; do
+  args=(--external "$TMP/outside/art.png" --authoring "$SC" --family props --dimensions palette --strength strong)
+  [ "$missing" = origin ] || args+=(--origin art)
+  [ "$missing" = rights-note ] || args+=(--rights-note owned)
+  [ "$missing" = id ] || args+=(--id ext-bad)
+  AG promote-anchor "${args[@]}" >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ok "external promote: missing $missing is a usage error" || no "external missing $missing rc=$rc" "$(cat "$TMP/err")"
+done
+printf 'not a png' > "$TMP/outside/not-png"
+AG promote-anchor --external "$TMP/outside/not-png" --origin art --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: non-PNG refused without writes" || no "external non-PNG rc=$rc" "$(cat "$TMP/err")"
+for origin in 'C:/art/x.png' '/home/me/art.png'; do
+  AG promote-anchor --external "$TMP/outside/art.png" --origin "$origin" --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: absolute origin $origin refused without writes" || no "external absolute origin rc=$rc" "$(cat "$TMP/err")"
+done
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note 'token=abc123' --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: credential refused without writes" || no "external credential rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'already exists' "$TMP/err" && ok "external promote: existing id refused" || no "external existing id rc=$rc" "$(cat "$TMP/err")"
+jq '.status = "active" | .approved_by = "Ana Silva" | .approved_on = "2026-11-01" | .external_source.attested_by = "Ana Silva" | .external_source.attested_on = "2026-11-01"' "$ext.json" > "$TMP/ext-active.json" && cp "$TMP/ext-active.json" "$ext.json"
+python3 -B - "$ROOT" "$SC" "$ext.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import stylelock
+data = json.load(open(sys.argv[3], encoding="utf-8"))
+assert not stylelock.anchor_errors(data, "rpg-base", "ext-1")
+assert any(a["data"]["id"] == "ext-1" for a in stylelock.valid_anchors(sys.argv[2], "rpg-base"))
+EOF
+[ $? -eq 0 ] && ok "external anchor: human activation is valid and selectable" || no "external active validity" "$(cat "$TMP/o")"
+rm -f "$ext.json" "$ext.png"
+
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-family --family characters --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_family="$SG/styles/rpg-chars/anchors/ext-family"
+[ $rc -eq 0 ] && [ -f "$ext_family.png" ] && jq -e '.style.style_id == "rpg-chars" and .family == "characters"' "$ext_family.json" >/dev/null \
+  && ok "external promote: mapped family uses its style and anchor directory" || no "external family rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_family.json" "$ext_family.png"
+before_external=$(find "$SG" -type f | sort)
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --style unlisted-style --id ext-disallowed --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'not allowed' "$TMP/err" && [ "$before_external" = "$(find "$SG" -type f | sort)" ] \
+  && ok "external promote: disallowed explicit style refused without writes" || no "external disallowed style rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible / page 4' --rights-note 'monkey: yes' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_prose="$SG/styles/rpg-base/anchors/ext-prose"
+[ $rc -eq 0 ] && jq -e '.external_source.origin == "art bible / page 4" and .external_source.rights_note == "monkey: yes"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: ordinary prose accepted" || no "external prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+
 # reject: validation, deterministic ids, asset rejections bound to a recorded output
 AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --family props >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "text is required" "$TMP/err" && ok "reject direction without text refused" || no "reject no text rc=$rc" "$(cat "$TMP/err")"
@@ -4280,6 +4338,26 @@ def case(rid, want, needles, label, **kw):
 
 
 case("u-good-001", "PASS", [], "gen-run-style: a human-approved active anchor (approved source run, signed approval, bytes match) PASS", refs=["a-good"])
+# A recorded reference exercises the same quality path even when malformed attestation prevents new selection.
+ext_sha = anchor("a-external", ref2, by="Ana Silva", n=12)
+ext_path = os.path.join(G, "styles", "rpg-base", "anchors", "a-external.json")
+ext_data = json.load(open(ext_path, encoding="utf-8"))
+del ext_data["source_run"]
+ext_data["external_source"] = {"origin": "art bible v2 p.14", "rights_note": "studio-owned", "sha256": ext_sha,
+                               "attested_by": "Ana Silva", "attested_on": "2026-11-01"}
+shas["a-external"] = ext_sha
+for attester, label in (("claude", "claude"), ("codex", "codex"), ("gpt-5", "gpt-5"),
+                        ("SAME_MODEL:claude-opus", "SAME_MODEL:claude-opus"), (None, "null"), ("Other Person", "another person"),
+                        ("Ana Silva", "approving person")):
+    ext_data["external_source"]["attested_by"] = attester
+    with open(ext_path, "w", encoding="utf-8") as f:
+        json.dump(ext_data, f)
+    case("u-external-001", "PASS" if attester == "Ana Silva" else "FAIL",
+         [] if attester == "Ana Silva" else ["external_source.attested_by"],
+         "gen-run-style: external anchor attested by %s %s" % (label, "PASS" if attester == "Ana Silva" else "FAIL"),
+         refs=["a-external"])
+os.remove(ext_path)
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "a-external.png"))
 case("u-agent-001", "FAIL", ["is an agent or model"], "gen-run-style: an active anchor approved_by an agent/model name FAIL", refs=["a-agent"])
 case("u-old-001", "WARN", ["changed since the run"], "gen-run-style: an anchor of an older style version stays valid (style drift WARN only)", refs=["a-old"], ref=ref1)
 case("u-gone-001", "FAIL", ["a-gone is not in assetgen/styles/rpg-base/anchors/"], "gen-run-style: a recorded anchor without its JSON FAIL", refs=["a-gone"])
