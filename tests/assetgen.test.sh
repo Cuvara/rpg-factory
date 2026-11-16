@@ -51,7 +51,8 @@
 # proposed -> approved lifecycle, an uncommitted approval HUMAN_REQUIRED in gen-run-style, cross-family anchor
 # warnings and anchor_family_fallback false, drift style-id-mismatch, 1322x1190 square tolerance and allow_swap, the
 # embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
-# style_selftest.py, pixelgrid_selftest.py), pixel-grid finalize (grid detection, palette limits, determinism,
+# style_selftest.py, pixelgrid_selftest.py, slicer_selftest.py), sheet slicing at gateway sizes, failed cell counts,
+# repeat and discard behavior, opt-in finalize, slice and sheet-hint CLI; pixel-grid finalize (grid detection, palette limits, determinism,
 # unsupported depths and opt-in QA), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
 # the read-only budget verb: outputs + failed attempts against the limit, ok/at-limit/exceeded/unlimited/invalid and
 # their exits; finalize's budget line and --json key with its exit unchanged), the output filter (finalize's first step
@@ -99,6 +100,140 @@ bound() { AG review-cmd --phase "$2" --run "$1" --json | jq -c --arg s "$3" --ar
 GOLD="$ROOT/tests/fixtures/assetgen/golden"
 G=(-c user.email=t@t -c user.name=t -c commit.gpgsign=false)
 has_pil() { python3 -c "import PIL" 2>/dev/null; }
+
+# Sheet cases have their own fixtures so each can also run independently via --case.
+sh_setup() {
+  sh_run="$TMP/$1-001"; mkdir -p "$sh_run/outputs"
+  AG resolve --purpose icon --style stylized-painterly --template image-generate --out "$sh_run/spec.json" >/dev/null || return 1
+  printf 'A sheet of separate icons.\n' > "$sh_run/prompt.md"
+  AG render --run "$sh_run" >/dev/null || return 1
+  jq '.purpose.data.qa.size = {"mode":"any", "fit":"none"}' "$sh_run/spec.json" > "$TMP/sh-spec.json" && cp "$TMP/sh-spec.json" "$sh_run/spec.json"
+}
+sh_fixture() {
+  python3 -B - "$ROOT" "$sh_run/outputs/prop.png" "$1" "$2" "$3" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import png
+path, w, h, variant = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+data = bytearray(w * h * 4)
+for r, (ya, yb) in enumerate(((.05, .29), (.38, .61), (.70, .94))):
+    for c, (xa, xb) in enumerate(((.04, .38), (.43, .65), (.72, .96))):
+        if variant == 'missing' and (r, c) == (1, 1):
+            continue
+        x0, x1 = int(w * xa) + r * 3, int(w * xb) - r * 2
+        y0, y1 = int(h * ya) + c * 3, int(h * yb) - c * 2
+        row = (bytes((50 + r * 40, 60 + c * 40, 120, 255)) * ((x1 - x0) // 2)
+               + bytes((200, 190, 160, 255)) * ((x1 - x0 + 1) // 2))
+        for y in range(y0, y1):
+            data[(y * w + x0) * 4:(y * w + x1) * 4] = row
+if variant == 'merged':
+    for y in range(int(h * .17), int(h * .17) + 5):
+        x0, x1 = int(w * .37), int(w * .45)
+        data[(y * w + x0) * 4:(y * w + x1) * 4] = bytes((50, 60, 120, 255)) * (x1 - x0)
+open(path, 'wb').write(png.encode(w, h, data))
+EOF
+}
+sh_signature() { (cd "$1" && sha256sum ./*.png | LC_ALL=C sort); }
+sh_case() {
+  case "$1" in
+    sheet-sizes)
+      for sh_size in 1322x1190 1672x941 2172x724; do
+        sh_setup "sh-size-$sh_size" && sh_fixture "${sh_size%x*}" "${sh_size#*x}" good || { no "sheet setup $sh_size"; continue; }
+        cp "$sh_run/outputs/prop.png" "$TMP/sh-input.png"
+        AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+        AG manifest --run "$sh_run" > "$TMP/sh-manifest" 2>> "$TMP/sh-err"; sh_manifest_rc=$?
+        [ "$sh_rc" -eq 0 ] && [ "$sh_manifest_rc" -eq 0 ] \
+          && jq -e '[.steps[].step] == ["filter","slice","fit","defringe","embed","qa"] and any(.steps[]; .step == "slice" and .state == "sliced")' "$TMP/sh-result.json" >/dev/null \
+          && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 9 ] \
+          && jq -e '.rows == 3 and .cols == 3 and (.sheets | length) == 1 and (.sheets[0].cells | length) == 9' "$sh_run/sheet.json" >/dev/null \
+          && cmp -s "$TMP/sh-input.png" "$sh_run/sheets/prop.png" \
+          && grep -q '^- Sheet:' "$sh_run/run.md" \
+          && [ "$(sed -n '/^---json$/,/^---$/p' "$sh_run/run.md" | sed '1d;$d' | jq '[.spec.outputs[] | select(.path | test("^outputs/prop-r[1-3]c[1-3]\\.png$"))] | length')" -eq 9 ] \
+          && ok "sheet: $sh_size yields nine recorded cells and preserves the sheet" || no "sheet $sh_size rc=$sh_rc manifest=$sh_manifest_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      done ;;
+    sheet-failures)
+      for sh_variant in merged missing; do
+        sh_setup "sh-$sh_variant" && sh_fixture 600 450 "$sh_variant" || { no "sheet $sh_variant setup"; continue; }
+        sh_before=$(sh_signature "$sh_run/outputs")
+        AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+        [ "$sh_rc" -eq 1 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] && [ ! -e "$sh_run/sheets" ] && [ ! -e "$sh_run/sheet.json" ] \
+          && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL" and any(.results[]; .state == "FAIL" and (.reason | contains("2 cells found, 3 expected"))))' "$TMP/sh-result.json" >/dev/null \
+          && ok "sheet: $sh_variant cells fail atomically with counts" || no "sheet $sh_variant rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      done
+      sh_setup sh-write-failure && sh_fixture 600 450 good || { no "sheet write failure setup"; return; }
+      python3 -B - "$ROOT" "$sh_run" > "$TMP/sh-fault" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import assetgen, finalize
+original = assetgen.write_atomic
+calls = 0
+def fail_write(path, data, suffix):
+    global calls
+    calls += 1
+    if calls == 3:
+        raise OSError('injected write failure')
+    original(path, data, suffix)
+assetgen.write_atomic = fail_write
+result = finalize.slice_step(assetgen, sys.argv[2], 3, 3, False)
+assert result['state'] == 'FAIL', result
+assert os.listdir(os.path.join(sys.argv[2], 'outputs')) == ['prop.png']
+assert not os.path.exists(os.path.join(sys.argv[2], 'sheet.json'))
+EOF
+      sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && ok "sheet: write failure removes cells and preserves source" || no "sheet write failure rc=$sh_rc" "$(cat "$TMP/sh-fault")" ;;
+    sheet-repeat)
+      sh_setup sh-repeat && sh_fixture 600 450 good || { no "sheet repeat setup"; return; }
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-first.json" 2> "$TMP/sh-err"; sh_first_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget" 2>> "$TMP/sh-err"; sh_budget_rc=$?
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget.json" 2>> "$TMP/sh-err"; sh_budget_json_rc=$?
+      [ "$sh_budget_rc" -eq 0 ] && [ "$sh_budget_json_rc" -eq 0 ] \
+        && grep -q '^budget ok: 1 used ' "$TMP/sh-budget" \
+        && jq -e '.used == 1 and .outputs == 1 and .state == "ok" and .sheet_cells == 9' "$TMP/sh-budget.json" >/dev/null \
+        && ok "sheet: budget counts nine cells as one generation" || no "sheet budget rc=$sh_budget_rc json=$sh_budget_json_rc" "$(cat "$TMP/sh-budget" "$TMP/sh-budget.json" "$TMP/sh-err")"
+      sh_before=$(sh_signature "$sh_run/outputs")
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_first_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped" and (.reason | contains("already sliced")))' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: repeat finalize skips slicing and preserves cell bytes" || no "sheet repeat rc=$sh_rc first=$sh_first_rc" "$(jq -c '[.results[] | select(.state == "FAIL")]' "$sh_run/qa.json")"
+      AG finalize --run "$sh_run" --rows 2 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 1 ] && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL")' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: changed dimensions fail" || no "sheet changed dimensions rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      AG discard --run "$sh_run" --output prop-r1c1.png --reason 'discard one cell' > "$TMP/sh-discard" 2>> "$TMP/sh-err"; sh_discard_rc=$?
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_discard_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ ! -e "$sh_run/outputs/prop-r1c1.png" ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped" and (.reason | contains("already sliced")))' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: repeat after discarding a cell skips slicing" || no "sheet discard repeat rc=$sh_rc discard=$sh_discard_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")" ;;
+    sheet-cli)
+      sh_setup sh-plain && sh_fixture 600 450 good || { no "sheet plain setup"; return; }
+      AG finalize --run "$sh_run" --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ ! -e "$sh_run/sheet.json" ] && jq -e '[.steps[].step] | index("slice") | not' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: finalize without dimensions has no slice step" || no "sheet opt-in rc=$sh_rc" "$(cat "$TMP/sh-err")"
+      sh_setup sh-slice && sh_fixture 600 450 good || { no "sheet slice setup"; return; }
+      AG slice --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && jq -e '.state == "sliced"' "$TMP/sh-result.json" >/dev/null && [ -f "$sh_run/sheet.json" ] \
+        && ok "sheet: slice verb succeeds" || no "sheet slice rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_setup sh-slice-bad && sh_fixture 600 450 merged || { no "sheet slice bad setup"; return; }
+      AG slice --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 1 ] && jq -e '.state == "FAIL"' "$TMP/sh-result.json" >/dev/null && [ ! -e "$sh_run/sheet.json" ] \
+        && ok "sheet: slice verb rejects merged cells" || no "sheet slice failure rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_before=$(find "$TMP" -type f | LC_ALL=C sort)
+      sh_hint=$(AG sheet-hint --rows 3 --cols 3 2>&1); sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && [[ "$sh_hint" = *'3 rows and 3 columns'* ]] && [ "$sh_before" = "$(find "$TMP" -type f | LC_ALL=C sort)" ] \
+        && ok "sheet: hint prints the grid without writing files" || no "sheet hint rc=$sh_rc" "$sh_hint"
+      AG sheet-hint --rows 0 --cols 3 > /dev/null 2>&1; sh_zero=$?
+      AG sheet-hint --rows 9 --cols 3 > /dev/null 2>&1; sh_nine=$?
+      AG finalize --run "$sh_run" --rows 3 > /dev/null 2>&1; sh_partial=$?
+      [ "$sh_zero" -eq 2 ] && [ "$sh_nine" -eq 2 ] && [ "$sh_partial" -eq 2 ] \
+        && ok "sheet: invalid dimensions exit 2" || no "sheet invalid arguments: $sh_zero $sh_nine $sh_partial" ;;
+    *) echo "Unknown case: $1" >&2; return 2 ;;
+  esac
+}
+if [ "${1:-}" = --case ]; then
+  [ "$#" -eq 2 ] || { echo 'Usage: assetgen.test.sh --case NAME' >&2; exit 2; }
+  sh_case "$2" || exit $?
+  echo "assetgen: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ]; exit $?
+fi
 
 # -- temp authoring repo with a game layer
 AUTH="$TMP/game-authoring"; GL="$AUTH/assetgen"
@@ -2125,6 +2260,8 @@ finrun() {
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
 
+echo "-- finalize: experimental sheet mode"
+for sh_name in sheet-sizes sheet-failures sheet-repeat sheet-cli; do sh_case "$sh_name"; done
 echo "-- finalize: pixel-grid detection, palette and opt-in QA"
 # A 128x128 pattern enlarged fourfold, with transparent corners and several opaque colours.
 python3 -B - "$ROOT" "$TMP" <<'EOF'
@@ -5292,7 +5429,7 @@ python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2
 n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
 [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "consistency self-test: $n_ok cases passed" || no "consistency self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 
-for st_ in imaging_selftest style_selftest pixelgrid_selftest; do
+for st_ in imaging_selftest style_selftest pixelgrid_selftest slicer_selftest; do
   echo "-- $st_ (tests/fixtures/assetgen/$st_.py)"
   python3 -B "$ROOT/tests/fixtures/assetgen/$st_.py" > "$TMP/cs" 2>&1; rc=$?
   n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")

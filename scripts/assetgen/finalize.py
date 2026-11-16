@@ -1,4 +1,4 @@
-"""assetgen finalize: filter, fit, defringe (alpha purposes only), pixel-grid, embed and qa in order, after fetch_outputs.
+"""assetgen finalize: filter, slice, fit, defringe, pixel-grid, embed and qa in order, after fetch_outputs.
 
 filter comes first: fetch_outputs also downloads PreviewImage files into outputs/, so every outputs/*.png that
 runfiles.output_origins classifies as a preview (not written by a SaveImage node of the rendered workflow.json) is moved
@@ -24,6 +24,7 @@ import shutil
 
 import consistency
 import pixelgrid
+import slicer
 
 SCHEMA = "rpg-factory.assetgen-finalize/1"
 RAW_DIR = "raw"
@@ -63,6 +64,9 @@ def precheck(ag, run_dir):
     path = os.path.join(run_dir, "pixelgrid.json")
     if os.path.isfile(path):
         pixel_record = ag.read_json(path, "pixel grid record")
+    sheet_path = os.path.join(run_dir, "sheet.json")
+    if os.path.isfile(sheet_path):
+        ag.read_json(sheet_path, "sheet record")
     return spec, record, pixel_record
 
 
@@ -91,8 +95,12 @@ def filter_step(ag, run_dir):
             workflow = None
     origins = ag.runfiles.output_origins(run_dir, workflow)
     pngs = ["outputs/" + os.path.basename(p) for p in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))]
-    previews = [o for o in pngs if origins.get(o, {}).get("kind") == "preview"]
-    unknown = [o for o in pngs if origins.get(o, {}).get("kind", "unknown") not in ("save", "preview")]
+    sheet_path = os.path.join(run_dir, "sheet.json")
+    record = ag.read_json(sheet_path, "sheet record") if os.path.isfile(sheet_path) else {}
+    recorded = {cell.get("output") for sheet in record.get("sheets", []) if isinstance(sheet, dict)
+                for cell in sheet.get("cells", []) if isinstance(cell, dict)} if isinstance(record, dict) else set()
+    previews = [o for o in pngs if o not in recorded and origins.get(o, {}).get("kind") == "preview"]
+    unknown = [o for o in pngs if o not in recorded and origins.get(o, {}).get("kind", "unknown") not in ("save", "preview")]
     if not previews:
         step["reason"] = "no preview file in outputs/"
     elif len(previews) == len(pngs):
@@ -113,6 +121,95 @@ def filter_step(ag, run_dir):
         step["results"].append({"state": "kept", "output": output,
                                 "reason": "no SaveImage or preview evidence, left in outputs/: %s"
                                 % origins.get(output, {}).get("reason", "not classified")})
+    return step
+
+
+def slice_step(ag, run_dir, rows, cols, force):
+    """Slice all sheets only after every sheet has been decoded and validated."""
+    step = {"step": "slice", "state": "skipped", "reason": "", "results": []}
+    record_path = os.path.join(run_dir, "sheet.json")
+    if os.path.isfile(record_path):
+        record = ag.read_json(record_path, "sheet record")
+        if not isinstance(record, dict) or (record.get("rows"), record.get("cols")) != (rows, cols):
+            step.update(state="FAIL", reason="sheet.json records %sx%s; start a new attempt" % (
+                record.get("rows") if isinstance(record, dict) else "?", record.get("cols") if isinstance(record, dict) else "?"))
+            return step
+        sheets = [s for s in record.get("sheets", []) if isinstance(s, dict)]
+        # cells may since be discarded or rewritten by later steps; the recorded sheets themselves must still be there
+        if sheets and all(isinstance(s.get("sheet"), str) and s["sheet"].startswith("sheets/")
+                          and os.path.basename(s["sheet"]) == s["sheet"][7:]
+                          and os.path.isfile(os.path.join(run_dir, *s["sheet"].split("/"))) for s in sheets):
+            step["reason"] = "already sliced (sheet.json)"
+            return step
+        step.update(state="FAIL", reason="sheet.json names a sheet missing from sheets/; start a new attempt")
+        return step
+    bound = ag.bound_records(run_dir, outputs_of(ag, run_dir))
+    if bound and not force:
+        step.update(state="FAIL", reason="%s already bind(s) the current outputs and slice would change them; "
+                    "pass --force to slice anyway (then those records are stale: re-run them)" % ", ".join(bound))
+        return step
+    todo = []
+    for path in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png"))):
+        row = {"output": "outputs/" + os.path.basename(path), "state": "skipped"}
+        step["results"].append(row)
+        try:
+            with open(path, "rb") as f:
+                source = f.read()
+            refusal = ag.depth_refusal(source, "sliced")
+            if refusal:
+                raise slicer.SliceError(refusal)
+            img = ag.png.decode(path)
+            cells, info = slicer.slice_image(img, rows, cols)
+            encoded = []
+            for cell in cells:
+                width, height, rgba = slicer.crop(img, cell["box"])
+                encoded.append(ag.rebuild(ag.png.encode(width, height, rgba), lambda t, b: True, ag.text_chunks(source)))
+            todo.append((path, source, cells, info, encoded, row))
+            row["reason"] = "sheet validated"
+        except (ag.png.Invalid, ag.png.Unsupported, OSError, slicer.SliceError) as exc:
+            row.update(state="FAIL", reason=str(exc))
+    if any(row["state"] == "FAIL" for row in step["results"]):
+        step.update(state="FAIL", reason="sheet validation failed; nothing sliced")
+        return step
+    sheets_dir = os.path.join(run_dir, "sheets")
+    records = []
+    written, moved, pending = [], [], None
+    try:
+        os.makedirs(sheets_dir, exist_ok=True)
+        for path, source, cells, info, encoded, row in todo:
+            entries = []
+            for cell, data in zip(cells, encoded):
+                name = "%s-r%sc%s.png" % (os.path.splitext(os.path.basename(path))[0], cell["row"], cell["col"])
+                out = free_target(os.path.join(run_dir, "outputs"), name)
+                pending = out + ".slice.tmp"
+                ag.write_atomic(out, data, ".slice.tmp")
+                written.append(out)
+                pending = None
+                entries.append(dict(cell, output="outputs/" + os.path.basename(out), sha256=hashlib.sha256(data).hexdigest()))
+            records.append({"source": row["output"], "sha256": hashlib.sha256(source).hexdigest(),
+                            "size": info["size"], "background": info["background"], "cells": entries})
+        for (path, _, _, _, _, row), record in zip(todo, records):
+            target = free_target(sheets_dir, os.path.basename(path))
+            os.rename(path, target)
+            moved.append((path, target))
+            record["sheet"] = "sheets/" + os.path.basename(target)
+        data = (json.dumps({"schema": "rpg-factory.assetgen-sheet/1", "run": os.path.basename(os.path.normpath(run_dir)),
+                            "rows": rows, "cols": cols, "sheets": records}, indent=1, sort_keys=True) + "\n").encode("utf-8")
+        pending = record_path + ".slice.tmp"
+        ag.write_atomic(record_path, data, ".slice.tmp")
+        pending = None
+    except OSError as exc:
+        for original, target in reversed(moved):
+            os.rename(target, original)
+        for path in written + ([pending] if pending else []):
+            if os.path.exists(path):
+                os.remove(path)
+        step.update(state="FAIL", reason="sheet write failed: %s" % exc)
+        step["results"].append({"state": "FAIL", "reason": str(exc)})
+        return step
+    for (_, _, _, _, _, row), record in zip(todo, records):
+        row.update(state="sliced", reason="-> %s, %d outputs" % (record["sheet"], len(record["cells"])))
+    step.update(state="sliced", reason="%d sheet(s) sliced" % len(records))
     return step
 
 
@@ -379,7 +476,7 @@ def step_lines(step):
     return lines
 
 
-def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_grid=False, max_colors=None):
+def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_grid=False, max_colors=None, rows=None, cols=None):
     """The finalize verb: returns the exit code (0 PASS, 1 FAIL, 3 NOT_AVAILABLE) after printing the result."""
     spec, record, pixel_record = precheck(ag, run_dir)
     if discard_qa_fail:
@@ -390,6 +487,10 @@ def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_gr
     steps.append(filter_step(ag, run_dir))
     if steps[-1]["state"] == "FAIL":
         failed = "filter"
+    if not failed and rows is not None:
+        steps.append(slice_step(ag, run_dir, rows, cols, force))
+        if steps[-1]["state"] == "FAIL":
+            failed = "slice"
     if not failed:
         steps.append(fit_step(ag, run_dir, spec, force))
         if steps[-1]["state"] == "FAIL":
