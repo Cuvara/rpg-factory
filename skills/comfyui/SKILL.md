@@ -69,7 +69,7 @@ Repos `authoring`. Owns no module, contract or check. Reads the plugin's core da
   `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (`workflow_path`, `wait`) -> `job`
   (status) -> `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`), again with `url_only=true` (free, read-only):
   save the result verbatim as `<run>/fetch.json`; a batch of N outputs repeats budget to `fetch_outputs` N times (batch
-  pitfall) -> once `assetgen.py finalize --run <run>` (filter: PreviewImage files to `<run>/previews/`; slice with
+  pitfall) and keeps `fetch.json` a JSON list, one result per prompt id, appended after each call, never overwritten -> once `assetgen.py finalize --run <run>` (filter: PreviewImage files to `<run>/previews/`; slice with
   `--rows R --cols C`; fit; defringe if `qa.alpha` required; pixel-grid with `--pixel-grid`; embed; qa; fixed order, never
   `qa` alone; `scripts/assetgen/finalize.py` docstring). `nodes`, `list_workflow_slots` only inspect.
 - **Authoring rule (comfy-mcp):** comfy-mcp runs only a graph from `assetgen.py render` of the purpose's template (core
@@ -146,8 +146,8 @@ Repos `authoring`. Owns no module, contract or check. Reads the plugin's core da
 - **A batch is repeated `run_workflow`, never a bigger graph:** the gateway returned one image for `n=2`
   (`docs/plans/assetgen-batch/probe.md`) and the node fixes `n` at 1 (`NineRouterImage` `run` in
   `templates/assetgen/comfy-node/comfyui_9router/__init__.py`): never rely on `n`, never duplicate image nodes
-  (graph-lint wants one `NineRouterImage`). N outputs are N runs of the same `<run>/workflow.json`: `budget` and
-  `fetch_outputs` each, one `finalize`; every run is a paid generation.
+  (graph-lint wants one `NineRouterImage`). N outputs are N runs of the same `<run>/workflow.json`: `budget`, `fetch_outputs`
+  each (every run paid), one `finalize`; `fetch.json` is a list of `url_only` results, one per prompt id, never overwritten.
 - **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`): a
   `COMFY_LOCAL_URL` at the one not running fails every tool while the snapshot shows the other service up.
 
