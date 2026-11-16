@@ -15,7 +15,7 @@ Always from the module directory (no `go.work`; see SKILL.md Architecture).
 | A package | `go test ./transfer -race -count=1` |
 | Like CI, one module | `go vet ./... && go test ./... -race` (`inputs.vet_flags` / `inputs.test_flags` steps, `.github/workflows/_go-module.yml:116-123`) |
 | Integration, one test | `cd backend/integration_test && go test -tags integration -run '^TestDotnetInterop_FullFlow$' -race -count=1 -v -timeout 300s .` |
-| Integration, like CI | `go vet -tags integration ./... && go test ./... -tags integration -v -race -timeout 300s` (`vet_flags` / `test_flags`, `.github/workflows/ci.yml:191-192`) |
+| Integration, like CI | `go vet -tags integration ./... && go test ./... -tags integration -v -race -timeout 300s` (`vet_flags` / `test_flags`, `.github/workflows/ci.yml:222-223`) |
 
 - `-count=1` defeats the test cache; a cached `ok ... (cached)` is not a fresh run.
 - `-race` needs cgo; CI always runs it, so run it locally before calling a concurrency change done.
@@ -30,7 +30,7 @@ Always from the module directory (no `go.work`; see SKILL.md Architecture).
 - Count outcomes from `-v` output: `grep -cE '^\s*--- PASS'`, `grep -E '^\s*--- (FAIL|SKIP)'`.
   The package line `ok` is printed even when every test in it skipped.
 - `[no test files]` in `integration_test` means `-tags integration` was missing - zero tests ran
-  (`.github/workflows/ci.yml:185-188`).
+  (`.github/workflows/ci.yml:215-218`).
 - The interop tests skip with `dotnet not found` (`gameServerSkip` / `t.Skip`
   `backend/integration_test/dotnet_interop_test.go:128,380`, `t.Skip` in `selfreg_flow_test.go:55`
   and `t.Skip` in `sealed_session_e2e_test.go:149`). They look for `dotnet` on `PATH`

@@ -242,13 +242,33 @@ def language_advisory(payload, registry, path):
             governed = bool(ws2 and within(main, ws2) and repo_of(path, ws2, registry)[0])
     if not governed:
         return None
-    if root:  # the plugin's own allowlist: path:* entries (a line number does not map onto an Edit fragment)
+    offset = 0 if payload.get("tool_name") == "Write" else None
+    allowed = {}
+    rel = None
+    if root:  # only the plugin's own allowlist applies
         try:
             rel = os.path.relpath(path, root).replace("\\", "/")
-            if f"{rel}:*" in english.allowlist(pathlib.Path(root, "tests", "fixtures", "english-allow.txt")):
+            allowed = english.allowlist(pathlib.Path(root, "tests", "fixtures", "english-allow.txt"))
+            if f"{rel}:*" in allowed:
                 return None
         except (OSError, ValueError):
             pass
+        ti = payload.get("tool_input") or {}
+        old = ti.get("old_string")
+        if payload.get("tool_name") == "Edit" and allowed and isinstance(old, str) and old and not ti.get("replace_all"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    current = f.read()
+                pos = current.find(old)
+                if pos >= 0:
+                    offset = current.count("\n", 0, pos)
+            except (OSError, UnicodeError):
+                pass
+    hit = next(((number + offset if offset is not None else number, line)
+                for number, line in enumerate(text.splitlines(), 1)
+                if english.classify(line) and (offset is None or f"{rel}:{number + offset}" not in allowed)), None)
+    if not hit:
+        return None
     number, line = hit
     shown = line.strip()
     shown = shown[:117] + "..." if len(shown) > 120 else shown
