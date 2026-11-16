@@ -57,7 +57,9 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        reason (WARN, the approver weighs it). Every recorded reference names an anchor that exists, is
                        well formed and active (retired since the run: WARN), approved by a person (not an agent or
                        model name), whose image bytes equal image_sha256, the run's pick and the source output, and
-                       whose source gen-run is approved in run.md and by its signed approval (ctx.approval). An active
+                       whose source gen-run is approved in run.md and by its signed approval (ctx.approval). An anchor
+                       from existing art (external_source) has no gen-run; it is valid only when active and attested by
+                       the person who activated it (attested_by = approved_by, never an agent). An active
                        anchor promoted from this run FAILS while this run is not approved. With the style lock the
                        image reviews also bind the style ref and the anchors shown (else stale). A run recorded before
                        the style lock with no anchor promoted from it gets no row.
@@ -594,24 +596,39 @@ def anchor_problems(rec, stylelock, ctx, authoring):
         fails.append("anchor %s image %s is missing" % (aid, data["image"]))
     elif sha256_file(image) != data["image_sha256"]:
         fails.append("anchor %s image %s: sha256 on disk differs from image_sha256" % (aid, data["image"]))
-    if data["image_sha256"] != data["source_run"]["sha256"]:
-        fails.append("anchor %s image_sha256 is not the sha256 of its source output %s"
-                     % (aid, data["source_run"]["output"]))
-    source = data["source_run"]["run_id"]
-    status = stylelock.run_status(authoring, source)
-    if status != "approved":
-        fails.append("anchor %s: source gen-run %s is %s, not approved" % (aid, source, status or "missing (no run.md)"))
+    external = data.get("external_source")
+    if external is not None:
+        if data["image_sha256"] != external.get("sha256"):
+            fails.append("anchor %s image_sha256 is not the sha256 its external source records" % aid)
+        if data["status"] == "active":
+            attester = external.get("attested_by")
+            if (not isinstance(attester, str) or not attester.strip() or stylelock.is_agent_name(attester)
+                    or attester != data.get("approved_by")):
+                fails.append("anchor %s is an external anchor attested by %r: only a person attests an external "
+                             "anchor, and the attester is the person who activates it (approved_by)" % (aid, attester))
+            attested_on = external.get("attested_on")
+            if not isinstance(attested_on, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", attested_on):
+                fails.append("anchor %s external source attested_on must be a YYYY-MM-DD string" % aid)
     else:
-        verdict = ctx.approval("AGEN-" + source)
-        state = (verdict or {}).get("state", "missing") if isinstance(verdict, dict) else "missing"
-        if state != "verified":
-            pending = pending_approval(authoring, source)
-            if pending and (not pending[1] or state in ("missing", "untrusted")):
-                human.append("anchor %s: the approval of source gen-run AGEN-%s is present but not committed/signed (%s): "
-                             "the person commits run.md and the record in one signed commit" % (aid, source, pending[0]))
-            else:
-                fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
-                    aid, source, state, "; ".join((verdict or {}).get("reasons") or [] if isinstance(verdict, dict) else [])))
+        source_run = data.get("source_run", {})
+        if data["image_sha256"] != source_run.get("sha256"):
+            fails.append("anchor %s image_sha256 is not the sha256 of its source output %s"
+                         % (aid, source_run.get("output")))
+        source = source_run.get("run_id")
+        status = stylelock.run_status(authoring, source)
+        if status != "approved":
+            fails.append("anchor %s: source gen-run %s is %s, not approved" % (aid, source, status or "missing (no run.md)"))
+        else:
+            verdict = ctx.approval("AGEN-" + source)
+            state = (verdict or {}).get("state", "missing") if isinstance(verdict, dict) else "missing"
+            if state != "verified":
+                pending = pending_approval(authoring, source)
+                if pending and (not pending[1] or state in ("missing", "untrusted")):
+                    human.append("anchor %s: the approval of source gen-run AGEN-%s is present but not committed/signed (%s): "
+                                 "the person commits run.md and the record in one signed commit" % (aid, source, pending[0]))
+                else:
+                    fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
+                        aid, source, state, "; ".join((verdict or {}).get("reasons") or [] if isinstance(verdict, dict) else [])))
     return fails, warns, human
 
 
