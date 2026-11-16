@@ -124,6 +124,30 @@
         "the check still honours the registry workspace default of its --root",
         "the enforce line exits 0 on the repo"
       ]
+    },
+    {
+      "id": "citation-drift",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "light",
+      "grade_reason": "four skill citations that moved in the server repo",
+      "objective": "Integration QA of this plan fails in one check that also fails at main: `python3 -B scripts/checks/skill-citations.py` reports 2 problems and 2 moved citations after the server repo's develop branch changed (not from this plan's diff). Fix them in the skill text: (1) skills/go-backend/SKILL.md cites `registry/watcher.go:145` for `ErrNotFound` (now at lines 157 and 164 of backend/gateway/registry/watcher.go at the server's origin/develop): read the file at that ref with git (never check anything out, never fetch) and cite the line that shows what the sentence describes. (2) skills/go-backend/references/testing.md cites `.github/workflows/ci.yml:191-192` for `test_flags` (now at lines 144, 152, 161, 174, 186): same method; adjust the sentence if the workflow changed what it says. (3) the two MOVED citations (testing.md `ci.yml:185-188`, skills/server-ops/references/manifests-and-checks.md `stack.sh:367-368`): run `python3 -B scripts/checks/skill-citations.py --fix`, then read each rewritten line to confirm it still shows the named symbol. Keep the skill line budget (tests/skills-lint.sh, tests/line-budget.test.sh). No changelog fragment unless tests/changelog.test.sh asks for one (citation refreshes are not behaviour changes). The check needs the workspace: run it with the workspace variable unset so the platform default applies. The machine is short on memory: one test command at a time.",
+      "paths": [
+        "skills/go-backend/SKILL.md",
+        "skills/go-backend/references/testing.md",
+        "skills/server-ops/references/manifests-and-checks.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "python3 -B scripts/checks/skill-citations.py --strict",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "scripts/checks/skill-citations.py --strict reports 0 problems and 0 moved",
+        "each changed citation shows the symbol its sentence names",
+        "tests/skills-lint.sh passes"
+      ]
     }
   ]
 }
