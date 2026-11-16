@@ -65,17 +65,22 @@ Repos `authoring`. Owns no module, contract or check. Reads the plugin's core da
 
 - **Run sequence:** `server_info` (version, nodes present) -> `assetgen.py graph-lint --run <run>` (exit 0; a local or hybrid template: also the template with `--profile`, see Hybrid and local runs) ->
   `validate_workflow` (`<run>/workflow.json` against the live node list) -> `upload_file` (every `<run>/references/*`
-  file under its own name; returns the input-folder name) -> `assetgen.py budget --run <run>` (exit 1 or `remaining 0`
-  (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (`workflow_path`, `wait`) -> `job` (status) ->
-  `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`), again with `url_only=true` (free, read-only): save the result
-  verbatim as `<run>/fetch.json` -> `assetgen.py finalize --run <run>` (filter: PreviewImage files to `<run>/previews/`;
-  fit; defringe if `qa.alpha` required; embed; qa; fixed order, never `qa` alone). `nodes`, `list_workflow_slots` only inspect.
+  file under its own name; returns the input-folder name) -> per output: `assetgen.py budget --run <run>` (exit 1 or
+  `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (`workflow_path`, `wait`) -> `job`
+  (status) -> `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`), again with `url_only=true` (free, read-only):
+  save the result verbatim as `<run>/fetch.json`; a batch of N outputs repeats budget to `fetch_outputs` N times (batch
+  pitfall) -> once `assetgen.py finalize --run <run>` (filter: PreviewImage files to `<run>/previews/`; slice with
+  `--rows R --cols C`; fit; defringe if `qa.alpha` required; pixel-grid with `--pixel-grid`; embed; qa; fixed order, never
+  `qa` alone; `scripts/assetgen/finalize.py` docstring). `nodes`, `list_workflow_slots` only inspect.
 - **Authoring rule (comfy-mcp):** comfy-mcp runs only a graph from `assetgen.py render` of the purpose's template (core
   or a game-layer one that `extends` it), laid out per [references/workflow-style.md](references/workflow-style.md).
   Before any `run_workflow`, `assetgen.py lint`, `assetgen.py graph-lint` (the template, with `--profile <resolved>` for a local one, and `--run <run>`) and a live
   `validate_workflow` pass (graph-lint exit 1: no `run_workflow`; fix the template, render again). Never run a graph
   patched with `set_workflow_slot` or by hand without rendering it again (render, not patch). No free-form graph for an
   asset-gen run: no hand-built graph, no `run_template`, `generate_image`, `fetch_template`, `vary_workflow` or `emit_partner_workflow`.
+- **Sheet mode (experimental):** one image holds R x C items: `assetgen.py sheet-hint --rows R --cols C` prints the prompt
+  text, `finalize --rows R --cols C` slices at the content gutters, never a fixed width / C (the returned size differs
+  from the request); touching items or a shadow across a gutter FAIL all-or-nothing (`scripts/assetgen/slicer.py` docstring).
 - **Hybrid and local runs** (templates with a `requires` block: `hybrid-icon-ui`, `hybrid-character`, `hybrid-environment`, `local-variation`; UNTESTED on RTX 5060: the branch never ran on the 8 GB target, the user tests it after merge; claim no VRAM number, timing, passing generation or quality result, and a local run's report says UNTESTED-on-target until the user confirms):
   1. First `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py --check` (read-only; or `rpg-factory:comfy-desktop-setup`) and read the `gpu`, `torch`, `profile`, `packs` and `models` rows. Save the machine's profile so `--profile auto` works (nothing else writes it; `scripts/assetgen/assetgen.py` `recorded_profile_path`; the script exits 3 when a step needs action but still prints the JSON, so do not chain on its exit code; again after a GPU, driver or instance change): `mkdir -p ~/.local/state/rpg-factory/assetgen && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py --check --json > ~/.local/state/rpg-factory/assetgen/hardware-profile.json` (the directory is `scripts/lib/fstate.py` `persistent`: adjust it when `RPG_FACTORY_STATE_DIR` or `XDG_STATE_HOME` is set).
   2. `assetgen.py resolve --profile auto|api-only|local-4gb|local-8gb` (`scripts/assetgen/assetgen.py` `choose_profile`, `resolve_spec`) picks the template for the purpose and profile and records `spec.profile`; never run a local template on a lower profile, never force one with `--template` (resolve exits 1), and an api-only machine never runs one.
@@ -103,8 +108,7 @@ Repos `authoring`. Owns no module, contract or check. Reads the plugin's core da
 
 - **The returned size can differ from the requested one, or ignore it entirely** (known issue): a 1536x1024 turnaround
   came back as a 2172x724 strip; the live style-lock e2e of 2026-11-08 got 1672x941 for both a 1536x1024 and a 1024x1024
-  request; the batch probe (`docs/plans/assetgen-batch/probe.md`) got 1254x1254 for 1024x1024 and one image for `n=2`,
-  so batch variants are separate calls. `review-cmd --phase image` states each output's true size and QA's verdict;
+  request; the batch probe (`docs/plans/assetgen-batch/probe.md`) got 1254x1254 for 1024x1024. `review-cmd --phase image` states each output's true size and QA's verdict;
   the reviewer does not grade size again. Image QA reads the real size from the file; no core
   purpose grades the exact size (`exact` is opt-in) but orientation, aspect or area and a minimum area and short side
   real outputs meet (square `icon`, `sprite-2d`, `texture-tileable`: `square_tolerance` 0.15, so 1322x1190 is square;
@@ -136,16 +140,20 @@ Repos `authoring`. Owns no module, contract or check. Reads the plugin's core da
   (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`
   again. Only `fetch_outputs` puts the PNGs into the run.
 - **Anchors need the same upload as an edit reference:** the anchor `LoadImage` nodes name `anchor-<id>.png` in
-  ComfyUI's input folder, so upload every `references/anchor-*.png` before `run_workflow`. `render --run` refuses an
-  anchor whose image changed since `resolve` (resolve again), and a template with other than exactly one
+  ComfyUI's input folder: upload every `references/anchor-*.png` before `run_workflow`. `render --run` refuses an
+  anchor whose image changed since `resolve`, and a template with other than exactly one
   `NineRouterImage` node cannot take anchors (`scripts/assetgen/assetgen.py` `copy_anchors`, `wire_references`).
+- **A batch is repeated `run_workflow`, never a bigger graph:** the gateway returned one image for `n=2`
+  (`docs/plans/assetgen-batch/probe.md`) and the node fixes `n` at 1 (`NineRouterImage` `run` in
+  `templates/assetgen/comfy-node/comfyui_9router/__init__.py`): never rely on `n`, never duplicate image nodes
+  (graph-lint wants one `NineRouterImage`). N outputs are N runs of the same `<run>/workflow.json`: `budget` and
+  `fetch_outputs` each, one `finalize`; every run is a paid generation.
 - **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`): a
   `COMFY_LOCAL_URL` at the one not running fails every tool while the snapshot shows the other service up.
 
 ## Testing
 
-- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI graph converted back equals the API graph), hints and lint blame, review-cmd, embed, defringe, finalize, budget, publish against a fake HTTP server, PNG QA (real returned sizes, a coloured low-alpha fringe), style lock (project config, anchors, selection, anchor wiring, consistency rows, drift), manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
-- `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
+- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI graph converted back equals the API graph), hints and lint blame, review-cmd, embed, defringe, finalize, budget, publish against a fake HTTP server, PNG QA (real returned sizes, a coloured low-alpha fringe), style lock (project config, anchors, selection, anchor wiring, consistency rows, drift), manifest and the quality plugin (temp authoring repo, no network, no ComfyUI). `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
 
 ## Tools
 
