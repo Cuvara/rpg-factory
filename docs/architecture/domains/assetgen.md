@@ -260,13 +260,15 @@ Review those runs again or regenerate them. The records stay valid for the versi
 
 ### Bootstrap a game style
 
-1. Exploration `concept-2d` runs with several styles or prompts.
-2. A person picks the images that define the style.
-3. `promote-anchor` for each picked image. Existing art can enter as an external anchor instead (`promote-anchor --external`, "External anchor (human gate)" under "Anchors and approval").
-4. A person approves the source gen-runs and activates the anchors. A person activates and attests an external anchor.
-5. `style init` writes the draft game style and the `project.json` skeleton, and `style derive` proposes the structured `palette`, `tone` and `canvas` fields from the anchors (`--apply` merges them into the draft). Then the game style gets `version: 1` and `status: active`, which is a person's decision. `lint` gives a `WARN` for an active game style without a usable structured field (absent, empty such as `canvas: {}`, or malformed), because every `style-*` QA row would be `NOT_AVAILABLE`.
+1. When the game style id is known, `style init` writes the draft game style and the `project.json` skeleton first, so exploration runs record the game style and their anchors need no second promotion.
+2. Exploration `concept-2d` runs under the game style id with prompt variants from the art bible.
+3. A person picks the images that define the style.
+4. `promote-anchor` for each picked image; the anchor belongs to the style id its run recorded. Existing art can enter as an external anchor instead (`promote-anchor --external`, "External anchor (human gate)" under "Anchors and approval").
+5. A person approves the source gen-runs and activates the anchors. A person activates and attests an external anchor.
+6. `style derive` proposes the structured `palette`, `tone` and `canvas` fields from those active anchors of the game style (`--apply` merges them into the still-draft style). It refuses a style without a usable anchor of its style id and version.
+7. Then the game style gets `version: 1` and `status: active`, which is a person's decision. `lint` gives a `WARN` for an active game style without a usable structured field (absent, empty such as `canvas: {}`, or malformed), because every `style-*` QA row would be `NOT_AVAILABLE`.
 
-Anchors feed only runs of their own style id and version, so a new game style id has no anchors until runs under it are approved and promoted (or an external anchor is attested). Either promote again from approved runs under the game style id, or use the game style id as the exploration style in step 1. The `asset-gen` skill runs this flow with the tech skill `asset-style` (`skills/asset-style/references/bootstrap.md`).
+Anchors feed only runs of their own style id and version. Exploring under another style id (for example a core style) needs a second promotion from the approved runs under the game style id: those anchors feed nothing of the game style, `style derive` refuses them, and `drift` lists them as `style-id-mismatch`. The `asset-gen` skill runs this flow with the tech skill `asset-style` (`skills/asset-style/references/bootstrap.md`).
 
 ## Skills and commands
 
