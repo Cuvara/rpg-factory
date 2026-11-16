@@ -1,0 +1,3 @@
+### Fixed
+
+- **Asset generation.** `style init` now warns that the new draft has no structured style fields. `style bump` carries an active external anchor with `external_source.attested_by` and `attested_on` reset to null, so the proposed copy validates. `style report` no longer suggests a palette `max_distance` that still fails QA (it reports that no permitted threshold fits) and handles `min_share` 0. The asset-style skill documents the real derive-then-bump flow: `style derive --apply` works only on a draft `styles/<ID>.json`, so an active style is derived without `--apply`, bumped, and the person merges the values into the bump draft.
