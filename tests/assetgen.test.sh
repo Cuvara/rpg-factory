@@ -2145,6 +2145,7 @@ EOF
 pg_first="$RUNS/pg-first-001"; pg_second="$RUNS/pg-second-001"
 finrun pg-first-001 icon icon-ok.png && finrun pg-second-001 icon icon-ok.png || no "pixel-grid run setup"
 cp "$pg_first/workflow.json" "$pg_second/workflow.json"
+cp "$pg_first/workflow.ui.json" "$pg_second/workflow.ui.json"
 cp "$TMP/pg-source.png" "$pg_first/outputs/prop.png"; cp "$TMP/pg-source.png" "$pg_second/outputs/prop.png"
 AG embed --run "$pg_first" > /dev/null 2>"$TMP/pg-err"
 AG embed --run "$pg_second" > /dev/null 2>>"$TMP/pg-err"
@@ -2195,7 +2196,7 @@ AG finalize --run "$pg_plain" --json > "$TMP/pg-plain.json" 2>"$TMP/pg-err"; pg_
 pg_style="$RUNS/pg-style-001"; finrun pg-style-001 icon icon-ok.png || no "pixel-grid style setup"
 cp "$TMP/pg-source.png" "$pg_style/outputs/prop.png"
 jq '.style.data.palette = {"text":"Two colours", "colors":[{"hex":"#ff0000"},{"hex":"#0000ff"}]}' "$pg_style/spec.json" > "$TMP/pg-spec.json" && cp "$TMP/pg-spec.json" "$pg_style/spec.json"
-AG finalize --run "$pg_style" --pixel-grid --max-colors 1 --json > "$TMP/pg-style.json" 2>"$TMP/pg-err"; pg_rc=$?
+AG finalize --run "$pg_style" --pixel-grid --max-colors 8 --json > "$TMP/pg-style.json" 2>"$TMP/pg-err"; pg_rc=$?
 python3 -B - "$ROOT" "$pg_style/outputs/prop.png" <<'EOF' > "$TMP/pg-style-pixels"
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
