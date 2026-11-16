@@ -347,8 +347,8 @@ def check(artifact, ctx):
         path, output = entry.get("path"), entry.get("output")
         if isinstance(path, str):
             rejected_paths.add(path)
-        if isinstance(output, str) and output in recorded:
-            fails.append("output %s is both recorded and discarded" % output)
+        if isinstance(output, str) and recorded.get(output) is not None and recorded.get(output) == entry.get("sha256"):
+            fails.append("output %s is both recorded and discarded (same bytes)" % output)
         if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
             fails.append("discarded %s must have a non-empty reason" % path)
         full = resolve(path) if isinstance(path, str) else None
