@@ -95,6 +95,35 @@
         "tests/fixtures/failed.trx holds no real user or host name and has no allowlist entry",
         "tests/checks-candidate.test.sh still passes"
       ]
+    },
+    {
+      "id": "ci-fix",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two convention fixes in one new script, found by CI",
+      "objective": "CI of the plan's pull request failed in two suites because of scripts/checks/portable-paths.py (task user-path-check, integrated; its task QA never ran). (a) tests/compat.test.sh (Linux and Windows): 'utf-8 stdio missing: scripts/checks/portable-paths.py'. Every script with a `__main__` block reconfigures stdout and stderr to UTF-8; copy the block of scripts/checks/english-only.py (the `_stream.reconfigure(encoding=\"utf-8\", errors=\"replace\")` loop and the error handler that prints `portable-paths: error: ...` and exits 2). (b) tests/workspace-default.test.sh: 'workspace reader guard' forbids the registry key name of the workspace default in any Python file under scripts except scripts/lib/workspace.py and scripts/lib/fstate.py, and forbids calling `default_workspace()` outside scripts/lib. Add a small helper to scripts/lib/workspace.py that returns the registry workspace default as written (raw, no platform conversion, None when absent; default_workspace keeps its behaviour and may use it) and make the check import it (sys.path insert of scripts/lib, as english-only.py does) instead of reading the key itself; the check must still read the value from the registry.json under its `--root`, so the fixture cases of tests/portable-paths.test.sh keep passing. Add a unit case for the helper to the suite that covers workspace.py helpers (tests/workspace-default.test.sh) if it fits in a few lines. No new changelog fragment (the check is unreleased; changelog.d/path-audit-check.md already describes it). CI runs on Linux. The machine is short on memory: run one test command at a time; run the three checks directly instead of the affected tier if the tier is stopped.",
+      "paths": [
+        "scripts/checks/portable-paths.py",
+        "scripts/lib/workspace.py",
+        "tests/workspace-default.test.sh",
+        "tests/portable-paths.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [
+        "affected-mapping"
+      ],
+      "checks": [
+        "tests/compat.test.sh",
+        "tests/workspace-default.test.sh",
+        "tests/portable-paths.test.sh",
+        "python3 -B scripts/checks/portable-paths.py --enforce"
+      ],
+      "acceptance": [
+        "tests/compat.test.sh and tests/workspace-default.test.sh pass",
+        "the check still honours the registry workspace default of its --root",
+        "the enforce line exits 0 on the repo"
+      ]
     }
   ]
 }
