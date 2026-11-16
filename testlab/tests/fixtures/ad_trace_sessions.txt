@@ -1,4 +1,4 @@
-# Scrubbed excerpt of %AppData%\AnyDesk\ad.trace (UTC), host duycu, 2026-10-23 15:19Z .. 2026-10-24 ~16:30Z.
+# Scrubbed excerpt of %AppData%\AnyDesk\ad.trace (UTC), host example-host, 2026-10-23 15:19Z .. 2026-10-24 ~16:30Z.
 # Only session-related lines and two idle 'Monitors found' lines are kept. Client ids are replaced by 0000000001; no addresses or fingerprints are present.
    info 2026-10-23 15:19:10.477       back  57812  73452                     base.monitor_info - Monitors found: 1
    info 2026-10-23 15:19:10.477       back  57812  73452             desk_rt.capture_component - Starting capture.

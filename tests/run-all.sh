@@ -1031,6 +1031,8 @@ run "skills lint (contract)" tests/skills-lint.sh
 run "line budget (gitguard.py, context.py, run-checks.py under 500 lines; self-test at 499/500)" tests/line-budget.test.sh
 run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
 run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
+run "Portable-paths fixture cases" env -u TMPDIR tests/portable-paths.test.sh
+run "Portable-paths enforcement" python3 -B scripts/checks/portable-paths.py --enforce
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "hook cost (no git guard on Read, bytecode in the state dir, gitlinks cache, python3 alias)" env -u TMPDIR tests/hook-perf.test.sh

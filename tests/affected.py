@@ -117,6 +117,9 @@ EXTRA = {
                                              "docs/architecture/overview.md"],
     "scripts/checks/english-only.py": ["*"],
     "tests/english-only.test.sh": ["scripts/checks/english-only.py"],
+    # the portable-paths enforce line is global too: any tracked file may hold a machine-specific user path
+    "scripts/checks/portable-paths.py": ["*"],
+    "tests/portable-paths.test.sh": ["scripts/checks/portable-paths.py"],
     "tests/routing.test.sh": SKILL_TEXT + ["scripts/factory_session.py"],
     "tests/routing-golden.test.sh": SKILL_TEXT,
     "tests/ui-skills.test.sh": ["skills/ui-*", "docs/architecture/*"],
@@ -558,7 +561,8 @@ def dynamic(path, conservative=False):
 
 def extra_covered(path):
     """A suite's EXTRA patterns cover the path: the suite reads it without naming the file (a computed name), so
-    that is a mention by the suite. Only suites under tests/ count, not the '*' of scripts/checks/english-only.py."""
+    that is a mention by the suite. Only suites under tests/ count, not the '*' of the global checks
+    (scripts/checks/english-only.py, scripts/checks/portable-paths.py)."""
     return any(suite.startswith("tests/") and hit(path, patterns) for suite, patterns in EXTRA.items())
 
 
