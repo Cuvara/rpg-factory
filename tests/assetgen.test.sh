@@ -51,7 +51,8 @@
 # proposed -> approved lifecycle, an uncommitted approval HUMAN_REQUIRED in gen-run-style, cross-family anchor
 # warnings and anchor_family_fallback false, drift style-id-mismatch, 1322x1190 square tolerance and allow_swap, the
 # embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
-# style_selftest.py), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
+# style_selftest.py, pixelgrid_selftest.py), pixel-grid finalize (grid detection, palette limits, determinism,
+# unsupported depths and opt-in QA), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
 # the read-only budget verb: outputs + failed attempts against the limit, ok/at-limit/exceeded/unlimited/invalid and
 # their exits; finalize's budget line and --json key with its exit unchanged), the output filter (finalize's first step
 # moves the PreviewImage files fetch_outputs downloads into outputs/ to previews/, classified by fetch.json or job state
@@ -2123,6 +2124,92 @@ finrun() {
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+
+echo "-- finalize: pixel-grid detection, palette and opt-in QA"
+# A 128x128 pattern enlarged fourfold, with transparent corners and several opaque colours.
+python3 -B - "$ROOT" "$TMP" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+colors = [(220, 40, 30, 255), (30, 180, 70, 255), (40, 60, 220, 255),
+          (230, 190, 30, 255), (130, 40, 180, 255), (30, 190, 190, 255)]
+rgba = bytearray()
+for y in range(512):
+    for x in range(512):
+        xx, yy = x // 4, y // 4
+        rgba.extend(colors[(xx * 7 + yy * 11) % len(colors)] if 16 <= xx < 112 and 16 <= yy < 112 else (0, 0, 0, 0))
+open(os.path.join(sys.argv[2], "pg-source.png"), "wb").write(png.encode(512, 512, rgba))
+row = b"\x80\x00\x40\x00\xc0\x00" * 512
+open(os.path.join(sys.argv[2], "pg-depth.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row] * 512))
+EOF
+pg_first="$RUNS/pg-first-001"; pg_second="$RUNS/pg-second-001"
+finrun pg-first-001 icon icon-ok.png && finrun pg-second-001 icon icon-ok.png || no "pixel-grid run setup"
+cp "$pg_first/workflow.json" "$pg_second/workflow.json"
+cp "$pg_first/workflow.ui.json" "$pg_second/workflow.ui.json"
+cp "$TMP/pg-source.png" "$pg_first/outputs/prop.png"; cp "$TMP/pg-source.png" "$pg_second/outputs/prop.png"
+AG embed --run "$pg_first" > /dev/null 2>"$TMP/pg-err"
+AG embed --run "$pg_second" > /dev/null 2>>"$TMP/pg-err"
+cp "$pg_first/outputs/prop.png" "$TMP/pg-input.png"
+AG finalize --run "$pg_first" --pixel-grid --max-colors 4 --json > "$TMP/pg-first.json" 2>>"$TMP/pg-err"; pg_rc=$?
+python3 -B - "$ROOT" "$pg_first/outputs/prop.png" <<'EOF' > "$TMP/pg-pixels"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+image = png.decode(sys.argv[2])
+colors = {tuple(image.rgba[i:i+3]) for i in range(0, len(image.rgba), 4) if image.rgba[i+3]}
+print("ok" if (image.width, image.height) == (128, 128) and len(colors) <= 4 else "bad")
+EOF
+[ "$pg_rc" -eq 0 ] && grep -qx ok "$TMP/pg-pixels" \
+  && jq -e '[.steps[] | select(.step == "pixel-grid" and .state == "pixelated")] | length == 1' "$TMP/pg-first.json" >/dev/null \
+  && jq -e '.outputs[0].scale == 4 and .outputs[0].source_size == "512x512" and .outputs[0].size == "128x128"' "$pg_first/pixelgrid.json" >/dev/null \
+  && cmp -s "$TMP/pg-input.png" "$pg_first/outputs-raw/pixelgrid/prop.png" \
+  && jq -e 'any(.results[]; .check == "png-pixel-grid" and .state == "PASS") and any(.results[]; .check == "png-size" and .state == "PASS" and any(.reasons[]; contains("graded at source size 512x512")))' "$pg_first/qa.json" >/dev/null \
+  && ok "pixel-grid: scale 4, at most four colours, original preserved and QA grades source size" \
+  || no "pixel-grid first rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-first.json")"
+
+AG finalize --run "$pg_second" --pixel-grid --max-colors 4 --json > "$TMP/pg-second.json" 2>>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && cmp -s "$pg_first/outputs/prop.png" "$pg_second/outputs/prop.png" \
+  && [ "$(jq -c .outputs "$pg_first/pixelgrid.json")" = "$(jq -c .outputs "$pg_second/pixelgrid.json")" ] \
+  && ok "pixel-grid: fresh runs produce identical bytes and output records" || no "pixel-grid deterministic rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-second.json")"
+cp "$pg_first/outputs/prop.png" "$TMP/pg-result.png"
+AG finalize --run "$pg_first" --pixel-grid --max-colors 4 --json > "$TMP/pg-again.json" 2>>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && cmp -s "$TMP/pg-result.png" "$pg_first/outputs/prop.png" \
+  && jq -e 'any(.steps[]; .step == "pixel-grid" and .state == "skipped" and any(.results[]; .reason == "already pixel-gridded"))' "$TMP/pg-again.json" >/dev/null \
+  && ok "pixel-grid: repeat finalize skips already pixel-gridded output with bytes unchanged" || no "pixel-grid repeat rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-again.json")"
+
+pg_deep="$RUNS/pg-deep-001"; finrun pg-deep-001 icon icon-ok.png || no "pixel-grid depth setup"
+cp "$TMP/pg-depth.png" "$pg_deep/outputs/prop.png"
+AG embed --run "$pg_deep" > /dev/null 2>"$TMP/pg-err"
+cp "$pg_deep/outputs/prop.png" "$TMP/pg-deep-input.png"
+AG finalize --run "$pg_deep" --pixel-grid --json > "$TMP/pg-deep.json" 2>>"$TMP/pg-err"; pg_rc=$?
+cmp -s "$TMP/pg-deep-input.png" "$pg_deep/outputs/prop.png" && [ ! -e "$pg_deep/outputs-raw/pixelgrid/prop.png" ] \
+  && jq -e 'any(.outputs[]; .state == "skipped" and (.reason | contains("bit depth 16")))' "$pg_deep/pixelgrid.json" >/dev/null \
+  && ok "pixel-grid: 16-bit output skipped with reason, unchanged and no raw copy" || no "pixel-grid depth rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-deep.json")"
+
+pg_plain="$RUNS/pg-plain-001"; finrun pg-plain-001 icon icon-ok.png || no "pixel-grid opt-in setup"
+AG finalize --run "$pg_plain" --json > "$TMP/pg-plain.json" 2>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && [ ! -e "$pg_plain/pixelgrid.json" ] \
+  && jq -e '[.steps[].step] == ["filter", "fit", "defringe", "embed", "qa"]' "$TMP/pg-plain.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-pixel-grid")] | length == 0' "$pg_plain/qa.json" >/dev/null \
+  && ok "finalize without pixel-grid keeps the usual steps and no pixel-grid QA row" || no "pixel-grid opt-in rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-plain.json")"
+
+pg_style="$RUNS/pg-style-001"; finrun pg-style-001 icon icon-ok.png || no "pixel-grid style setup"
+cp "$TMP/pg-source.png" "$pg_style/outputs/prop.png"
+jq '.style.data.palette = {"text":"Two colours", "colors":[{"hex":"#ff0000"},{"hex":"#0000ff"}]}' "$pg_style/spec.json" > "$TMP/pg-spec.json" && cp "$TMP/pg-spec.json" "$pg_style/spec.json"
+AG finalize --run "$pg_style" --pixel-grid --max-colors 8 --json > "$TMP/pg-style.json" 2>"$TMP/pg-err"; pg_rc=$?
+python3 -B - "$ROOT" "$pg_style/outputs/prop.png" <<'EOF' > "$TMP/pg-style-pixels"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+image = png.decode(sys.argv[2])
+colors = {tuple(image.rgba[i:i+3]) for i in range(0, len(image.rgba), 4) if image.rgba[i+3]}
+print("ok" if colors and colors <= {(255, 0, 0), (0, 0, 255)} else "bad")
+EOF
+[ "$pg_rc" -eq 0 ] && grep -qx ok "$TMP/pg-style-pixels" && jq -e '.params.palette == "style"' "$pg_style/pixelgrid.json" >/dev/null \
+  && ok "pixel-grid: structured style palette supplies output colours" || no "pixel-grid style rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-style.json")"
+AG finalize --run "$pg_plain" --max-colors 4 > "$TMP/pg-invalid" 2>&1; pg_rc=$?
+[ "$pg_rc" -eq 2 ] && ok "finalize --max-colors without --pixel-grid exits 2" || no "pixel-grid missing flag rc=$pg_rc" "$(cat "$TMP/pg-invalid")"
+
 # Live fetch_outputs names encode the prompt and index, not the source type. Each run gets its own rendered prefix.
 filter_run() {
   local name="$1"
@@ -5205,7 +5292,7 @@ python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2
 n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
 [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "consistency self-test: $n_ok cases passed" || no "consistency self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 
-for st_ in imaging_selftest style_selftest; do
+for st_ in imaging_selftest style_selftest pixelgrid_selftest; do
   echo "-- $st_ (tests/fixtures/assetgen/$st_.py)"
   python3 -B "$ROOT/tests/fixtures/assetgen/$st_.py" > "$TMP/cs" 2>&1; rc=$?
   n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")

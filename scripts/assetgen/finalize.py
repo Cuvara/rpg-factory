@@ -1,4 +1,4 @@
-"""assetgen finalize: filter, fit, defringe (alpha purposes only), embed and qa in order, after fetch_outputs.
+"""assetgen finalize: filter, fit, defringe (alpha purposes only), pixel-grid, embed and qa in order, after fetch_outputs.
 
 filter comes first: fetch_outputs also downloads PreviewImage files into outputs/, so every outputs/*.png that
 runfiles.output_origins classifies as a preview (not written by a SaveImage node of the rendered workflow.json) is moved
@@ -21,6 +21,9 @@ import hashlib
 import json
 import os
 import shutil
+
+import consistency
+import pixelgrid
 
 SCHEMA = "rpg-factory.assetgen-finalize/1"
 RAW_DIR = "raw"
@@ -56,7 +59,11 @@ def precheck(ag, run_dir):
     path = os.path.join(run_dir, ag.DEFRINGE_FILE)
     if os.path.isfile(path):
         record = ag.read_json(path, "defringe record")
-    return spec, record
+    pixel_record = None
+    path = os.path.join(run_dir, "pixelgrid.json")
+    if os.path.isfile(path):
+        pixel_record = ag.read_json(path, "pixel grid record")
+    return spec, record, pixel_record
 
 
 def free_target(directory, name):
@@ -221,9 +228,22 @@ def needs_defringe(ag, path):
     return bool(img.has_alpha) and min(img.rgba[3::4]) < 255
 
 
-def defringe_step(ag, run_dir, spec, record, force):
+def defringe_step(ag, run_dir, spec, record, force, pixel_grid=False, pixel_record=None):
     """The defringe step: {step, state: defringed|skipped|FAIL, reason, results}."""
     step = {"step": "defringe", "state": "skipped", "reason": "", "results": []}
+    if pixel_grid:
+        step["reason"] = "pixel grid requested: alpha is binarized, nothing to defringe"
+        return step
+    recorded = pixel_record.get("outputs", []) if isinstance(pixel_record, dict) else []
+    for row in recorded if isinstance(recorded, list) else []:
+        if not isinstance(row, dict) or row.get("state") != "pixelated":
+            continue
+        output = row.get("output")
+        if (isinstance(output, str) and output.startswith("outputs/")
+                and os.path.basename(output) == output[8:] and row.get("after_pixels_sha256")
+                and ag.pixels_sha256(os.path.join(run_dir, *output.split("/"))) == row["after_pixels_sha256"]):
+            step["reason"] = "pixel-gridded outputs (pixelgrid.json): not defringed"
+            return step
     if not wants_alpha(spec):
         step["reason"] = "not an alpha purpose (qa.alpha is not required)"
         return step
@@ -255,6 +275,88 @@ def defringe_step(ag, run_dir, spec, record, force):
     return step
 
 
+def pixelgrid_step(ag, run_dir, spec, record, force, max_colors):
+    """Reduce outputs to their detected grid, preserving the source and recording every result."""
+    style = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    style_data = style.get("data") if isinstance(style.get("data"), dict) else {}
+    state, config = consistency.palette_config(style_data)
+    palette = config[1] if state == "ok" else None
+    limit = 16 if max_colors is None else max_colors
+    params = {"max_colors": limit, "palette": "style" if palette else "quantized",
+              "palette_colors": ["#%02x%02x%02x" % color for color in palette] if palette else None}
+    old_params = record.get("params") if isinstance(record, dict) else None
+    old_rows = record.get("outputs", []) if isinstance(record, dict) else []
+    old = {r.get("output"): r for r in old_rows if isinstance(r, dict)} if isinstance(old_rows, list) else {}
+    step = {"step": "pixel-grid", "state": "skipped", "reason": "", "results": []}
+    todo = []
+    for path in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png"))):
+        output = "outputs/" + os.path.basename(path)
+        prev = old.get(output, {})
+        row = {"output": output, "state": "skipped"}
+        step["results"].append(row)
+        try:
+            with open(path, "rb") as f:
+                current = f.read()
+            refusal = ag.depth_refusal(current, "pixel-gridded")
+            if refusal:
+                row["reason"] = refusal
+                continue
+            img = ag.png.decode(path)
+            if (prev.get("state") == "pixelated" and prev.get("after_pixels_sha256")
+                    and ag.pixels_sha256(path) == prev["after_pixels_sha256"] and old_params == params):
+                row.update(prev)
+                row.update(state="skipped", reason="already pixel-gridded")
+                continue
+            raw_rel = prev.get("raw")
+            raw = os.path.join(run_dir, *raw_rel.split("/")) if isinstance(raw_rel, str) and raw_rel.startswith("outputs-raw/pixelgrid/") and os.path.basename(raw_rel) == raw_rel[len("outputs-raw/pixelgrid/"):] else None
+            source = current
+            if raw and os.path.isfile(raw) and ag.qa.sha256(raw) == prev.get("before_sha256"):
+                with open(raw, "rb") as f:
+                    source = f.read()
+                refusal = ag.depth_refusal(source, "pixel-gridded")
+                if refusal:
+                    row["reason"] = refusal
+                    continue
+                img = ag.png.decode(raw)
+            else:
+                raw = None
+            width, height, rgba, info = pixelgrid.process(img, palette=palette, max_colors=limit)
+        except (ag.png.Invalid, ag.png.Unsupported, OSError, pixelgrid.NoGrid) as exc:
+            row["reason"] = str(exc)
+            continue
+        row["reason"] = "grid detected: not yet pixel-gridded"
+        todo.append((path, source, raw, width, height, rgba, info, row))
+    if todo:
+        bound = ag.bound_records(run_dir, outputs_of(ag, run_dir))
+        if bound and not force:
+            step.update(state="FAIL", reason="%s already bind(s) the current outputs and pixel-grid would change them; "
+                        "pass --force to pixel-grid anyway (then those records are stale: re-run them)" % ", ".join(bound))
+            return step
+    for path, source, raw, width, height, rgba, info, row in todo:
+        if raw is None:
+            raw_dir = os.path.join(run_dir, "outputs-raw", "pixelgrid")
+            os.makedirs(raw_dir, exist_ok=True)
+            raw = free_target(raw_dir, os.path.basename(path))
+            with open(raw, "xb") as f:
+                f.write(source)
+        new = ag.rebuild(ag.png.encode(width, height, rgba), lambda t, b: True, ag.text_chunks(source))
+        ag.write_atomic(path, new, ".pixelgrid.tmp")
+        row.update(state="pixelated", raw="outputs-raw/pixelgrid/" + os.path.basename(raw),
+                   source_size=info["source_size"], size=info["size"], scale=info["scale"], offset=info["offset"],
+                   colors=info["colors"], before_sha256=hashlib.sha256(source).hexdigest(),
+                   after_sha256=hashlib.sha256(new).hexdigest(), after_pixels_sha256=ag.pixels_sha256(path),
+                   reason="%s -> %s, scale %s, %d colors%s" % (info["source_size"], info["size"], info["scale"],
+                            info["colors"], "; max_colors ignored for style palette" if palette else ""))
+    step.update(state="pixelated" if todo else "skipped", reason="%d pixelated, %d skipped" % (
+        len(todo), len(step["results"]) - len(todo)))
+    ag.write_json(os.path.join(run_dir, "pixelgrid.json"), {
+        "schema": "rpg-factory.assetgen-pixelgrid/1", "run": os.path.basename(os.path.normpath(run_dir)),
+        "params": params, "outputs": [
+            dict(old[row["output"]], reason="already pixel-gridded")
+            if row.get("reason") == "already pixel-gridded" else row for row in step["results"]]})
+    return step
+
+
 def embed_step(ag, run_dir):
     rows = ag.embed(run_dir)
     counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("embedded", "replaced", "kept", "FAIL")}
@@ -277,9 +379,9 @@ def step_lines(step):
     return lines
 
 
-def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False):
+def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_grid=False, max_colors=None):
     """The finalize verb: returns the exit code (0 PASS, 1 FAIL, 3 NOT_AVAILABLE) after printing the result."""
-    spec, record = precheck(ag, run_dir)
+    spec, record, pixel_record = precheck(ag, run_dir)
     if discard_qa_fail:
         ag.discard.records(ag, run_dir)  # an unreadable discards.json refuses here, before any write
     before = image_reviews(ag, run_dir)
@@ -293,9 +395,13 @@ def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False):
         if steps[-1]["state"] == "FAIL":
             failed = "fit"
     if not failed:
-        steps.append(defringe_step(ag, run_dir, spec, record, force))
+        steps.append(defringe_step(ag, run_dir, spec, record, force, pixel_grid, pixel_record))
         if steps[-1]["state"] == "FAIL":
             failed = "defringe"
+    if not failed and pixel_grid:
+        steps.append(pixelgrid_step(ag, run_dir, spec, pixel_record, force, max_colors))
+        if steps[-1]["state"] == "FAIL":
+            failed = "pixel-grid"
     if not failed:
         steps.append(embed_step(ag, run_dir))
         if steps[-1]["state"] == "FAIL":

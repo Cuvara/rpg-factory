@@ -13,7 +13,8 @@ Usage:
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
-  assetgen.py finalize --run RUN [--force] [--discard-qa-fail] [--authoring DIR] [--json]
+  assetgen.py finalize --run RUN [--force] [--discard-qa-fail] [--pixel-grid [--max-colors N]] [--authoring DIR]
+                      [--json]
   assetgen.py discard --run RUN --output N --reason TEXT [--authoring DIR] [--json]
   assetgen.py budget --run RUN [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
@@ -122,6 +123,12 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   outputs-rejected/   discard and finalize --discard-qa-fail move rejected PNGs here without overwriting them
   discards.json       append-only history of discarded outputs and their hashes and reasons
   outputs-raw/<name>  defringe: the original of each output it rewrote (kept; never an output, never in a binding)
+  outputs-raw/pixelgrid/<name>  finalize --pixel-grid: the original of each output it reduced to its pixel grid
+  pixelgrid.json      finalize --pixel-grid: {"schema": "rpg-factory.assetgen-pixelgrid/1", "params", "outputs"}
+                      (scripts/assetgen/pixelgrid.py: grid detected, downsampled to one pixel per cell, alpha
+                      binarized, palette limited to the structured style palette or --max-colors N, default 16; 8-bit
+                      PNGs only, any other depth skipped untouched with the reason); qa adds png-pixel-grid rows only
+                      when it exists
   defringe.json       defringe: {"schema": "rpg-factory.assetgen-defringe/1", "params": {"alpha_floor", "rings",
                       "opaque"}, "outputs": [{"output", "raw", "before_sha256", "after_sha256", "after_pixels_sha256",
                       "stats"}]}
@@ -198,6 +205,8 @@ rewritten. Outputs that qa.json or an image review already bind and that still n
 defringe (defringe's own refusal) unless --force; --force is passed to defringe only. It prints which image reviews
 (review-image.json, review-image-claude.json) it made stale ("stale now (re-run them): ..."; qa.json is rewritten, so
 never listed). --json: one object, schema rpg-factory.assetgen-finalize/1 (steps, stale, state, exit, budget).
+--pixel-grid adds a pixel-grid step after defringe (deterministic, no AI upscaling; defringe is skipped then);
+--max-colors N (2..256) needs --pixel-grid (exit 2 otherwise).
 
 Spend guard (scripts/assetgen/budget.py): resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default
 4; not a whole number >= 1: exit 2). budget --run prints used (the run's outputs/*.png + the failed attempts of its
@@ -1293,13 +1302,13 @@ def run_budget(run_dir, spec):
     return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
 
 
-def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False):
+def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False, pixel_grid=False, max_colors=None):
     """finalize.run plus the budget state (text: a line before the summary line; --json: key "budget"). The exit code
     stays finalize's; a refusal (SystemExit from its precheck) prints what it printed and is re-raised unchanged."""
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            code = finalize.run(sys.modules[__name__], run_dir, force, as_json, discard_qa_fail)
+            code = finalize.run(sys.modules[__name__], run_dir, force, as_json, discard_qa_fail, pixel_grid, max_colors)
     except BaseException:
         sys.stdout.write(buf.getvalue())
         sys.stdout.flush()
@@ -1849,6 +1858,10 @@ def main(argv=None):
     c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
                    "already bind (they are stale afterwards: re-run them)")
     c.add_argument("--discard-qa-fail", action="store_true", help="discard QA-FAIL outputs and re-run qa")
+    c.add_argument("--pixel-grid", action="store_true", help="reduce the outputs to their detected pixel grid and "
+                   "limit the palette (originals in outputs-raw/pixelgrid/, record pixelgrid.json)")
+    c.add_argument("--max-colors", type=int, metavar="N", help="with --pixel-grid and no structured style palette: "
+                   "at most N colours (2..256, default 16)")
     c.add_argument("--json", action="store_true")
     c = sp("promote-anchor"); run_arg(c, False); c.add_argument("--output")
     c.add_argument("--external"); c.add_argument("--origin"); c.add_argument("--rights-note"); c.add_argument("--style")
@@ -2018,7 +2031,11 @@ def main(argv=None):
             emit(st, a.json, budget.line(st))
             return st["exit"]
         if a.cmd == "finalize":
-            return finalize_with_budget(a.run, a.force, a.json, a.discard_qa_fail)
+            if a.max_colors is not None and not a.pixel_grid:
+                fail("finalize --max-colors needs --pixel-grid", 2)
+            if a.max_colors is not None and not 2 <= a.max_colors <= 256:
+                fail("finalize --max-colors must be 2..256", 2)
+            return finalize_with_budget(a.run, a.force, a.json, a.discard_qa_fail, a.pixel_grid, a.max_colors)
         if a.cmd == "promote-anchor":
             if a.external is not None:
                 rec = promote_external_anchor(a.external, a.origin, a.rights_note, authoring, a.style, a.id,
