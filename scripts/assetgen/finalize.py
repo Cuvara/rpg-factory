@@ -331,6 +331,7 @@ def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False):
                 steps.append({"step": "discard", "state": "discarded",
                               "reason": "%d discarded to outputs-rejected/" % len(rows), "results": rows})
                 step, text, code = qa_step(ag, run_dir)
+                discard_stale = [n for n in discard_stale if n != "qa.json"]
                 qa_text.append(text)
                 steps.append(step)
         if step["state"] == "FAIL":

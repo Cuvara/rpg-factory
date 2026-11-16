@@ -2403,17 +2403,17 @@ AG finalize --run "$bp" --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
   && ok "batch finalize without discard flag fails QA and moves nothing" || no "batch without flag rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
 
 batch_run batch-discard-001
-bd="$RUNS/batch-discard-001"
-AG embed --run "$bd" >/dev/null 2>"$TMP/err"
-cp "$bd/outputs/bad.png" "$TMP/batch-bad.png"
-AG finalize --run "$bd" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
-AG manifest --run "$bd" >/dev/null 2>>"$TMP/err"; mrc=$?
-[ $rc -eq 0 ] && [ $mrc -eq 0 ] && [ "$(find "$bd/outputs" -name '*.png' | wc -l)" -eq 3 ] \
-  && cmp -s "$TMP/batch-bad.png" "$bd/outputs-rejected/bad.png" \
-  && jq -e '.discards | length == 1 and .[0].by == "finalize" and .[0].output == "outputs/bad.png"' "$bd/discards.json" >/dev/null \
-  && jq -e '(.outputs | length == 3) and ([.results[].output] | unique | length == 3) and all(.results[]; .output != "outputs/bad.png")' "$bd/qa.json" >/dev/null \
-  && batch_front "$bd" | jq -e '(.spec.outputs | length == 3) and (.spec.trace.discarded | length == 1 and .[0].output == "outputs/bad.png" and .[0].path == "outputs-rejected/bad.png")' >/dev/null \
-  && grep -q '^- Discarded: outputs/bad.png' "$bd/run.md" \
+batchd="$RUNS/batch-discard-001"
+AG embed --run "$batchd" >/dev/null 2>"$TMP/err"
+cp "$batchd/outputs/bad.png" "$TMP/batch-bad.png"
+AG finalize --run "$batchd" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+AG manifest --run "$batchd" >/dev/null 2>>"$TMP/err"; mrc=$?
+[ $rc -eq 0 ] && [ $mrc -eq 0 ] && jq -e '.stale | index("qa.json") | not' "$TMP/batch.json" >/dev/null && [ "$(find "$batchd/outputs" -name '*.png' | wc -l)" -eq 3 ] \
+  && cmp -s "$TMP/batch-bad.png" "$batchd/outputs-rejected/bad.png" \
+  && jq -e '.discards | length == 1 and .[0].by == "finalize" and .[0].output == "outputs/bad.png"' "$batchd/discards.json" >/dev/null \
+  && jq -e '(.outputs | length == 3) and ([.results[].output] | unique | length == 3) and all(.results[]; .output != "outputs/bad.png")' "$batchd/qa.json" >/dev/null \
+  && batch_front "$batchd" | jq -e '(.spec.outputs | length == 3) and (.spec.trace.discarded | length == 1 and .[0].output == "outputs/bad.png" and .[0].path == "outputs-rejected/bad.png")' >/dev/null \
+  && grep -q '^- Discarded: outputs/bad.png' "$batchd/run.md" \
   && ok "batch finalize discards one QA failure byte-identically and manifests the three passing outputs" \
   || no "batch discard rc=$rc manifest=$mrc" "$(cat "$TMP/err" "$TMP/batch.json")"
 
@@ -2699,7 +2699,7 @@ variant qp-tamper-001; printf 'x' >> "$RUNS/qp-tamper-001/outputs/qp-icon.png"
 variant qp-extra-001; cp "$FX/icon-ok.png" "$RUNS/qp-extra-001/outputs/second.png"
 # Copies of the manifested four-output batch isolate each rejected-file quality check.
 for name in qp-batch-001 qp-batch-extra-001 qp-rejected-extra-001 qp-rejected-sha-001 qp-reverse-001; do
-  cp -R "$bd" "$RUNS/$name"; rm -f "$RUNS/$name/run.md"; AG manifest --run "$RUNS/$name" >/dev/null
+  cp -R "$batchd" "$RUNS/$name"; rm -f "$RUNS/$name/run.md"; AG manifest --run "$RUNS/$name" >/dev/null
 done
 cp "$FX/icon-ok.png" "$RUNS/qp-batch-extra-001/outputs/unrecorded.png"
 cp "$FX/icon-ok.png" "$RUNS/qp-rejected-extra-001/outputs-rejected/unrecorded.png"
@@ -2914,6 +2914,8 @@ case_ qp-fallback-001 gen-run-prompt-review WARN 'same-model fallback' "explicit
 case_ qp-badmark-001 gen-run-prompt-review FAIL 'is not the prompt author' "SAME_MODEL marker on another model's review: FAIL"
 case_ qp-tamper-001 gen-run-outputs FAIL 'sha256 on disk differs' "output bytes changed after the record: FAIL"
 case_ qp-extra-001 gen-run-outputs FAIL 'outputs/second.png is not recorded' "unrecorded outputs/*.png: FAIL"
+batch_front "$RUNS/qp-batch-001" | jq -e '.spec.trace.discarded | length == 1' >/dev/null \
+  && ok "batch quality fixture records one discard" || no "batch quality fixture missing discard trace"
 case_ qp-batch-001 gen-run-outputs PASS '' "manifested batch with a recorded discard: gen-run-outputs PASS"
 case_ qp-batch-extra-001 gen-run-outputs FAIL 'outputs/unrecorded.png is not recorded' "batch with an unrecorded output: gen-run-outputs FAIL"
 case_ qp-rejected-extra-001 gen-run-outputs FAIL 'outputs-rejected/unrecorded.png is not recorded' "unlisted rejected PNG: gen-run-outputs FAIL"
