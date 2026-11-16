@@ -17,7 +17,7 @@ from workspace import find_workspace, native_abs  # scripts/lib is on sys.path (
 
 MACHINE_PATH = re.compile(
     r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/'
-    r'|/mnt/[A-Za-z](?:/|$)|/Users/|/home/|AppData', re.I | re.M)
+    r'|/mnt/[A-Za-z](?=\W|$)|(?<![\w/:.-])/(?:Users|home)/|AppData', re.I | re.M)
 
 
 def machine_path_hit(text):

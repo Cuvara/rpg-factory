@@ -705,10 +705,10 @@ portable_out=$(portable_plans "$ROOT/docs/plans" 2>&1); portable_rc=$?
   || no "docs/plans portable paths (rc=$portable_rc)" "$portable_out"
 PLAN_COPY="$TMP/plans-portable"; mkdir -p "$PLAN_COPY"
 if [ -d "$ROOT/docs/plans" ]; then cp -r "$ROOT/docs/plans/." "$PLAN_COPY/"; fi
-printf '%s\n' 'see https://example.com/x and https://example.com/c/workspace/example' 'docs/plans/x and docs/plans/c/example' > "$PLAN_COPY/zz-url.md"
+printf '%s\n' 'see https://example.com/x and https://example.com/c/workspace/example' 'https://example.com/Users/person and https://example.com/home/person' 'docs/plans/x and docs/plans/c/example' > "$PLAN_COPY/zz-url.md"
 portable_out=$(portable_plans "$PLAN_COPY" 2>&1) && ok "docs/plans check allows URLs and repo-relative paths" || no "docs/plans check rejects URLs or repo-relative paths" "$portable_out"
 rm -f "$PLAN_COPY/zz-url.md"
-for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/mnt/c' '/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
+for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/mnt/c' '/mnt/c,' '/mnt/c)' '/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
   printf '%s\n' "$machine_path" > "$PLAN_COPY/zz-machine-path.md"
   portable_out=$(portable_plans "$PLAN_COPY" 2>&1); portable_rc=$?
   if [ "$portable_rc" -ne 0 ] && grep -qF 'machine-specific absolute path:' <<<"$portable_out"; then
