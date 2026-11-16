@@ -4948,6 +4948,10 @@ if mode == "anchors":
 else:
     def run(rid, status, family, outputs, qa=None, style=ref, raw_qa=None):
         lock = {"style": style}
+        ids = {"props": ["props-a", "props-b"], "characters": ["chars-a"]}.get(family, []) if status == "approved" and style == ref else []
+        lock["references"] = [{"anchor_id": aid, "image": "references/anchor-" + aid + ".png"} for aid in ids]
+        for aid in ids:
+            put(os.path.join(G, "runs", rid, "references", "anchor-" + aid + ".png"), open(os.path.join(AD, aid + ".png"), "rb").read())
         if family:
             lock["family"] = family
         front(os.path.join(G, "runs", rid, "run.md"), {"id": "AGEN-" + rid, "status": status, "spec": {"style_lock": lock}})
@@ -4968,7 +4972,7 @@ else:
     run("r-chars-1", "approved", "characters", {"chars.png": disc(128, 192, (40, 60, 200), (220, 200, 80))},
         [("style-palette", "PASS"), ("style-tone", "FAIL")])
     run("r-ui-1", "rejected", "ui", {}, raw_qa=b"{ not json")
-    run("r-none", "approved", None, {})
+    run("r-none", "approved", None, {"unanchored.png": disc(256, 256, red, green)})
     run("r-other", "approved", "props", {}, [("style-palette", "FAIL")], style={"style_id": "other-game", "version": 1, "sha256": "1" * 64})
     os.makedirs(os.path.join(G, "runs", "r-broken"), exist_ok=True)
     with open(os.path.join(G, "runs", "r-broken", "run.md"), "w", encoding="utf-8") as f:
@@ -5007,10 +5011,9 @@ else:
     p_out = [out("r-props-1", "ok.png"), out("r-props-1", "near.png"), out("r-props-2", "far.png")]
     c_out = [out("r-chars-1", "chars.png")]
     p_anc, c_anc = [anc("props-a"), anc("props-b")], [anc("chars-a")]
-    all_anc = p_anc + c_anc
     exp = {"props_need": need(p_anc, p_out), "props_inside": inside(p_anc, p_out, 0.05),
            "chars_need": need(c_anc, c_out), "chars_inside": inside(c_anc, c_out, 0.05),
-           "total_need": need(all_anc, p_out + c_out), "total_inside": inside(all_anc, p_out + c_out, 0.05),
+           "total_need": max(need(p_anc, p_out), need(c_anc, c_out)), "total_inside": inside(p_anc, p_out, 0.05) + inside(c_anc, c_out, 0.05),
            "props_lum": [round(min(o[0] for o in p_out), 3), round(max(o[0] for o in p_out), 3)],
            "props_sat": [round(min(o[1] for o in p_out), 3), round(max(o[1] for o in p_out), 3)]}
     jdump(expect, exp)
@@ -5052,8 +5055,8 @@ AG style report --authoring "$SR" --style other-game --json > "$TMP/sr-o.json" 2
   && [ "$(SRJ "$DG | .total.runs")" = '{"by_status":{"approved":4,"rejected":2},"total":6}' ] \
   && ok "style report groups per family (a run without a family is (none)); the total counts the style's 6 runs by status, not other-game's or the unstyled ones" \
   || no "family grouping" "$(SRJ "$DG | [.families | map_values(.runs), .total.runs]")"
-[ "$(SRJ "$DG | .families | map_values(.approved_outputs)")" = '{"(none)":0,"characters":1,"props":3,"ui":0}' ] && [ "$(SRJ "$DG | .total.approved_outputs")" = 4 ] \
-  && ok "style report counts the approved outputs per family (props 3, characters 1) and 4 in total" || no "approved outputs" "$(SRJ "$DG | [.families | map_values(.approved_outputs), .total.approved_outputs]")"
+[ "$(SRJ "$DG | .families | map_values(.approved_outputs)")" = '{"(none)":1,"characters":1,"props":3,"ui":0}' ] && [ "$(SRJ "$DG | .total.approved_outputs")" = 5 ] \
+  && ok "style report counts five approved outputs across the families" || no "approved outputs" "$(SRJ "$DG | [.families | map_values(.approved_outputs), .total.approved_outputs]")"
 # QA: the WARN and FAIL rate of every style-* row equals the fixture counts; non-style rows are not counted
 [ "$(SRJ "$DG | .families.props.qa")" = '{"style-edges":{"FAIL":0,"NOT_AVAILABLE":1,"PASS":2,"WARN":0,"fail_rate":0,"rows":3,"warn_rate":0},"style-palette":{"FAIL":1,"NOT_AVAILABLE":0,"PASS":1,"WARN":1,"fail_rate":0.333,"rows":3,"warn_rate":0.333},"style-tone":{"FAIL":0,"NOT_AVAILABLE":0,"PASS":1,"WARN":2,"fail_rate":0,"rows":3,"warn_rate":0.667}}' ] \
   && ok "style report QA rates (props): style-palette warn/fail 0.333/0.333, style-tone 0.667/0, style-edges 0/0 with its NOT_AVAILABLE counted; artifact-quality not a style row" \
@@ -5085,54 +5088,113 @@ exp() { jq -c "($1) | walk(if type == \"number\" then . + 0 else . end)" "$TMP/s
 # suggestions: palette.max_distance with its data
 [ "$(SRJ "$DG | .families.props.suggestions.\"palette.max_distance\"")" = '{"applied":false,"data":{"current":48,"d_needed":{"max":80,"median":40,"min":0},"min_share":0.6,"outputs":3,"pass_at_current":2},"reason":null,"value":80}' ] \
   && [ "$(SRJ "$DG | .families.characters.suggestions.\"palette.max_distance\" | [.value, .data.current, .data.outputs, .data.pass_at_current]")" = '[40,48,1,1]' ] \
-  && [ "$(SRJ "$DG | .total.suggestions.\"palette.max_distance\" | [.value, .data.outputs, .data.d_needed.median, .data.pass_at_current]")" = '[80,4,40,3]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"palette.max_distance\" | [.value, .data.outputs, .data.d_needed.median, .data.pass_at_current]")" = '[80,5,40,4]' ] \
   && ok "suggested palette.max_distance = the largest d_needed (props 80, characters 40, total 80), with current 48, min_share 0.6, the d_needed spread and how many pass at current" || no "palette suggestion" "$(SRJ "$DG | .total.suggestions")"
 # suggestions: tone.tolerance with its data (value is the smallest 2-decimal tolerance that keeps every approved output inside the anchor range)
 sr_tone_qa() {
 python3 -B - "$ROOT" "$SR" "$TMP/sr1.json" "$1" <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
-import consistency, png
+import consistency, png, qa, re
 root, report, group = sys.argv[2:]
 style = next(s for s in json.load(open(report, encoding="utf-8"))["styles"] if s["style_id"] == "demo-game")
 selection = style["total"] if group == "total" else style["families"][{"props": "props", "chars": "characters"}[group]]
 tol = selection["suggestions"]["tone.tolerance"]["value"]
-anchor_dir = os.path.join(root, "assetgen", "styles", "demo-game", "anchors")
-anchor_ids = {"props": ["props-a", "props-b"], "chars": ["chars-a"], "total": ["props-a", "props-b", "chars-a"]}[group]
-anchors = [png.decode(os.path.join(anchor_dir, a + ".png")) for a in anchor_ids]
 outputs = {"props": [("r-props-1", "ok.png"), ("r-props-1", "near.png"), ("r-props-2", "far.png")],
            "chars": [("r-chars-1", "chars.png")]}
 chosen = outputs["props"] + outputs["chars"] if group == "total" else outputs[group]
-images = [png.decode(os.path.join(root, "assetgen", "runs", r, "outputs", name)) for r, name in chosen]
-assert all(consistency.check_tone(img, {"tone": {"tolerance": tol}}, anchors)[0] == "PASS" for img in images)
+def passes(t):
+    states = []
+    for rid, name in chosen:
+        run = os.path.join(root, "assetgen", "runs", rid)
+        front = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", open(os.path.join(run, "run.md"), encoding="utf-8").read(), re.S).group(1))
+        anchors = qa.style_anchors(run, front["spec"])
+        img = png.decode(os.path.join(run, "outputs", name))
+        states.append(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchors)[0] == "PASS")
+    return all(states)
+assert passes(tol)
 if tol > 0:
-    prev = round(tol - 0.01, 2)
-    assert any(consistency.check_tone(img, {"tone": {"tolerance": prev}}, anchors)[0] != "PASS" for img in images)
+    assert not passes(round(tol - 0.01, 2))
 EOF
 }
 for g in props:props chars:characters total:total; do
   k=${g%%:*}; sel=".families.${g#*:}"; [ "${g#*:}" = total ] && sel=".total"
-  [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\" | [.applied, .reason, .data.current, (.data | has(\"anchor_range\") and has(\"output_range\"))]")" = '[false,null,0.05,true]' ] \
+  [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\" | [.applied, .reason, .data.current, (.data | has(\"selected_anchor_range\") and has(\"output_range\"))]")" = '[false,null,0.05,true]' ] \
     && [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\".data.inside_at_current")" = "$(exp .${k}_inside)" ] \
     && sr_tone_qa "$k" > "$TMP/sr-tone-qa" 2>&1 \
     && ok "style report tone.tolerance suggestion ($k): the smallest two-decimal value that passes QA for all outputs" \
     || no "tone suggestion ($k)" "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\"") $(cat "$TMP/sr-tone-qa")"
 done
-[ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[2,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[1,1]' ] \
-  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[3,4]' ] \
-  && ok "style report tone suggestion scopes the anchors to the family (props 2, characters 1) and uses all 3 for the total" || no "tone scope" "$(SRJ "$DG | .total.suggestions")"
+[ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[4,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[1,1]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[5,5]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data.outputs_without_anchors")" = 1 ] \
+  && [ "$(SRJ "$DG | .families.\"(none)\".suggestions.\"tone.tolerance\" | [.value, .data.outputs_without_anchors, (.reason | type)]")" = '[null,1,"string"]' ] \
+  && ok "style report counts selected copies and excludes outputs without usable anchors" || no "tone scope" "$(SRJ "$DG | .total.suggestions")"
+# The selected black and white anchors must not be pooled across families.
+SR_REPRO="$TMP/sr-selected"
+cp -R "$SR" "$SR_REPRO"
+python3 -B - "$ROOT" "$SR_REPRO" <<'EOF'
+import hashlib, json, os, shutil, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+root = os.path.join(sys.argv[2], "assetgen")
+runs = os.path.join(root, "runs")
+ref = json.loads(open(os.path.join(runs, "r-props-1", "run.md"), encoding="utf-8").read().split("---")[1][4:])["spec"]["style_lock"]["style"]
+shutil.rmtree(runs)
+for family, anchor, output in (("props", 0, 128), ("characters", 255, 255)):
+    run = os.path.join(runs, family)
+    for sub in ("references", "outputs"):
+        os.makedirs(os.path.join(run, sub))
+    def write(path, value):
+        open(path, "wb").write(png.encode(1, 1, bytes((value, value, value, 255))))
+    write(os.path.join(run, "references", "anchor.png"), anchor)
+    write(os.path.join(run, "outputs", "output.png"), output)
+    aid = "props-a" if family == "props" else "chars-a"
+    ad = os.path.join(root, "styles", "demo-game", "anchors")
+    write(os.path.join(ad, aid + ".png"), anchor)
+    metadata = os.path.join(ad, aid + ".json")
+    data = json.load(open(metadata, encoding="utf-8"))
+    data["image_sha256"] = hashlib.sha256(open(os.path.join(ad, aid + ".png"), "rb").read()).hexdigest()
+    json.dump(data, open(metadata, "w", encoding="utf-8"))
+    front = {"status": "approved", "spec": {"style_lock": {"style": ref, "family": family,
+             "references": [{"anchor_id": family, "image": "references/anchor.png"}]}}}
+    open(os.path.join(run, "run.md"), "w", encoding="utf-8").write("---json\n" + json.dumps(front) + "\n---\n")
+EOF
+AG style report --authoring "$SR_REPRO" --style demo-game --json > "$TMP/sr-selected.json" 2> "$TMP/sr-selected.err"
+python3 -B - "$ROOT" "$SR_REPRO" "$TMP/sr-selected.json" >> "$TMP/sr-selected.err" 2>&1 <<'EOF'
+import json, os, re, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, qa
+style = json.load(open(sys.argv[3], encoding="utf-8"))["styles"][0]
+for group, families in ((style["families"]["props"], ["props"]), (style["families"]["characters"], ["characters"]), (style["total"], ["props", "characters"])):
+    tol = group["suggestions"]["tone.tolerance"]["value"]
+    if len(families) == 2:
+        assert tol == 0.51, tol
+    def passes(t):
+        results = []
+        for family in families:
+            run = os.path.join(sys.argv[2], "assetgen", "runs", family)
+            front = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", open(os.path.join(run, "run.md"), encoding="utf-8").read(), re.S).group(1))
+            results.append(consistency.check_tone(png.decode(os.path.join(run, "outputs", "output.png")),
+                           {"tone": {"tolerance": t}}, qa.style_anchors(run, front["spec"]))[0] == "PASS")
+        return all(results)
+    assert passes(tol)
+    assert tol == 0 or not passes(round(tol - 0.01, 2))
+EOF
+[ $? -eq 0 ] && ok "tone suggestions pass QA against each run's selected black or white anchor" \
+  || no "selected-anchor tone regression" "$(cat "$TMP/sr-selected.err")"
 # the text prints each suggestion with its numbers and says not applied
 grep -q "^    palette.max_distance = 80 (suggestion only, not applied): current 48; min_share 0.6; 3 approved output(s); d_needed min 0 median 40 max 80; 2 pass at current" "$TMP/sr1.txt" \
-  && grep -Eq "^    tone.tolerance = 0\.[0-9]+ \(suggestion only, not applied\): current 0.05; 2 anchor\(s\); 3 approved output\(s\); luminance anchors \[.*\] outputs \[.*\]; saturation anchors \[.*\] outputs \[.*\]; [0-9] inside at current" "$TMP/sr1.txt" \
+  && grep -Eq "^    tone.tolerance = 0\.[0-9]+ \(suggestion only, not applied\): current 0.05; 4 selected anchor copy/copies; 3 approved output\(s\); 0 output\(s\) without anchors; luminance selected anchors \[.*\] outputs \[.*\]; saturation selected anchors \[.*\] outputs \[.*\]; [0-9] inside at current" "$TMP/sr1.txt" \
   && grep -q "^read-only report: nothing was written; every suggestion is for a person to apply" "$TMP/sr1.txt" \
   && ok "style report text: each suggestion carries 'not applied' and its supporting numbers (current, d_needed, ranges), and the report says nothing was written" || no "suggestion text" "$(grep -n 'suggestion only' "$TMP/sr1.txt")"
 [ "$(grep -c 'suggestion only, not applied' "$TMP/sr1.txt")" -eq "$(grep -cE '^ +(palette\.max_distance|tone\.tolerance)' "$TMP/sr1.txt")" ] && [ "$(jq '[.. | objects | select(has("applied")) | .applied] | all(. == false)' "$TMP/sr1.json")" = true ] \
   && ok "style report prints every suggestion as not applied (text) and applied false (--json)" || no "applied flags" "$(grep -n 'suggestion' "$TMP/sr1.txt" | head)"
 # a group without approved outputs: null suggestions with a reason
-[ "$(SRJ "$DG | [.families.ui, .families.\"(none)\"] | map(.suggestions | map_values([.value, (.reason | type), .applied]))")" = '[{"palette.max_distance":[null,"string",false],"tone.tolerance":[null,"string",false]},{"palette.max_distance":[null,"string",false],"tone.tolerance":[null,"string",false]}]' ] \
+[ "$(SRJ "$DG | [.families.ui] | map(.suggestions | map_values([.value, (.reason | type), .applied]))")" = '[{"palette.max_distance":[null,"string",false],"tone.tolerance":[null,"string",false]}]' ] \
   && [ "$(SRJ "$DG | .families.ui.suggestions | map(.reason) | unique")" = '["no approved output with opaque pixels"]' ] \
   && grep -q "^    palette.max_distance: no suggestion (no approved output with opaque pixels) (suggestion only, not applied): current 48; min_share 0.6; 0 approved output(s)" "$TMP/sr1.txt" \
-  && ok "style report: a family without approved outputs (ui, (none)) gets null suggestions with the reason, printed as 'no suggestion'" || no "null suggestions" "$(SRJ "$DG | .families.ui.suggestions")"
+  && ok "style report: a family without approved outputs (ui) gets null suggestions with the reason, printed as 'no suggestion'" || no "null suggestions" "$(SRJ "$DG | .families.ui.suggestions")"
 # White against a black-only palette requires distance 442, outside the permitted range.
 SRX="$TMP/style-report-extreme"; cp -r "$SR" "$SRX"
 jq '.palette.colors = [{"hex":"#000000"}] | .palette.min_share = 1' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
@@ -5194,21 +5256,21 @@ def palette_case(img, colors, share):
         assert suggestion["value"] is None and "no permitted max_distance" in suggestion["reason"]
     return d
 
-def tone_case(anchor_imgs, output_imgs):
+def tone_case(cases):
     def record(img):
         lum, sat = consistency.tone_stats(img)
         return {"luminance": lum, "saturation": sat}
-    suggestion = style_report._suggest_tone([record(i) for i in output_imgs], [record(i) for i in anchor_imgs], 0.05)
+    suggestion = style_report._suggest_tone([dict(record(img), run=str(n), selected_anchors=[consistency.tone_stats(a) for a in anchors]) for n, (anchors, img) in enumerate(cases)], 0.05)
     tol = suggestion["value"]
     assert tol is not None, suggestion
     def passes(t):
-        return all(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchor_imgs)[0] == "PASS" for img in output_imgs)
+        return all(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchors)[0] == "PASS" for anchors, img in cases)
     assert passes(tol), tol
     assert tol == 0 or not passes(round(tol - 0.01, 2)), tol
     return tol
 
 assert palette_case(image([(r, 0, 0) for r in range(10)]), [(0, 0, 0)], 0.70000000001) == 7
-assert tone_case([image([(39, 39, 39)])], [image([(90, 90, 90)])]) == 0.21
+assert tone_case([([image([(39, 39, 39)])], image([(90, 90, 90)]))]) == 0.21
 rng = random.Random(7941)
 shares = [0, 0.1, 0.3, 0.7, 0.70000000001, 1 / 3, 1]
 def color():
@@ -5216,8 +5278,8 @@ def color():
 for i in range(200):
     palette_case(image([color() for _ in range(rng.randint(1, 20))]),
                  [color() for _ in range(rng.randint(1, 4))], shares[i % len(shares)])
-    tone_case([image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))],
-              [image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))])
+    tone_case([([image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))],
+                image([color() for _ in range(rng.randint(1, 5))])) for _ in range(rng.randint(1, 3))])
 EOF
 rc=$?
 [ $rc -eq 0 ] && ok "style report suggestions pass palette and tone QA at the smallest permitted thresholds in 202 regression cases" \
