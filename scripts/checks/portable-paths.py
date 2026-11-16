@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))  # appended: stdlib lookups must not stat /mnt/c first
-from workspace import registry_root_default  # noqa: E402  (scripts/lib/workspace.py)
+from workspace import registry_workspace_default  # noqa: E402  (scripts/lib/workspace.py)
 
 SEP = r"[/\\]+"
 SEGMENT = r"[\w.$%{}<>~!-]+"
@@ -59,7 +59,7 @@ def main() -> int:
     root = args.root.resolve()
     allow = load_allowlist(args.allowlist or root / "tests/fixtures/portable-paths-allow.txt")
     registry = json.loads((root / "registry.json").read_text(encoding="utf-8"))
-    default = registry_root_default(registry)
+    default = registry_workspace_default(registry)
     workspace = canonical(default) if default else None
     result = subprocess.run(["git", "ls-files", "-z"], cwd=root, check=True, stdout=subprocess.PIPE)
     findings = files = 0
