@@ -168,6 +168,17 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   path-audit (Claude Code stops background shells of an idle session when memory is low). Write the lesson into
   `parallel-work.md`: on a loaded machine the tier command runs with `-j 1`, one task QA at a time, and a task lead
   reports NOT_RUN after one retry instead of looping.
+- A new script under `scripts/checks/` met two repo conventions only in CI (the UTF-8 stdio block of
+  `tests/compat.test.sh`, the workspace reader guard of `tests/workspace-default.test.sh`). Name both in
+  `scripts/README.md` next to the checks list, or give `scripts/checks/` a template.
+- An Orca Codex worker can start with an empty prompt and idle with no escalation (task citation-drift: about 4.5
+  hours), and a Claude implementer ended its turn without sending `worker_done`. Same class as agent-runtime-quirks:
+  the task lead should time out a dispatch that shows no turn start and re-dispatch it.
+- In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
+  spelling worked (not reproduced).
+- `tests/run-all.sh` keeps no log of a run: a caller that keeps only the tail of the output loses the FAIL lines
+  (integration QA had to be rerun to see one failure). Write the FAIL blocks to a file under the state dir and print
+  its path in the summary.
 - testlab `test_lab.py` case `test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small` fails under load
   (sampler CPU 1.56 % against a 1.0 % bound); it measures the live host. Make the bound load-tolerant or skip on a
   busy machine.
