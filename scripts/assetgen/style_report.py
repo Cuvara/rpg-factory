@@ -149,7 +149,7 @@ def _output_record(img, palette):
                     for r, g, b, _ in consistency.opaque_samples(img))
         n = len(sq)
         rec["share"] = bisect.bisect_right(sq, max_distance * max_distance) / n
-        k = min(n, math.ceil(min_share * n))
+        k = min(n, math.ceil(round(min_share * n, 9)))
         if min_share == 0:
             rec["d_needed"] = 0
         else:

@@ -5128,6 +5128,20 @@ AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx-zero.jso
 [ $rc -eq 0 ] && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == 0 and .data.d_needed.max == 0 and .reason == null' "$TMP/srx-zero.json" >/dev/null \
   && ok "style report suggests distance zero when min_share is zero" || no "zero min_share rc=$rc" "$(cat "$TMP/sr.err" "$TMP/srx-zero.json")"
 
+# Seven of ten pixels meet min_share 0.7 at distance 6; floating-point multiplication must not select the eighth.
+python3 -B - "$ROOT" > "$TMP/sr-float" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png, style_report
+pixels = bytes(channel for red in range(10) for channel in (red, 0, 0, 255))
+img = png.Image(10, 1, pixels, True, "fixture")
+record = style_report._output_record(img, ({}, [(0, 0, 0)], 0, 0.7))
+assert record["d_needed"] == 6, record
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report selects the seventh pixel for min_share 0.7 of ten" \
+  || no "style report floating-point rank rc=$rc" "$(cat "$TMP/sr-float")"
+
 # a draft style with no palette, no anchors and no runs: still exit 0, suggestions null with reasons, nothing written
 SRN="$TMP/style-report-bare"; mkdir -p "$SRN"
 AG style init --id demo-game --extends pixel-art --authoring "$SRN" > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report bare setup: style init" "$(cat "$TMP/sr.err")"
