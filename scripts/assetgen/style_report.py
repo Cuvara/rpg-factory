@@ -149,13 +149,14 @@ def _output_record(img, palette):
                     for r, g, b, _ in consistency.opaque_samples(img))
         n = len(sq)
         rec["share"] = bisect.bisect_right(sq, max_distance * max_distance) / n
-        k = min(n, math.ceil(round(min_share * n, 9)))
-        if min_share == 0:
-            rec["d_needed"] = 0
-        else:
-            k = max(1, k)
-            d = math.isqrt(sq[k - 1])
-            rec["d_needed"] = d + (1 if d * d < sq[k - 1] else 0)
+        lo, hi = 0, 442
+        while lo < hi:
+            d = (lo + hi) // 2
+            if bisect.bisect_right(sq, d * d) / n >= min_share:
+                hi = d
+            else:
+                lo = d + 1
+        rec["d_needed"] = lo
     return rec
 
 
@@ -259,7 +260,20 @@ def _suggest_tone(outs, anchors, current):
         min(a[k] for a in anchors) - current <= o[k] <= max(a[k] for a in anchors) + current
         for k in ("luminance", "saturation")))
     data.update(anchor_range=anchor_range, output_range=output_range, inside_at_current=inside)
-    return {"value": min(1.0, _round_up_2(need)), "reason": None, "data": data, "applied": False}
+    def fits(c):
+        tol = round(c / 100, 2)
+        return all(min(a[k] for a in anchors) - tol <= o[k] <= max(a[k] for a in anchors) + tol
+                   for o in outs for k in ("luminance", "saturation"))
+
+    c = min(100, round(_round_up_2(need) * 100))
+    while c > 0 and fits(c - 1):
+        c -= 1
+    while c <= 100 and not fits(c):
+        c += 1
+    if c > 100:
+        return {"value": None, "reason": "no permitted tolerance (0..1) keeps every approved output inside the anchor range",
+                "data": data, "applied": False}
+    return {"value": round(c / 100, 2), "reason": None, "data": data, "applied": False}
 
 
 def _group(fam, style_runs, outs, qa_rows, rejections, palette, palette_reason, anchors, tone_current):

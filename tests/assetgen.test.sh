@@ -4698,8 +4698,11 @@ def jdump(path, obj):
         f.write("\n")
 def front(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(os.path.join(sys.argv[1], "templates", "assetgen", "gen-run.md"), encoding="utf-8") as f:
+        envelope = json.loads(f.read().split("---", 2)[1].removeprefix("json\n"))
+    envelope.update(obj)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("---json\n%s\n---\n# run\n" % json.dumps(obj))
+        f.write("---json\n%s\n---\n# run\n" % json.dumps(envelope))
 def disc(w, h, a, b):
     px = bytearray()
     for y in range(h):
@@ -4708,7 +4711,7 @@ def disc(w, h, a, b):
             px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
     return png.encode(w, h, bytes(px))
 if mode == "anchors":
-    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved"})
+    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved", "spec": {}})
     for aid, family, w, h, a, b, status in (
             ("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40), "active"),
             ("props-a-v1", "props", 256, 256, (200, 40, 40), (40, 160, 60), "active"),
@@ -4819,7 +4822,8 @@ aq_fails() { python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$1" --regist
   jq -r '.results[] | select(.state == "FAIL") | "\(.artifact)|\(.check)"' "$2" | LC_ALL=C sort -u; }
 aq_fails "$SBP" "$TMP/sb-aq-before.json" > "$TMP/sb-fails-before"; aq_fails "$SB" "$TMP/sb-aq-after.json" > "$TMP/sb-fails-after"
 [ "$(jq -r .quality.state "$TMP/sb1.json")" = PASS ] && [ "$(jq -c .quality.new_fails "$TMP/sb1.json")" = '[]' ] \
-  && [ "$(jq '.results | length' "$TMP/sb-aq-before.json")" -gt 0 ] && [ "$(jq '.results | length' "$TMP/sb-aq-after.json")" -gt 0 ] \
+  && jq -e '([.results[] | select(.check == "parse" and .state == "FAIL")] | length) == 0 and (["AGEN-derive-001", "AGEN-bump-001"] | all(. as $id | any($rows[]; .artifact == $id and (.check | startswith("gen-run-")))))' --argjson rows "$(jq '.results' "$TMP/sb-aq-before.json")" "$TMP/sb-aq-before.json" >/dev/null \
+  && jq -e '([.results[] | select(.check == "parse" and .state == "FAIL")] | length) == 0 and (["AGEN-derive-001", "AGEN-bump-001"] | all(. as $id | any($rows[]; .artifact == $id and (.check | startswith("gen-run-")))))' --argjson rows "$(jq '.results' "$TMP/sb-aq-after.json")" "$TMP/sb-aq-after.json" >/dev/null \
   && [ -z "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after")" ] \
   && ok "quality.state PASS, and artifact-quality --domain assetgen shows no FAIL on the bumped authoring that was not there before ($(wc -l < "$TMP/sb-fails-before" | tr -d ' ') FAIL before, $(wc -l < "$TMP/sb-fails-after" | tr -d ' ') after)" \
   || no "quality after the bump: $(jq -r .quality.state "$TMP/sb1.json")" "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after"; jq -c .quality "$TMP/sb1.json")"
@@ -5084,13 +5088,35 @@ exp() { jq -c "($1) | walk(if type == \"number\" then . + 0 else . end)" "$TMP/s
   && [ "$(SRJ "$DG | .total.suggestions.\"palette.max_distance\" | [.value, .data.outputs, .data.d_needed.median, .data.pass_at_current]")" = '[80,4,40,3]' ] \
   && ok "suggested palette.max_distance = the largest d_needed (props 80, characters 40, total 80), with current 48, min_share 0.6, the d_needed spread and how many pass at current" || no "palette suggestion" "$(SRJ "$DG | .total.suggestions")"
 # suggestions: tone.tolerance with its data (value is the smallest 2-decimal tolerance that keeps every approved output inside the anchor range)
+sr_tone_qa() {
+python3 -B - "$ROOT" "$SR" "$TMP/sr1.json" "$1" <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png
+root, report, group = sys.argv[2:]
+style = next(s for s in json.load(open(report, encoding="utf-8"))["styles"] if s["style_id"] == "demo-game")
+selection = style["total"] if group == "total" else style["families"][{"props": "props", "chars": "characters"}[group]]
+tol = selection["suggestions"]["tone.tolerance"]["value"]
+anchor_dir = os.path.join(root, "assetgen", "styles", "demo-game", "anchors")
+anchor_ids = {"props": ["props-a", "props-b"], "chars": ["chars-a"], "total": ["props-a", "props-b", "chars-a"]}[group]
+anchors = [png.decode(os.path.join(anchor_dir, a + ".png")) for a in anchor_ids]
+outputs = {"props": [("r-props-1", "ok.png"), ("r-props-1", "near.png"), ("r-props-2", "far.png")],
+           "chars": [("r-chars-1", "chars.png")]}
+chosen = outputs["props"] + outputs["chars"] if group == "total" else outputs[group]
+images = [png.decode(os.path.join(root, "assetgen", "runs", r, "outputs", name)) for r, name in chosen]
+assert all(consistency.check_tone(img, {"tone": {"tolerance": tol}}, anchors)[0] == "PASS" for img in images)
+if tol > 0:
+    prev = round(tol - 0.01, 2)
+    assert any(consistency.check_tone(img, {"tone": {"tolerance": prev}}, anchors)[0] != "PASS" for img in images)
+EOF
+}
 for g in props:props chars:characters total:total; do
   k=${g%%:*}; sel=".families.${g#*:}"; [ "${g#*:}" = total ] && sel=".total"
   [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\" | [.applied, .reason, .data.current, (.data | has(\"anchor_range\") and has(\"output_range\"))]")" = '[false,null,0.05,true]' ] \
     && [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\".data.inside_at_current")" = "$(exp .${k}_inside)" ] \
-    && jq -e --argjson need "$(exp .${k}_need)" "$DG | $sel.suggestions.\"tone.tolerance\".value | . + 0.0000001 >= \$need and . - 0.0100001 < \$need and . <= 1" "$TMP/sr1.json" >/dev/null \
-    && ok "style report tone.tolerance suggestion ($k): present with current 0.05, anchor and output ranges and inside_at_current; the value covers the outputs (need $(exp .${k}_need))" \
-    || no "tone suggestion ($k)" "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\"") need=$(exp .${k}_need)"
+    && sr_tone_qa "$k" > "$TMP/sr-tone-qa" 2>&1 \
+    && ok "style report tone.tolerance suggestion ($k): the smallest two-decimal value that passes QA for all outputs" \
+    || no "tone suggestion ($k)" "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\"") $(cat "$TMP/sr-tone-qa")"
 done
 [ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[2,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[1,1]' ] \
   && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[3,4]' ] \
@@ -5141,6 +5167,61 @@ EOF
 rc=$?
 [ $rc -eq 0 ] && ok "style report selects the seventh pixel for min_share 0.7 of ten" \
   || no "style report floating-point rank rc=$rc" "$(cat "$TMP/sr-float")"
+
+python3 -B - "$ROOT" > "$TMP/sr-qa-regressions" 2>&1 <<'EOF'
+import os, random, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, style_report
+
+def image(colors):
+    return png.Image(len(colors), 1, bytes(c for rgb in colors for c in (*rgb, 255)), True, "fixture")
+
+def palette_case(img, colors, share):
+    style = {"palette": {"colors": [{"hex": "#%02x%02x%02x" % rgb} for rgb in colors],
+                         "max_distance": 0, "min_share": share}}
+    config = consistency.palette_config(style)[1]
+    record = style_report._output_record(img, config)
+    suggestion = style_report._suggest_palette([record], config, None)
+    d = record["d_needed"]
+    if d <= 441:
+        assert suggestion["value"] == d
+        style["palette"]["max_distance"] = d
+        assert consistency.check_palette(img, style)[0] == "PASS", (d, share)
+        if d:
+            style["palette"]["max_distance"] = d - 1
+            assert consistency.check_palette(img, style)[0] != "PASS", (d, share)
+    else:
+        assert suggestion["value"] is None and "no permitted max_distance" in suggestion["reason"]
+    return d
+
+def tone_case(anchor_imgs, output_imgs):
+    def record(img):
+        lum, sat = consistency.tone_stats(img)
+        return {"luminance": lum, "saturation": sat}
+    suggestion = style_report._suggest_tone([record(i) for i in output_imgs], [record(i) for i in anchor_imgs], 0.05)
+    tol = suggestion["value"]
+    assert tol is not None, suggestion
+    def passes(t):
+        return all(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchor_imgs)[0] == "PASS" for img in output_imgs)
+    assert passes(tol), tol
+    assert tol == 0 or not passes(round(tol - 0.01, 2)), tol
+    return tol
+
+assert palette_case(image([(r, 0, 0) for r in range(10)]), [(0, 0, 0)], 0.70000000001) == 7
+assert tone_case([image([(39, 39, 39)])], [image([(90, 90, 90)])]) == 0.21
+rng = random.Random(7941)
+shares = [0, 0.1, 0.3, 0.7, 0.70000000001, 1 / 3, 1]
+def color():
+    return tuple(rng.randrange(256) for _ in range(3))
+for i in range(200):
+    palette_case(image([color() for _ in range(rng.randint(1, 20))]),
+                 [color() for _ in range(rng.randint(1, 4))], shares[i % len(shares)])
+    tone_case([image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))],
+              [image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))])
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report suggestions pass palette and tone QA at the smallest permitted thresholds in 202 regression cases" \
+  || no "style report QA threshold regressions rc=$rc" "$(cat "$TMP/sr-qa-regressions")"
 
 # a draft style with no palette, no anchors and no runs: still exit 0, suggestions null with reasons, nothing written
 SRN="$TMP/style-report-bare"; mkdir -p "$SRN"
