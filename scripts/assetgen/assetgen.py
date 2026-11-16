@@ -19,10 +19,16 @@ Usage:
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
   assetgen.py promote-anchor --run RUN --output N|PATH --family F --dimensions a,b --strength S [--id ID]
                              [--authoring DIR] [--json]
+  assetgen.py promote-anchor --external PNG --origin TEXT --rights-note TEXT --authoring DIR [--style ID]
+                             --id ID --family F --dimensions a,b --strength S [--json]
   assetgen.py reject --type asset|direction --reason R [--text T] [--family F] [--run RUN --output N|PATH]
                      [--style S --authoring DIR] [--any-version] [--id ID] [--json]
   assetgen.py drift --authoring DIR [--json]
   assetgen.py approve-record --run RUN --by NAME [--note TEXT] [--authoring DIR] [--json]
+  assetgen.py style init --id ID --extends CORE [--family FAM=STYLE]... --authoring DIR [--title T] [--json]
+  assetgen.py style derive --authoring DIR --style ID [--family FAM] [--apply] [--json]
+  assetgen.py style bump --authoring DIR --id ID [--list-only] [--json]
+  assetgen.py style report --authoring DIR [--style ID] [--json]
 
 RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
 <authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
@@ -82,7 +88,7 @@ anchor_target or primary_node that names no such node or input (template_target_
 a template too). primary_node names the
 generation node whose size the run requests (requested_size); render requires it when the graph has more than one
 NineRouterImage (graph-lint one-image-node still wants exactly one in a staged template). promote-anchor writes a
-proposed anchor from a manifested run output (a person approves it); reject records a rejected asset or direction;
+proposed anchor from a manifested run output or external art (a person approves and attests its source); reject records a rejected asset or direction;
 drift lists gen-runs, anchors and rejections recorded on an older style version or another style hash, and with
 project.json those under a style id that is neither the project style nor a family style (style-id-mismatch, naming
 the project style).
@@ -201,14 +207,25 @@ Failed attempts: a run whose generation, QA or review failed for good keeps its 
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
-Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
-these), graph-lint and budget. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
+Read-only verbs: list, show, resolve (without --out), lint, drift, style report and review-cmd --no-write (factory-cmd
+forwards only these), graph-lint and budget. style report (scripts/assetgen/style_report.py) prints per style and family the
+tone and palette spread over the approved runs' outputs, the WARN and FAIL rate of each style-* QA row, the rejections by
+reason and suggested thresholds (palette.max_distance, tone.tolerance) with the numbers behind each; it is deterministic
+and never applies a suggestion. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
 references/anchor-*.png), defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json),
 finalize (all of those), manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
 the given run dir, approve-record (run.md and <authoring>/approvals/AGEN-<run-id>/), promote-anchor
-(assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and reject
-(assetgen/styles/<style>/rejections/<id>.json) in the authoring repo. review-cmd only prints a `codex exec --sandbox
+(assetgen/styles/<style>/anchors/<id>.json + .png from a run or external art, status proposed only) and reject
+(assetgen/styles/<style>/rejections/<id>.json) in the authoring repo, and style init (scripts/assetgen/style_cmd.py:
+a draft assetgen/styles/<id>.json extending a core style, draft stubs for family styles and the assetgen/project.json
+skeleton; it never overwrites a file, exit 1 with nothing written) and style derive --apply (scripts/assetgen/
+style_derive.py: palette colours, tone and canvas proposed from the style's valid active anchors, merged only into a
+draft game style; without --apply it prints the proposal and writes nothing) and style bump (style_cmd.py: a draft
+version N+1 of an active game style at assetgen/styles/<id>/versions/<N+1>.json and proposed copies of its valid
+anchors, never an active anchor and never an edit of an active file; it lists the anchors, runs and rejections that need
+re-approval, and is limited to listing when the artifact-quality check rejects the result; --list-only writes nothing).
+review-cmd only prints a `codex exec --sandbox
 read-only` command with absolute paths (it works from any cwd); --no-write (factory-cmd always passes it) never builds
 a tile or composite: it uses each only when it holds the current pixels, else exits 2. The only network call is publish: it POSTs workflow.ui.json to ComfyUI's userdata
 API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
@@ -247,6 +264,9 @@ import lint  # noqa: E402
 import png  # noqa: E402
 import qa  # noqa: E402
 import runfiles  # noqa: E402
+import style_cmd  # noqa: E402
+import style_derive  # noqa: E402
+import style_report  # noqa: E402
 import stylelock  # noqa: E402
 import uiworkflow  # noqa: E402
 
@@ -1501,6 +1521,35 @@ def promote_anchor(run_dir, output, family, dimensions, strength, anchor_id=None
             "dimensions": split_list(dimensions), "strength": strength, "image": aid + ".png", "image_sha256": out["sha256"],
             "source_run": {"run_id": run_id, "output": out["path"], "sha256": out["sha256"]},
             "approved_by": None, "approved_on": None}
+    return write_anchor(authoring, src, data)
+
+
+def promote_external_anchor(src, origin, rights_note, authoring, style, anchor_id, family, dimensions, strength):
+    """Propose external art for a person to activate and attest."""
+    project = stylelock.load_project(authoring)
+    if not style and project is None:
+        fail("promote-anchor needs --style", 2)
+    sid = stylelock.choose({"id": "external-anchor", "data": {}}, authoring, family=family, style=style)["style_id"]
+    ref = stylelock.style_ref(layers.load("style", sid, authoring))
+    try:
+        with open(src, "rb") as f:
+            signature = f.read(8)
+    except OSError:
+        signature = None
+    if signature != b"\x89PNG\r\n\x1a\n":
+        fail("%s is not a PNG file" % src)
+    digest = qa.sha256(src)
+    data = {"schema": stylelock.ANCHOR_SCHEMA, "id": anchor_id, "status": "proposed", "style": ref, "family": family,
+            "dimensions": split_list(dimensions), "strength": strength, "image": anchor_id + ".png", "image_sha256": digest,
+            "external_source": {"origin": origin, "rights_note": rights_note, "sha256": digest,
+                                "attested_by": None, "attested_on": None},
+            "approved_by": None, "approved_on": None}
+    return write_anchor(authoring, src, data)
+
+
+def write_anchor(authoring, src, data):
+    """Validate and write a proposed anchor and its image."""
+    ref, aid = data["style"], data["id"]
     errs = stylelock.anchor_errors(data, ref.get("style_id"), aid)
     if errs:
         fail("anchor not written: " + "; ".join(errs))
@@ -1787,7 +1836,8 @@ def main(argv=None):
     c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
                    "already bind (they are stale afterwards: re-run them)")
     c.add_argument("--json", action="store_true")
-    c = sp("promote-anchor"); run_arg(c); c.add_argument("--output", required=True)
+    c = sp("promote-anchor"); run_arg(c, False); c.add_argument("--output")
+    c.add_argument("--external"); c.add_argument("--origin"); c.add_argument("--rights-note"); c.add_argument("--style")
     c.add_argument("--family", required=True); c.add_argument("--dimensions", required=True)
     c.add_argument("--strength", required=True, choices=list(stylelock.STRENGTHS)); c.add_argument("--id"); c.add_argument("--json", action="store_true")
     c = sp("reject"); c.add_argument("--type", required=True, choices=list(stylelock.REJECTION_TYPES), dest="kind")
@@ -1796,12 +1846,27 @@ def main(argv=None):
     c.add_argument("--authoring", help="authoring repo (direction rejections; a --run id resolves in it)")
     c.add_argument("--any-version", action="store_true"); c.add_argument("--id"); c.add_argument("--json", action="store_true")
     c = sp("drift"); c.add_argument("--authoring", required=True); c.add_argument("--json", action="store_true")
+    style_parser = sp("style")
+    # style_cmd owns `style init` and `style bump` and returns the nested subparsers action; `derive` and `report` join it
+    style_subs = style_cmd.add_parsers(style_parser)
+    style_derive.add_parser(style_subs)
+    style_report.add_parser(style_subs)
     c = sp("manifest"); run_arg(c); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     authoring = getattr(a, "authoring", None)
     if authoring and not os.path.isdir(authoring):
         fail("--authoring %s is not a directory" % authoring, 2)
+    if a.cmd == "promote-anchor":
+        if a.external is not None:
+            if a.run is not None or a.output is not None:
+                fail("promote-anchor --external takes no --run or --output", 2)
+            if not all((a.external, a.origin, a.rights_note, authoring, a.id)):
+                fail("promote-anchor --external needs --origin, --rights-note, --authoring and --id", 2)
+        elif not a.run or a.output is None:
+            fail("promote-anchor needs --run and --output", 2)
+        elif a.origin is not None or a.rights_note is not None or a.style is not None:
+            fail("promote-anchor --origin, --rights-note and --style require --external", 2)
     if getattr(a, "run", None):
         a.run = resolve_run(a.run, authoring)
     try:
@@ -1939,9 +2004,15 @@ def main(argv=None):
         if a.cmd == "finalize":
             return finalize_with_budget(a.run, a.force, a.json)
         if a.cmd == "promote-anchor":
-            rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)
-            emit(rec, a.json, "wrote %s: anchor %s proposed (a person approves it: status active, approved_by, approved_on)"
-                 % (rec["path"], rec["id"]))
+            if a.external is not None:
+                rec = promote_external_anchor(a.external, a.origin, a.rights_note, authoring, a.style, a.id,
+                                              a.family, a.dimensions, a.strength)
+                message = ("wrote %s: external anchor %s proposed (a person activates it and attests the source: "
+                           "status active, approved_by, approved_on, external_source.attested_by = approved_by, attested_on)")
+            else:
+                rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)
+                message = "wrote %s: anchor %s proposed (a person approves it: status active, approved_by, approved_on)"
+            emit(rec, a.json, message % (rec["path"], rec["id"]))
             return 0
         if a.cmd == "reject":
             rec = reject(a.kind, a.reason, a.text, a.family, a.run, a.output, a.style, authoring, a.any_version, a.id)
@@ -1951,6 +2022,10 @@ def main(argv=None):
             report = stylelock.drift(authoring)
             emit(report, a.json, drift_text(report))
             return 0
+        if a.cmd == "style":
+            if a.style_cmd == "derive":
+                return style_derive.run(a)
+            return style_report.run(a) if a.style_cmd == "report" else style_cmd.run(a)
         if a.cmd == "manifest":
             front, reset, changes = manifest(a.run, a.title, a.prompt_author, a.generated_by)
             newline = run_md_newline(a.run)

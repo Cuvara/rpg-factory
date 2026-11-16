@@ -32,7 +32,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 1. **Route and pick.** `factory-context.sh --domain assetgen` (lead, gates, the `comfy-mcp` and `codex` tool states).
    Invoke `rpg-factory:comfyui` now. Pick a purpose (`assetgen.py list --authoring <A>`, game layer first; ask when
    none fits) and the family. `<A>/assetgen/project.json` picks the style; without it pick one, or bootstrap a game
-   style first when the user wants one ([references/style-lock.md](references/style-lock.md)). Run id `<slug>-NNN`,
+   style first when the user wants one (`rpg-factory:asset-style`). Run id `<slug>-NNN`,
    next free under `runs/` (`--run`: the id, under `<A>/assetgen/runs/` with `--authoring <A>`, or the path).
 2. **Resolve.** `assetgen.py resolve --purpose P [--family F] [--style S] [--template T] [--max-outputs N] --authoring
    <A> --out <run>/spec.json`. A style outside `project.json` or a deprecated one is refused: `--style-override REASON`
@@ -96,8 +96,8 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    off to the lead of `spec.handoff_domain` through its contract (art2d, art3d, ui, vfx: `rpg-factory:art-2d`, `art-3d`,
    `ui-ux`, `vfx`) with the gen-run ID, output paths and SHA-256. Before approval the images are concept drafts only.
 9. **Promote** a tuned purpose, style or template into the game layer (`extends` with only the changed fields) only
-   when the user asks, then `lint`. **Style lock** ([references/style-lock.md](references/style-lock.md)):
-   `promote-anchor` when a person picks an anchor, `reject` when a person rejects, `drift` after a style change.
+   when the user asks, then `lint`. **Style lock** (`rpg-factory:asset-style`): `promote-anchor` when a person
+   picks an anchor, `reject` when a person rejects, `drift` after a style change.
 
 ## Rules
 

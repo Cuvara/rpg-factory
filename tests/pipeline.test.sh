@@ -3727,7 +3727,17 @@ git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TM
 git -C "$S" branch -q -D feat/core/demo-gw-isolated feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
-NOKILL="kill|taskkill|Stop-Process|--force"
+# kill, taskkill and Stop-Process match as whole words only (a hyphen counts as a word character, ERE has no portable
+# \b): a checkout path containing 'skill' (the status and cleanup "next:" lines print the script path) must not trip it.
+NOKILL='(^|[^[:alnum:]_-])(kill|taskkill|Stop-Process)([^[:alnum:]_-]|$)|--force'
+for nk in 'kill 4242' '  taskkill /PID 42 /F' 'Stop-Process -Id 42' 'git worktree remove --force x'; do
+  if has_ere "$nk" "$NOKILL"; then pass=$((pass + 1)); echo "PASS  NOKILL matches '$nk'"
+  else fail=$((fail + 1)); echo "FAIL  NOKILL must match '$nk'"; fi
+done
+for nk in '/c/x/feat-assetgen-style-skill-scenarios/scripts/factory-pipeline.py status' 'skills/factory-core' 'nokill-word-match'; do
+  if has_ere "$nk" "$NOKILL"; then fail=$((fail + 1)); echo "FAIL  NOKILL must not match '$nk'"
+  else pass=$((pass + 1)); echo "PASS  NOKILL ignores '$nk'"; fi
+done
 # a plain git task worktree: removed with `git worktree remove` (no --force)
 git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
 opath "plain task worktree: git worktree remove without --force" 1 "^  git -C .* worktree remove [^ ]*srv-gw'?$" cleanup "$G"

@@ -58,6 +58,24 @@
 # under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
 # preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
 # recorded previews/ path), finalize size fitting (transparent bands, original preservation, skips and refusals),
+# style init (style_cmd.py: a draft game style, a family stub and project.json written into a fresh authoring dir; lint
+# 0 FAIL and no WARN for them, the expected WARN once the style is active, resolve locks it; an existing style or
+# project.json is never overwritten, exit 1; a non-core --extends or a malformed --family exits 2; templates/assetgen
+# unchanged), style derive (style_derive.py: palette colours, tone tolerance and a canvas aspect per family proposed from
+# the valid active anchors, byte-identical output for the same anchors, --family restricts, an anchor whose PNG no longer
+# matches image_sha256 is skipped; --apply merges only into a draft style (an active style or one without anchors exits 1
+# and stays byte-identical), after it lint has 0 FAIL and the style-palette, style-tone and style-canvas rows are ok in
+# field_states and available in qa; a canvas entry with only min_side passes lint),
+# style bump (style_cmd.py: an active game style gets a draft version N+1 under styles/<id>/versions/ and carried anchors
+# written only as proposed copies; nothing active is edited, no anchor is written active; the report names every anchor,
+# run and rejection that needs re-approval; no new artifact-quality FAIL on the bumped fixture; a quality rejection or a
+# check that cannot run removes the carried anchors and limits the verb to listing; --list-only writes nothing; a draft
+# style, a core-only id and a second bump exit 1, a malformed --id exits 2),
+# style report (style_report.py: read-only, byte-identical output and an untouched authoring dir; per style and family the
+# runs by status, the tone spread and palette share over the approved outputs, the WARN and FAIL rate of each style-* QA
+# row, rejections by reason and suggested palette.max_distance and tone.tolerance printed with their data and never
+# applied; a group without approved outputs gives null suggestions with a reason; an unreadable output is skipped;
+# --style restricts, a malformed --style exits 2, an unknown style exits 1),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -3677,6 +3695,64 @@ mkdir -p "$TMP/sl-wf-run-001"; AG promote-anchor --run "$TMP/sl-wf-run-001" --ou
 [ $rc -eq 1 ] && grep -q "must be <authoring>/assetgen/runs/<slug>-NNN" "$TMP/err" && ok "promote-anchor: a run outside <authoring>/assetgen/runs refused" || no "run layout rc=$rc" "$(cat "$TMP/err")"
 grep -rq '"status": "active"' "$pa.json" && no "promote-anchor wrote an active anchor" || ok "promote-anchor never writes status active"
 
+# External art is copied into the authoring repo without recording its original path.
+mkdir -p "$TMP/outside"; cp "$FX/icon-ok.png" "$TMP/outside/art.png"
+ext="$SG/styles/rpg-base/anchors/ext-1"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible v2 p.14' --rights-note 'studio-owned' --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong --json > "$TMP/ext.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.status == "proposed" and .approved_by == null and .approved_on == null and .external_source.attested_by == null and .external_source.attested_on == null and (has("source_run") | not) and .external_source.origin == "art bible v2 p.14" and .external_source.rights_note == "studio-owned" and .external_source.sha256 == .image_sha256' "$ext.json" >/dev/null \
+  && [ "$(jq -r .image_sha256 "$ext.json")" = "$(sha256sum "$ext.png" | cut -d' ' -f1)" ] && cmp -s "$ext.png" "$TMP/outside/art.png" \
+  && ! grep -Fq "$TMP/outside" "$ext.json" && ! grep -Fq 'outside' "$ext.json" \
+  && ok "external promote: proposed record, copied bytes and digest, no source path" || no "external promote rc=$rc" "$(cat "$TMP/err")"
+AG lint "$ext.json" --authoring "$SC" > "$TMP/o" 2>&1 && ok "external promote: proposed anchor lints clean" || no "external anchor lint" "$(cat "$TMP/o")"
+! grep -q '"status": "active"' "$ext.json" && ok "external promote: never writes an active anchor" || no "external promote wrote active status"
+AG promote-anchor --external "$TMP/outside/art.png" --run "$dp" --origin art --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && ok "external promote: --run conflicts with --external" || no "external with run rc=$rc" "$(cat "$TMP/err")"
+for missing in origin rights-note id; do
+  args=(--external "$TMP/outside/art.png" --authoring "$SC" --family props --dimensions palette --strength strong)
+  [ "$missing" = origin ] || args+=(--origin art)
+  [ "$missing" = rights-note ] || args+=(--rights-note owned)
+  [ "$missing" = id ] || args+=(--id ext-bad)
+  AG promote-anchor "${args[@]}" >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ok "external promote: missing $missing is a usage error" || no "external missing $missing rc=$rc" "$(cat "$TMP/err")"
+done
+printf 'not a png' > "$TMP/outside/not-png"
+AG promote-anchor --external "$TMP/outside/not-png" --origin art --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: non-PNG refused without writes" || no "external non-PNG rc=$rc" "$(cat "$TMP/err")"
+for origin in 'C:/art/x.png' '/home/me/art.png'; do
+  AG promote-anchor --external "$TMP/outside/art.png" --origin "$origin" --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: absolute origin $origin refused without writes" || no "external absolute origin rc=$rc" "$(cat "$TMP/err")"
+done
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note 'token=abc123' --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: credential refused without writes" || no "external credential rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'already exists' "$TMP/err" && ok "external promote: existing id refused" || no "external existing id rc=$rc" "$(cat "$TMP/err")"
+jq '.status = "active" | .approved_by = "Ana Silva" | .approved_on = "2026-11-01" | .external_source.attested_by = "Ana Silva" | .external_source.attested_on = "2026-11-01"' "$ext.json" > "$TMP/ext-active.json" && cp "$TMP/ext-active.json" "$ext.json"
+python3 -B - "$ROOT" "$SC" "$ext.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import stylelock
+data = json.load(open(sys.argv[3], encoding="utf-8"))
+assert not stylelock.anchor_errors(data, "rpg-base", "ext-1")
+assert any(a["data"]["id"] == "ext-1" for a in stylelock.valid_anchors(sys.argv[2], "rpg-base"))
+EOF
+[ $? -eq 0 ] && ok "external anchor: human activation is valid and selectable" || no "external active validity" "$(cat "$TMP/o")"
+rm -f "$ext.json" "$ext.png"
+
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-family --family characters --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_family="$SG/styles/rpg-chars/anchors/ext-family"
+[ $rc -eq 0 ] && [ -f "$ext_family.png" ] && jq -e '.style.style_id == "rpg-chars" and .family == "characters"' "$ext_family.json" >/dev/null \
+  && ok "external promote: mapped family uses its style and anchor directory" || no "external family rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_family.json" "$ext_family.png"
+before_external=$(find "$SG" -type f | sort)
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --style unlisted-style --id ext-disallowed --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'not allowed' "$TMP/err" && [ "$before_external" = "$(find "$SG" -type f | sort)" ] \
+  && ok "external promote: disallowed explicit style refused without writes" || no "external disallowed style rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible / page 4' --rights-note 'monkey: yes' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_prose="$SG/styles/rpg-base/anchors/ext-prose"
+[ $rc -eq 0 ] && jq -e '.external_source.origin == "art bible / page 4" and .external_source.rights_note == "monkey: yes"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: ordinary prose accepted" || no "external prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+
 # reject: validation, deterministic ids, asset rejections bound to a recorded output
 AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --family props >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "text is required" "$TMP/err" && ok "reject direction without text refused" || no "reject no text rc=$rc" "$(cat "$TMP/err")"
@@ -4262,6 +4338,26 @@ def case(rid, want, needles, label, **kw):
 
 
 case("u-good-001", "PASS", [], "gen-run-style: a human-approved active anchor (approved source run, signed approval, bytes match) PASS", refs=["a-good"])
+# A recorded reference exercises the same quality path even when malformed attestation prevents new selection.
+ext_sha = anchor("a-external", ref2, by="Ana Silva", n=12)
+ext_path = os.path.join(G, "styles", "rpg-base", "anchors", "a-external.json")
+ext_data = json.load(open(ext_path, encoding="utf-8"))
+del ext_data["source_run"]
+ext_data["external_source"] = {"origin": "art bible v2 p.14", "rights_note": "studio-owned", "sha256": ext_sha,
+                               "attested_by": "Ana Silva", "attested_on": "2026-11-01"}
+shas["a-external"] = ext_sha
+for attester, label in (("claude", "claude"), ("codex", "codex"), ("gpt-5", "gpt-5"),
+                        ("SAME_MODEL:claude-opus", "SAME_MODEL:claude-opus"), (None, "null"), ("Other Person", "another person"),
+                        ("Ana Silva", "approving person")):
+    ext_data["external_source"]["attested_by"] = attester
+    with open(ext_path, "w", encoding="utf-8") as f:
+        json.dump(ext_data, f)
+    case("u-external-001", "PASS" if attester == "Ana Silva" else "FAIL",
+         [] if attester == "Ana Silva" else ["external_source.attested_by"],
+         "gen-run-style: external anchor attested by %s %s" % (label, "PASS" if attester == "Ana Silva" else "FAIL"),
+         refs=["a-external"])
+os.remove(ext_path)
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "a-external.png"))
 case("u-agent-001", "FAIL", ["is an agent or model"], "gen-run-style: an active anchor approved_by an agent/model name FAIL", refs=["a-agent"])
 case("u-old-001", "WARN", ["changed since the run"], "gen-run-style: an anchor of an older style version stays valid (style drift WARN only)", refs=["a-old"], ref=ref1)
 case("u-gone-001", "FAIL", ["a-gone is not in assetgen/styles/rpg-base/anchors/"], "gen-run-style: a recorded anchor without its JSON FAIL", refs=["a-gone"])
@@ -4317,6 +4413,899 @@ SP="$TMP/style-plugin"; rm -rf "$SP/assetgen/runs/seed-001"
 (cd "$SP" && eval "${cmd//\{plugin_root\}/\"$ROOT\"}") > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q "a-good.json: .*seed-001 is missing" "$TMP/o" \
   && ok "assetgen-lint (registry command, in the authoring repo): an active anchor whose source run.md is gone FAILS" || no "assetgen-lint rc=$rc" "$(grep -v '^PASS' "$TMP/o")"
+
+echo "-- style init: draft game style, family stub and project.json skeleton (style_cmd.py)"
+SI="$TMP/style-init"; mkdir -p "$SI"
+tpl_hash() { find "$ROOT/templates/assetgen" -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1; }
+tpl0=$(tpl_hash)
+AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+SS="$SI/assetgen/styles"; SPJ="$SI/assetgen/project.json"
+grep -Fq 'WARN: the new style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness)' "$TMP/si.out" \
+  && grep -q 'no style-\* QA row can grade an output until one is added' "$TMP/si.out" \
+  && grep -q 'Lint WARNs once the style is active; add fields by hand or use style derive --apply once valid active anchors exist' "$TMP/si.out" \
+  && ok "style init text warns about missing structured fields and how to add them" || no "style init warning" "$(cat "$TMP/si.out")"
+[ $rc -eq 0 ] && [ -f "$SS/demo-game.json" ] && [ -f "$SS/demo-game-characters.json" ] && [ -f "$SPJ" ] \
+  && ok "style init exits 0 and writes the style, the family stub and project.json" || no "style init rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+[ "$(jq -c '[.extends, .version, .status]' "$SS/demo-game.json")" = '["pixel-art",1,"draft"]' ] \
+  && ok "style init: the main style extends pixel-art, version 1, status draft" || no "style init main style" "$(cat "$SS/demo-game.json")"
+[ "$(jq -c '[.extends, .status]' "$SS/demo-game-characters.json")" = '["demo-game","draft"]' ] \
+  && ok "style init: the family stub extends the main style and is draft" || no "style init family stub" "$(cat "$SS/demo-game-characters.json")"
+[ "$(jq -c '[.schema, .style, .families, .allowed_styles]' "$SPJ")" \
+  = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"},["demo-game","demo-game-characters"]]' ] \
+  && ok "style init: project.json has the schema, style {id, 1}, families and allowed_styles" || no "style init project.json" "$(cat "$SPJ")"
+AG lint --authoring "$SI" --json > "$TMP/si-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/si-lint.json")
+nwarn=$(jq '[.results[] | select(.state == "WARN" and (.path | test("project[.]json|assetgen/styles/")))] | length' "$TMP/si-lint.json")
+npass=$(jq '[.results[] | select(.state == "PASS" and (.path == "game:assetgen/project.json" or (.path | test("^game:assetgen/styles/demo-game"))))] | length' "$TMP/si-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$nwarn" = 0 ] && [ "$npass" = 3 ] \
+  && ok "lint after style init: 0 FAIL, project.json and both draft styles PASS with no WARN" || no "lint after init rc=$rc fail=$nfail warn=$nwarn pass=$npass" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/si-lint.json")"
+jq '.status = "active"' "$SS/demo-game.json" > "$TMP/si-active.json" && cp "$TMP/si-active.json" "$SS/demo-game.json"
+AG lint --authoring "$SI" --json > "$TMP/si-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/si-lint.json")
+siw=$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json" and .state == "WARN") | .reasons[]] | join(" ")' "$TMP/si-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && grep -q "active game style has no usable structured style fields" <<<"$siw" \
+  && ok "an active style from init WARNs 'no usable structured style fields' (0 FAIL)" || no "active style lint rc=$rc fail=$nfail" "$siw"
+AG resolve --purpose icon --authoring "$SI" --out "$TMP/si-spec.json" > /dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.style_lock.style.style_id' "$TMP/si-spec.json")" = demo-game ] \
+  && ok "resolve --authoring locks the new project style (spec.style_lock.style.style_id)" || no "resolve after init rc=$rc" "$(jq -c .style_lock "$TMP/si-spec.json" 2>&1)"
+h_style=$(sha256sum "$SS/demo-game.json" | cut -d' ' -f1); h_proj=$(sha256sum "$SPJ" | cut -d' ' -f1); n_files=$(find "$SI/assetgen" -type f | wc -l | tr -d ' ')
+AG style init --id demo-game --extends pixel-art --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/si.err" && [ "$(sha256sum "$SS/demo-game.json" | cut -d' ' -f1)" = "$h_style" ] \
+  && [ "$(sha256sum "$SPJ" | cut -d' ' -f1)" = "$h_proj" ] && [ "$(find "$SI/assetgen" -type f | wc -l | tr -d ' ')" = "$n_files" ] \
+  && ok "a second style init exits 1 with a message and leaves the files byte-identical" || no "second init rc=$rc" "$(cat "$TMP/si.err")"
+SJ="$TMP/style-init-proj"; mkdir -p "$SJ/assetgen"; echo '{"keep": true}' > "$SJ/assetgen/project.json"; h_keep=$(sha256sum "$SJ/assetgen/project.json" | cut -d' ' -f1)
+AG style init --id other-game --extends pixel-art --authoring "$SJ" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "project.json already exists" "$TMP/si.err" && [ ! -e "$SJ/assetgen/styles/other-game.json" ] \
+  && [ "$(sha256sum "$SJ/assetgen/project.json" | cut -d' ' -f1)" = "$h_keep" ] \
+  && ok "an existing project.json alone exits 1: no style file is written, project.json untouched" || no "existing project.json rc=$rc" "$(cat "$TMP/si.err")"
+SU="$TMP/style-init-usage"; mkdir -p "$SU"
+AG style init --id bad-game --extends no-such-core-style --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "not a core style" "$TMP/si.err" && [ ! -e "$SU/assetgen" ] \
+  && ok "--extends naming a non-core style exits 2 and writes nothing" || no "non-core extends rc=$rc" "$(cat "$TMP/si.err")"
+AG style init --id demo-game --extends demo-game --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$SU/assetgen" ] && ok "--extends naming a game style exits 2 (core styles only)" || no "game extends rc=$rc" "$(cat "$TMP/si.err")"
+for badfam in "characters" "Characters=x" "characters=" "=x"; do
+  AG style init --id bad-game --extends pixel-art --family "$badfam" --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "must be FAM=STYLE" "$TMP/si.err" && [ ! -e "$SU/assetgen" ] \
+    && ok "malformed --family '$badfam' exits 2 and writes nothing" || no "malformed --family '$badfam' rc=$rc" "$(cat "$TMP/si.err")"
+done
+SF="$TMP/style-init-family"; mkdir -p "$SF"
+AG style init --id demo-game --extends pixel-art --family characters=pixel-art --authoring "$SF" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "is a core style" "$TMP/si.err" && [ ! -e "$SF/assetgen" ] \
+  && ok "--family naming a core style exits 1 and writes nothing" || no "core family style rc=$rc" "$(cat "$TMP/si.err"; find "$SF" -type f)"
+SG="$TMP/style-init-gamefam"; mkdir -p "$SG/assetgen/styles"
+echo '{"schema":"rpg-factory.assetgen-style/1","title":"other","extends":"pixel-art","version":1,"status":"draft"}' > "$SG/assetgen/styles/other-fam.json"
+h_fam=$(sha256sum "$SG/assetgen/styles/other-fam.json" | cut -d' ' -f1)
+AG style init --id demo-game --extends pixel-art --family characters=other-fam --authoring "$SG" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "must extend the project style" "$TMP/si.err" && [ ! -e "$SG/assetgen/styles/demo-game.json" ] && [ ! -e "$SG/assetgen/project.json" ] \
+  && [ "$(sha256sum "$SG/assetgen/styles/other-fam.json" | cut -d' ' -f1)" = "$h_fam" ] && [ "$(find "$SG/assetgen" -type f | wc -l | tr -d ' ')" = 1 ] \
+  && ok "an existing game family style that does not extend the new id exits 1 and writes nothing" || no "foreign family style rc=$rc" "$(cat "$TMP/si.err"; find "$SG" -type f)"
+SK="$TMP/style-init-json"; mkdir -p "$SK"
+AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SK" --json > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/si.out")" = "rpg-factory.assetgen-style-init/1" ] \
+  && [ "$(jq -c '.files | sort' "$TMP/si.out")" = '["assetgen/project.json","assetgen/styles/demo-game-characters.json","assetgen/styles/demo-game.json"]' ] \
+  && [ "$(jq -c '.project | [.schema, .style, .families]' "$TMP/si.out")" = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"}]' ] \
+  && [ "$(jq -cS '.project' "$TMP/si.out")" = "$(jq -cS . "$SK/assetgen/project.json")" ] \
+  && ok "style init --json prints schema rpg-factory.assetgen-style-init/1 with files and project" || no "style init --json rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+jq -e '.warnings | length == 1 and (.[0] | contains("WARN:") and contains("palette.colors, tone, canvas, outline.edge_darkness") and contains("no style-* QA row can grade an output until one is added") and contains("Lint WARNs once the style is active") and contains("by hand") and contains("style derive --apply") and contains("valid active anchors"))' "$TMP/si.out" >/dev/null \
+  && ok "style init JSON includes the structured fields warning" || no "style init JSON warning" "$(cat "$TMP/si.out")"
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style init changed nothing under templates/assetgen" || no "templates/assetgen changed" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+echo "-- style derive: palette, tone and canvas proposed from the anchors, --apply into a draft only (style_derive.py)"
+SD="$TMP/style-derive"; mkdir -p "$SD"
+AG style init --id demo-game --extends pixel-art --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err" || no "style derive setup: style init" "$(cat "$TMP/sd.err")"
+# valid active anchors for the draft style: two props (256x256) and one characters (256x384) with distinct colours,
+# PNGs encoded here, an approved source gen-run, the style ref of the merged style at version 1
+python3 -B - "$ROOT" "$SD" > "$TMP/sd.setup" 2>&1 <<'EOF'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, png, stylelock
+A = sys.argv[2]
+G = os.path.join(A, "assetgen")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+os.makedirs(os.path.join(G, "runs", "derive-001"), exist_ok=True)
+with open(os.path.join(G, "runs", "derive-001", "run.md"), "w", encoding="utf-8") as f:
+    f.write("---json\n%s\n---\n# run\n" % json.dumps({"id": "AGEN-derive-001", "status": "approved"}))
+d = os.path.join(G, "styles", "demo-game", "anchors")
+os.makedirs(d, exist_ok=True)
+for aid, family, w, h, a, b in (("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40)),
+                                ("props-a", "props", 256, 256, (200, 40, 40), (40, 160, 60)),
+                                ("props-b", "props", 256, 256, (200, 40, 40), (40, 160, 60))):
+    data = disc(w, h, a, b)
+    with open(os.path.join(d, aid + ".png"), "wb") as f:
+        f.write(data)
+    with open(os.path.join(d, aid + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": "active", "style": ref, "family": family,
+                   "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+                   "image_sha256": hashlib.sha256(data).hexdigest(),
+                   "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+                   "approved_by": "Dana", "approved_on": "2026-11-01"}, f)
+print("ok")
+EOF
+grep -qx ok "$TMP/sd.setup" || no "style derive setup: anchors" "$(cat "$TMP/sd.setup")"
+SDS="$SD/assetgen/styles/demo-game.json"
+h_sd=$(sha256sum "$SDS" | cut -d' ' -f1)
+cp -r "$SD" "$TMP/style-derive-pre"   # the draft style as init wrote it, anchors included (QA and min_side cases below)
+AG style derive --style demo-game --authoring "$SD" --json > "$TMP/sd1.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sd1.json")" = "rpg-factory.assetgen-style-derive/1" ] && [ "$(jq -r .applied "$TMP/sd1.json")" = false ] \
+  && [ "$(jq -c '[.anchors[].id]' "$TMP/sd1.json")" = '["chars-a","props-a","props-b"]' ] && [ "$(jq -c .skipped "$TMP/sd1.json")" = '[]' ] \
+  && ok "style derive --json exits 0: a proposal from the 3 valid active anchors, nothing skipped, not applied" || no "style derive --json rc=$rc" "$(cat "$TMP/sd.err" "$TMP/sd1.json")"
+[ "$(jq -c '[.proposal.palette.colors[].hex] | sort' "$TMP/sd1.json")" = '["#283cc8","#28a03c","#c82828","#dcc828"]' ] \
+  && [ -n "$(jq -r '.proposal.palette.text // empty' "$TMP/sd1.json")" ] && [ "$(jq -r '.proposal.tone.tolerance' "$TMP/sd1.json")" = 0.05 ] \
+  && ok "style derive proposes palette.colors (the four anchor colours as hex, with text) and tone.tolerance 0.05" || no "style derive palette/tone" "$(jq -c .proposal "$TMP/sd1.json")"
+[ "$(jq -c '.proposal.canvas' "$TMP/sd1.json")" = '{"characters":{"aspect":"2:3","tolerance":0.02},"props":{"aspect":"1:1","tolerance":0.02}}' ] \
+  && ok "style derive proposes a canvas per family: props 1:1, characters 2:3" || no "style derive canvas" "$(jq -c .proposal.canvas "$TMP/sd1.json")"
+AG style derive --style demo-game --authoring "$SD" --json > "$TMP/sd2.json" 2> "$TMP/sd.err"
+cmp -s "$TMP/sd1.json" "$TMP/sd2.json" && ok "two style derive --json runs on the same anchors are byte-identical" || no "style derive output differs between runs" "$(diff "$TMP/sd1.json" "$TMP/sd2.json")"
+AG style derive --style demo-game --authoring "$SD" > "$TMP/sd1.txt" 2> "$TMP/sd.err"; rc=$?
+AG style derive --style demo-game --authoring "$SD" > "$TMP/sd2.txt" 2> "$TMP/sd.err"
+[ $rc -eq 0 ] && cmp -s "$TMP/sd1.txt" "$TMP/sd2.txt" && grep -q "chars-a" "$TMP/sd1.txt" && grep -q "props-a" "$TMP/sd1.txt" && grep -q "props-b" "$TMP/sd1.txt" \
+  && grep -q "canvas.props: aspect 1:1" "$TMP/sd1.txt" && grep -q "not applied" "$TMP/sd1.txt" \
+  && ok "style derive text output is byte-identical, names the anchors and the canvas, and says not applied" || no "style derive text rc=$rc" "$(cat "$TMP/sd1.txt")"
+AG style derive --style demo-game --authoring "$SD" --family props --json > "$TMP/sdp.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '.proposal.canvas | keys' "$TMP/sdp.json")" = '["props"]' ] && [ "$(jq -c '[.anchors[].id]' "$TMP/sdp.json")" = '["props-a","props-b"]' ] \
+  && [ "$(jq -c '[.proposal.palette.colors[].hex] | sort' "$TMP/sdp.json")" = '["#28a03c","#c82828"]' ] && [ "$(jq -r .family "$TMP/sdp.json")" = props ] \
+  && ok "style derive --family props restricts the anchors, the palette and the canvas to props" || no "style derive --family props rc=$rc" "$(cat "$TMP/sd.err"; jq -c .proposal "$TMP/sdp.json")"
+AG style derive --style demo-game --authoring "$SD" --family characters --json > "$TMP/sdc.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.proposal.tone.tolerance' "$TMP/sdc.json")" = 0.1 ] && [ "$(jq -c '.proposal.canvas | keys' "$TMP/sdc.json")" = '["characters"]' ] \
+  && ok "style derive --family characters (one anchor): tone.tolerance 0.1, canvas characters only" || no "style derive --family characters rc=$rc" "$(cat "$TMP/sd.err"; jq -c .proposal "$TMP/sdc.json")"
+[ "$(sha256sum "$SDS" | cut -d' ' -f1)" = "$h_sd" ] && ok "a derive without --apply leaves the style file byte-identical" || no "plain derive changed the style file" "$(cat "$SDS")"
+AG style derive --style no-such-game --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "has no game file" "$TMP/sd.err" && ok "style derive for a style without a game file exits 1 with a message" || no "missing style rc=$rc" "$(cat "$TMP/sd.err")"
+AG style derive --style demo-game --family "Bad Family" --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 2 ] && ok "style derive with a malformed --family exits 2" || no "malformed --family rc=$rc" "$(cat "$TMP/sd.err")"
+
+# an anchor whose PNG bytes no longer match image_sha256 is skipped (and reported), never sampled
+SDT="$TMP/style-derive-tamper"; cp -r "$SD" "$SDT"
+printf 'x' >> "$SDT/assetgen/styles/demo-game/anchors/props-b.png"
+AG style derive --style demo-game --authoring "$SDT" --json > "$TMP/sdt.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '[.anchors[].id]' "$TMP/sdt.json")" = '["chars-a","props-a"]' ] && [ "$(jq -r '.skipped | map(.id) | join(",")' "$TMP/sdt.json")" = props-b ] \
+  && jq -r '.skipped[0].reason' "$TMP/sdt.json" | grep -q "does not match image_sha256" \
+  && ok "an anchor whose PNG no longer matches image_sha256 is skipped and reported" || no "tampered anchor rc=$rc" "$(cat "$TMP/sd.err"; jq -c '[.anchors, .skipped]' "$TMP/sdt.json")"
+AG style derive --style demo-game --authoring "$SDT" > "$TMP/sdt.txt" 2> "$TMP/sd.err"
+grep -q "anchor skipped: props-b" "$TMP/sdt.txt" && ok "the text output reports the skipped anchor" || no "skipped anchor not in the text output" "$(cat "$TMP/sdt.txt")"
+
+# refusals: a style without valid anchors, an active style, a style without status (= active): exit 1, file byte-identical
+SDN="$TMP/style-derive-noanchor"; mkdir -p "$SDN"
+AG style init --id demo-game --extends pixel-art --authoring "$SDN" > /dev/null 2>&1
+h_n=$(sha256sum "$SDN/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+for flags in "" "--apply"; do
+  AG style derive --style demo-game --authoring "$SDN" $flags > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+  [ $rc -eq 1 ] && grep -q "no usable anchor" "$TMP/sd.err" && [ "$(sha256sum "$SDN/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_n" ] \
+    && ok "style derive ${flags:-(plain)} on a style without anchors exits 1 and leaves the file byte-identical" || no "no-anchor derive $flags rc=$rc" "$(cat "$TMP/sd.err")"
+done
+SDU="$TMP/style-derive-unusable"; cp -r "$SD" "$SDU"
+for f in "$SDU"/assetgen/styles/demo-game/anchors/*.png; do printf 'x' >> "$f"; done
+h_u=$(sha256sum "$SDU/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SDU" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "no usable anchor" "$TMP/sd.err" && [ "$(sha256sum "$SDU/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_u" ] \
+  && ok "style derive --apply where every anchor PNG is tampered exits 1 and leaves the file byte-identical" || no "all-tampered apply rc=$rc" "$(cat "$TMP/sd.err")"
+SDA="$TMP/style-derive-active"; cp -r "$SD" "$SDA"
+jq '.status = "active"' "$SDS" > "$TMP/sd-active.json" && cp "$TMP/sd-active.json" "$SDA/assetgen/styles/demo-game.json"
+h_a=$(sha256sum "$SDA/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SDA" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only merges into a draft" "$TMP/sd.err" && [ "$(sha256sum "$SDA/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_a" ] \
+  && ok "style derive --apply on an active style exits 1 and leaves the file byte-identical" || no "active apply rc=$rc" "$(cat "$TMP/sd.err")"
+AG style derive --style demo-game --authoring "$SDA" --json > "$TMP/sda.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .applied "$TMP/sda.json")" = false ] && [ "$(jq -r .style.status "$TMP/sda.json")" = active ] \
+  && [ "$(sha256sum "$SDA/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_a" ] \
+  && ok "a plain derive on an active style still proposes (exit 0) and writes nothing" || no "active plain derive rc=$rc" "$(cat "$TMP/sd.err")"
+SDM="$TMP/style-derive-nostatus"; cp -r "$SD" "$SDM"
+jq 'del(.status)' "$SDS" > "$TMP/sd-nostatus.json" && cp "$TMP/sd-nostatus.json" "$SDM/assetgen/styles/demo-game.json"
+h_m=$(sha256sum "$SDM/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SDM" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only merges into a draft" "$TMP/sd.err" && [ "$(sha256sum "$SDM/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_m" ] \
+  && ok "style derive --apply on a style without status (active) exits 1 and leaves the file byte-identical" || no "no-status apply rc=$rc" "$(cat "$TMP/sd.err")"
+
+# QA availability: dqa AUTHORING NAME resolves an icon run (family props), renders it (the anchor copies) and runs qa
+dqa() {
+  local d="$1/assetgen/runs/dq-$2-001"; rm -rf "$d"; mkdir -p "$d/outputs"
+  AG resolve --purpose icon --authoring "$1" --out "$d/spec.json" > /dev/null 2> "$TMP/err" || return 1
+  printf 'Derive prompt.\n' > "$d/prompt.md"
+  AG render --run "$d" > /dev/null 2>> "$TMP/err" || return 1
+  cp "$FX/icon-ok.png" "$d/outputs/out.png"
+  AG qa --run "$d" --json > "$TMP/dq-$2.json" 2>> "$TMP/err"   # exit 1 is fine: only the style rows matter here
+  rm -rf "$d"
+  [ -s "$TMP/dq-$2.json" ]
+}
+dst() { jq -r --arg c "$2" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/dq-$1.json"; }
+dqa "$TMP/style-derive-pre" before || no "style derive QA setup (before apply)" "$(cat "$TMP/err")"
+[ "$(dst before style-palette)" = NOT_AVAILABLE ] && [ "$(dst before style-tone)" = NOT_AVAILABLE ] && [ "$(dst before style-canvas)" = NOT_AVAILABLE ] \
+  && ok "before --apply the draft style's style-palette, style-tone and style-canvas QA rows are NOT_AVAILABLE" \
+  || no "QA rows before apply: $(dst before style-palette) $(dst before style-tone) $(dst before style-canvas)" "$(jq -c '[.results[] | select(.check | startswith("style-"))]' "$TMP/dq-before.json")"
+
+# --apply on the draft style with anchors
+AG style derive --style demo-game --authoring "$SD" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "wrote assetgen/styles/demo-game.json" "$TMP/sd.out" \
+  && [ "$(jq -c '[.status, .extends, .version, .tone.tolerance]' "$SDS")" = '["draft","pixel-art",1,0.05]' ] \
+  && [ "$(jq -c '[.palette.colors[].hex] | sort' "$SDS")" = '["#283cc8","#28a03c","#c82828","#dcc828"]' ] && [ -n "$(jq -r '.palette.text // empty' "$SDS")" ] \
+  && [ "$(jq -c '.canvas' "$SDS")" = '{"characters":{"aspect":"2:3","tolerance":0.02},"props":{"aspect":"1:1","tolerance":0.02}}' ] \
+  && ok "style derive --apply on the draft style exits 0 and writes palette, tone and canvas (status, extends, version kept)" || no "draft apply rc=$rc" "$(cat "$TMP/sd.err" "$TMP/sd.out"; cat "$SDS")"
+[ "$(jq -cS '.proposal' "$TMP/sd1.json")" = "$(jq -cS '{palette: .palette, tone: .tone, canvas: .canvas}' "$SDS")" ]   && ok "the written fields equal the proposal" || no "written fields differ from the proposal" "$(cat "$SDS")"
+h_after=$(sha256sum "$SDS" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SD" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(sha256sum "$SDS" | cut -d' ' -f1)" = "$h_after" ] && ok "a second --apply on the same anchors rewrites the same bytes" || no "second apply rc=$rc" "$(cat "$TMP/sd.err")"
+AG lint --authoring "$SD" --json > "$TMP/sd-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/sd-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json") | .state] | join(",")' "$TMP/sd-lint.json")" = PASS ] \
+  && ok "lint after style derive --apply: 0 FAIL, the derived style PASSes" || no "lint after derive rc=$rc fail=$nfail" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/sd-lint.json")"
+python3 -B - "$ROOT" "$SD" 2>&1 <<'EOF' | tr -d '\r' > "$TMP/sd.fs"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, layers
+st = consistency.field_states(layers.load("style", "demo-game", sys.argv[2])["data"])
+for row in ("style-palette", "style-tone", "style-canvas"):
+    print(row, st[row][0])
+EOF
+[ "$(cat "$TMP/sd.fs")" = "$(printf 'style-palette ok\nstyle-tone ok\nstyle-canvas ok')" ] \
+  && ok "consistency.field_states of the derived style: style-palette, style-tone, style-canvas are ok" || no "field_states after derive" "$(cat "$TMP/sd.fs")"
+dqa "$SD" after || no "style derive QA setup (after apply)" "$(cat "$TMP/err")"
+s_pal=$(dst after style-palette); s_tone=$(dst after style-tone); s_can=$(dst after style-canvas)
+all_rows="$s_pal$s_tone$s_can"
+[ -n "$s_pal" ] && [ -n "$s_tone" ] && [ -n "$s_can" ] && [ "$all_rows" = "${all_rows//NOT_AVAILABLE/}" ] \
+  && ok "after --apply the style-palette ($s_pal), style-tone ($s_tone) and style-canvas ($s_can) QA rows are available, not NOT_AVAILABLE" \
+  || no "QA rows after apply: palette=$s_pal tone=$s_tone canvas=$s_can" "$(jq -c '[.results[] | select(.check | startswith("style-"))]' "$TMP/dq-after.json")"
+
+# a canvas entry with only min_side: lint accepts it (it was FAIL while stylelock.style_errors wanted an aspect) and QA can grade it
+for st_ in draft active; do
+  SDX="$TMP/style-derive-minside-$st_"; cp -r "$TMP/style-derive-pre" "$SDX"
+  jq --arg s "$st_" '.status = $s | .canvas = {"props": {"min_side": 128}}' "$TMP/style-derive-pre/assetgen/styles/demo-game.json" > "$SDX/assetgen/styles/demo-game.json"
+  AG lint --authoring "$SDX" --json > "$TMP/sd-lint.json" 2>&1; rc=$?
+  nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/sd-lint.json")
+  srow=$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json") | .state] | join(",")' "$TMP/sd-lint.json")
+  [ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$srow" = PASS ] \
+    && ok "lint accepts a $st_ style whose canvas entry has only min_side (0 FAIL, the style PASSes)" || no "min_side-only canvas ($st_) lint rc=$rc fail=$nfail style=$srow" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/sd-lint.json")"
+done
+python3 -B - "$ROOT" "$TMP/style-derive-minside-draft" > "$TMP/sd.fs" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, layers, stylelock
+d = layers.load("style", "demo-game", sys.argv[2])["data"]
+print(consistency.field_states(d)["style-canvas"][0], stylelock.style_errors(d))
+EOF
+[ "$(cat "$TMP/sd.fs")" = "ok []" ] && ok "a min_side-only canvas: field_states style-canvas ok and stylelock.style_errors empty" || no "min_side-only canvas states" "$(cat "$TMP/sd.fs")"
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style derive changed nothing under templates/assetgen" || no "templates/assetgen changed by derive" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+echo "-- style bump: draft version N+1, proposed anchor copies and the re-approval report (style_cmd.py)"
+# fixture: an ACTIVE game style at version 1 (init, anchors, derive --apply into the draft, then activated), anchors
+# chars-a and props-a-v1 (active), props-p (proposed), props-old (retired), a run of the style at version 1, and the
+# rejections rej-v1 (version 1) and rej-any (version null); built once in SB0, every case works on a copy
+SB0="$TMP/style-bump-base"; mkdir -p "$SB0"; git init -q -b main "$SB0"
+AG style init --id demo-game --extends pixel-art --authoring "$SB0" > "$TMP/sb.out" 2> "$TMP/sb.err" || no "style bump setup: style init" "$(cat "$TMP/sb.err")"
+sb_setup() {   # sb_setup MODE: anchors (draft ref, before derive) | final (every record and the run carry the active style ref)
+python3 -B - "$ROOT" "$SB0" "$1" 2>&1 <<'EOF' | tr -d '\r'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, png, stylelock
+A, mode = sys.argv[2], sys.argv[3]
+G = os.path.join(A, "assetgen")
+D = os.path.join(G, "styles", "demo-game")
+AD, RD = os.path.join(D, "anchors"), os.path.join(D, "rejections")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def jdump(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+def front(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(os.path.join(sys.argv[1], "templates", "assetgen", "gen-run.md"), encoding="utf-8") as f:
+        envelope = json.loads(f.read().split("---", 2)[1].removeprefix("json\n"))
+    envelope.update(obj)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("---json\n%s\n---\n# run\n" % json.dumps(envelope))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+if mode == "anchors":
+    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved", "spec": {}})
+    for aid, family, w, h, a, b, status in (
+            ("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40), "active"),
+            ("props-a-v1", "props", 256, 256, (200, 40, 40), (40, 160, 60), "active"),
+            ("props-p", "props", 256, 256, (180, 40, 40), (40, 160, 60), "proposed"),
+            ("props-old", "props", 256, 256, (200, 40, 40), (60, 160, 40), "retired")):
+        data = disc(w, h, a, b)
+        os.makedirs(AD, exist_ok=True)
+        with open(os.path.join(AD, aid + ".png"), "wb") as f:
+            f.write(data)
+        person = status != "proposed"
+        jdump(os.path.join(AD, aid + ".json"),
+              {"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": status, "style": ref, "family": family,
+               "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+               "image_sha256": hashlib.sha256(data).hexdigest(),
+               "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+               "approved_by": "Dana" if person else None, "approved_on": "2026-11-01" if person else None})
+else:
+    for name in sorted(os.listdir(AD)):
+        if name.endswith(".json"):
+            p = os.path.join(AD, name)
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+            data["style"] = ref
+            jdump(p, data)
+    jdump(os.path.join(RD, "rej-v1.json"),
+          {"schema": "rpg-factory.assetgen-rejection/1", "id": "rej-v1", "type": "direction", "style": ref,
+           "family": None, "reason": "other", "text": "no neon glow on version 1 props"})
+    jdump(os.path.join(RD, "rej-any.json"),
+          {"schema": "rpg-factory.assetgen-rejection/1", "id": "rej-any", "type": "direction",
+           "style": {"style_id": "demo-game", "version": None, "sha256": "0" * 64},
+           "family": None, "reason": "other", "text": "no text or logos on any version"})
+    front(os.path.join(G, "runs", "bump-run-001", "run.md"),
+          {"id": "AGEN-bump-001", "status": "approved",
+           "spec": {"style": {"id": "demo-game", "sha256": ref["sha256"]}, "style_lock": {"style": ref}}})
+print("ok")
+EOF
+}
+sb_setup anchors > "$TMP/sb.setup"; grep -qx ok "$TMP/sb.setup" || no "style bump setup: anchors" "$(cat "$TMP/sb.setup")"
+AG style derive --style demo-game --authoring "$SB0" --apply > "$TMP/sb.out" 2> "$TMP/sb.err" || no "style bump setup: style derive --apply" "$(cat "$TMP/sb.err")"
+jq '.status = "active"' "$SB0/assetgen/styles/demo-game.json" > "$TMP/sb-active.json" && cp "$TMP/sb-active.json" "$SB0/assetgen/styles/demo-game.json"
+sb_setup final > "$TMP/sb.setup"; grep -qx ok "$TMP/sb.setup" || no "style bump setup: records" "$(cat "$TMP/sb.setup")"
+# tsig DIR: one hash over every file below DIR but .git; sb_files DIR: the sorted file list; sb_changed PRE POST: files of PRE that differ or vanished
+tsig() { (cd "$1" && find . -type f -not -path './.git/*' -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1); }
+sb_files() { (cd "$1" && find . -type f -not -path './.git/*' | LC_ALL=C sort); }
+sb_changed() { local f; sb_files "$1" | while read -r f; do cmp -s "$1/$f" "$2/$f" || echo "$f"; done; }
+sb_copy() { rm -rf "$1"; cp -r "$SB0" "$1"; }
+
+SBX="$TMP/style-bump-external"; sb_copy "$SBX"
+SBXA="$SBX/assetgen/styles/demo-game/anchors"
+cp "$SBXA/props-a-v1.png" "$SBXA/external-v1.png"
+jq --slurpfile base "$SBXA/props-a-v1.json" '.id = "external-v1" | .image = "external-v1.png" | .style = $base[0].style | .image_sha256 = $base[0].image_sha256 | .external_source.sha256 = $base[0].image_sha256' "$TMP/ext-active.json" > "$SBXA/external-v1.json"
+cp "$SBXA/external-v1.json" "$TMP/sb-external-before.json"
+AG style bump --id demo-game --authoring "$SBX" --json > "$TMP/sbx.json" 2> "$TMP/sb.err"; rc=$?
+AG lint "$SBXA/external-v2.json" --authoring "$SBX" > "$TMP/sbx-lint" 2>&1; lint_rc=$?
+[ $rc -eq 0 ] && [ $lint_rc -eq 0 ] && cmp -s "$TMP/sb-external-before.json" "$SBXA/external-v1.json" \
+  && jq -e '.status == "proposed" and .style.version == 2 and .approved_by == null and .approved_on == null and .external_source.attested_by == null and .external_source.attested_on == null' "$SBXA/external-v2.json" >/dev/null \
+  && jq -e '.anchors[] | select(.id == "external-v1" and .action == "carried" and .new_id == "external-v2")' "$TMP/sbx.json" >/dev/null \
+  && ok "style bump carries an external anchor as an unattested proposed record and preserves the original" \
+  || no "external anchor bump rc=$rc lint=$lint_rc" "$(cat "$TMP/sb.err" "$TMP/sbx-lint" "$TMP/sbx.json")"
+
+SBP="$TMP/style-bump-pre"; sb_copy "$SBP"          # the authoring repo as it was before the bump
+SB="$TMP/style-bump"; sb_copy "$SB"; SBS="$SB/assetgen/styles"; SBD="$SBS/demo-game/versions/2.json"
+AG style bump --id demo-game --authoring "$SB" --json > "$TMP/sb1.json" 2> "$TMP/sb.err"; rc=$?
+# (1) the draft is a copy at version 2, nothing that existed changed
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sb1.json")" = "rpg-factory.assetgen-style-bump/1" ] && [ "$(jq -r .draft.written "$TMP/sb1.json")" = true ] \
+  && [ "$(jq -r .draft.path "$TMP/sb1.json")" = "assetgen/styles/demo-game/versions/2.json" ] && [ -f "$SBD" ] \
+  && [ "$(jq -c '[.version, .status]' "$SBD")" = '[2,"draft"]' ] \
+  && [ "$(jq -cS 'del(.version, .status)' "$SBD")" = "$(jq -cS 'del(.version, .status)' "$SBS/demo-game.json")" ] \
+  && ok "style bump --json exits 0 and writes versions/2.json: version 2, status draft, every other key of the active file" || no "style bump rc=$rc" "$(cat "$TMP/sb.err"; cat "$SBD" 2>&1)"
+[ "$(jq -c '[.version, .status]' "$SBS/demo-game.json")" = '[1,"active"]' ] && [ -z "$(sb_changed "$SBP" "$SB")" ] \
+  && ok "the active style file, project.json and every pre-existing anchor, rejection and run file are byte-identical after the bump" \
+  || no "a pre-existing file changed" "$(sb_changed "$SBP" "$SB")"
+sb_files "$SBP" > "$TMP/sb.before"; sb_files "$SB" > "$TMP/sb.after"
+[ "$(LC_ALL=C comm -13 "$TMP/sb.before" "$TMP/sb.after" | tr '\n' ' ')" = "./assetgen/styles/demo-game/anchors/chars-a-v2.json ./assetgen/styles/demo-game/anchors/chars-a-v2.png ./assetgen/styles/demo-game/anchors/props-a-v2.json ./assetgen/styles/demo-game/anchors/props-a-v2.png ./assetgen/styles/demo-game/versions/2.json " ] \
+  && ok "the bump added exactly the draft and two carried anchors (json + png each), no file was removed" || no "files added by the bump" "$(LC_ALL=C comm -3 "$TMP/sb.before" "$TMP/sb.after")"
+# (2) carried anchors are proposed copies for version 2
+AGD="$SBS/demo-game/anchors"; carried_ok=true; carried_why=""
+for pair in "chars-a chars-a-v2" "props-a-v1 props-a-v2"; do
+  read -r old new <<<"$pair"
+  [ "$(jq -c '[.status, .approved_by, .approved_on, .style.version, .style.sha256, .id, .image]' "$AGD/$new.json")" \
+    = "[\"proposed\",null,null,2,\"$(jq -r .draft.style.sha256 "$TMP/sb1.json")\",\"$new\",\"$new.png\"]" ] \
+    && [ "$(jq -r .image_sha256 "$AGD/$new.json")" = "$(jq -r .image_sha256 "$AGD/$old.json")" ] && cmp -s "$AGD/$old.png" "$AGD/$new.png" \
+    || { carried_ok=false; carried_why="$carried_why $new: $(cat "$AGD/$new.json" 2>&1 | head -c 400)"; }
+done
+$carried_ok && [ ! -e "$AGD/props-a-v1-v2.json" ] && [ ! -e "$AGD/props-a-v1-v2.png" ] \
+  && ok "carried anchors chars-a-v2 and props-a-v2 are proposed, approved_by null, style.version 2, same image sha256 and bytes (the -v1 suffix is replaced: no props-a-v1-v2)" \
+  || no "carried anchors" "$carried_why"
+[ "$(jq -r 'select(.status == "active") | .id' "$AGD"/*.json | LC_ALL=C sort | tr '\n' ' ')" = "chars-a props-a-v1 " ] \
+  && ok "no anchor is written active: only the two pre-existing active anchors have status active" || no "anchor statuses" "$(jq -c '[.id, .status]' "$AGD"/*.json)"
+# (3) the report names what needs re-approval
+[ "$(jq -c '.needs_reapproval | [.anchors, .runs, .rejections]' "$TMP/sb1.json")" = '[["chars-a","props-a-v1","props-p"],["AGEN-bump-001"],["rej-v1"]]' ] \
+  && ok "needs_reapproval lists the carried and proposed anchors, the version 1 run and the version 1 rejection" \
+  || no "needs_reapproval" "$(jq -c .needs_reapproval "$TMP/sb1.json")"
+[ "$(jq -r '[.anchors[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "chars-a=carried,props-a-v1=carried,props-old=none,props-p=reapprove" ] \
+  && [ "$(jq -r '[.anchors[] | select(.new_id != null) | "\(.id)>\(.new_id)"] | join(",")' "$TMP/sb1.json")" = "chars-a>chars-a-v2,props-a-v1>props-a-v2" ] \
+  && [ "$(jq -r '[.rejections[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "rej-any=applies,rej-v1=rerecord" ] \
+  && [ "$(jq -r '[.runs[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "AGEN-bump-001=reapprove" ] \
+  && ok "report rows: anchors carried/reapprove/none with new_id on carried rows, the version null rejection applies, the retired anchor is none" \
+  || no "report rows" "$(jq -c '[.anchors, .runs, .rejections]' "$TMP/sb1.json")"
+SBT="$TMP/style-bump-text"; sb_copy "$SBT"
+AG style bump --id demo-game --authoring "$SBT" > "$TMP/sb1.txt" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "^anchor props-p " "$TMP/sb1.txt" && grep -q "^anchor chars-a " "$TMP/sb1.txt" && grep -q "^anchor props-a-v1 " "$TMP/sb1.txt" \
+  && grep -q "^run AGEN-bump-001 " "$TMP/sb1.txt" && grep -q "^rejection rej-v1 .*rerecord" "$TMP/sb1.txt" && grep -q "^rejection rej-any .*applies" "$TMP/sb1.txt" \
+  && grep -q "nothing active was edited" "$TMP/sb1.txt" && ! grep -q "limited to listing" "$TMP/sb1.txt" \
+  && ok "the text report names every anchor, run and rejection and says nothing active was edited" || no "text report rc=$rc" "$(cat "$TMP/sb1.txt" "$TMP/sb.err")"
+# (4) quality: the bump's own check passes, and artifact-quality shows no FAIL that was not there before
+aq_fails() { python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$1" --registry "$ROOT/registry.json" --domain assetgen --json > "$2" 2>> "$TMP/err"
+  jq -r '.results[] | select(.state == "FAIL") | "\(.artifact)|\(.check)"' "$2" | LC_ALL=C sort -u; }
+aq_fails "$SBP" "$TMP/sb-aq-before.json" > "$TMP/sb-fails-before"; aq_fails "$SB" "$TMP/sb-aq-after.json" > "$TMP/sb-fails-after"
+[ "$(jq -r .quality.state "$TMP/sb1.json")" = PASS ] && [ "$(jq -c .quality.new_fails "$TMP/sb1.json")" = '[]' ] \
+  && jq -e '([.results[] | select(.check == "parse" and .state == "FAIL")] | length) == 0 and (["AGEN-derive-001", "AGEN-bump-001"] | all(. as $id | any($rows[]; .artifact == $id and (.check | startswith("gen-run-")))))' --argjson rows "$(jq '.results' "$TMP/sb-aq-before.json")" "$TMP/sb-aq-before.json" >/dev/null \
+  && jq -e '([.results[] | select(.check == "parse" and .state == "FAIL")] | length) == 0 and (["AGEN-derive-001", "AGEN-bump-001"] | all(. as $id | any($rows[]; .artifact == $id and (.check | startswith("gen-run-")))))' --argjson rows "$(jq '.results' "$TMP/sb-aq-after.json")" "$TMP/sb-aq-after.json" >/dev/null \
+  && [ -z "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after")" ] \
+  && ok "quality.state PASS, and artifact-quality --domain assetgen shows no FAIL on the bumped authoring that was not there before ($(wc -l < "$TMP/sb-fails-before" | tr -d ' ') FAIL before, $(wc -l < "$TMP/sb-fails-after" | tr -d ' ') after)" \
+  || no "quality after the bump: $(jq -r .quality.state "$TMP/sb1.json")" "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after"; jq -c .quality "$TMP/sb1.json")"
+# (5) a second bump of the same style: the draft exists, nothing is written
+h_sb=$(tsig "$SB")
+AG style bump --id demo-game --authoring "$SB" > "$TMP/sb2.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/sb.err" && [ "$(tsig "$SB")" = "$h_sb" ] \
+  && ok "a second style bump exits 1 (the draft exists) and writes nothing" || no "second bump rc=$rc" "$(cat "$TMP/sb.err")"
+# (6) --list-only writes nothing and still lists
+SBL="$TMP/style-bump-list"; sb_copy "$SBL"; h_sbl=$(tsig "$SBL"); g_sbl=$(git -C "$SBL" status --porcelain)
+AG style bump --id demo-game --authoring "$SBL" --list-only --json > "$TMP/sbl.json" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(tsig "$SBL")" = "$h_sbl" ] && [ "$(git -C "$SBL" status --porcelain)" = "$g_sbl" ] && [ ! -e "$SBL/assetgen/styles/demo-game/versions" ] \
+  && [ "$(jq -r .draft.written "$TMP/sbl.json")" = false ] && [ "$(jq -r .list_only "$TMP/sbl.json")" = true ] && [ "$(jq -r .quality.state "$TMP/sbl.json")" = SKIPPED ] \
+  && [ "$(jq -c .needs_reapproval "$TMP/sbl.json")" = "$(jq -c .needs_reapproval "$TMP/sb1.json")" ] \
+  && ok "style bump --list-only writes nothing (tree and git status unchanged), skips the quality check and lists the same re-approvals" \
+  || no "list-only rc=$rc" "$(cat "$TMP/sb.err"; jq -c '[.draft, .quality, .needs_reapproval]' "$TMP/sbl.json")"
+AG style bump --id demo-game --authoring "$SBL" --list-only > "$TMP/sbl.txt" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "nothing written" "$TMP/sbl.txt" && grep -q "^anchor props-p " "$TMP/sbl.txt" && [ "$(tsig "$SBL")" = "$h_sbl" ] \
+  && ok "the --list-only text says nothing was written and still names the anchors" || no "list-only text rc=$rc" "$(cat "$TMP/sbl.txt" "$TMP/sb.err")"
+# (7) refusals
+SBDR="$TMP/style-bump-draft"; rm -rf "$SBDR"; mkdir -p "$SBDR"
+AG style init --id demo-game --extends pixel-art --authoring "$SBDR" > /dev/null 2>&1; h_dr=$(tsig "$SBDR")
+AG style bump --id demo-game --authoring "$SBDR" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only works on an active style" "$TMP/sb.err" && [ "$(tsig "$SBDR")" = "$h_dr" ] \
+  && ok "style bump of a draft style exits 1 and writes nothing" || no "draft bump rc=$rc" "$(cat "$TMP/sb.err")"
+SBC="$TMP/style-bump-core"; sb_copy "$SBC"; h_c=$(tsig "$SBC")
+AG style bump --id pixel-art --authoring "$SBC" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "has no game file" "$TMP/sb.err" && [ "$(tsig "$SBC")" = "$h_c" ] \
+  && ok "style bump of a core-only style id exits 1 and writes nothing" || no "core-only bump rc=$rc" "$(cat "$TMP/sb.err")"
+AG style bump --id "Bad_Id" --authoring "$SBC" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "must be a lowercase id" "$TMP/sb.err" && [ "$(tsig "$SBC")" = "$h_c" ] \
+  && ok "style bump with a malformed --id exits 2 and writes nothing" || no "malformed --id rc=$rc" "$(cat "$TMP/sb.err")"
+# (8) the quality plugin rejects the carried anchors (a stub FAILs once any *-v2.json anchor exists) or cannot run (non-JSON)
+cat > "$TMP/sb-quality-stub.py" <<'EOF'
+import glob, json, os, sys
+fail = glob.glob(os.path.join(sys.argv[1], "assetgen", "styles", "*", "anchors", "*-v2.json"))
+print(json.dumps({"results": [{"artifact": "AGEN-stub", "check": "gen-run-style", "state": "FAIL" if fail else "PASS",
+                               "reasons": ["a carried anchor broke the stub"] if fail else []}]}))
+EOF
+printf 'print("this is not json")\n' > "$TMP/sb-quality-garbage.py"
+for kind in "stub REJECTED" "garbage NOT_RUN"; do
+  read -r k want <<<"$kind"
+  SBQ="$TMP/style-bump-q-$k"; sb_copy "$SBQ"; sb_files "$SBQ" > "$TMP/sb.before"
+  ( export RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT="$TMP/sb-quality-$k.py"; AG style bump --id demo-game --authoring "$SBQ" --json > "$TMP/sbq.json" 2> "$TMP/sb.err" ); rc=$?
+  sb_files "$SBQ" > "$TMP/sb.after"
+  [ $rc -eq 0 ] && [ "$(jq -r .quality.state "$TMP/sbq.json")" = "$want" ] && [ -f "$SBQ/assetgen/styles/demo-game/versions/2.json" ] && [ "$(jq -r .draft.written "$TMP/sbq.json")" = true ] \
+    && [ -z "$(find "$SBQ/assetgen/styles/demo-game/anchors" -name '*-v2.*')" ] \
+    && [ "$(LC_ALL=C comm -13 "$TMP/sb.before" "$TMP/sb.after")" = "./assetgen/styles/demo-game/versions/2.json" ] && [ -z "$(sb_changed "$SBP" "$SBQ")" ] \
+    && [ "$(jq '[.anchors[] | select(.action == "carried" or .new_id != null)] | length' "$TMP/sbq.json")" = 0 ] \
+    && [ "$(jq -c '.needs_reapproval.anchors' "$TMP/sbq.json")" = '["chars-a","props-a-v1","props-p"]' ] \
+    && ok "quality $want ($k stub): exit 0, the draft stays, no carried anchor file remains, every anchor is still listed for re-approval" \
+    || no "quality $want ($k) rc=$rc" "$(cat "$TMP/sb.err"; jq -c '[.quality, .anchors]' "$TMP/sbq.json"; find "$SBQ/assetgen/styles/demo-game" -type f)"
+  [ "$want" != REJECTED ] || { [ "$(jq -c '[.quality.new_fails[] | [.artifact, .check]]' "$TMP/sbq.json")" = '[["AGEN-stub","gen-run-style"]]' ] \
+    && ok "a quality rejection names the new FAIL (artifact and check)" || no "new_fails" "$(jq -c .quality "$TMP/sbq.json")"; }
+  sb_copy "$SBQ"
+  ( export RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT="$TMP/sb-quality-$k.py"; AG style bump --id demo-game --authoring "$SBQ" > "$TMP/sbq.txt" 2> "$TMP/sb.err" ); rc=$?
+  [ $rc -eq 0 ] && grep -q "^quality: $want" "$TMP/sbq.txt" && grep -q "the verb was limited to listing" "$TMP/sbq.txt" && grep -q "nothing active was edited" "$TMP/sbq.txt" \
+    && ! grep -q "^wrote assetgen/styles/demo-game/anchors/" "$TMP/sbq.txt" \
+    && ok "quality $want ($k stub): the text output says the verb was limited to listing" || no "limited-to-listing text ($k) rc=$rc" "$(cat "$TMP/sbq.txt" "$TMP/sb.err")"
+done
+# (9) style derive keeps passing its own cases above (unchanged); (10) core data untouched
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style bump changed nothing under templates/assetgen" || no "templates/assetgen changed by bump" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+echo "-- style report: spreads, QA rates, rejections and suggested thresholds, read-only (style_report.py)"
+# fixture: a draft game style at version 1 (init, anchors chars-a / props-a / props-b, derive --apply: palette of 4 colours,
+# tone.tolerance 0.05, palette.max_distance 48 and min_share 0.6 by default), then runs, qa.json files and rejections:
+#   r-props-1 approved props   outputs ok (d_needed 0), near (40), bad.png (garbage), clear.png (transparent)
+#                              qa palette PASS, tone PASS, edges NOT_AVAILABLE (+ a non-style row)
+#   r-props-2 approved props   output far (d_needed 80)               qa palette FAIL, tone WARN, edges PASS
+#   r-props-3 rejected props   no outputs                             qa palette WARN, tone WARN, edges PASS
+#   r-chars-1 approved characters output chars (d_needed 40)          qa palette PASS, tone FAIL
+#   r-ui-1    rejected ui      no outputs                             qa.json is not JSON
+#   r-none    approved, no family, no outputs directory
+#   r-other   a run of another style; r-broken: run.md without front matter; derive-001: the anchors' source run
+# rejections: two props palette_off, one characters anatomy (asset), one family-less other, one malformed props record
+SR="$TMP/style-report"; mkdir -p "$SR"
+AG style init --id demo-game --extends pixel-art --authoring "$SR" > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report setup: style init" "$(cat "$TMP/sr.err")"
+sr_setup() {   # sr_setup MODE: anchors (before derive) | records (runs, qa, rejections; writes $TMP/sr.expect)
+python3 -B - "$ROOT" "$SR" "$1" "$TMP/sr.expect" 2>&1 <<'EOF' | tr -d '\r'
+import hashlib, json, math, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, layers, png, stylelock
+A, mode, expect = sys.argv[2], sys.argv[3], sys.argv[4]
+G = os.path.join(A, "assetgen")
+D = os.path.join(G, "styles", "demo-game")
+AD, RD = os.path.join(D, "anchors"), os.path.join(D, "rejections")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def jdump(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+def front(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("---json\n%s\n---\n# run\n" % json.dumps(obj))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+def put(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+if mode == "anchors":
+    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved"})
+    for aid, family, w, h, a, b in (("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40)),
+                                    ("props-a", "props", 256, 256, (200, 40, 40), (40, 160, 60)),
+                                    ("props-b", "props", 256, 256, (200, 40, 40), (40, 160, 60))):
+        data = disc(w, h, a, b)
+        put(os.path.join(AD, aid + ".png"), data)
+        jdump(os.path.join(AD, aid + ".json"),
+              {"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": "active", "style": ref, "family": family,
+               "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+               "image_sha256": hashlib.sha256(data).hexdigest(),
+               "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+               "approved_by": "Dana", "approved_on": "2026-11-01"})
+else:
+    def run(rid, status, family, outputs, qa=None, style=ref, raw_qa=None):
+        lock = {"style": style}
+        ids = {"props": ["props-a", "props-b"], "characters": ["chars-a"]}.get(family, []) if status == "approved" and style == ref else []
+        lock["references"] = [{"anchor_id": aid, "image": "references/anchor-" + aid + ".png"} for aid in ids]
+        for aid in ids:
+            put(os.path.join(G, "runs", rid, "references", "anchor-" + aid + ".png"), open(os.path.join(AD, aid + ".png"), "rb").read())
+        if family:
+            lock["family"] = family
+        front(os.path.join(G, "runs", rid, "run.md"), {"id": "AGEN-" + rid, "status": status, "spec": {"style_lock": lock}})
+        for name, data in outputs.items():
+            put(os.path.join(G, "runs", rid, "outputs", name), data)
+        if qa is not None:
+            jdump(os.path.join(G, "runs", rid, "qa.json"), {"results": [{"check": c, "state": s} for c, s in qa]})
+        if raw_qa is not None:
+            put(os.path.join(G, "runs", rid, "qa.json"), raw_qa)
+    red, green = (200, 40, 40), (40, 160, 60)
+    props = {"ok.png": disc(256, 256, red, green), "near.png": disc(256, 256, red, (40, 160, 100)),
+             "bad.png": b"this is not a png", "clear.png": png.encode(64, 64, bytes(64 * 64 * 4))}
+    run("r-props-1", "approved", "props", props,
+        [("style-palette", "PASS"), ("style-tone", "PASS"), ("style-edges", "NOT_AVAILABLE"), ("artifact-quality", "FAIL")])
+    run("r-props-2", "approved", "props", {"far.png": disc(256, 256, red, (40, 160, 140))},
+        [("style-palette", "FAIL"), ("style-tone", "WARN"), ("style-edges", "PASS")])
+    run("r-props-3", "rejected", "props", {}, [("style-palette", "WARN"), ("style-tone", "WARN"), ("style-edges", "PASS")])
+    run("r-chars-1", "approved", "characters", {"chars.png": disc(128, 192, (40, 60, 200), (220, 200, 80))},
+        [("style-palette", "PASS"), ("style-tone", "FAIL")])
+    run("r-ui-1", "rejected", "ui", {}, raw_qa=b"{ not json")
+    run("r-none", "approved", None, {"unanchored.png": disc(256, 256, red, green)})
+    run("r-other", "approved", "props", {}, [("style-palette", "FAIL")], style={"style_id": "other-game", "version": 1, "sha256": "1" * 64})
+    os.makedirs(os.path.join(G, "runs", "r-broken"), exist_ok=True)
+    with open(os.path.join(G, "runs", "r-broken", "run.md"), "w", encoding="utf-8") as f:
+        f.write("no front matter\n")
+    def rej(rid, rtype, family, reason, text=None, run_ref=None):
+        obj = {"schema": "rpg-factory.assetgen-rejection/1", "id": rid, "type": rtype, "style": ref, "family": family,
+               "reason": reason, "text": text}
+        if run_ref:
+            obj["run"] = run_ref
+        jdump(os.path.join(RD, rid + ".json"), obj)
+        errs = stylelock.rejection_errors(json.load(open(os.path.join(RD, rid + ".json"), encoding="utf-8")), "demo-game", rid)
+        return errs
+    errs = {}
+    errs["rej-1"] = rej("rej-1", "direction", "props", "palette_off", "too saturated")
+    errs["rej-2"] = rej("rej-2", "direction", "props", "palette_off", "off palette again")
+    errs["rej-3"] = rej("rej-3", "asset", "characters", "anatomy", None, {"run_id": "r-chars-1", "output": "outputs/chars.png", "sha256": "2" * 64})
+    errs["rej-4"] = rej("rej-4", "direction", None, "other", "no text on any family")
+    rej("rej-bad", "direction", "props", "bogus", "malformed on purpose")
+    bad = [k for k, v in errs.items() if v]
+    if bad or not stylelock.rejection_errors(json.load(open(os.path.join(RD, "rej-bad.json"), encoding="utf-8")), "demo-game", "rej-bad"):
+        print("fixture rejections invalid:", bad, errs)
+        sys.exit(0)
+    # expected tone numbers, from the PNGs and anchors on disk, independent of the report's grouping code
+    def tone(path):
+        return consistency.tone_stats(png.decode(path))
+    def need(anchors, outs):
+        n = 0.0
+        for k in (0, 1):
+            lo, hi = min(a[k] for a in anchors), max(a[k] for a in anchors)
+            n = max(n, max(max(0.0, lo - o[k], o[k] - hi) for o in outs))
+        return n
+    def inside(anchors, outs, tol):
+        return sum(1 for o in outs if all(min(a[k] for a in anchors) - tol <= o[k] <= max(a[k] for a in anchors) + tol for k in (0, 1)))
+    out = lambda rid, name: tone(os.path.join(G, "runs", rid, "outputs", name))
+    anc = lambda aid: tone(os.path.join(AD, aid + ".png"))
+    p_out = [out("r-props-1", "ok.png"), out("r-props-1", "near.png"), out("r-props-2", "far.png")]
+    c_out = [out("r-chars-1", "chars.png")]
+    p_anc, c_anc = [anc("props-a"), anc("props-b")], [anc("chars-a")]
+    exp = {"props_need": need(p_anc, p_out), "props_inside": inside(p_anc, p_out, 0.05),
+           "chars_need": need(c_anc, c_out), "chars_inside": inside(c_anc, c_out, 0.05),
+           "total_need": max(need(p_anc, p_out), need(c_anc, c_out)), "total_inside": inside(p_anc, p_out, 0.05) + inside(c_anc, c_out, 0.05),
+           "props_lum": [round(min(o[0] for o in p_out), 3), round(max(o[0] for o in p_out), 3)],
+           "props_sat": [round(min(o[1] for o in p_out), 3), round(max(o[1] for o in p_out), 3)]}
+    jdump(expect, exp)
+print("ok")
+EOF
+}
+sr_setup anchors > "$TMP/sr.setup"; grep -qx ok "$TMP/sr.setup" || no "style report setup: anchors" "$(cat "$TMP/sr.setup")"
+AG style derive --style demo-game --authoring "$SR" --apply > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report setup: style derive --apply" "$(cat "$TMP/sr.err")"
+sr_setup records > "$TMP/sr.setup"; grep -qx ok "$TMP/sr.setup" || no "style report setup: records" "$(cat "$TMP/sr.setup")"
+sr_sig() { (cd "$1" && { find . -not -path './.git/*' | LC_ALL=C sort; find . -type f -not -path './.git/*' -exec sha256sum {} + | LC_ALL=C sort; } | sha256sum | cut -d' ' -f1); }
+SRJ() { jq -c "($1) | walk(if type == \"number\" then . + 0 else . end)" "$TMP/sr1.json"; }   # a query over the full report, numbers canonical
+DG='.styles[] | select(.style_id == "demo-game")'
+sig_sr=$(sr_sig "$SR"); h_srs=$(sha256sum "$SR/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style report --authoring "$SR" --json > "$TMP/sr1.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sr1.json")" = "rpg-factory.assetgen-style-report/1" ] && [ "$(SRJ '[.styles[].style_id]')" = '["demo-game","other-game"]' ] \
+  && [ "$(SRJ '.style_filter')" = null ] && [ "$(SRJ "$DG | [.version, .status, .game_file]")" = '[1,"draft",true]' ] \
+  && ok "style report --json exits 0: schema rpg-factory.assetgen-style-report/1, the game style and the style only a run names" || no "style report --json rc=$rc" "$(cat "$TMP/sr.err"; head -c 600 "$TMP/sr1.json")"
+AG style report --authoring "$SR" > "$TMP/sr1.txt" 2> "$TMP/sr.err"; rc2=$?
+[ $rc2 -eq 0 ] && grep -q "^style demo-game version 1 status draft" "$TMP/sr1.txt" && grep -q "^  family props:" "$TMP/sr1.txt" && grep -q "^  all families:" "$TMP/sr1.txt" \
+  && ok "style report (text) exits 0 and prints the style, each family and the all-families total" || no "style report text rc=$rc2" "$(cat "$TMP/sr.err" "$TMP/sr1.txt")"
+# read-only: the authoring dir (files, directories, content) is exactly as before, so is core data
+[ "$(sr_sig "$SR")" = "$sig_sr" ] && [ "$(sha256sum "$SR/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_srs" ] \
+  && [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style report writes nothing: the authoring dir (files, directories, content), the style file and templates/assetgen are unchanged" || no "style report changed files" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+AG style report --authoring "$SR" --json > "$TMP/sr2.json" 2> "$TMP/sr.err"; AG style report --authoring "$SR" > "$TMP/sr2.txt" 2>> "$TMP/sr.err"
+cmp -s "$TMP/sr1.json" "$TMP/sr2.json" && cmp -s "$TMP/sr1.txt" "$TMP/sr2.txt" && [ -s "$TMP/sr1.txt" ] \
+  && ok "two style report runs give byte-identical --json and text output" || no "style report output differs between runs" "$(diff "$TMP/sr1.json" "$TMP/sr2.json" | head -20)"
+# --style restricts to one style, and its entry is the same as in the full report
+AG style report --authoring "$SR" --style demo-game --json > "$TMP/sr-s.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '[.style_filter, (.styles | map(.style_id))]' "$TMP/sr-s.json")" = '["demo-game",["demo-game"]]' ] \
+  && [ "$(jq -cS '.styles[0]' "$TMP/sr-s.json")" = "$(jq -cS "$DG" "$TMP/sr1.json")" ] \
+  && ok "style report --style demo-game restricts to that style (same data as in the full report)" || no "--style restriction rc=$rc" "$(cat "$TMP/sr.err"; jq -c '[.style_filter, (.styles | map(.style_id))]' "$TMP/sr-s.json")"
+AG style report --authoring "$SR" --style other-game --json > "$TMP/sr-o.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '.styles | map(.style_id)' "$TMP/sr-o.json")" = '["other-game"]' ] && [ "$(jq -c '.styles[0] | [.game_file, .total.runs.total, (.error != null)]' "$TMP/sr-o.json")" = '[false,1,true]' ] \
+  && ok "style report --style of a style only a run names: exit 0, no game file, its one run counted, the load error reported" || no "other-game report rc=$rc" "$(cat "$TMP/sr.err"; head -c 500 "$TMP/sr-o.json")"
+# per-family grouping and the runs by status
+[ "$(SRJ "$DG | .families | keys")" = '["(none)","characters","props","ui"]' ] \
+  && [ "$(SRJ "$DG | .families | map_values(.runs)")" = '{"(none)":{"by_status":{"approved":1},"total":1},"characters":{"by_status":{"approved":1},"total":1},"props":{"by_status":{"approved":2,"rejected":1},"total":3},"ui":{"by_status":{"rejected":1},"total":1}}' ] \
+  && [ "$(SRJ "$DG | .total.runs")" = '{"by_status":{"approved":4,"rejected":2},"total":6}' ] \
+  && ok "style report groups per family (a run without a family is (none)); the total counts the style's 6 runs by status, not other-game's or the unstyled ones" \
+  || no "family grouping" "$(SRJ "$DG | [.families | map_values(.runs), .total.runs]")"
+[ "$(SRJ "$DG | .families | map_values(.approved_outputs)")" = '{"(none)":1,"characters":1,"props":3,"ui":0}' ] && [ "$(SRJ "$DG | .total.approved_outputs")" = 5 ] \
+  && ok "style report counts five approved outputs across the families" || no "approved outputs" "$(SRJ "$DG | [.families | map_values(.approved_outputs), .total.approved_outputs]")"
+# QA: the WARN and FAIL rate of every style-* row equals the fixture counts; non-style rows are not counted
+[ "$(SRJ "$DG | .families.props.qa")" = '{"style-edges":{"FAIL":0,"NOT_AVAILABLE":1,"PASS":2,"WARN":0,"fail_rate":0,"rows":3,"warn_rate":0},"style-palette":{"FAIL":1,"NOT_AVAILABLE":0,"PASS":1,"WARN":1,"fail_rate":0.333,"rows":3,"warn_rate":0.333},"style-tone":{"FAIL":0,"NOT_AVAILABLE":0,"PASS":1,"WARN":2,"fail_rate":0,"rows":3,"warn_rate":0.667}}' ] \
+  && ok "style report QA rates (props): style-palette warn/fail 0.333/0.333, style-tone 0.667/0, style-edges 0/0 with its NOT_AVAILABLE counted; artifact-quality not a style row" \
+  || no "props QA rates" "$(SRJ "$DG | .families.props.qa")"
+[ "$(SRJ "$DG | .families.characters.qa | map_values([.rows, .warn_rate, .fail_rate])")" = '{"style-palette":[1,0,0],"style-tone":[1,0,1]}' ] \
+  && [ "$(SRJ "$DG | .total.qa | map_values([.rows, .PASS, .WARN, .FAIL, .NOT_AVAILABLE, .warn_rate, .fail_rate])")" = '{"style-edges":[3,2,0,0,1,0,0],"style-palette":[4,2,1,1,0,0.25,0.25],"style-tone":[4,1,2,1,0,0.5,0.25]}' ] \
+  && [ "$(SRJ "$DG | (.families.ui.qa, .families.\"(none)\".qa)")" = '{}
+{}' ] \
+  && ok "style report QA rates (characters, total): style-palette 0.25/0.25 over 4 rows, style-tone 0.5/0.25, a family without rows has none" \
+  || no "total QA rates" "$(SRJ "$DG | [.families.characters.qa, .total.qa]")"
+[ "$(SRJ "$DG | [.qa_runs, .qa_unreadable]")" = '[4,["r-ui-1"]]' ] && [ "$(SRJ '.runs_unreadable')" = '["r-broken"]' ] \
+  && grep -q "qa.json read from 4 run(s); unreadable: r-ui-1" "$TMP/sr1.txt" && grep -q "runs with unreadable run.md: r-broken" "$TMP/sr1.txt" \
+  && ok "style report: a qa.json that is not JSON and a run.md without front matter are listed, not a crash" || no "unreadable qa/run" "$(SRJ "$DG | [.qa_runs, .qa_unreadable]") $(SRJ '.runs_unreadable')"
+# rejections by reason
+[ "$(SRJ "$DG | .total.rejections")" = '{"by_reason":{"anatomy":1,"malformed":1,"other":1,"palette_off":2},"total":5}' ] \
+  && [ "$(SRJ "$DG | .families.props.rejections")" = '{"by_reason":{"malformed":1,"palette_off":2},"total":3}' ] \
+  && [ "$(SRJ "$DG | .families.characters.rejections")" = '{"by_reason":{"anatomy":1},"total":1}' ] \
+  && [ "$(SRJ "$DG | .families.\"(none)\".rejections")" = '{"by_reason":{"other":1},"total":1}' ] && [ "$(SRJ "$DG | .families.ui.rejections.total")" = 0 ] \
+  && grep -q "rejections: 5 (anatomy 1, malformed 1, other 1, palette_off 2)" "$TMP/sr1.txt" \
+  && ok "style report counts the rejections by reason, per family and in total (a malformed record under malformed)" || no "rejections" "$(SRJ "$DG | [.total.rejections, (.families | map_values(.rejections))]")"
+# tone spread and the skipped outputs
+exp() { jq -c "($1) | walk(if type == \"number\" then . + 0 else . end)" "$TMP/sr.expect"; }
+[ "$(SRJ "$DG | .families.props.tone | [.luminance.min, .luminance.max]")" = "$(exp .props_lum)" ] && [ "$(SRJ "$DG | .families.props.tone | [.saturation.min, .saturation.max]")" = "$(exp .props_sat)" ] \
+  && [ "$(SRJ "$DG | .families.ui.tone")" = '{"luminance":null,"saturation":null}' ] \
+  && ok "style report tone spread over the approved props outputs: min and max luminance and saturation match the PNGs; a group without outputs has none" || no "tone spread" "$(SRJ "$DG | .families.props.tone") $(cat "$TMP/sr.expect")"
+[ "$(jq -c '.styles[] | select(.style_id == "demo-game") | [.skipped.outputs[] | [.run, .output, (.reason | split(" (")[0])]]' "$TMP/sr1.json")" = '[["r-props-1","outputs/bad.png","not readable"],["r-props-1","outputs/clear.png","no opaque pixels"]]' ] \
+  && grep -q "output skipped: r-props-1 outputs/bad.png: not readable" "$TMP/sr1.txt" \
+  && ok "style report skips an unreadable and a fully transparent approved output (listed with a reason), the other outputs still count" || no "skipped outputs" "$(SRJ "$DG | .skipped")"
+# suggestions: palette.max_distance with its data
+[ "$(SRJ "$DG | .families.props.suggestions.\"palette.max_distance\"")" = '{"applied":false,"data":{"current":48,"d_needed":{"max":80,"median":40,"min":0},"min_share":0.6,"outputs":3,"pass_at_current":2},"reason":null,"value":80}' ] \
+  && [ "$(SRJ "$DG | .families.characters.suggestions.\"palette.max_distance\" | [.value, .data.current, .data.outputs, .data.pass_at_current]")" = '[40,48,1,1]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"palette.max_distance\" | [.value, .data.outputs, .data.d_needed.median, .data.pass_at_current]")" = '[80,5,40,4]' ] \
+  && ok "suggested palette.max_distance = the largest d_needed (props 80, characters 40, total 80), with current 48, min_share 0.6, the d_needed spread and how many pass at current" || no "palette suggestion" "$(SRJ "$DG | .total.suggestions")"
+# suggestions: tone.tolerance with its data (value is the smallest 2-decimal tolerance that keeps every approved output inside the anchor range)
+sr_tone_qa() {
+python3 -B - "$ROOT" "$SR" "$TMP/sr1.json" "$1" <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, qa, re
+root, report, group = sys.argv[2:]
+style = next(s for s in json.load(open(report, encoding="utf-8"))["styles"] if s["style_id"] == "demo-game")
+selection = style["total"] if group == "total" else style["families"][{"props": "props", "chars": "characters"}[group]]
+tol = selection["suggestions"]["tone.tolerance"]["value"]
+outputs = {"props": [("r-props-1", "ok.png"), ("r-props-1", "near.png"), ("r-props-2", "far.png")],
+           "chars": [("r-chars-1", "chars.png")]}
+chosen = outputs["props"] + outputs["chars"] if group == "total" else outputs[group]
+def passes(t):
+    states = []
+    for rid, name in chosen:
+        run = os.path.join(root, "assetgen", "runs", rid)
+        front = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", open(os.path.join(run, "run.md"), encoding="utf-8").read(), re.S).group(1))
+        anchors = qa.style_anchors(run, front["spec"])
+        img = png.decode(os.path.join(run, "outputs", name))
+        states.append(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchors)[0] == "PASS")
+    return all(states)
+assert passes(tol)
+if tol > 0:
+    assert not passes(round(tol - 0.01, 2))
+EOF
+}
+for g in props:props chars:characters total:total; do
+  k=${g%%:*}; sel=".families.${g#*:}"; [ "${g#*:}" = total ] && sel=".total"
+  [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\" | [.applied, .reason, .data.current, (.data | has(\"selected_anchor_range\") and has(\"output_range\"))]")" = '[false,null,0.05,true]' ] \
+    && [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\".data.inside_at_current")" = "$(exp .${k}_inside)" ] \
+    && sr_tone_qa "$k" > "$TMP/sr-tone-qa" 2>&1 \
+    && ok "style report tone.tolerance suggestion ($k): the smallest two-decimal value that passes QA for all outputs" \
+    || no "tone suggestion ($k)" "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\"") $(cat "$TMP/sr-tone-qa")"
+done
+[ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[4,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[1,1]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[5,5]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data.outputs_without_anchors")" = 1 ] \
+  && [ "$(SRJ "$DG | .families.\"(none)\".suggestions.\"tone.tolerance\" | [.value, .data.outputs_without_anchors, (.reason | type)]")" = '[null,1,"string"]' ] \
+  && ok "style report counts selected copies and excludes outputs without usable anchors" || no "tone scope" "$(SRJ "$DG | .total.suggestions")"
+# The selected black and white anchors must not be pooled across families.
+SR_REPRO="$TMP/sr-selected"
+cp -R "$SR" "$SR_REPRO"
+python3 -B - "$ROOT" "$SR_REPRO" <<'EOF'
+import hashlib, json, os, shutil, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+root = os.path.join(sys.argv[2], "assetgen")
+runs = os.path.join(root, "runs")
+ref = json.loads(open(os.path.join(runs, "r-props-1", "run.md"), encoding="utf-8").read().split("---")[1][4:])["spec"]["style_lock"]["style"]
+shutil.rmtree(runs)
+for family, anchor, output in (("props", 0, 128), ("characters", 255, 255)):
+    run = os.path.join(runs, family)
+    for sub in ("references", "outputs"):
+        os.makedirs(os.path.join(run, sub))
+    def write(path, value):
+        open(path, "wb").write(png.encode(1, 1, bytes((value, value, value, 255))))
+    write(os.path.join(run, "references", "anchor.png"), anchor)
+    write(os.path.join(run, "outputs", "output.png"), output)
+    aid = "props-a" if family == "props" else "chars-a"
+    ad = os.path.join(root, "styles", "demo-game", "anchors")
+    write(os.path.join(ad, aid + ".png"), anchor)
+    metadata = os.path.join(ad, aid + ".json")
+    data = json.load(open(metadata, encoding="utf-8"))
+    data["image_sha256"] = hashlib.sha256(open(os.path.join(ad, aid + ".png"), "rb").read()).hexdigest()
+    json.dump(data, open(metadata, "w", encoding="utf-8"))
+    front = {"status": "approved", "spec": {"style_lock": {"style": ref, "family": family,
+             "references": [{"anchor_id": family, "image": "references/anchor.png"}]}}}
+    open(os.path.join(run, "run.md"), "w", encoding="utf-8").write("---json\n" + json.dumps(front) + "\n---\n")
+EOF
+AG style report --authoring "$SR_REPRO" --style demo-game --json > "$TMP/sr-selected.json" 2> "$TMP/sr-selected.err"
+python3 -B - "$ROOT" "$SR_REPRO" "$TMP/sr-selected.json" >> "$TMP/sr-selected.err" 2>&1 <<'EOF'
+import json, os, re, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, qa
+style = json.load(open(sys.argv[3], encoding="utf-8"))["styles"][0]
+for group, families in ((style["families"]["props"], ["props"]), (style["families"]["characters"], ["characters"]), (style["total"], ["props", "characters"])):
+    tol = group["suggestions"]["tone.tolerance"]["value"]
+    if len(families) == 2:
+        assert tol == 0.51, tol
+    def passes(t):
+        results = []
+        for family in families:
+            run = os.path.join(sys.argv[2], "assetgen", "runs", family)
+            front = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", open(os.path.join(run, "run.md"), encoding="utf-8").read(), re.S).group(1))
+            results.append(consistency.check_tone(png.decode(os.path.join(run, "outputs", "output.png")),
+                           {"tone": {"tolerance": t}}, qa.style_anchors(run, front["spec"]))[0] == "PASS")
+        return all(results)
+    assert passes(tol)
+    assert tol == 0 or not passes(round(tol - 0.01, 2))
+EOF
+[ $? -eq 0 ] && ok "tone suggestions pass QA against each run's selected black or white anchor" \
+  || no "selected-anchor tone regression" "$(cat "$TMP/sr-selected.err")"
+# the text prints each suggestion with its numbers and says not applied
+grep -q "^    palette.max_distance = 80 (suggestion only, not applied): current 48; min_share 0.6; 3 approved output(s); d_needed min 0 median 40 max 80; 2 pass at current" "$TMP/sr1.txt" \
+  && grep -Eq "^    tone.tolerance = 0\.[0-9]+ \(suggestion only, not applied\): current 0.05; 4 selected anchor copy/copies; 3 approved output\(s\); 0 output\(s\) without anchors; luminance selected anchors \[.*\] outputs \[.*\]; saturation selected anchors \[.*\] outputs \[.*\]; [0-9] inside at current" "$TMP/sr1.txt" \
+  && grep -q "^read-only report: nothing was written; every suggestion is for a person to apply" "$TMP/sr1.txt" \
+  && ok "style report text: each suggestion carries 'not applied' and its supporting numbers (current, d_needed, ranges), and the report says nothing was written" || no "suggestion text" "$(grep -n 'suggestion only' "$TMP/sr1.txt")"
+[ "$(grep -c 'suggestion only, not applied' "$TMP/sr1.txt")" -eq "$(grep -cE '^ +(palette\.max_distance|tone\.tolerance)' "$TMP/sr1.txt")" ] && [ "$(jq '[.. | objects | select(has("applied")) | .applied] | all(. == false)' "$TMP/sr1.json")" = true ] \
+  && ok "style report prints every suggestion as not applied (text) and applied false (--json)" || no "applied flags" "$(grep -n 'suggestion' "$TMP/sr1.txt" | head)"
+# a group without approved outputs: null suggestions with a reason
+[ "$(SRJ "$DG | [.families.ui] | map(.suggestions | map_values([.value, (.reason | type), .applied]))")" = '[{"palette.max_distance":[null,"string",false],"tone.tolerance":[null,"string",false]}]' ] \
+  && [ "$(SRJ "$DG | .families.ui.suggestions | map(.reason) | unique")" = '["no approved output with opaque pixels"]' ] \
+  && grep -q "^    palette.max_distance: no suggestion (no approved output with opaque pixels) (suggestion only, not applied): current 48; min_share 0.6; 0 approved output(s)" "$TMP/sr1.txt" \
+  && ok "style report: a family without approved outputs (ui) gets null suggestions with the reason, printed as 'no suggestion'" || no "null suggestions" "$(SRJ "$DG | .families.ui.suggestions")"
+# White against a black-only palette requires distance 442, outside the permitted range.
+SRX="$TMP/style-report-extreme"; cp -r "$SR" "$SRX"
+jq '.palette.colors = [{"hex":"#000000"}] | .palette.min_share = 1' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
+python3 -B - "$ROOT" "$SRX/assetgen/runs/r-props-1/outputs/ok.png" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+with open(sys.argv[2], "wb") as f:
+    f.write(png.encode(1, 1, bytes((255, 255, 255, 255))))
+EOF
+AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx.json" 2> "$TMP/sr.err"; rc=$?
+AG style report --authoring "$SRX" --style demo-game > "$TMP/srx.txt" 2>> "$TMP/sr.err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == null and .data.d_needed.max == 442 and (.reason | contains("no permitted max_distance (0..441) makes every approved output pass") and contains("442"))' "$TMP/srx.json" >/dev/null \
+  && grep -Fq 'palette.max_distance: no suggestion (no permitted max_distance (0..441) makes every approved output pass; largest needed distance is 442)' "$TMP/srx.txt" \
+  && ok "style report refuses an impossible palette threshold in JSON and text" || no "extreme palette report rc=$rc/$rc2" "$(cat "$TMP/sr.err" "$TMP/srx.json")"
+jq '.palette.min_share = 0' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
+AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx-zero.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == 0 and .data.d_needed.max == 0 and .reason == null' "$TMP/srx-zero.json" >/dev/null \
+  && ok "style report suggests distance zero when min_share is zero" || no "zero min_share rc=$rc" "$(cat "$TMP/sr.err" "$TMP/srx-zero.json")"
+
+# Seven of ten pixels meet min_share 0.7 at distance 6; floating-point multiplication must not select the eighth.
+python3 -B - "$ROOT" > "$TMP/sr-float" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png, style_report
+pixels = bytes(channel for red in range(10) for channel in (red, 0, 0, 255))
+img = png.Image(10, 1, pixels, True, "fixture")
+record = style_report._output_record(img, ({}, [(0, 0, 0)], 0, 0.7))
+assert record["d_needed"] == 6, record
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report selects the seventh pixel for min_share 0.7 of ten" \
+  || no "style report floating-point rank rc=$rc" "$(cat "$TMP/sr-float")"
+
+python3 -B - "$ROOT" > "$TMP/sr-qa-regressions" 2>&1 <<'EOF'
+import os, random, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, style_report
+
+def image(colors):
+    return png.Image(len(colors), 1, bytes(c for rgb in colors for c in (*rgb, 255)), True, "fixture")
+
+def palette_case(img, colors, share):
+    style = {"palette": {"colors": [{"hex": "#%02x%02x%02x" % rgb} for rgb in colors],
+                         "max_distance": 0, "min_share": share}}
+    config = consistency.palette_config(style)[1]
+    record = style_report._output_record(img, config)
+    suggestion = style_report._suggest_palette([record], config, None)
+    d = record["d_needed"]
+    if d <= 441:
+        assert suggestion["value"] == d
+        style["palette"]["max_distance"] = d
+        assert consistency.check_palette(img, style)[0] == "PASS", (d, share)
+        if d:
+            style["palette"]["max_distance"] = d - 1
+            assert consistency.check_palette(img, style)[0] != "PASS", (d, share)
+    else:
+        assert suggestion["value"] is None and "no permitted max_distance" in suggestion["reason"]
+    return d
+
+def tone_case(cases):
+    def record(img):
+        lum, sat = consistency.tone_stats(img)
+        return {"luminance": lum, "saturation": sat}
+    suggestion = style_report._suggest_tone([dict(record(img), run=str(n), selected_anchors=[consistency.tone_stats(a) for a in anchors]) for n, (anchors, img) in enumerate(cases)], 0.05)
+    tol = suggestion["value"]
+    assert tol is not None, suggestion
+    def passes(t):
+        return all(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchors)[0] == "PASS" for anchors, img in cases)
+    assert passes(tol), tol
+    assert tol == 0 or not passes(round(tol - 0.01, 2)), tol
+    return tol
+
+assert palette_case(image([(r, 0, 0) for r in range(10)]), [(0, 0, 0)], 0.70000000001) == 7
+assert tone_case([([image([(39, 39, 39)])], image([(90, 90, 90)]))]) == 0.21
+rng = random.Random(7941)
+shares = [0, 0.1, 0.3, 0.7, 0.70000000001, 1 / 3, 1]
+def color():
+    return tuple(rng.randrange(256) for _ in range(3))
+for i in range(200):
+    palette_case(image([color() for _ in range(rng.randint(1, 20))]),
+                 [color() for _ in range(rng.randint(1, 4))], shares[i % len(shares)])
+    tone_case([([image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))],
+                image([color() for _ in range(rng.randint(1, 5))])) for _ in range(rng.randint(1, 3))])
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report suggestions pass palette and tone QA at the smallest permitted thresholds in 202 regression cases" \
+  || no "style report QA threshold regressions rc=$rc" "$(cat "$TMP/sr-qa-regressions")"
+
+# a draft style with no palette, no anchors and no runs: still exit 0, suggestions null with reasons, nothing written
+SRN="$TMP/style-report-bare"; mkdir -p "$SRN"
+AG style init --id demo-game --extends pixel-art --authoring "$SRN" > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report bare setup: style init" "$(cat "$TMP/sr.err")"
+sig_n=$(sr_sig "$SRN")
+AG style report --authoring "$SRN" --style demo-game --json > "$TMP/srn.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '.styles[0].total.suggestions | map_values([.value, .reason != null])' "$TMP/srn.json")" = '{"palette.max_distance":[null,true],"tone.tolerance":[null,true]}' ] \
+  && [ "$(jq -c '.styles[0].total | [.runs.total, .approved_outputs, .rejections.total, .qa]' "$TMP/srn.json")" = '[0,0,0,{}]' ] && [ "$(sr_sig "$SRN")" = "$sig_n" ] \
+  && ok "style report of a fresh draft style (no palette, no anchors, no runs) exits 0 with null suggestions and a reason, and writes nothing" || no "bare style report rc=$rc" "$(cat "$TMP/sr.err"; jq -c '.styles[0].total.suggestions' "$TMP/srn.json")"
+# an authoring dir with nothing to report: exit 0 and still nothing written
+SRE="$TMP/style-report-empty"; mkdir -p "$SRE"; sig_e=$(sr_sig "$SRE")
+AG style report --authoring "$SRE" > "$TMP/sre.txt" 2> "$TMP/sr.err"; rc=$?; AG style report --authoring "$SRE" --json > "$TMP/sre.json" 2>> "$TMP/sr.err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q "no style data to report" "$TMP/sre.txt" && [ "$(jq -c '.styles' "$TMP/sre.json")" = '[]' ] && [ "$(sr_sig "$SRE")" = "$sig_e" ] \
+  && ok "style report of an authoring dir with no style data exits 0 (also --json) and creates nothing" || no "empty authoring rc=$rc/$rc2" "$(cat "$TMP/sr.err" "$TMP/sre.txt")"
+# exit codes: a malformed --style is usage (2), a style no data knows is a refusal (1); neither writes
+AG style report --authoring "$SR" --style "Bad_Id" > "$TMP/sr.out" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "lowercase id" "$TMP/sr.err" && ok "style report with a malformed --style exits 2" || no "malformed --style rc=$rc" "$(cat "$TMP/sr.err")"
+AG style report --authoring "$SR" --style no-such-style > "$TMP/sr.out" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "no game style file" "$TMP/sr.err" && [ ! -s "$TMP/sr.out" ] && [ "$(sr_sig "$SR")" = "$sig_sr" ] \
+  && ok "style report of an unknown style exits 1 with a message and prints no report" || no "unknown style rc=$rc" "$(cat "$TMP/sr.err" "$TMP/sr.out")"
+[ "$(sr_sig "$SR")" = "$sig_sr" ] && [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style report left the authoring fixture and templates/assetgen unchanged after every case" || no "fixture or templates/assetgen changed by report" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
 echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?

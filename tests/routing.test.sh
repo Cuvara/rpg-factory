@@ -286,9 +286,12 @@ assetgen_route="$(lead asset-gen) and $(tech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/runs/iron-sword-icon-001/run.md assetgen/templates/image-generate.json 2>&1)
 fexpect 'authoring assetgen path -> asset-gen leads, tech comfyui' "jq -e '.repos[0] | $assetgen_route' <<<\"\$out\" >/dev/null"
 fexpect 'authoring assetgen path -> tech comfy-desktop-setup too (used_by asset-gen)' "jq -e '.repos[0] | $(tech comfy-desktop-setup)' <<<\"\$out\" >/dev/null"
-art2d_nocomfy="$(lead art-2d) and $(notech comfyui)"
+fexpect 'authoring assetgen path -> tech asset-style too (used_by asset-gen)' "jq -e '.repos[0] | $(tech asset-style)' <<<\"\$out\" >/dev/null"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/project.json assetgen/styles/game-pixel.json 2>&1)
+fexpect 'authoring assetgen style path -> asset-gen leads, tech comfyui and asset-style' "jq -e '.repos[0] | $assetgen_route and $(tech asset-style)' <<<\"\$out\" >/dev/null"
+art2d_nocomfy="$(lead art-2d) and $(notech comfyui) and $(notech asset-style)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths art2d/specs/iron-sword.md 2>&1)
-fexpect 'authoring art2d path -> art-2d leads, no tech comfyui (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
+fexpect 'authoring art2d path -> art-2d leads, no tech comfyui or asset-style (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
 out=$(fctx "$FS")
 fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
   'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'
