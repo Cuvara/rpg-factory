@@ -28,7 +28,8 @@ sets `severity` `fail`.
 writes a draft `assetgen/styles/<ID>.json` (version 1, status `draft`, no structured fields), draft stubs for family
 styles that do not exist yet, and the `assetgen/project.json` skeleton. It checks every target first and never
 overwrites. A family style that already exists must extend `ID`; a core-only family style is refused. Read its
-`note:` line: a draft style gets no lint WARN until it is made active.
+`WARN:` line (text output) or `warnings` list (`--json`): it names the missing structured fields, and no `style-*`
+QA row can grade an output until one is added. A draft style gets no lint WARN until it is made active.
 
 ## style derive
 
