@@ -13,7 +13,8 @@ Usage:
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
-  assetgen.py finalize --run RUN [--force] [--authoring DIR] [--json]
+  assetgen.py finalize --run RUN [--force] [--discard-qa-fail] [--authoring DIR] [--json]
+  assetgen.py discard --run RUN --output N --reason TEXT [--authoring DIR] [--json]
   assetgen.py budget --run RUN [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
@@ -118,6 +119,8 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       chunk kept; a PNG whose chunk is the current workflow.ui.json is kept byte for byte, a stale
                       chunk from an older render is replaced), so the file QA and the reviews hash is the embedded one
                       and dragging it into ComfyUI restores the graph
+  outputs-rejected/   discard and finalize --discard-qa-fail move rejected PNGs here without overwriting them
+  discards.json       append-only history of discarded outputs and their hashes and reasons
   outputs-raw/<name>  defringe: the original of each output it rewrote (kept; never an output, never in a binding)
   defringe.json       defringe: {"schema": "rpg-factory.assetgen-defringe/1", "params": {"alpha_floor", "rings",
                       "opaque"}, "outputs": [{"output", "raw", "before_sha256", "after_sha256", "after_pixels_sha256",
@@ -257,6 +260,7 @@ import fstate  # noqa: E402
 import approval  # noqa: E402
 import budget  # noqa: E402
 import finalize  # noqa: E402
+import discard  # noqa: E402
 import graphstyle  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
@@ -1187,7 +1191,7 @@ def defringe(run_dir, alpha_floor=None, force=False):
     return rows, bound
 
 
-def defringe_line(run_dir, outputs):
+def defringe_line(run_dir, outputs, discarded=()):
     """The run.md body line of defringe.json (None without it): what it did, and STALE when an output's pixels are no
     longer the ones defringe wrote (after_pixels_sha256; embed keeps them)."""
     path = os.path.join(run_dir, DEFRINGE_FILE)
@@ -1196,8 +1200,9 @@ def defringe_line(run_dir, outputs):
     rec = read_json(path, "defringe record")
     done = [o for o in rec.get("outputs") or [] if isinstance(o, dict)] if isinstance(rec, dict) else []
     recorded = {o["path"] for o in outputs}
-    stale = [str(o.get("output")) for o in done if o.get("output") not in recorded or pixels_sha256(
-        os.path.join(run_dir, *str(o.get("output")).split("/"))) != o.get("after_pixels_sha256")]
+    stale = [str(o.get("output")) for o in done if o.get("output") not in discarded and (
+        o.get("output") not in recorded or pixels_sha256(
+            os.path.join(run_dir, *str(o.get("output")).split("/"))) != o.get("after_pixels_sha256"))]
     params = rec.get("params") if isinstance(rec, dict) and isinstance(rec.get("params"), dict) else {}
     floor = params.get("alpha_floor")
     return "- Defringe: %d output(s), alpha floor %s, originals in %s/ (%s)%s" % (
@@ -1288,13 +1293,13 @@ def run_budget(run_dir, spec):
     return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
 
 
-def finalize_with_budget(run_dir, force, as_json):
+def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False):
     """finalize.run plus the budget state (text: a line before the summary line; --json: key "budget"). The exit code
     stays finalize's; a refusal (SystemExit from its precheck) prints what it printed and is re-raised unchanged."""
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            code = finalize.run(sys.modules[__name__], run_dir, force, as_json)
+            code = finalize.run(sys.modules[__name__], run_dir, force, as_json, discard_qa_fail)
     except BaseException:
         sys.stdout.write(buf.getvalue())
         sys.stdout.flush()
@@ -1359,6 +1364,9 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
             "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
+    discarded = discard.active(sys.modules[__name__], run_dir)
+    if discarded:
+        front["spec"]["trace"]["discarded"] = discarded
     wf_path = os.path.join(run_dir, "workflow.json")
     workflow = read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None
     local = runfiles.local_generation(workflow, spec, model_hashes())
@@ -1410,6 +1418,9 @@ def manifest_text(front, run_dir=None, newline="\n"):
             "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
                                                      ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
             "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none")]
+    discarded = s["trace"].get("discarded", [])
+    if discarded:
+        body.append("- Discarded: " + ", ".join("%s (%s)" % (r["output"], r["reason"]) for r in discarded))
     local = s["generation"].get("local")
     if local is not None:
         models = local["models"]
@@ -1423,7 +1434,7 @@ def manifest_text(front, run_dir=None, newline="\n"):
             for r in local["samplers"]) or "none"
         body.insert(5, "- Local stage (UNTESTED on RTX 5060): models %s (%d of %d sha256 unverified), LoRAs %s, sampler %s"
                     % (model_text, sum(not r["verified"] for r in rows), len(rows), lora_text, sampler_text))
-    fringe = defringe_line(run_dir, s["outputs"]) if run_dir else None
+    fringe = defringe_line(run_dir, s["outputs"], {r["output"] for r in discarded}) if run_dir else None
     if fringe:
         body.append(fringe)
     lock = s.get("style_lock")
@@ -1831,10 +1842,13 @@ def main(argv=None):
     c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("discard"); run_arg(c); c.add_argument("--output", required=True); c.add_argument("--reason", required=True)
+    c.add_argument("--json", action="store_true")
     c = sp("budget"); run_arg(c); c.add_argument("--json", action="store_true")
     c = sp("finalize"); run_arg(c)
     c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
                    "already bind (they are stale afterwards: re-run them)")
+    c.add_argument("--discard-qa-fail", action="store_true", help="discard QA-FAIL outputs and re-run qa")
     c.add_argument("--json", action="store_true")
     c = sp("promote-anchor"); run_arg(c, False); c.add_argument("--output")
     c.add_argument("--external"); c.add_argument("--origin"); c.add_argument("--rights-note"); c.add_argument("--style")
@@ -1995,6 +2009,8 @@ def main(argv=None):
             report, text, code = qa_run(a.run)
             emit(report, a.json, text)
             return code
+        if a.cmd == "discard":
+            return discard.run(sys.modules[__name__], a.run, a.output, a.reason, a.json)
         if a.cmd == "budget":
             if not os.path.isfile(os.path.join(a.run, "spec.json")):
                 fail("budget needs <run>/spec.json (resolve --out first)")
@@ -2002,7 +2018,7 @@ def main(argv=None):
             emit(st, a.json, budget.line(st))
             return st["exit"]
         if a.cmd == "finalize":
-            return finalize_with_budget(a.run, a.force, a.json)
+            return finalize_with_budget(a.run, a.force, a.json, a.discard_qa_fail)
         if a.cmd == "promote-anchor":
             if a.external is not None:
                 rec = promote_external_anchor(a.external, a.origin, a.rights_note, authoring, a.style, a.id,
