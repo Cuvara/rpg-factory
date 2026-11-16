@@ -355,6 +355,40 @@
         "style-fields.md matches the style init output",
         "existing style tests keep passing"
       ]
+    },
+    {
+      "id": "style-review-fixes-3",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the round-three finding of the Codex cross-model review of style report: tone suggestions compare each output against the pooled anchors of the style, while QA (consistency.check_tone) grades an output against the anchor copies its own run selected, so a suggested tolerance can still WARN in QA. Reproduction from the review: a black props anchor, a white characters anchor, an approved grey (128,128,128) props output whose run selected the black anchor, and a white characters output give a total suggestion of 0.0, while QA needs 0.51 for the props output. Derive each requirement against the references that run actually selected, the way QA does, before aggregating per family and in total; check whether the palette, canvas and outline suggestions have the same pooled-versus-selected mismatch and fix them the same way if so.",
+      "paths": [
+        "scripts/assetgen/style_report.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-style-review-fixes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-init",
+        "style-derive",
+        "style-bump",
+        "style-report",
+        "style-skill-scaffold",
+        "style-skill-content",
+        "style-skill-scenarios",
+        "nokill-word-match",
+        "external-anchor",
+        "style-docs",
+        "style-review-fixes",
+        "style-review-fixes-2"
+      ],
+      "checks": [
+        "tests/run-all.sh --only-suites tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every tone suggestion, per family and total, passes consistency.check_tone for every approved output it covers when that output is graded against its own run's selected anchors; a test builds the reviewed two-family case and feeds the suggestion back into QA",
+        "the other suggestion kinds are checked for the same mismatch and the report says what was found",
+        "existing style report tests keep passing"
+      ]
     }
   ]
 }
