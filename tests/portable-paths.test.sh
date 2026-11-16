@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d "${RPG_FACTORY_STATE_DIR:-${TMPDIR:-/tmp}}/portable-paths.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/tests/fixtures" "$TMP/docs/plans"
+mkdir -p "$TMP/tests/fixtures" "$TMP/docs/plans" "$TMP/.github"
 git -C "$TMP" init -q
 CHECK="$ROOT/scripts/checks/portable-paths.py"
 printf '{"workspace":{"root_default":"/home/workspaceowner/project"}}\n' > "$TMP/registry.json"
@@ -36,8 +36,14 @@ good = ['%APPDATA%', '%USERPROFILE%', '$HOME', '${HOME}', '~', '$env:LOCALAPPDAT
         '/home/workspaceowner/project/child', '/home/', '/Users/']
 good += ['C:' + s + home + s + n + s + 'repo' for n in
          ['person', 'example', 'user', 'username', 'name', 'me', 'you', 'someone',
-          'runner', 'runneradmin', 'RUNNER~1', 'x', '<name>', '<user>', '{user}', '$USER', '...']]
-(root / 'bad.txt').write_text('\n'.join(bad) + '\n', encoding='utf-8')
+          'x', '<name>', '<user>', '{user}', '$USER', '...']]
+(root / 'bad.txt').write_text('\n'.join([bad[0] + ' # marker'] + bad[1:]) + '\n', encoding='utf-8')
+runners = ['runner', 'runneradmin', 'RUNNER~1']
+runner_paths = '\n'.join(s + 'home' + s + n + s + 'repo' for n in runners) + '\n'
+(root / '.github/runner.txt').write_text(runner_paths, encoding='utf-8')
+(root / 'runner.txt').write_text(runner_paths, encoding='utf-8')
+(root / 'binary.dat').write_bytes(b'\0' + bad[0].encode('utf-8'))
+(root / 'non-utf8.dat').write_bytes(b'\xff' + bad[0].encode('utf-8'))
 (root / 'good.txt').write_text('\n'.join(good) + '\n', encoding='utf-8')
 (root / 'docs/plans/skip.md').write_text(bad[0] + '\n', encoding='utf-8')
 PY
@@ -47,23 +53,30 @@ for n in {1..13}; do
   [[ "$report" == *"bad.txt:$n: "* ]] || { echo "FAIL missing bad line $n: $report"; exit 1; }
 done
 [[ "$report" != *"good.txt:"* && "$report" != *"docs/plans/skip.md:"* ]] || { echo "FAIL allowed input: $report"; exit 1; }
+for n in {1..3}; do
+  [[ "$report" == *"runner.txt:$n: "* ]] || { echo "FAIL missing runner line $n: $report"; exit 1; }
+done
+[[ "$report" != *".github/runner.txt:"* && "$report" != *"binary.dat:"* && "$report" != *"non-utf8.dat:"* ]] || { echo "FAIL skipped or allowed input: $report"; exit 1; }
 set +e
 python3 -B "$CHECK" --root "$TMP" --enforce >/dev/null
 rc=$?
 set -e
 [[ $rc -eq 1 ]] || { echo "FAIL enforce finding exit $rc"; exit 1; }
-printf 'bad.txt # Fixture deliberately contains paths.\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
+printf 'bad.txt # Fixture deliberately contains paths.\nrunner.txt # Fixture exercises runner names.\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
 python3 -B "$CHECK" --root "$TMP" --enforce >/dev/null
 printf 'bad.txt:AppData # Suppress only application data.\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
 report=$(python3 -B "$CHECK" --root "$TMP")
 [[ "$report" != *"bad.txt:8:"* && "$report" == *"bad.txt:1:"* ]] || { echo "FAIL regex allowlist: $report"; exit 1; }
+printf 'bad.txt:repo # marker # Suppress a pattern containing a comment delimiter.\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
+report=$(python3 -B "$CHECK" --root "$TMP")
+[[ "$report" != *"bad.txt:1:"* && "$report" == *"bad.txt:2:"* ]] || { echo "FAIL regex containing delimiter: $report"; exit 1; }
 printf 'bad.txt\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
 set +e
 python3 -B "$CHECK" --root "$TMP" >/dev/null 2>&1
 rc=$?
 set -e
 [[ $rc -eq 2 ]] || { echo "FAIL invalid allowlist exit $rc"; exit 1; }
-printf 'bad.txt # Fixture deliberately contains paths.\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
+printf 'bad.txt # Fixture deliberately contains paths.\nrunner.txt # Fixture exercises runner names.\n' > "$TMP/tests/fixtures/portable-paths-allow.txt"
 printf '{"workspace":{"root_default":"/home/anotherowner/project"}}\n' > "$TMP/registry.json"
 set +e
 report=$(python3 -B "$CHECK" --root "$TMP" --enforce)

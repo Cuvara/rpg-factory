@@ -15,7 +15,8 @@ PATHS = re.compile(
     rf"(?<![\w/])(?:[a-z]:{SEP}users{SEP}|/mnt/[a-z]/users/|/[a-z]/users/|/users/|/home/)(?P<user>{SEGMENT})"
     rf"|(?<![\w/])[a-z]:{SEP}(?:tmp|temp)(?={SEP}|\b)", re.I)
 URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
-FAKE = {"person", "example", "user", "username", "name", "me", "you", "someone", "runner", "runneradmin", "runner~1", "..."}
+FAKE = {"person", "example", "user", "username", "name", "me", "you", "someone", "..."}
+CI_RUNNERS = {"runner", "runneradmin", "runner~1"}
 
 
 def canonical(path: str) -> str:
@@ -34,7 +35,7 @@ def load_allowlist(path: Path) -> list[tuple[str, re.Pattern[str] | None]]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        entry, marker, reason = line.partition(" #")
+        entry, marker, reason = line.rpartition(" #")
         if not marker or not reason.strip():
             raise ValueError(f"{path}:{number}: entry needs a reason")
         name, colon, pattern = entry.strip().partition(":")
@@ -78,7 +79,9 @@ def main() -> int:
                 if any(start <= match.start() < end for start, end in urls):
                     continue
                 user = match.group("user")
-                if user and (user.casefold() in FAKE or len(user) == 1 or
+                if user and (user.casefold() in FAKE or
+                             (rel.startswith(".github/") and user.casefold() in CI_RUNNERS) or
+                             len(user) == 1 or
                              user.startswith(("<", "{", "$", "%", "~"))):
                     continue
                 # Compare the whole path from the match, not just its home prefix.
