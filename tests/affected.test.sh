@@ -67,9 +67,17 @@ if [ "$got" = 'tests/affected.test.sh' ]; then
 else fail=$((fail + 1)); echo "FAIL  selector change selects only selector suite: got [$got]"; fi
 printf '%s\n' tests/affected.test.sh > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
-if [ "$got" = $'scripts/checks/english-only.py\ntests/affected.test.sh' ]; then
-  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English check"
-else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English check: got [$got]"; fi
+if [ "$got" = $'scripts/checks/english-only.py\nscripts/checks/portable-paths.py\ntests/affected.test.sh' ]; then
+  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English and portable-paths checks"
+else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English and portable-paths checks: got [$got]"; fi
+# the portable-paths enforce line is global: a docs-only change selects it, and a change to the check selects its suite
+printf '%s\n' docs/releasing.md > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
+if grep -qx scripts/checks/portable-paths.py <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  a docs-only change selects the portable-paths enforce line"
+else fail=$((fail + 1)); echo "FAIL  a docs-only change selects the portable-paths enforce line: got [$(tr '\n' ' ' <<<"$got")]"; fi
+sel 0 "a change to the portable-paths check selects its suite" tests/portable-paths.test.sh scripts/checks/portable-paths.py
+sel 1 "an unrelated script skips the portable-paths suite" tests/portable-paths.test.sh scripts/changelog.py
 printf '%s\n' tests/parallel-policy.test.sh > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
 if [[ "$got" == *tests/parallel-policy.test.sh* ]] && [[ "$got" != *tests/git-guard.test.sh* ]]; then
@@ -88,13 +96,14 @@ cands=("${suites[@]}" tests/delivery-generic.test.sh)
 printf '%s\n' scripts/factory-pipeline.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
 want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh tests/commands.test.sh \
-  tests/skills-lint.sh scripts/checks/english-only.py | sort)
+  tests/skills-lint.sh scripts/checks/english-only.py scripts/checks/portable-paths.py | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(codex-plugin|compat|parallel-policy)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  factory-pipeline.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  factory-pipeline.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
 printf '%s\n' scripts/lib/pipeline_route.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
-want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py | sort)
+want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py \
+  scripts/checks/portable-paths.py | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
@@ -250,7 +259,7 @@ check("a leaf nothing names and no EXTRA covers stays unsure", m.reaches("script
 check("a leaf a suite's EXTRA patterns cover is named by that suite: no longer unsure",
       m.reaches("scripts/lib/stuff2.py") is not None and "tests/fixtures/assetgen/covered_selftest.py" in m.reaches("scripts/lib/stuff2.py")
       and not m.needed(["scripts/lib/stuff2.py"], "tests/other.test.sh"))
-check("only a tests/ suite's EXTRA covers a leaf (the '*' of english-only.py does not)",
+check("only a tests/ suite's EXTRA covers a leaf (the '*' of the global checks does not)",
       m.extra_covered("tests/fixtures/assetgen/x.py") and not m.extra_covered("tests/zzdir/leaf_selftest.py"))
 reset(); tool_before = h("tests/tool.test.sh")
 (root / "scripts/lib/deep.py").write_text("X = 2\n")
@@ -264,6 +273,7 @@ check("hash ignores unrelated script", after == h())
 check("hash changes on transitive library", after != h())
 check("unknown suite cannot reuse", h("tests/missing.test.sh") == "-")
 check("wildcard EXTRA cannot reuse", h("scripts/checks/english-only.py") == "-")
+check("the portable-paths wildcard EXTRA cannot reuse either", h("scripts/checks/portable-paths.py") == "-")
 before_delete = h()
 (root / "scripts/entry.py").unlink()
 check("hash changes on missing input", before_delete != h())
