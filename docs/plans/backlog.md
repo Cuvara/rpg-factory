@@ -179,6 +179,9 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 - `tests/run-all.sh` keeps no log of a run: a caller that keeps only the tail of the output loses the FAIL lines
   (integration QA had to be rerun to see one failure). Write the FAIL blocks to a file under the state dir and print
   its path in the summary.
+- Under heavy load the snapshot reports a product repo as "not a git work tree" (seen once in `tests/routing.test.sh`,
+  scenario "Redis servers:id -> wire-contract leads"; `git_out` in `scripts/lib/workspace.py` has a 5 s timeout). A
+  timeout should be reported as a timeout, not as a missing work tree, and the scenario should retry once.
 - testlab `test_lab.py` case `test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small` fails under load
   (sampler CPU 1.56 % against a 1.0 % bound); it measures the live host. Make the bound load-tolerant or skip on a
   busy machine.

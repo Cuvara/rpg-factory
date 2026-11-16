@@ -41,7 +41,7 @@ and reviews; QA ran where memory allowed (below).
 | affected-mapping | codex gpt-6.1-terra (fixture), claude-sonnet-5-5 (mapping) | claude-opus-5-5 medium review PASS; QA PASS on the task's checks, recorded by the task lead | b090b9e | stopped by memory; the task's own checks passed (below) |
 | ci-fix | claude-sonnet-5-5 | codex gpt-6.1-sol high: first QA FAIL at c634ac9 (helper name matched the reader guard), PASS at 3bee197 | 3bee197 | stopped after `compat` passed; the task's own checks passed (below) |
 | citation-drift | claude-sonnet-5-5 | claude-opus-5-5 review and lead QA PASS (docs-only); codex gpt-6.1-sol review PASS, no findings | 489e8a1 | NOT_RUN; the citation check and `tests/skills-lint.sh` (700 passed) ran directly |
-| integration | - | run lead, `tests/run-all.sh --workspace-only` with the workspace variable unset | 63b6e80 | 24 checks: 24 passed, 0 failed, 0 skipped (38bf8a9: 24 passed; db9ed37: 23 passed, 1 failed, the citation drift) |
+| integration | - | run lead, `tests/run-all.sh --workspace-only` with the workspace variable unset | daae3c3 | 24 checks: 23 passed, 1 failed (transient, below); the failed suite rerun alone: 131 passed, 0 failed. Earlier: 38bf8a9 24 passed; db9ed37 23 passed, 1 failed (the citation drift); 63b6e80 24 passed |
 
 Checks the task leads ran directly, one at a time:
 
@@ -55,6 +55,12 @@ Checks the task leads ran directly, one at a time:
   `tests/portable-paths.test.sh` PASS; the enforce line 864 files, 0 findings.
 
 ## Limitations
+
+- Integration QA at daae3c3 (the merge of `main` after PR 124 refreshed the same citations; the conflict in
+  `skills/go-backend/references/testing.md` took the version of `main`) is not one clean run: `routing + history
+  replay` failed in one scenario ("Redis servers:id -> wire-contract leads") whose snapshot reported the server repo as
+  "not a git work tree" on a heavily loaded machine (the suite took 633 s, the run 2122 s). The repo was intact, and
+  `tests/routing.test.sh` rerun alone at the same commit passed 131 of 131. CI at daae3c3: 92 jobs passed, `ci-ok` green.
 
 - The two CI failures were not caught before the pull request because the task QA of `user-path-check` never ran and
   integration QA (`--workspace-only`) does not include those suites.
