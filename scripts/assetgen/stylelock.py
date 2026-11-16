@@ -5,7 +5,7 @@ Data (all under the authoring repo, never written here; this module only reads):
                                                       {id, version}, allowed_styles, families (asset family -> game
                                                       style that extends the base), art_direction upstream refs
   assetgen/styles/<style-id>/anchors/<id>.json + .png rpg-factory.assetgen-anchor/1: a human-approved image of a
-                                                      style version (status proposed|active|retired)
+                                                      style version from a gen-run or attested external art (status proposed|active|retired)
   assetgen/styles/<style-id>/rejections/<id>.json     rpg-factory.assetgen-rejection/1: a rejected asset or direction
                                                       (data, not an approval; feeds the avoid list and the review)
 
@@ -18,8 +18,8 @@ reason is given), else families[family], else project.style.id; without project.
 (today's behaviour, project null). project.style.version must equal that style's version. A deprecated style is
 refused unless an override reason is given; the reason is recorded as style_lock.override.
 
-Anchor validity (engine view): status active and its source gen-run (assetgen/runs/<run_id>/run.md) has status
-approved. Records of older style versions stay valid; selection only uses the run's style version. The quality
+Anchor validity (engine view): status active and either its source gen-run (assetgen/runs/<run_id>/run.md) has status
+approved or its external source is attested by the approving person. Records of older style versions stay valid; selection only uses the run's style version. The quality
 plugin additionally checks the signed approval, the image hash and that approved_by is a person.
 
 Selection (select_references) is deterministic: no clock, no recency. Candidates are the valid active anchors of
@@ -58,6 +58,8 @@ TEXT_FIELDS = ("palette", "lighting", "outline", "shape_language")
 HEX = re.compile(r"\A#[0-9a-fA-F]{6}\Z")
 SHA = re.compile(r"\A[0-9a-f]{64}\Z")
 DATE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
+EXTERNAL_PATH = re.compile(r"(?<![\w/:])(?:/(?!/)|~[/\\]|[a-zA-Z]:[/\\]|\\\\)")
+EXTERNAL_CREDENTIAL = re.compile(r"\b(?:[\w-]*(?:key|token|secret|password|bearer)[\w-]*|authorization)\s*[\"']?\s*[:=]\s*\S|\bBearer\s+\S|\bsk-[A-Za-z0-9_-]{12,}", re.I)
 ASPECT = re.compile(r"\A[1-9]\d*:[1-9]\d*\Z")
 ID = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
 # AI model and agent families: a name that starts with one as a whole word (not followed by a letter) is an agent
@@ -407,6 +409,27 @@ def run_ref_errors(run, key):
     return []
 
 
+def external_source_errors(src, key="external_source"):
+    if not isinstance(src, dict):
+        return ["%s must be an object" % key]
+    errs = []
+    fields = {"origin", "rights_note", "sha256", "attested_by", "attested_on"}
+    missing, extra = sorted(fields - set(src)), sorted(set(src) - fields)
+    if missing:
+        errs.append("%s is missing keys %s" % (key, ", ".join(missing)))
+    if extra:
+        errs.append("%s has unknown keys %s" % (key, ", ".join(extra)))
+    for field in ("origin", "rights_note"):
+        value = src.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errs.append("%s.%s must be non-empty text" % (key, field))
+        elif EXTERNAL_PATH.search(value) or EXTERNAL_CREDENTIAL.search(value):
+            errs.append("%s.%s must not contain an absolute path or credential" % (key, field))
+    if not isinstance(src.get("sha256"), str) or not SHA.match(src["sha256"]):
+        errs.append("%s.sha256 must be a sha256 hex digest" % key)
+    return errs
+
+
 def anchor_errors(data, style_id=None, anchor_id=None):
     """Structure errors of one anchor (style_id / anchor_id: the directory and file stem it lives in)."""
     if not isinstance(data, dict):
@@ -434,7 +457,36 @@ def anchor_errors(data, style_id=None, anchor_id=None):
         errs.append("image must be a .png file name next to the anchor")
     if not isinstance(data.get("image_sha256"), str) or not SHA.match(data["image_sha256"]):
         errs.append("image_sha256 must be a sha256 hex digest")
-    errs += run_ref_errors(data.get("source_run"), "source_run")
+    if ("source_run" in data) == ("external_source" in data):
+        errs.append("anchor must have exactly one of source_run or external_source")
+    if "source_run" in data or "external_source" not in data:
+        errs += run_ref_errors(data.get("source_run"), "source_run")
+    if "external_source" in data:
+        src = data["external_source"]
+        errs += external_source_errors(src)
+        if isinstance(src, dict):
+            if src.get("sha256") != data.get("image_sha256"):
+                errs.append("external_source.sha256 must equal image_sha256")
+            attester, attested_on = src.get("attested_by"), src.get("attested_on")
+            if data.get("status") == "proposed":
+                if attester is not None:
+                    errs.append("external_source.attested_by must be null for a proposed anchor")
+                if attested_on is not None:
+                    errs.append("external_source.attested_on must be null for a proposed anchor")
+            elif data.get("status") == "active":
+                if not isinstance(attester, str) or not attester.strip():
+                    errs.append("an active external anchor needs external_source.attested_by (the person who activates it)")
+                elif is_agent_name(attester):
+                    errs.append("external_source.attested_by %r is an agent or model; only a person attests an external anchor" % attester)
+                if attester != data.get("approved_by"):
+                    errs.append("external_source.attested_by must equal approved_by")
+                if not isinstance(attested_on, str) or not DATE.match(attested_on):
+                    errs.append("an active external anchor needs external_source.attested_on YYYY-MM-DD")
+            else:
+                if attester is not None and not isinstance(attester, str):
+                    errs.append("external_source.attested_by must be null or a name")
+                if attested_on is not None and not (isinstance(attested_on, str) and DATE.match(attested_on)):
+                    errs.append("external_source.attested_on must be null or YYYY-MM-DD")
     by, on = data.get("approved_by"), data.get("approved_on")
     if data.get("status") == "active":
         if not isinstance(by, str) or not by.strip():
@@ -519,12 +571,14 @@ def run_status(authoring, run_id):
 
 
 def anchor_validity(record, authoring):
-    """(valid, reason) in the engine view: well formed, status active, source gen-run approved."""
+    """(valid, reason): well formed, active, with an approved run or attested external source."""
     if record["errors"]:
         return False, "malformed: " + "; ".join(record["errors"])
     data = record["data"]
     if data["status"] != "active":
         return False, "status %s" % data["status"]
+    if "external_source" in data:
+        return True, "active, external source attested by %s" % data["external_source"]["attested_by"]
     status = run_status(authoring, data["source_run"]["run_id"])
     if status != "approved":
         return False, "source gen-run %s is %s, not approved" % (data["source_run"]["run_id"], status or "missing")
