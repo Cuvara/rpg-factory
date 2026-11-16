@@ -11,13 +11,14 @@ is the family "(none)") plus the style-wide "total" it reports:
                is listed as skipped, never a crash): min, max and mean of the mean luminance and mean saturation
                (consistency.tone_stats)
   palette      when the merged style has a usable palette (consistency.palette_config): per output the share of opaque
-               samples within the current max_distance and d_needed, the smallest integer distance (capped at 441) at
+               samples within the current max_distance and d_needed, the smallest integer distance at
                which that share reaches min_share; min, median and max of both
   qa           for every run of the style with a readable qa.json, each style-* row (qa.is_style_row) counted by state
                PASS, WARN, FAIL and NOT_AVAILABLE per check, with warn_rate and fail_rate = count / rows of that check
                (3 decimals; null without rows)
   rejections   stylelock.load_rejections counted by reason (a malformed record under "malformed"), per family and total
-  suggestions  palette.max_distance = the largest d_needed over the approved outputs; tone.tolerance = the smallest
+  suggestions  palette.max_distance = the largest d_needed over the approved outputs, or null when it exceeds the
+               permitted maximum 441; tone.tolerance = the smallest
                tolerance, rounded up to 2 decimals, that keeps every approved output's mean luminance and saturation
                inside the range of the valid active anchors of the style's current version (the anchors of the family
                when it has any, else all of the style's; an anchor whose PNG is missing, does not match its image_sha256
@@ -148,9 +149,13 @@ def _output_record(img, palette):
                     for r, g, b, _ in consistency.opaque_samples(img))
         n = len(sq)
         rec["share"] = bisect.bisect_right(sq, max_distance * max_distance) / n
-        k = min(n, max(1, math.ceil(round(min_share * n, 9))))
-        d = math.isqrt(sq[k - 1])
-        rec["d_needed"] = min(MAX_DISTANCE_CAP, d + (1 if d * d < sq[k - 1] else 0))
+        k = min(n, math.ceil(round(min_share * n, 9)))
+        if min_share == 0:
+            rec["d_needed"] = 0
+        else:
+            k = max(1, k)
+            d = math.isqrt(sq[k - 1])
+            rec["d_needed"] = d + (1 if d * d < sq[k - 1] else 0)
     return rec
 
 
@@ -230,7 +235,11 @@ def _suggest_palette(outs, palette, reason):
     needed = [o["d_needed"] for o in outs]
     data["d_needed"] = _spread(needed)
     data["pass_at_current"] = sum(1 for o in outs if o["share"] >= min_share)
-    return {"value": max(needed), "reason": None, "data": data, "applied": False}
+    largest = max(needed)
+    if largest > MAX_DISTANCE_CAP:
+        return {"value": None, "reason": "no permitted max_distance (0..441) makes every approved output pass; "
+                "largest needed distance is %d" % largest, "data": data, "applied": False}
+    return {"value": largest, "reason": None, "data": data, "applied": False}
 
 
 def _suggest_tone(outs, anchors, current):

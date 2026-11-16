@@ -4420,6 +4420,10 @@ tpl_hash() { find "$ROOT/templates/assetgen" -type f -exec sha256sum {} + | LC_A
 tpl0=$(tpl_hash)
 AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
 SS="$SI/assetgen/styles"; SPJ="$SI/assetgen/project.json"
+grep -Fq 'WARN: the new style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness)' "$TMP/si.out" \
+  && grep -q 'no style-\* QA row can grade an output until one is added' "$TMP/si.out" \
+  && grep -q 'Lint WARNs once the style is active; add fields by hand or use style derive --apply once valid active anchors exist' "$TMP/si.out" \
+  && ok "style init text warns about missing structured fields and how to add them" || no "style init warning" "$(cat "$TMP/si.out")"
 [ $rc -eq 0 ] && [ -f "$SS/demo-game.json" ] && [ -f "$SS/demo-game-characters.json" ] && [ -f "$SPJ" ] \
   && ok "style init exits 0 and writes the style, the family stub and project.json" || no "style init rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
 [ "$(jq -c '[.extends, .version, .status]' "$SS/demo-game.json")" = '["pixel-art",1,"draft"]' ] \
@@ -4483,6 +4487,8 @@ AG style init --id demo-game --extends pixel-art --family characters=demo-game-c
   && [ "$(jq -c '.project | [.schema, .style, .families]' "$TMP/si.out")" = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"}]' ] \
   && [ "$(jq -cS '.project' "$TMP/si.out")" = "$(jq -cS . "$SK/assetgen/project.json")" ] \
   && ok "style init --json prints schema rpg-factory.assetgen-style-init/1 with files and project" || no "style init --json rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+jq -e '.warnings | length == 1 and (.[0] | contains("WARN:") and contains("palette.colors, tone, canvas, outline.edge_darkness") and contains("no style-* QA row can grade an output until one is added") and contains("Lint WARNs once the style is active") and contains("by hand") and contains("style derive --apply") and contains("valid active anchors"))' "$TMP/si.out" >/dev/null \
+  && ok "style init JSON includes the structured fields warning" || no "style init JSON warning" "$(cat "$TMP/si.out")"
 [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
   && ok "style init changed nothing under templates/assetgen" || no "templates/assetgen changed" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
@@ -4749,6 +4755,19 @@ tsig() { (cd "$1" && find . -type f -not -path './.git/*' -exec sha256sum {} + |
 sb_files() { (cd "$1" && find . -type f -not -path './.git/*' | LC_ALL=C sort); }
 sb_changed() { local f; sb_files "$1" | while read -r f; do cmp -s "$1/$f" "$2/$f" || echo "$f"; done; }
 sb_copy() { rm -rf "$1"; cp -r "$SB0" "$1"; }
+
+SBX="$TMP/style-bump-external"; sb_copy "$SBX"
+SBXA="$SBX/assetgen/styles/demo-game/anchors"
+cp "$SBXA/props-a-v1.png" "$SBXA/external-v1.png"
+jq --slurpfile base "$SBXA/props-a-v1.json" '.id = "external-v1" | .image = "external-v1.png" | .style = $base[0].style | .image_sha256 = $base[0].image_sha256 | .external_source.sha256 = $base[0].image_sha256' "$TMP/ext-active.json" > "$SBXA/external-v1.json"
+cp "$SBXA/external-v1.json" "$TMP/sb-external-before.json"
+AG style bump --id demo-game --authoring "$SBX" --json > "$TMP/sbx.json" 2> "$TMP/sb.err"; rc=$?
+AG lint "$SBXA/external-v2.json" --authoring "$SBX" > "$TMP/sbx-lint" 2>&1; lint_rc=$?
+[ $rc -eq 0 ] && [ $lint_rc -eq 0 ] && cmp -s "$TMP/sb-external-before.json" "$SBXA/external-v1.json" \
+  && jq -e '.status == "proposed" and .style.version == 2 and .approved_by == null and .approved_on == null and .external_source.attested_by == null and .external_source.attested_on == null' "$SBXA/external-v2.json" >/dev/null \
+  && jq -e '.anchors[] | select(.id == "external-v1" and .action == "carried" and .new_id == "external-v2")' "$TMP/sbx.json" >/dev/null \
+  && ok "style bump carries an external anchor as an unattested proposed record and preserves the original" \
+  || no "external anchor bump rc=$rc lint=$lint_rc" "$(cat "$TMP/sb.err" "$TMP/sbx-lint" "$TMP/sbx.json")"
 
 SBP="$TMP/style-bump-pre"; sb_copy "$SBP"          # the authoring repo as it was before the bump
 SB="$TMP/style-bump"; sb_copy "$SB"; SBS="$SB/assetgen/styles"; SBD="$SBS/demo-game/versions/2.json"
@@ -5088,6 +5107,41 @@ grep -q "^    palette.max_distance = 80 (suggestion only, not applied): current 
   && [ "$(SRJ "$DG | .families.ui.suggestions | map(.reason) | unique")" = '["no approved output with opaque pixels"]' ] \
   && grep -q "^    palette.max_distance: no suggestion (no approved output with opaque pixels) (suggestion only, not applied): current 48; min_share 0.6; 0 approved output(s)" "$TMP/sr1.txt" \
   && ok "style report: a family without approved outputs (ui, (none)) gets null suggestions with the reason, printed as 'no suggestion'" || no "null suggestions" "$(SRJ "$DG | .families.ui.suggestions")"
+# White against a black-only palette requires distance 442, outside the permitted range.
+SRX="$TMP/style-report-extreme"; cp -r "$SR" "$SRX"
+jq '.palette.colors = [{"hex":"#000000"}] | .palette.min_share = 1' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
+python3 -B - "$ROOT" "$SRX/assetgen/runs/r-props-1/outputs/ok.png" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+with open(sys.argv[2], "wb") as f:
+    f.write(png.encode(1, 1, bytes((255, 255, 255, 255))))
+EOF
+AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx.json" 2> "$TMP/sr.err"; rc=$?
+AG style report --authoring "$SRX" --style demo-game > "$TMP/srx.txt" 2>> "$TMP/sr.err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == null and .data.d_needed.max == 442 and (.reason | contains("no permitted max_distance (0..441) makes every approved output pass") and contains("442"))' "$TMP/srx.json" >/dev/null \
+  && grep -Fq 'palette.max_distance: no suggestion (no permitted max_distance (0..441) makes every approved output pass; largest needed distance is 442)' "$TMP/srx.txt" \
+  && ok "style report refuses an impossible palette threshold in JSON and text" || no "extreme palette report rc=$rc/$rc2" "$(cat "$TMP/sr.err" "$TMP/srx.json")"
+jq '.palette.min_share = 0' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
+AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx-zero.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == 0 and .data.d_needed.max == 0 and .reason == null' "$TMP/srx-zero.json" >/dev/null \
+  && ok "style report suggests distance zero when min_share is zero" || no "zero min_share rc=$rc" "$(cat "$TMP/sr.err" "$TMP/srx-zero.json")"
+
+# Seven of ten pixels meet min_share 0.7 at distance 6; floating-point multiplication must not select the eighth.
+python3 -B - "$ROOT" > "$TMP/sr-float" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png, style_report
+pixels = bytes(channel for red in range(10) for channel in (red, 0, 0, 255))
+img = png.Image(10, 1, pixels, True, "fixture")
+record = style_report._output_record(img, ({}, [(0, 0, 0)], 0, 0.7))
+assert record["d_needed"] == 6, record
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report selects the seventh pixel for min_share 0.7 of ten" \
+  || no "style report floating-point rank rc=$rc" "$(cat "$TMP/sr-float")"
+
 # a draft style with no palette, no anchors and no runs: still exit 0, suggestions null with reasons, nothing written
 SRN="$TMP/style-report-bare"; mkdir -p "$SRN"
 AG style init --id demo-game --extends pixel-art --authoring "$SRN" > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report bare setup: style init" "$(cat "$TMP/sr.err")"

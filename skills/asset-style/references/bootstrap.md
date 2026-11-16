@@ -27,7 +27,7 @@ Collect 6-12 reference images from a **rights-clean** set: images the person own
 generated and approved in this project. Never a scraped or third-party image without a licence the person confirms,
 and never an artist's name used as a style shortcut in a prompt. Record each image's source and licence in the report.
 References steer exploration prompts and the art bible; they are not anchors (an anchor is an approved gen-run
-output).
+output or a person-attested external image with an `external_source` record).
 
 ## 3. Draft the style (optional, recommended)
 
