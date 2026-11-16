@@ -30,7 +30,7 @@ Always from the module directory (no `go.work`; see SKILL.md Architecture).
 - Count outcomes from `-v` output: `grep -cE '^\s*--- PASS'`, `grep -E '^\s*--- (FAIL|SKIP)'`.
   The package line `ok` is printed even when every test in it skipped.
 - `[no test files]` in `integration_test` means `-tags integration` was missing - zero tests ran
-  (`.github/workflows/ci.yml:215-219`).
+  (`.github/workflows/ci.yml:215-218`).
 - The interop tests skip with `dotnet not found` (`gameServerSkip` / `t.Skip`
   `backend/integration_test/dotnet_interop_test.go:128,380`, `t.Skip` in `selfreg_flow_test.go:55`
   and `t.Skip` in `sealed_session_e2e_test.go:149`). They look for `dotnet` on `PATH`
