@@ -97,7 +97,7 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
   instead (`dotnet_interop_test.go:98-117`).
 - **No build tag, no tests.** Every `integration_test/*_test.go` file is `//go:build integration` (only the helper `mock_client.go` is untagged); without
   `-tags integration` the package reports `[no test files]` - CI says it once went green that way
-  (comment above `test_flags`, `.github/workflows/ci.yml:185-192`).
+  (comment above `test_flags`, `.github/workflows/ci.yml:273-280`).
 - **Plugin ABI lock.** The `.so` must be built by `heroiclabs/nakama-pluginbuilder` at the SAME tag
   as the running `heroiclabs/nakama`, with the Go toolchain and `nakama-common` that release ships;
   mismatch fails at load with "plugin was built with a different version of package"
