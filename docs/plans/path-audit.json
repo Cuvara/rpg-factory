@@ -64,6 +64,37 @@
         "no tracked file outside the allowlist carries a real user home, expanded application-data or machine-only scratch path",
         "run-all runs the suite and the enforce line; testlab's own tests still pass with the scrubbed fixtures"
       ]
+    },
+    {
+      "id": "affected-mapping",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two mapping lines with their expected lists, and one fixture scrub",
+      "objective": "Follow-up of task user-path-check (already integrated). (a) tests/affected.py has no mapping for the new check and suite: add `\"scripts/checks/portable-paths.py\": [\"*\"]` and `\"tests/portable-paths.test.sh\": [\"scripts/checks/portable-paths.py\"]` to EXTRA next to the English-only lines (near line 118), so the affected tier and scripts/ci-plan.py run the enforce line on every change and the suite when the check changes; update the comments that name the English-only check as the only global one and every expected list in tests/affected.test.sh (and tests/ci-plan.test.sh if it lists global checks) that the new global check changes; add a case that a docs-only change selects the portable-paths enforce line. (b) tests/fixtures/failed.trx still holds the real Windows user and host name (runUser, storage and codeBase attributes) and is allowlisted in tests/fixtures/portable-paths-allow.txt: scrub both to obviously fake names that scripts/checks/portable-paths.py allows (its only reader tests/checks-candidate.test.sh checks the Failed outcome only; verify that) and drop the allowlist entry. Changelog fragment changelog.d/path-audit-affected.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time.",
+      "paths": [
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "tests/ci-plan.test.sh",
+        "tests/fixtures/failed.trx",
+        "tests/fixtures/portable-paths-allow.txt",
+        "changelog.d/path-audit-affected.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "user-path-check"
+      ],
+      "checks": [
+        "tests/affected.test.sh",
+        "tests/ci-plan.test.sh",
+        "tests/portable-paths.test.sh",
+        "python3 -B scripts/checks/portable-paths.py --enforce"
+      ],
+      "acceptance": [
+        "a change to any tracked file selects the portable-paths enforce line; a change to the check selects its suite",
+        "tests/fixtures/failed.trx holds no real user or host name and has no allowlist entry",
+        "tests/checks-candidate.test.sh still passes"
+      ]
     }
   ]
 }
