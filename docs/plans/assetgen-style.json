@@ -32,7 +32,7 @@
         "tests/assetgen.test.sh"
       ],
       "acceptance": [
-        "style init creates the draft style and project.json; lint passes with 0 FAIL and the expected WARN for missing structured fields",
+        "style init creates the draft style and project.json; lint passes with 0 FAIL. Lint grades structured fields only on an active style (lint.style_warnings), so the draft gets no lint WARN: style init itself warns that the new style has no structured fields (text and a warnings list in --json), and the same style gives the lint missing-fields WARN once it is active",
         "an existing style or project.json is never overwritten (exit 1 with a message)",
         "no file under templates/assetgen/ changes"
       ]
@@ -317,6 +317,42 @@
         "a bumped style that carries an active external anchor validates, with the copy proposed and unattested",
         "style report never suggests a threshold that still fails QA",
         "the asset-style skill describes only flows the verbs support; skills-lint passes",
+        "existing style tests keep passing"
+      ]
+    },
+    {
+      "id": "style-review-fixes-2",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Fix the second-round findings of the Codex cross-model review (review files are named in the task lead spec). (1) style report: a suggested threshold must never fail QA. The palette rank is rounded before the sample is chosen (min_share 0.70000000001 with ten pixels suggests distance 6, which QA fails) and a tone suggestion can fail consistency.check_tone through float rounding (anchor grey 39, output grey 90 suggests 0.2 and QA WARNs). Derive each suggestion from, or validate it against, the same comparison QA makes (call the consistency check with the rounded value and step it until QA passes, or report that no permitted value fits), with regression tests for both cases and without an epsilon that hides the mismatch. (2) style bump: the quality integration assertion near the carried external anchor test is vacuous because the fixture runs omit kind, so artifact-quality only reports parse failures and never calls the assetgen domain plugin; use valid gen-run fixtures and assert the domain checks ran before comparing FAIL rows. (3) style-fields.md still tells the reader to read the note: line of style init, which now prints WARN: in text and a warnings list in JSON.",
+      "paths": [
+        "scripts/assetgen/style_report.py",
+        "tests/assetgen.test.sh",
+        "skills/asset-style/references/style-fields.md",
+        "changelog.d/assetgen-style-review-fixes.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "style-init",
+        "style-derive",
+        "style-bump",
+        "style-report",
+        "style-skill-scaffold",
+        "style-skill-content",
+        "style-skill-scenarios",
+        "nokill-word-match",
+        "external-anchor",
+        "style-docs",
+        "style-review-fixes"
+      ],
+      "checks": [
+        "tests/run-all.sh --only-suites tests/assetgen.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "every threshold style report suggests passes the QA check it is for, proven by tests that call the QA comparison, including the two reported inputs",
+        "the bump quality test fails when the assetgen domain checks do not run",
+        "style-fields.md matches the style init output",
         "existing style tests keep passing"
       ]
     }
