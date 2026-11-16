@@ -1526,10 +1526,10 @@ def promote_anchor(run_dir, output, family, dimensions, strength, anchor_id=None
 
 def promote_external_anchor(src, origin, rights_note, authoring, style, anchor_id, family, dimensions, strength):
     """Propose external art for a person to activate and attest."""
-    project = stylelock.load_project(authoring) if not style else None
-    sid = style or (project["data"]["style"]["id"] if project else None)
-    if not sid:
+    project = stylelock.load_project(authoring)
+    if not style and project is None:
         fail("promote-anchor needs --style", 2)
+    sid = stylelock.choose({"id": "external-anchor", "data": {}}, authoring, family=family, style=style)["style_id"]
     ref = stylelock.style_ref(layers.load("style", sid, authoring))
     try:
         with open(src, "rb") as f:

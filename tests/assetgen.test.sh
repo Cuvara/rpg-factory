@@ -3738,6 +3738,21 @@ EOF
 [ $? -eq 0 ] && ok "external anchor: human activation is valid and selectable" || no "external active validity" "$(cat "$TMP/o")"
 rm -f "$ext.json" "$ext.png"
 
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-family --family characters --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_family="$SG/styles/rpg-chars/anchors/ext-family"
+[ $rc -eq 0 ] && [ -f "$ext_family.png" ] && jq -e '.style.style_id == "rpg-chars" and .family == "characters"' "$ext_family.json" >/dev/null \
+  && ok "external promote: mapped family uses its style and anchor directory" || no "external family rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_family.json" "$ext_family.png"
+before_external=$(find "$SG" -type f | sort)
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --style unlisted-style --id ext-disallowed --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'not allowed' "$TMP/err" && [ "$before_external" = "$(find "$SG" -type f | sort)" ] \
+  && ok "external promote: disallowed explicit style refused without writes" || no "external disallowed style rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible / page 4' --rights-note 'monkey: yes' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_prose="$SG/styles/rpg-base/anchors/ext-prose"
+[ $rc -eq 0 ] && jq -e '.external_source.origin == "art bible / page 4" and .external_source.rights_note == "monkey: yes"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: ordinary prose accepted" || no "external prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+
 # reject: validation, deterministic ids, asset rejections bound to a recorded output
 AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --family props >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "text is required" "$TMP/err" && ok "reject direction without text refused" || no "reject no text rc=$rc" "$(cat "$TMP/err")"
