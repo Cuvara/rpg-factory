@@ -16,16 +16,12 @@ verb, the data layers and the run directory). `<A>` is the authoring repo root f
 
 ## Applies when / Not when
 
-- **Applies:** generating or regenerating an image for the game with ComfyUI, reviewing a generation run, recording
-  it as a `gen-run`, or tuning a purpose, style or workflow template in the game layer `assetgen/`.
-- **Not when:** art direction, asset specs and exports (`art-2d`, `art-3d`), UI specs (`ui-ux`), effect specs (`vfx`),
-  Unity import (engineering), or how ComfyUI, the template format and the image node work (`rpg-factory:comfyui`).
+- **Applies:** generating or regenerating an image for the game with ComfyUI, reviewing a generation run, recording it as a `gen-run`, or tuning a purpose, style or workflow template in the game layer `assetgen/`.
+- **Not when:** art direction, asset specs and exports (`art-2d`, `art-3d`), UI specs (`ui-ux`), effect specs (`vfx`), Unity import (engineering), or how ComfyUI, the template format and the image node work (`rpg-factory:comfyui`).
 
 ## Scope
 
-Repo `authoring`, module `authoring.assetgen` (`assetgen/`): game layer `{purposes,styles,templates}/`, run directories
-`runs/<run-id>/`, style lock (`project.json`, `styles/<style-id>/` anchors and rejections). Core data (`templates/assetgen/`)
-changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`.
+Repo `authoring`, module `authoring.assetgen` (`assetgen/`): game layer `{purposes,styles,templates}/`, run directories `runs/<run-id>/`, style lock (`project.json`, `styles/<style-id>/` anchors and rejections). Core data (`templates/assetgen/`) changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`.
 
 ## Workflow delta
 
@@ -45,6 +41,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    and `avoid` (`assetgen.py show --kind purpose <id> --authoring <A>`: an id like `image-edit` is both a purpose and
    a template, so always pass `--kind`), the style prefix and suffix, `spec.hints` (never an overridden one), the
    style's `forbidden`, the direction rejections and the user's subject. No text, logos or brands unless asked for.
+   **Sheet mode** (experimental, icon and sprite grids): `assetgen.py sheet-hint --rows R --cols C` prints a prompt snippet (writes nothing; 1..8 per side, at least two cells) to paste into `prompt.md` before the prompt review.
 4. **Prompt review (Codex).** `assetgen.py review-cmd --phase prompt --run <run>` prints a read-only `codex exec`
    command (absolute paths); run it as printed -> `<run>/review-prompt.json`. On `FAIL` fix `prompt.md` and review
    again, at most 2 fix rounds; still `FAIL` -> report `BLOCKED`, ask the user. `codex` not OK or failing: review
@@ -60,14 +57,14 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    an outdated `comfyui_9router` pack: report its version, never update or reinstall it; comfy-mcp or the node missing:
    `rpg-factory:comfy-desktop-setup`) -> `assetgen.py graph-lint --run <run>` (a local run: also the template with `--profile <resolved>`; exit 1: no `run_workflow`, report it) ->
    `validate_workflow` on `<run>/workflow.json` -> `upload_file` of each `<run>/references/*` file under its name ->
-   `assetgen.py budget --run <run>` before each `run_workflow` (used: outputs plus the series' failed attempts against
+   `assetgen.py budget --run <run>` before each `run_workflow` (`scripts/assetgen/assetgen.py` `run_budget`: outputs plus the series' failed attempts against
    `resolve --max-outputs N`, default 4; exit 1 or `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) ->
    `run_workflow` (wait) -> `job` until done -> `fetch_outputs` with `out_dir` `<run>/outputs`, then with `url_only=true`
-   (free, read-only, same `prompt_id`): save the result verbatim as `<run>/fetch.json` -> `assetgen.py finalize --run
-   <run>`: filter (PreviewImage files to `<run>/previews/`, excluded from budget), fit (`qa.size.fit` pad: pads to the
-   expected aspect, originals in `raw/`), defringe (alpha purposes, `defringe.json`), embed (UI workflow into each PNG) and qa, in that
+   (free, read-only, same `prompt_id`): save the result verbatim as `<run>/fetch.json` (a batch: a JSON list of those results) -> `assetgen.py finalize --run
+   <run> [--rows R --cols C] [--pixel-grid [--max-colors N]] [--discard-qa-fail]`: filter (PreviewImage files to `<run>/previews/`, excluded from budget), slice (only with `--rows/--cols`), fit (`qa.size.fit` pad: pads to the
+   expected aspect, originals in `raw/`), defringe (alpha purposes, `defringe.json`; skipped with `--pixel-grid`), pixel-grid (only with `--pixel-grid`), embed (UI workflow into each PNG) and qa, in that
    fixed order (never `qa` before `embed`); it stops at the first FAIL naming the step, exits like qa and prints the budget
-   line. Optional: `assetgen.py publish --run <run> --comfy-url <URL>` uploads `workflow.ui.json` to Workflows > assetgen
+   line. **Batch** (several outputs): the image node returns one image per call (`n` is not honoured), so a batch is repeated `run_workflow` calls, `budget` before each, each `fetch_outputs` into `<run>/outputs`, then one `finalize`; `--max-outputs N` caps the series, and a batch beyond the request needs the user's yes. Optional: `assetgen.py publish --run <run> --comfy-url <URL>` uploads `workflow.ui.json` to Workflows > assetgen
    (`run_workflow` opens no tab; exit 3 if unreachable, blocks nothing). Tool not OK: render only, `NOT_RUN`; a person may
    run `workflow.ui.json` in ComfyUI and drop the PNGs into `outputs/`, then `finalize`. Never claim an unrun generation.
 7. **Check the images.** `finalize` wrote `qa.json` (exit 0 PASS, 1 FAIL, 3 NOT_AVAILABLE); `style-*` rows are soft
@@ -88,6 +85,9 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    regenerate in a new run directory (next free NNN) with a new prompt review, at most 2 regenerations, then stop and
    report; failed attempts get no `run.md`; `manifest` lists them in `spec.trace.failed_attempts`. A service-caused FAIL
    (`rpg-factory:comfyui` Pitfalls): stop regenerating, `manifest` the last attempt with its QA FAIL visible, report.
+   **Discard:** `assetgen.py discard --run <run> --output N|name --reason TEXT` moves one output to `outputs-rejected/` (never overwrites or deletes), appends `discards.json` and names the stale records (`qa.json`, image reviews: re-run them); it refuses an approved `run.md`, a blank reason and the last output. After a QA FAIL, `finalize --discard-qa-fail` discards the outputs with an output-specific FAIL row and grades the rest again (all failing: nothing discarded). `manifest` records `spec.trace.discarded` and a `- Discarded:` body line, `gen-run-outputs` checks them. `budget` counts `outputs/*.png` only, so a discard frees a slot: never discard to make room.
+   **Pixel grid** (pixel-art style or purpose): `finalize --pixel-grid [--max-colors N]` (2..256, default 16; a structured style palette wins) detects the grid, downsamples to one pixel per cell, binarizes alpha and limits colours; originals in `outputs-raw/pixelgrid/`, record `pixelgrid.json`, QA row `png-pixel-grid` (no grid found: WARN, output untouched); 8-bit PNGs only (others skipped untouched with the reason); `png-size` grades a gridded output at its recorded source size.
+   **Sheet:** `finalize --rows R --cols C` (or `slice --run <run> --rows R --cols C`) slices every output as one sheet at content gutters into `outputs/<stem>-r<R>c<C>.png`; the sheet moves to `sheets/`, `sheet.json` records hashes and boxes. All-or-nothing (a wrong cell count is a FAIL row and writes nothing); a sliced sheet counts as one generation for `budget`; `manifest` adds a `- Sheet:` body line.
 8. **Record.** `assetgen.py manifest --run <run> [--title T]` writes `run.md` (`gen-run`, status `proposed`); never
    hand-edit it: fix the run, rerun `manifest`. Run the fast checks (validation delta). A person approves (gate below):
    only on their explicit word, quoted in the report, `assetgen.py approve-record --run <run> --by <their name> [--note
@@ -112,10 +112,9 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 
 ## Generated & protected paths
 
-- `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `references/anchor-*.png`, `outputs-raw/`,
-  `raw/`, `previews/`, `defringe.json`, `finalize.json`, `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
+- `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `references/anchor-*.png`, `outputs-raw/` (`pixelgrid/`), `outputs-rejected/`, `sheets/`, `raw/`, `previews/`, `defringe.json`, `pixelgrid.json`, `sheet.json`, `discards.json`, `finalize.json`, `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
 - `<run>/review-prompt.json`, `review-image.json`: the reviewer's (`-o` of the printed command); `review-image-claude.json`, `fetch.json`: yours.
-- `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `finalize` (filter to `previews/`, fit, defringe, embed); the SHA-256 after it is the record.
+- `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `finalize` or `discard` (filter to `previews/`, slice, fit, defringe, pixel-grid, embed); the SHA-256 after it is the record.
 - `approvals/AGEN-<run_id>/`: `approve-record` on a person's explicit word; the person commits and signs it.
 - `assetgen/styles/<style-id>/anchors/`: `promote-anchor` writes `proposed`; only a person sets `active`,
   `approved_by`, `approved_on`. `rejections/`: `reject`, on a person's word.
@@ -140,7 +139,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 
 - [ ] Purpose, style and template fit the asset; the game layer was used when it has the id.
 - [ ] `prompt.md` follows purpose and style, no overridden style hint; Codex-reviewed (or a marked SAME_MODEL fallback).
-- [ ] `workflow.json` graph-linted and validated live; `budget` OK (remaining > 0) before each run; outputs passed through `finalize` (never a skipped embed).
+- [ ] `workflow.json` graph-linted and validated live; `budget` OK (remaining > 0) before each run, no discard used to make room; outputs passed through `finalize` (never a skipped embed); a pixel-art run used `--pixel-grid`.
 - [ ] QA PASS for every output (alpha: `png-edge-fringe`, edges judged on both composites by both reviews).
 - [ ] Codex image review present; `review-image-claude.json` per the tier; their findings agree or are listed.
 - [ ] Style lock: the project's style (override only on request), anchors uploaded and judged, no anchor activated by an agent.
@@ -150,7 +149,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 
 Run id and gen-run ID, purpose / style / template with their layer, the prompt, the prompt and image review states and
 reviewers (SAME_MODEL named), the review tier, tool states (comfy-mcp, codex), outputs (path, size, SHA-256), QA table,
-your visual findings, budget line, regenerations and failed attempt ids, finalize (defringe state, a FAIL's step), style
+your visual findings, budget line, regenerations and failed attempt ids, discards (output, reason), finalize (defringe state, pixel-grid state, sheet rows x cols, a FAIL's step), style
 ref, family, override, selected anchors (cross-family named), drift items, publish state, an outdated `comfyui_9router`
 pack, record status, approval (the person's quoted word, committed and signed or not) and handoff target. A local or hybrid run adds the profile (`spec.profile`: id, source), the local models (`spec.generation.local`: checkpoint, LoRAs, hashes or "unverified") and the seed, and states "UNTESTED on RTX 5060" with no VRAM, timing or quality claim until the user confirms.
 
