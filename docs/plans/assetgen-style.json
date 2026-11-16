@@ -204,6 +204,27 @@
       ]
     },
     {
+      "id": "nokill-word-match",
+      "repo": "plugin",
+      "kind": "test",
+      "objective": "tests/pipeline.test.sh NOKILL matches 'kill' anywhere, so the slot-line refutes fail whenever the checkout path contains 'skill' (the status output prints next: commands with the script path; seen in the feat-assetgen-style-style-skill-scenarios worktree). Match kill, taskkill and Stop-Process as whole words and keep --force.",
+      "paths": [
+        "tests/pipeline.test.sh",
+        "changelog.d/nokill-word-match.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "grade": "light",
+      "grade_reason": "one test regex; no product code",
+      "checks": [
+        "tests/run-all.sh --only-suites tests/pipeline.test.sh --only-cases settled-workers"
+      ],
+      "acceptance": [
+        "the settled-workers case passes in a checkout whose path contains 'skill'",
+        "an output line carrying 'kill 4242', 'taskkill' or 'Stop-Process' still fails the refute"
+      ]
+    },
+    {
       "id": "external-anchor",
       "repo": "plugin",
       "kind": "code",
