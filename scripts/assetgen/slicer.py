@@ -22,11 +22,7 @@ def hint(rows, cols):
 def foreground(img):
     w, h, data = img.width, img.height, img.rgba
     alpha = data[3::4]
-    if 255 in alpha and alpha.count(255) == len(alpha):
-        transparent = False
-    else:
-        transparent = any(a < 255 for a in alpha)
-    if transparent:
+    if sum(a < 128 for a in alpha) * 100 >= len(alpha):
         table = bytes(1 if a >= 128 else 0 for a in range(256))
         return bytearray(alpha.translate(table)), "transparent background"
     border = []

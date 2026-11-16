@@ -172,23 +172,43 @@ def slice_step(ag, run_dir, rows, cols, force):
         step.update(state="FAIL", reason="sheet validation failed; nothing sliced")
         return step
     sheets_dir = os.path.join(run_dir, "sheets")
-    os.makedirs(sheets_dir, exist_ok=True)
     records = []
-    for path, source, cells, info, encoded, row in todo:
-        target = free_target(sheets_dir, os.path.basename(path))
-        os.rename(path, target)
-        entries = []
-        for cell, data in zip(cells, encoded):
-            name = "%s-r%sc%s.png" % (os.path.splitext(os.path.basename(path))[0], cell["row"], cell["col"])
-            out = free_target(os.path.join(run_dir, "outputs"), name)
-            ag.write_atomic(out, data, ".slice.tmp")
-            entries.append(dict(cell, output="outputs/" + os.path.basename(out), sha256=hashlib.sha256(data).hexdigest()))
-        records.append({"sheet": "sheets/" + os.path.basename(target), "source": row["output"],
-                        "sha256": hashlib.sha256(source).hexdigest(), "size": info["size"],
-                        "background": info["background"], "cells": entries})
-        row.update(state="sliced", reason="-> %s, %d outputs" % (records[-1]["sheet"], len(entries)))
-    ag.write_json(record_path, {"schema": "rpg-factory.assetgen-sheet/1", "run": os.path.basename(os.path.normpath(run_dir)),
-                                "rows": rows, "cols": cols, "sheets": records})
+    written, moved, pending = [], [], None
+    try:
+        os.makedirs(sheets_dir, exist_ok=True)
+        for path, source, cells, info, encoded, row in todo:
+            entries = []
+            for cell, data in zip(cells, encoded):
+                name = "%s-r%sc%s.png" % (os.path.splitext(os.path.basename(path))[0], cell["row"], cell["col"])
+                out = free_target(os.path.join(run_dir, "outputs"), name)
+                pending = out + ".slice.tmp"
+                ag.write_atomic(out, data, ".slice.tmp")
+                written.append(out)
+                pending = None
+                entries.append(dict(cell, output="outputs/" + os.path.basename(out), sha256=hashlib.sha256(data).hexdigest()))
+            records.append({"source": row["output"], "sha256": hashlib.sha256(source).hexdigest(),
+                            "size": info["size"], "background": info["background"], "cells": entries})
+        for (path, _, _, _, _, row), record in zip(todo, records):
+            target = free_target(sheets_dir, os.path.basename(path))
+            os.rename(path, target)
+            moved.append((path, target))
+            record["sheet"] = "sheets/" + os.path.basename(target)
+        data = (json.dumps({"schema": "rpg-factory.assetgen-sheet/1", "run": os.path.basename(os.path.normpath(run_dir)),
+                            "rows": rows, "cols": cols, "sheets": records}, indent=1, sort_keys=True) + "\n").encode("utf-8")
+        pending = record_path + ".slice.tmp"
+        ag.write_atomic(record_path, data, ".slice.tmp")
+        pending = None
+    except OSError as exc:
+        for original, target in reversed(moved):
+            os.rename(target, original)
+        for path in written + ([pending] if pending else []):
+            if os.path.exists(path):
+                os.remove(path)
+        step.update(state="FAIL", reason="sheet write failed: %s" % exc)
+        step["results"].append({"state": "FAIL", "reason": str(exc)})
+        return step
+    for (_, _, _, _, _, row), record in zip(todo, records):
+        row.update(state="sliced", reason="-> %s, %d outputs" % (record["sheet"], len(record["cells"])))
     step.update(state="sliced", reason="%d sheet(s) sliced" % len(records))
     return step
 

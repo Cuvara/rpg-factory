@@ -117,6 +117,11 @@ def fails(name, img, rows, cols, expected):
 
 
 img, _ = sheet(600, 450)
+opaque, _ = sheet(600, 450, opaque=True)
+pixels = bytearray(opaque.rgba)
+pixels[3] = 254
+nearly_opaque = png.Image(opaque.width, opaque.height, bytes(pixels), True, "test")
+check("isolated alpha-254 uses border colour", slicer.foreground(nearly_opaque)[1] == "background #f8f6f4")
 fails("merged cells", sheet(600, 450, merged=True)[0], 3, 3, "2 cells found, 3 expected")
 fails("missing cell", sheet(600, 450, missing=(1, 1))[0], 3, 3, "2 cells found, 3 expected")
 fails("wrong row count", sheet(600, 450, row_count=2)[0], 3, 3, "2 rows found, 3 expected")

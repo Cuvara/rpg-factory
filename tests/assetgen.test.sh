@@ -159,10 +159,37 @@ sh_case() {
         [ "$sh_rc" -eq 1 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] && [ ! -e "$sh_run/sheets" ] && [ ! -e "$sh_run/sheet.json" ] \
           && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL" and any(.results[]; .state == "FAIL" and (.reason | contains("2 cells found, 3 expected"))))' "$TMP/sh-result.json" >/dev/null \
           && ok "sheet: $sh_variant cells fail atomically with counts" || no "sheet $sh_variant rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
-      done ;;
+      done
+      sh_setup sh-write-failure && sh_fixture 600 450 good || { no "sheet write failure setup"; return; }
+      python3 -B - "$ROOT" "$sh_run" > "$TMP/sh-fault" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import assetgen, finalize
+original = assetgen.write_atomic
+calls = 0
+def fail_write(path, data, suffix):
+    global calls
+    calls += 1
+    if calls == 3:
+        raise OSError('injected write failure')
+    original(path, data, suffix)
+assetgen.write_atomic = fail_write
+result = finalize.slice_step(assetgen, sys.argv[2], 3, 3, False)
+assert result['state'] == 'FAIL', result
+assert os.listdir(os.path.join(sys.argv[2], 'outputs')) == ['prop.png']
+assert not os.path.exists(os.path.join(sys.argv[2], 'sheet.json'))
+EOF
+      sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && ok "sheet: write failure removes cells and preserves source" || no "sheet write failure rc=$sh_rc" "$(cat "$TMP/sh-fault")" ;;
     sheet-repeat)
       sh_setup sh-repeat && sh_fixture 600 450 good || { no "sheet repeat setup"; return; }
       AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-first.json" 2> "$TMP/sh-err"; sh_first_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget" 2>> "$TMP/sh-err"; sh_budget_rc=$?
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget.json" 2>> "$TMP/sh-err"; sh_budget_json_rc=$?
+      [ "$sh_budget_rc" -eq 0 ] && [ "$sh_budget_json_rc" -eq 0 ] \
+        && grep -q '^budget ok: 1 used ' "$TMP/sh-budget" \
+        && jq -e '.used == 1 and .outputs == 1 and .state == "ok" and .sheet_cells == 9' "$TMP/sh-budget.json" >/dev/null \
+        && ok "sheet: budget counts nine cells as one generation" || no "sheet budget rc=$sh_budget_rc json=$sh_budget_json_rc" "$(cat "$TMP/sh-budget" "$TMP/sh-budget.json" "$TMP/sh-err")"
       sh_before=$(sh_signature "$sh_run/outputs")
       AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
       [ "$sh_first_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] \

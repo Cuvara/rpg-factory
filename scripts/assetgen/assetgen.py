@@ -1306,7 +1306,39 @@ def failed_attempts(run_dir):
 def run_budget(run_dir, spec):
     """budget.state of a run: its outputs plus the failed attempts of its series (none for a dir not <slug>-NNN)."""
     name = os.path.basename(os.path.normpath(run_dir))
-    return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
+    st = budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
+    try:
+        with open(os.path.join(run_dir, "sheet.json"), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        return st
+    if not isinstance(record, dict):
+        return st
+    sheets = record.get("sheets")
+    sheets = [s for s in sheets if isinstance(s, dict)] if isinstance(sheets, list) else []
+    paths = set()
+    for sheet in sheets:
+        cells = sheet.get("cells")
+        for cell in cells if isinstance(cells, list) else []:
+            output = cell.get("output") if isinstance(cell, dict) else None
+            if (isinstance(output, str) and output.startswith("outputs/")
+                    and os.path.basename(output) == output[8:]
+                    and output.endswith(".png") and os.path.isfile(os.path.join(run_dir, *output.split("/")))):
+                paths.add(output)
+    st["sheet_cells"] = len(paths)
+    adjustment = len(sheets) - len(paths)
+    st["outputs"] += adjustment
+    st["used"] += adjustment
+    if st["state"] not in ("invalid", "unlimited"):
+        used, allowed = st["used"], st["allowed"]
+        st["remaining"] = max(0, allowed - used)
+        if used < allowed:
+            st.update(state="ok", exit=0, reason="%d of %d generations left in this run series" % (st["remaining"], allowed))
+        elif used == allowed:
+            st.update(state="at-limit", exit=0, reason="the run series used all %d allowed generations: do not run run_workflow again" % allowed)
+        else:
+            st.update(state="exceeded", exit=1, reason="the run series used %d generations, more than the %d allowed" % (used, allowed))
+    return st
 
 
 def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False, pixel_grid=False, max_colors=None, rows=None, cols=None):
