@@ -58,6 +58,8 @@
 # under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
 # preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
 # recorded previews/ path), finalize size fitting (transparent bands, original preservation, skips and refusals),
+# batch discard (QA failures, all-fail and opt-in behavior, manual selection, collisions, refusals, stale reviews,
+# reversible moves, manifest trace and quality checks for unrecorded or changed files; single-output compatibility),
 # style init (style_cmd.py: a draft game style, a family stub and project.json written into a fresh authoring dir; lint
 # 0 FAIL and no WARN for them, the expected WARN once the style is active, resolve locks it; an existing style or
 # project.json is never overwritten, exit 1; a non-core --extends or a malformed --family exits 2; templates/assetgen
@@ -2384,6 +2386,72 @@ find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$
 f_help=$(AG finalize --help 2>&1); grep -q -- "--force" <<<"$f_help" && grep -q "finalize --run RUN" "$ROOT/scripts/assetgen/assetgen.py" \
   && ok "finalize is a subcommand (--run, --authoring, --force, --json) listed in the assetgen.py usage" || no "finalize usage" "$f_help"
 
+echo "-- batch discard and finalize QA failures"
+batch_run() {
+  finrun "$1" icon icon-ok.png || return 1
+  local run="$RUNS/$1"
+  cp "$FX/icon-ok.png" "$run/outputs/a.png"
+  cp "$FX/icon-ok.png" "$run/outputs/b.png"
+  cp "$FX/icon-opaque.png" "$run/outputs/bad.png"
+}
+batch_front() { sed -n '/^---json$/,/^---$/p' "$1/run.md" | sed '1d;$d'; }
+batch_run batch-plain-001
+bp="$RUNS/batch-plain-001"
+AG finalize --run "$bp" --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa"' "$TMP/batch.json" >/dev/null && [ "$(find "$bp/outputs" -name '*.png' | wc -l)" -eq 4 ] \
+  && [ ! -e "$bp/outputs-rejected" ] && [ ! -e "$bp/discards.json" ] \
+  && ok "batch finalize without discard flag fails QA and moves nothing" || no "batch without flag rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+batch_run batch-discard-001
+bd="$RUNS/batch-discard-001"
+AG embed --run "$bd" >/dev/null 2>"$TMP/err"
+cp "$bd/outputs/bad.png" "$TMP/batch-bad.png"
+AG finalize --run "$bd" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+AG manifest --run "$bd" >/dev/null 2>>"$TMP/err"; mrc=$?
+[ $rc -eq 0 ] && [ $mrc -eq 0 ] && [ "$(find "$bd/outputs" -name '*.png' | wc -l)" -eq 3 ] \
+  && cmp -s "$TMP/batch-bad.png" "$bd/outputs-rejected/bad.png" \
+  && jq -e '.discards | length == 1 and .[0].by == "finalize" and .[0].output == "outputs/bad.png"' "$bd/discards.json" >/dev/null \
+  && jq -e '(.outputs | length == 3) and ([.results[].output] | unique | length == 3) and all(.results[]; .output != "outputs/bad.png")' "$bd/qa.json" >/dev/null \
+  && batch_front "$bd" | jq -e '(.spec.outputs | length == 3) and (.spec.trace.discarded | length == 1 and .[0].output == "outputs/bad.png" and .[0].path == "outputs-rejected/bad.png")' >/dev/null \
+  && grep -q '^- Discarded: outputs/bad.png' "$bd/run.md" \
+  && ok "batch finalize discards one QA failure byte-identically and manifests the three passing outputs" \
+  || no "batch discard rc=$rc manifest=$mrc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+finrun batch-allfail-001 icon icon-opaque.png
+ba="$RUNS/batch-allfail-001"; cp "$FX/icon-opaque.png" "$ba/outputs/second.png"
+AG finalize --run "$ba" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa" and (.discarded | length == 0)' "$TMP/batch.json" >/dev/null \
+  && [ "$(find "$ba/outputs" -name '*.png' | wc -l)" -eq 2 ] && [ ! -e "$ba/outputs-rejected" ] && [ ! -e "$ba/discards.json" ] \
+  && ok "batch finalize leaves all outputs in place when all fail QA" || no "batch all fail rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+finrun discard-manual-001 icon icon-ok.png
+dm="$RUNS/discard-manual-001"; cp "$FX/icon-ok.png" "$dm/outputs/a.png"; cp "$FX/icon-ok.png" "$dm/outputs/z.png"
+AG qa --run "$dm" >/dev/null; bound "$dm" image PASS codex > "$dm/review-image.json"
+AG discard --run "$dm" --output 1 --reason 'first choice' --json > "$TMP/discard.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.discarded[0].output == "outputs/a.png" and (.stale | index("qa.json")) and (.stale | index("review-image.json"))' "$TMP/discard.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$dm/outputs-rejected/a.png" \
+  && ok "discard by index moves bytes and reports stale QA and image review" || no "discard index rc=$rc" "$(cat "$TMP/err" "$TMP/discard.json")"
+cp "$FX/icon-opaque.png" "$dm/outputs/a.png"
+AG discard --run "$dm" --output a.png --reason 'second choice' --json > "$TMP/discard.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.discarded[0].path == "outputs-rejected/a.1.png"' "$TMP/discard.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$dm/outputs-rejected/a.png" && cmp -s "$FX/icon-opaque.png" "$dm/outputs-rejected/a.1.png" \
+  && ok "discard by name preserves an existing rejected file with a numbered collision" || no "discard name rc=$rc" "$(cat "$TMP/err" "$TMP/discard.json")"
+AG discard --run "$dm" --output z.png --reason '  ' > "$TMP/o" 2>&1; rblank=$?
+AG discard --run "$dm" --output missing.png --reason missing > "$TMP/o2" 2>&1; rmissing=$?
+AG discard --run "$dm" --output z.png --reason valid >/dev/null 2>"$TMP/err"; rmove=$?
+AG discard --run "$dm" --output 1 --reason last > "$TMP/o3" 2>&1; rlast=$?
+[ $rblank -eq 2 ] && [ $rmissing -eq 1 ] && [ $rmove -eq 0 ] && [ $rlast -eq 1 ] \
+  && [ -f "$dm/outputs/prop.png" ] && [ "$(jq '.discards | length' "$dm/discards.json")" -eq 3 ] \
+  && ok "discard refuses blank reason, unknown output and last output without moving them" || no "discard refusals rc=$rblank/$rmissing/$rmove/$rlast" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3" "$TMP/err")"
+AG discard --run "$fa" --output 1 --reason approved > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q 'run.md is approved' "$TMP/o" && [ ! -e "$fa/outputs-rejected" ] && [ -f "$fa/outputs/prop.png" ] \
+  && ok "discard refuses an approved run without moving its output" || no "discard approved rc=$rc" "$(cat "$TMP/o")"
+
+finrun discard-single-001 icon icon-ok.png
+ds="$RUNS/discard-single-001"; AG finalize --run "$ds" >/dev/null; AG manifest --run "$ds" >/dev/null
+batch_front "$ds" | jq -e '.spec.trace | has("discarded") | not' >/dev/null && ! grep -q '^- Discarded:' "$ds/run.md" \
+  && ok "single-output manifest retains its existing trace and body without discards" || no "single-output discard compatibility"
+
 echo "-- budget: advisory spend guard (resolve --max-outputs, budget --run, finalize)"
 lf() { tr -d '\r' < "$1"; }
 # resolve records spec.budget.max_outputs: default 4 (--json and --out), --max-outputs N, invalid values are usage errors
@@ -2629,6 +2697,22 @@ variant qp-fallback-001 SAME_MODEL:claude              # explicit same-model fal
 variant qp-badmark-001 SAME_MODEL:codex                # marker on another model's review
 variant qp-tamper-001; printf 'x' >> "$RUNS/qp-tamper-001/outputs/qp-icon.png"
 variant qp-extra-001; cp "$FX/icon-ok.png" "$RUNS/qp-extra-001/outputs/second.png"
+# Copies of the manifested four-output batch isolate each rejected-file quality check.
+for name in qp-batch-001 qp-batch-extra-001 qp-rejected-extra-001 qp-rejected-sha-001 qp-reverse-001; do
+  cp -R "$bd" "$RUNS/$name"; rm -f "$RUNS/$name/run.md"; AG manifest --run "$RUNS/$name" >/dev/null
+done
+cp "$FX/icon-ok.png" "$RUNS/qp-batch-extra-001/outputs/unrecorded.png"
+cp "$FX/icon-ok.png" "$RUNS/qp-rejected-extra-001/outputs-rejected/unrecorded.png"
+printf x >> "$RUNS/qp-rejected-sha-001/outputs-rejected/bad.png"
+reverse="$RUNS/qp-reverse-001"
+mv "$reverse/outputs-rejected/bad.png" "$reverse/outputs/bad.png"
+AG qa --run "$reverse" >/dev/null 2>"$TMP/err"; reverseqa=$?
+AG manifest --run "$reverse" >/dev/null 2>>"$TMP/err"; reversemanifest=$?
+[ $reverseqa -eq 1 ] && [ $reversemanifest -eq 0 ] && cmp -s "$TMP/batch-bad.png" "$reverse/outputs/bad.png" \
+  && batch_front "$reverse" | jq -e '(.spec.outputs | length == 4) and (.spec.trace | has("discarded") | not)' >/dev/null \
+  && ! grep -q '^- Discarded:' "$reverse/run.md" \
+  && ok "moving a discarded PNG back and rerunning QA and manifest removes its discard trace" \
+  || no "discard reversal qa=$reverseqa manifest=$reversemanifest" "$(cat "$TMP/err")"
 variant qp-qafail-001; cp "$FX/icon-opaque.png" "$RUNS/qp-qafail-001/outputs/qp-icon.png"
 AG qa --run "$RUNS/qp-qafail-001" >/dev/null; AG manifest --run "$RUNS/qp-qafail-001" >/dev/null
 variant qp-noqa-001; rm -f "$RUNS/qp-noqa-001/qa.json"; AG manifest --run "$RUNS/qp-noqa-001" >/dev/null
@@ -2830,6 +2914,10 @@ case_ qp-fallback-001 gen-run-prompt-review WARN 'same-model fallback' "explicit
 case_ qp-badmark-001 gen-run-prompt-review FAIL 'is not the prompt author' "SAME_MODEL marker on another model's review: FAIL"
 case_ qp-tamper-001 gen-run-outputs FAIL 'sha256 on disk differs' "output bytes changed after the record: FAIL"
 case_ qp-extra-001 gen-run-outputs FAIL 'outputs/second.png is not recorded' "unrecorded outputs/*.png: FAIL"
+case_ qp-batch-001 gen-run-outputs PASS '' "manifested batch with a recorded discard: gen-run-outputs PASS"
+case_ qp-batch-extra-001 gen-run-outputs FAIL 'outputs/unrecorded.png is not recorded' "batch with an unrecorded output: gen-run-outputs FAIL"
+case_ qp-rejected-extra-001 gen-run-outputs FAIL 'outputs-rejected/unrecorded.png is not recorded' "unlisted rejected PNG: gen-run-outputs FAIL"
+case_ qp-rejected-sha-001 gen-run-outputs FAIL 'sha256 on disk differs' "rejected PNG with changed bytes: gen-run-outputs FAIL"
 case_ qp-qafail-001 gen-run-qa FAIL 'QA is FAIL' "QA not PASS on a proposed run: FAIL"
 case_ qp-noqa-001 gen-run-qa FAIL 'qa.json is missing' "QA never run: FAIL"
 case_ qp-prov-001 gen-run-provenance FAIL 'provenance.model is not recorded' "provenance without model on a proposed run: FAIL"
