@@ -29,12 +29,22 @@ matched, and the macOS user-home alternative also matches the path part of a URL
 plan". Optional follow-up: a `factory-pipeline.py plan-edit` verb (or a `validate --replace <plan>` mode) that does
 the copy, validation and replace in one step, with a test that an invalid edit never replaces the plan.
 
+### core-style-v2
 
+Bump the six core styles under `templates/assetgen/styles/` to structured v2 (`palette.colors`, `tone`, `canvas`),
+and only after a game project has real derived values from `assetgen.py style derive`. Reason: the bump changes every
+core style hash, so every existing run, anchor and rejection recorded against a core style drifts
+(`assetgen.py drift` reports `hash-changed`).
 
+### external-path-uri
 
+`stylelock.EXTERNAL_PATH` still accepts `file:` URIs (with a drive letter) and `$HOME` / `%USERPROFILE%` forms in the
+`external_source` `origin` and `rights_note`. Refuse a `file:` scheme and environment-variable paths, with a test.
 
+### review-base-topic
 
-
+`review_base` for a task with no deps that was cut from the topic branch uses the plan base (`main`) and so selects
+every suite. Use the topic branch as the review base.
 
 ### agent-runtime-quirks
 
