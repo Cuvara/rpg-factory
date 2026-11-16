@@ -1,4 +1,4 @@
-﻿"""Deterministic pixel-grid detection, reduction and palette limiting for RGBA8 images.
+"""Deterministic pixel-grid detection, reduction and palette limiting for RGBA8 images.
 
 Boundary energy is the sum of absolute RGBA differences between adjacent pixels.
 For each candidate cell size, find the strongest boundary residue on each axis;
@@ -40,7 +40,7 @@ def detect(img):
         raise NoGrid("image is too small to detect a grid")
     best = max(c[3] for c in candidates)
     k, ox, oy, score = next(c for c in reversed(candidates) if c[3] >= 0.9 * best)
-    if score < max(0.5, 3 / k):
+    if score < max(0.5, min(0.9, 3 / k)):
         raise NoGrid("edge energy does not show a clear pixel grid")
     return k, ox, oy
 

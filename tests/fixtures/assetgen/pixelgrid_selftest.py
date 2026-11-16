@@ -1,4 +1,4 @@
-﻿"""Self-test pixel-grid detection, reduction and deterministic palette limiting.
+"""Self-test pixel-grid detection, reduction and deterministic palette limiting.
 
 Prints ok/not ok per case and exits nonzero if any case fails.
 """
@@ -42,8 +42,8 @@ def upscale(scale, crop):
     return png.Image(w, h, bytes(data), True, "test")
 
 
-for scale in (4, 7):
-    for crop in (0, 2):
+for scale in (2, 3, 4, 7):
+    for crop in ((0, 1) if scale in (2, 3) else (0, 2)):
         img = upscale(scale, crop)
         name = "scale %d crop %d" % (scale, crop)
         try:
