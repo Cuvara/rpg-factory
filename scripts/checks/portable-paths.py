@@ -9,6 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+from workspace import registry_root_default  # noqa: E402  (scripts/lib/workspace.py)
+
 SEP = r"[/\\]+"
 SEGMENT = r"[\w.$%{}<>~!-]+"
 PATHS = re.compile(
@@ -56,7 +59,8 @@ def main() -> int:
     root = args.root.resolve()
     allow = load_allowlist(args.allowlist or root / "tests/fixtures/portable-paths-allow.txt")
     registry = json.loads((root / "registry.json").read_text(encoding="utf-8"))
-    workspace = canonical(registry["workspace"]["root_default"])
+    default = registry_root_default(registry)
+    workspace = canonical(default) if default else None
     result = subprocess.run(["git", "ls-files", "-z"], cwd=root, check=True, stdout=subprocess.PIPE)
     findings = files = 0
     for raw in result.stdout.split(b"\0"):
@@ -98,9 +102,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         raise SystemExit(main())
     except (OSError, ValueError, KeyError, TypeError, re.error, subprocess.CalledProcessError) as exc:

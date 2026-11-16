@@ -5,6 +5,7 @@
   linked_worktree(d)               (toplevel, main checkout) of a linked worktree, read from its `.git` file (no git call)
   native_path(p) / native_abs(p)   a path written in another shell's drive form as this platform resolves it
   default_workspace(env, nt, registry)  the configured workspace or the registry default in native form
+  registry_root_default(registry)  the registry's workspace default as written (raw, None when absent)
 
 Stdlib only and cheap to import: the file guard loads it on every Read.
 """
@@ -31,6 +32,12 @@ def native_path(p, nt=None):
         return p
     m = re.match(r"^/mnt/([A-Za-z])(/|$)", p) or re.match(r"^/([A-Za-z])(/|$)", p)
     return f"{m.group(1).upper()}:/{p[m.end():]}" if m else p
+
+
+def registry_root_default(registry):
+    """The registry's workspace default exactly as written (no platform conversion), or None when absent."""
+    ws = registry.get("workspace") if registry else None
+    return ws.get("root_default") if isinstance(ws, dict) else None
 
 
 def default_workspace(env=None, nt=None, registry=None):
