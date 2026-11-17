@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- None.
+- plan-edit-verb, plan-edit-commit-guard and run-lead-waiter-reaped: plan plan-edit (`docs/plans/plan-edit.json`).
 
 ## Open
 
