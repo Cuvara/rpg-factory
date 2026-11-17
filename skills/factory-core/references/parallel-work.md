@@ -51,6 +51,14 @@ The QA tiers table of delivery.md carries this repo's commands (registry `pipeli
 green before merging and `tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
 slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for a release.
 
+- **Before rerunning a tier command whose terminal or wrapping command is gone, look for its run first:** check the slot
+  directories (`<persistent state dir>/locks/run-all-slots/<n>`: `checkout`, `pid`, `winpid`, `args`) for a live run of
+  your checkout and read its result with `tests/run-all.sh --last-result` instead of starting a copy (a second run of
+  the same checkout and arguments exits 4 and names the holder; `--attach` waits for it and returns its status). Stop
+  that process only when you started it, by its PID and never by pattern. Reason: backlog run-all-orphan-after-reap - a
+  stopped wrapper left run-all running and holding its test slot while the session believed it dead, so a rerun queued
+  behind or duplicated its own run.
+
 ## Stacked dispatch and test selection in this repo (delivery.md sections 4 and 10)
 
 The stacked-dependent rule is delivery.md section 4, "Stacked dependents" (`policy:stacked-dispatch`); these are the

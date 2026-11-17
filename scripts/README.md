@@ -105,6 +105,11 @@ tests/run-all.sh --list-suites      # print the suite names --only-suites accept
 tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree and coverage (integration QA)
 tests/run-all.sh --no-wait          # exit 3 instead of waiting when another full run holds the per-machine lock
 tests/run-all.sh --no-reuse         # run every suite; by default a suite whose input hash already passed is reused
+tests/run-all.sh --last-result [--checkout DIR]  # print the newest result record of a checkout (read-only; exit 0, or 1 when none);
+                                    # adds a `running:` line while a slot or the full-run lock of that checkout is live
+tests/run-all.sh --attach           # with a live run of the same checkout and arguments: wait for it, print its record, exit with
+                                    # its status; without it that second run starts nothing and exits 4, naming the holder
+                                    # (slot, pid, winpid, started, args). Every admitted run writes its record at exit, also after INT/TERM/HUP
 tests/run-all.sh -j 4               # up to 4 suites at once; same lines, order, count and exit code as -j 1 (default);
                                     # live-workspace checks one at a time, run1 suites alone; CI uses -j 4
 tests/run-all-parallel.test.sh      # run-all -j scheduler on stand-in suites (order, counts, cap, live lane, run1)
