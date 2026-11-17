@@ -281,7 +281,7 @@ def host_free_source(source):
         if parsed.scheme in ("http", "https") or parsed.netloc:
             return parsed.path + ("?" + parsed.query if parsed.query else "") + ("#" + parsed.fragment if parsed.fragment else "")
     except ValueError:
-        return ""
+        return source  # malformed authority: keep the evidence as recorded; classification reports it invalid
     return source
 
 

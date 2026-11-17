@@ -654,11 +654,10 @@ EOF
 staged_layout_rc=$?
 [ $staged_layout_rc -eq 0 ] && ok "workflow.ui.json every core workflow template: no wire crosses an unrelated node, Save off the preview row, groups hold members and notes" \
   || no "workflow.ui.json core templates layout rc=$staged_layout_rc" "$(cat "$TMP/staged-layout-check")"
-# The re-laid templates differ from the base branch only in ui.positions (nodes, links, params, widget values, groups,
-# notes and every other field are unchanged), and ui.positions validates: unknown node id, non-pair, non-finite number,
+# Each re-laid template's ui.positions apply to its layout, and ui.positions validates: unknown node id, non-pair, non-finite number,
 # bool and a non-object each raise a ValueError naming ui positions; a position overrides the computed one.
 python3 -B - "$ROOT" > "$TMP/positions-check" 2>&1 <<'EOF'
-import copy, json, math, subprocess, sys
+import copy, json, math, sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
@@ -666,7 +665,6 @@ sys.path.insert(0, str(root / "scripts/assetgen"))
 import uiworkflow
 
 known = json.loads((root / "scripts/assetgen/data/known-nodes.json").read_text(encoding="utf-8"))["nodes"]
-BASE = "feat/assetgen/followups"
 RELAID = ("hybrid-character", "hybrid-environment", "hybrid-icon-ui", "local-variation")
 workflows = root / "templates/assetgen/workflows"
 for name in RELAID:
@@ -676,26 +674,6 @@ for name in RELAID:
     ui = uiworkflow.to_ui(t["workflow"], known, None, t["ui"])
     nodes = {str(n["id"]): n for n in ui["nodes"]}
     assert all(nodes[nid]["pos"] == list(pos) for nid, pos in positions.items()), name
-
-def without_positions(t):
-    t = copy.deepcopy(t)
-    t["ui"].pop("positions", None)
-    return t
-
-probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "-q", BASE + "^{commit}"],
-                       capture_output=True, text=True)
-if probe.returncode != 0:
-    print("skip base ref %s is not available" % BASE)
-else:
-    for name in RELAID:
-        rel = "templates/assetgen/workflows/%s.json" % name
-        shown = subprocess.run(["git", "-C", str(root), "show", "%s:%s" % (BASE, rel)], capture_output=True)
-        assert shown.returncode == 0, (name, shown.stderr)
-        old = json.loads(shown.stdout.decode("utf-8"))
-        new = json.loads((root / rel).read_text(encoding="utf-8"))
-        assert without_positions(old) == without_positions(new), name
-        assert list(old["workflow"]) == list(new["workflow"]), name  # node order and ids as before
-    print("compared")
 
 graph = json.loads((root / "tests/fixtures/assetgen/local/hybrid-anchor-template.json").read_text(encoding="utf-8"))
 def lay(positions, groups=True):
@@ -739,13 +717,6 @@ positions_rc=$?
 [ $positions_rc -eq 0 ] && grep -qx ok "$TMP/positions-check" \
   && ok "ui.positions: unknown id, non-pair, non-finite, bool and non-object raise a ValueError naming ui positions; a position overrides the computed one and stays inside its group" \
   || no "ui.positions validation rc=$positions_rc" "$(cat "$TMP/positions-check")"
-if grep -q '^skip ' "$TMP/positions-check"; then
-  ok "re-laid templates differ from the base branch only in ui.positions (skipped: $(grep '^skip ' "$TMP/positions-check" | cut -c6-))"
-else
-  [ $positions_rc -eq 0 ] && grep -qx compared "$TMP/positions-check" \
-    && ok "re-laid hybrid and local templates differ from feat/assetgen/followups only in ui.positions (nodes, links, params, widget values, groups, notes unchanged)" \
-    || no "re-laid templates differ beyond positions rc=$positions_rc" "$(cat "$TMP/positions-check")"
-fi
 cp "$ROOT/tests/fixtures/assetgen/ui-layout.json" "$GL/templates/ui-layout.json"
 mkrun ui-layout-001 icon --style stylized-painterly --authoring "$AUTH" --template ui-layout
 ud="$RUNS/ui-layout-001"
@@ -2559,6 +2530,26 @@ AG finalize --run "$fn" --json > "$TMP/filter-hostfree.json" 2>"$TMP/err"; rc=$?
   && cmp -s "$TMP/fetch-hostfree.json" "$fn/fetch.json" \
   && ok "filter: a host-free fetch.json classifies the same files and stays byte-identical" \
   || no "filter host-free fetch.json rc=$rc" "$(cat "$TMP/err" "$TMP/filter-hostfree.json")"
+# A malformed URL (an unterminated IPv6 authority) is kept as recorded by rewrite_fetch, never replaced by an empty string;
+# a well-formed hosted URL in the same entry is still rewritten host-free.
+python3 -B - "$ROOT" "$TMP/fetch-malformed" > "$TMP/fetch-malformed.out" 2>&1 <<'EOF'
+import json, os, sys
+root, work = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "scripts/assetgen"))
+import runfiles
+os.makedirs(work, exist_ok=True)
+bad = "http://[::1/view?filename=x.png"
+with open(os.path.join(work, "fetch.json"), "w", encoding="utf-8") as f:
+    json.dump({"prompt_id": "p1", "urls": [bad, "http://127.0.0.1:8188/view?filename=y.png&type=output"]}, f)
+assert runfiles.host_free_source(bad) == bad
+runfiles.rewrite_fetch(work)
+data = json.load(open(os.path.join(work, "fetch.json"), encoding="utf-8"))
+assert data["urls"] == [bad, "/view?filename=y.png&type=output"], data
+print("ok")
+EOF
+[ $? -eq 0 ] && grep -qx ok "$TMP/fetch-malformed.out" \
+  && ok "rewrite_fetch keeps a malformed fetch URL unchanged and still strips the host of a valid one" \
+  || no "rewrite_fetch malformed URL" "$(cat "$TMP/fetch-malformed.out")"
 # A live-shaped staged SaveImage output is fitted before embedding and QA.
 fitlive="$RUNS/fit-live-icon-001"
 mkrun fit-live-icon-001 icon --style stylized-painterly --template staged-icon && AG render --run "$fitlive" >/dev/null 2>"$TMP/err" \

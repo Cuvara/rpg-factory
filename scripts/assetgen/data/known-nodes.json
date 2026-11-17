@@ -1320,7 +1320,7 @@
     "DWPosePreprocessor"
    ],
    "provider": "comfyui_controlnet_aux (Fannovel16)",
-   "signatures": "pack source node_wrappers/canny.py at commit a587a4c15945, no saved object_info"
+   "signatures": "CannyEdgePreprocessor: pack source node_wrappers/canny.py at commit a587a4c15945, no saved object_info; DepthAnythingPreprocessor and DWPosePreprocessor: hand-written, unverified against the upstream pack (no source file or commit checked, no saved object_info; the ckpt_name, bbox_detector and pose_estimator inputs are COMBO in the upstream pack and recorded here as STRING)"
   },
   "cut-out (BiRefNet or rembg)": {
    "nodes": [

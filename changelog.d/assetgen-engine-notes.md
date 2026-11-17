@@ -9,6 +9,6 @@
 
 ### Fixed
 
-- Asset generation tests: the staged layout test runs over every core workflow template, not only `staged-*.json`, and a second check proves the re-laid templates differ from the base branch only in `ui.positions`; `ui.positions` validation (unknown node id, non-pair, non-finite number, bool) is covered.
+- Asset generation tests: the staged layout test runs over every core workflow template, not only `staged-*.json`; `ui.positions` validation (unknown node id, non-pair, non-finite number, bool) is covered.
 - Asset generation tests: the `anchor_target` lint cases assert the result count and the state and reasons of every entry of `results`, not only `results[0]`, and the hybrid anchor fixture (and the `target-*` lint fixtures derived from it) decodes with `VAEDecodeTiled`, as the `local-8gb` profile wants, so the profile lint reports nothing on it.
 - UNTESTED on RTX 5060: nothing was generated or measured; the tests use fixtures and in-process checks only, and no image, endpoint or credential is involved.

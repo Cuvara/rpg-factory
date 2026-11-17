@@ -91,7 +91,6 @@ FLUX_RULE = {"local-4gb": "any", "local-8gb": "quantized"}
 FLUX = re.compile(r"flux", re.I)
 QUANTIZED = re.compile(r"fp8|gguf|q4|q5|q6|q8|nf4", re.I)
 MODEL_INPUT = "_name"  # a model-file input: ckpt_name, lora_name, control_net_name, model_name, unet_name, clip_name
-REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "known-nodes.json")
 _LOCAL = []
 
 
@@ -381,7 +380,7 @@ def _local_types():
             registry = lint.known_registry()
             local = {t for t in registry.get("local_model_nodes", []) if isinstance(t, str)}
             packs = {t for spec in registry.get("packs", {}).values() for t in spec.get("nodes", []) if isinstance(t, str)}
-        except (OSError, ValueError, AttributeError, TypeError):
+        except (ImportError, OSError, ValueError, AttributeError, TypeError):
             local, packs = set(), set()
         _LOCAL.append((local, packs))
     return _LOCAL[0]
