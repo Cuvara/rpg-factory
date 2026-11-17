@@ -4,13 +4,21 @@ The limit is ADVISORY. The engine cannot stop comfy-mcp run_workflow (it never r
 runs `assetgen.py budget --run <run>` before each run_workflow and does not run when remaining is 0 or the state is
 exceeded. resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default DEFAULT_MAX_OUTPUTS).
 
-used = the run's deliverable outputs/*.png (excluding previews) + the failed attempts of its series (lower-numbered
-sibling run dirs without run.md). Output classification uses fetch.json evidence via runfiles.output_origins.
+used = the generations made + the failed attempts of its series (lower-numbered sibling run dirs without run.md).
+The budget counts generations, so a discard never refunds one: the run's deliverable outputs/*.png (excluding previews)
+plus its active discards (discards.json entries whose file is still in outputs-rejected/ with the recorded sha256, the
+rule of discard.active; a file moved back to outputs/ counts once, as an output). A sliced sheet counts as one
+generation whether its cells are present or discarded (a fully discarded sheet still counts 1): its cells never add to
+the count. Output classification uses fetch.json evidence via runfiles.output_origins. --json: `outputs` is the counted
+generations (failed attempts excluded), `discarded` how many of them are discarded (discarded non-sheet outputs plus
+sheets whose every cell is discarded), `sheet_cells` the cells present in outputs/ and `sheet_cells_discarded` the
+discarded cells of sheets (both only when sheet.json exists).
 States: unlimited (spec.json has no budget: a run resolved before the spend guard, never a failure), ok (used <
 allowed), at-limit (used == allowed), exceeded (used > allowed), invalid (spec.budget present but malformed). Only
 exceeded and invalid exit 1. Stdlib only; never imports assetgen.
 """
 import glob
+import hashlib
 import json
 import os
 import re
@@ -66,6 +74,88 @@ def _limit(spec):
     return n, None
 
 
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 16), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _output_path(value):
+    """value when it is an outputs/<name>.png path, else None."""
+    if (isinstance(value, str) and value.startswith("outputs/") and os.path.basename(value) == value[8:]
+            and value.endswith(".png")):
+        return value
+    return None
+
+
+def _active_discards(run_dir):
+    """The outputs/ names of the active discards (see discard.active), one per rejected file; [] when discards.json
+    is missing or unreadable. Reads discards.json itself: budget never imports assetgen or discard."""
+    try:
+        with open(os.path.join(run_dir, "discards.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        return []
+    rows = data.get("discards") if isinstance(data, dict) else None
+    seen, result = set(), []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        output, path = row.get("output"), row.get("path")
+        if (not isinstance(output, str) or not isinstance(path, str) or not path.startswith("outputs-rejected/")
+                or os.path.basename(path) != path[len("outputs-rejected/"):]
+                or not isinstance(row.get("reason"), str) or not row["reason"].strip()):
+            continue
+        target = os.path.join(run_dir, *path.split("/"))
+        try:
+            ok = os.path.isfile(target) and _sha256(target) == row.get("sha256")
+        except OSError:
+            ok = False
+        if ok and path not in seen:
+            seen.add(path)
+            result.append(output)
+    return result
+
+
+def _sheets(run_dir):
+    """The sheets of sheet.json as lists of their outputs/ cell paths, or None when there is no readable record."""
+    try:
+        with open(os.path.join(run_dir, "sheet.json"), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError, UnicodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    sheets = record.get("sheets")
+    result = []
+    for sheet in sheets if isinstance(sheets, list) else []:
+        if not isinstance(sheet, dict):
+            continue
+        cells = sheet.get("cells")
+        paths = [_output_path(cell.get("output")) for cell in cells if isinstance(cell, dict)] if isinstance(cells, list) else []
+        result.append([p for p in paths if p])
+    return result
+
+
+def _generations(run_dir, outputs):
+    """(generations, discarded, extra): the generations made, the counted ones that are discarded, and the sheet keys
+    (sheet_cells, sheet_cells_discarded) when sheet.json exists, else {}. `outputs` is the number of deliverable
+    outputs/*.png files; sheet cells never add to the count, a sheet counts once, a discard never refunds."""
+    active = _active_discards(run_dir)
+    sheets = _sheets(run_dir)
+    cells = {path for cell_paths in sheets or [] for path in cell_paths}
+    present = {path for path in cells if os.path.isfile(os.path.join(run_dir, *path.split("/")))}
+    discarded_cells = [o for o in active if o in cells and o not in present]
+    discarded_plain = [o for o in active if o not in cells]
+    generations = outputs - len(present) + len(sheets or []) + len(discarded_plain)
+    fully = sum(1 for cell_paths in sheets or [] if cell_paths and all(
+        p not in present and p in discarded_cells for p in cell_paths))
+    extra = {} if sheets is None else {"sheet_cells": len(present), "sheet_cells_discarded": len(discarded_cells)}
+    return generations, len(discarded_plain) + fully, extra
+
+
 def state(run_dir, spec, failed_attempts):
     """The budget state of a run (see the module docstring); failed_attempts are the run ids of its series' failed
     attempts (assetgen.failed_attempts)."""
@@ -73,6 +163,7 @@ def state(run_dir, spec, failed_attempts):
     outputs, previews = _output_counts(run_dir)
     preview_pattern = os.path.join(glob.escape(run_dir), runfiles.PREVIEW_DIR, "*")
     previews += sum(1 for path in glob.glob(preview_pattern) if os.path.isfile(path))
+    outputs, discarded, extra = _generations(run_dir, outputs)
     used = outputs + len(failed)
     allowed, problem = _limit(spec)
     remaining = None
@@ -93,9 +184,11 @@ def state(run_dir, spec, failed_attempts):
         else:
             st, exit_code = "exceeded", 1
             reason = "the run series used %d generations, more than the %d allowed" % (used, allowed)
-    return {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "outputs": outputs, "previews": previews,
-            "failed_attempts": failed, "used": used, "allowed": allowed, "remaining": remaining, "state": st,
-            "reason": reason, "exit": exit_code}
+    result = {"schema": SCHEMA, "run": os.path.basename(os.path.normpath(run_dir)), "outputs": outputs,
+              "discarded": discarded, "previews": previews, "failed_attempts": failed, "used": used, "allowed": allowed,
+              "remaining": remaining, "state": st, "reason": reason, "exit": exit_code}
+    result.update(extra)
+    return result
 
 
 def _plural(n, word):
@@ -104,8 +197,10 @@ def _plural(n, word):
 
 def line(st):
     """One text line: "budget <state>: ..."."""
-    used = "%d used (%s + %s)" % (st["used"], _plural(st["outputs"], "output"),
-                                   _plural(len(st["failed_attempts"]), "failed attempt"))
+    discarded = st.get("discarded", 0)
+    used = "%d used (%s%s + %s)" % (st["used"], _plural(st["outputs"], "output"),
+                                     ", %d discarded" % discarded if discarded else "",
+                                     _plural(len(st["failed_attempts"]), "failed attempt"))
     preview_note = " (%s not counted)" % _plural(st.get("previews", 0), "preview file") if st.get("previews", 0) else ""
     if st["state"] == "unlimited":
         return "budget unlimited: %s; spec.json has no budget (resolved before the spend guard)%s" % (used, preview_note)
