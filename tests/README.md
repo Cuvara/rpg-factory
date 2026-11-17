@@ -10,13 +10,9 @@ Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standal
 
 ## QA tiers and run-all flags
 
-The QA tiers table of `skills/delivery/references/delivery.md` (section 10, "QA tiers"; registry `pipeline.qa_tiers`)
-names the command of each tier. In short: a task runs `tests/run-all.sh --affected --base <base> -j 2` or its own
-suites with `--only-suites`; integration QA before a PR runs `tests/run-all.sh --workspace-only`; CI
-runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite, `--no-workspace --no-claude`)
-and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single required check
-(`.github/workflows/tests.yml`, section "CI" below); `tests/run-all.sh --release` and `tests/dogfood.sh --installed`
-run only for a release. The rules behind those commands follow.
+Which tier runs which command, and when: `skills/delivery/references/delivery.md` section 10 ("QA tiers"; registry
+`pipeline.qa_tiers`). CI is described in section "CI" below. The run-all flags and rules that belong to the runner
+follow.
 
 ## CI
 
