@@ -187,24 +187,24 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 
 ### policy-followups-leftovers
 
-From plan policy-followups (`docs/plans/policy-followups/report.md`), the two decided items first:
+From plans policy-followups and owner-policy (`docs/plans/policy-followups/report.md`,
+`docs/plans/owner-policy/report.md`):
 
-- Decided by the owner (2026-11-17), to implement: a plan may widen `pipeline.models.scope` for itself, but only
-  (a) after asking the owner, with the owner's word recorded in the plan, or (b) when the model is strictly necessary
-  for that plan, with the reason recorded in the plan. Today a plan-scoped owner override cannot name a model outside
-  the scope (the personal policy file may only narrow it). Run lead's reading: `validate` accepts an out-of-scope
-  model only with such a recorded approval or necessity reason, and the report lists every widening.
-- Decided by the owner (2026-11-17), to implement: the english-only check applies everywhere; only the chat report to
-  the owner uses `workspace.report_language`. Today the git guard covers only commands run inside the plugin checkout
-  the guard runs from (`in_scope()` in `scripts/lib/rpgf_guard/language.py`). Run lead's reading: cover every
-  rpg-factory checkout and worktree (Orca task worktrees outside the workspace included), in the git guard and in
-  `scripts/file-guard.py` alike.
 - `plan_branch` in `scripts/factory-pipeline.py` treats `<topic>-*` as this plan's, so a plan whose topic extends
   this one (`<topic>-v2`) can count as a child when Orca's lineage names this plan's worktree as its parent; an
   Orca-prefixed branch equal to the topic (`codex/<topic>`) is not matched by lineage.
 - With concise `worker-list` rows (Orca without `--full`), a worker released through `terminalState` but without
   `state` is still counted in the "settledness not checked" note.
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
+
+- Lows of `model_scope_widen` (plan owner-policy): `validate` reports a malformed entry twice (once in `validate()`,
+  once through `load_for_plan`); `"model_scope_widen": null` passes `validate` while the schema requires an array;
+  `status --json` prints the widening lines on stderr (`pipeline-status.schema.json` has no field for them);
+  `lead_prompt` loads the policy twice.
+- The git guard's english-only check inspects only absolute path tokens: a relative `git -C ../clone` from an
+  unrelated directory gets no advisory.
+- A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
+  session must stop its own run before it reports.
 
 ### path-audit-followups
 
@@ -240,6 +240,10 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   busy machine.
 
 ## Covered
+
+- **policy-followups-leftovers, the two owner decisions of 2026-11-17**: shipped in plan owner-policy
+  (`changelog.d/owner-policy-scope-widen.md`, `changelog.d/owner-policy-english-scope.md`); the lows stay in
+  policy-followups-leftovers.
 
 - **repo-path-audit**: shipped in plan path-audit (`changelog.d/path-audit-pattern.md`,
   `changelog.d/path-audit-check.md`, `changelog.d/path-audit-affected.md`); the lows moved to path-audit-followups.

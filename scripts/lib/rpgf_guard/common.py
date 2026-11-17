@@ -37,7 +37,7 @@ SCRIPTS = os.path.dirname(LIB)  # factory_session.py lives here
 if LIB not in sys.path:
     sys.path.append(LIB)  # appended: stdlib lookups must not stat /mnt/c first
 from pluginroot import plugin_root
-from workspace import find_workspace, git_out, linked_worktree, main_checkout, native_path  # noqa: E402,F401  (public: scripts/git-guard.py re-exports them)
+from workspace import find_workspace, git_out, linked_worktree, main_checkout, native_path, plugin_checkout  # noqa: E402,F401  (public: scripts/git-guard.py re-exports them)
 PLUGIN_ROOT = plugin_root()
 
 

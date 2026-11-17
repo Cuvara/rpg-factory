@@ -155,10 +155,19 @@ lang none Write "$C/Assets/i18n/vi.txt" "$VI"
 lang none Write "$S/backend/deploy/messages.po" "$VI"
 lang none Write "$TMP/outside/vi.txt" "$VI"                                    # not governed: no opinion
 lang none Write "$HOME_DIR/.claude/projects/p/notes.md" "$VI"                  # only the memory directory of a project is governed
+# A clone and its linked worktree outside the workspace are governed; another plugin is not.
+CLONE="$TMP/plugin-clone"; LWT="$TMP/plugin-worktree"; OTHER_PLUGIN="$TMP/other-plugin"
+mkdir -p "$CLONE/.git/worktrees/wt" "$CLONE/.claude-plugin" "$LWT" "$OTHER_PLUGIN/.git" "$OTHER_PLUGIN/.claude-plugin"
+printf '{"name":"rpg-factory"}\n' > "$CLONE/.claude-plugin/plugin.json"
+printf 'gitdir: %s/.git/worktrees/wt\n' "$CLONE" > "$LWT/.git"
+printf '{"name":"other-plugin"}\n' > "$OTHER_PLUGIN/.claude-plugin/plugin.json"
+lang warn Write "$CLONE/docs/new.md" "$VI"
+lang warn Write "$LWT/docs/new.md" "$VI"
+lang none Write "$OTHER_PLUGIN/docs/new.md" "$VI"
 # A temporary plugin checkout exercises the plugin allowlist without changing the real fixture.
 LP="$TMP/language-plugin"
-mkdir -p "$LP/.claude-plugin" "$LP/tests/fixtures" "$LP/docs"
-printf '{}\n' > "$LP/.claude-plugin/plugin.json"
+mkdir -p "$LP/.git" "$LP/.claude-plugin" "$LP/tests/fixtures" "$LP/docs"
+printf '{"name":"rpg-factory"}\n' > "$LP/.claude-plugin/plugin.json"
 printf 'docs/sample.md:2 # fixture\n' > "$LP/tests/fixtures/english-allow.txt"
 printf 'first\nold\nlast\n' > "$LP/docs/sample.md"
 lang none Write "$LP/docs/sample.md" "$(jq -cn --argjson v "$VI" '"first\n" + $v')"

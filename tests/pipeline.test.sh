@@ -6,7 +6,7 @@
 # case-map: dogfood tests/dogfood.sh tests/dogfood/*
 # case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
-# case-map: model-policy docs/schemas/pipeline-subplan.schema.json
+# case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py
 # case-map: subplan docs/schemas/pipeline-subplan.schema.json
 # case-map: status docs/schemas/pipeline-status.schema.json
 # case-map: cleanup docs/schemas/pipeline-status.schema.json
@@ -3150,6 +3150,57 @@ STATE_MP=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/scripts/li
 mkdir -p "$(dirname "$STATE_MP")"; cp "$TMP/mp-narrow.json" "$STATE_MP"
 expect "override file in the persistent state dir applies without the variable" 0 "--model claude-sonnet-5-5 --effort high --json$" dispatch "$LT" --task gw --phase lead --runner orca
 rm -f "$STATE_MP"
+# Plan-specific widening is isolated from other plans and from the personal override.
+python3 - "$LT" "$TMP" <<'PY'
+import copy, json, pathlib, sys
+base = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+tmp = pathlib.Path(sys.argv[2])
+entry = {"agent": "claude", "model": "claude-haiku-4-5", "efforts": ["medium"],
+         "basis": "owner-approved", "reason": "Owner approved on 2026-11-17"}
+other = {"agent": "codex", "model": "example-model", "efforts": ["high"],
+         "basis": "necessary", "reason": "No in-scope model can perform this task"}
+def write(name, value):
+    plan = copy.deepcopy(base)
+    plan["id"] = "widen-" + name
+    plan["model_scope_widen"] = value
+    (tmp / ("widen-" + name + ".json")).write_text(json.dumps(plan), encoding="utf-8")
+write("valid", [entry, other])
+write("covered", [{**entry, "model": "claude-opus-5-5"}])
+for name, value in {
+    "non-array": {}, "non-object": [42], "unknown-key": [{**entry, "extra": 1}],
+    "missing-key": [{k: v for k, v in entry.items() if k != "model"}],
+    "unknown-agent": [{**entry, "agent": "unknown"}], "empty-efforts": [{**entry, "efforts": []}],
+    "unknown-basis": [{**entry, "basis": "maybe"}], "empty-reason": [{**entry, "reason": ""}],
+    "whitespace-reason": [{**entry, "reason": "   "}],
+}.items():
+    write(name, value)
+PY
+WIDE="$TMP/widen-valid.json"
+expect "plan widening: absent field rejects explicit model and effort" 2 "Nothing was dispatched" dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
+refute "plan widening: absent field dispatches nothing" "^orca |^# agent:" dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
+pp dispatch "$WIDE" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
+if [ "$RC" = 0 ] && has_ere "$OUT" '^orca agent launch .*--model claude-haiku-4-5 --effort medium --json$' && [ "$(grep -c '^model scope widened by plan ' <<<"$OUT")" = 1 ] && has_ere "$OUT" '^model scope widened by plan widen-valid: claude claude-haiku-4-5 \[medium\] \(basis owner-approved: Owner approved on 2026-11-17\)$'; then
+  pass=$((pass + 1)); echo "PASS  plan widening: explicit dispatch names its basis exactly once"
+else fail=$((fail + 1)); echo "FAIL  plan widening: explicit dispatch (rc=$RC)"; sed 's/^/      /' <<<"$OUT" | head -30; fi
+refute "plan widening: default profile does not use widening" '^model scope widened by plan ' dispatch "$WIDE" --task gw --phase lead --runner orca
+refute "plan widening: absent field dispatch prints no widening" '^model scope widened by plan ' dispatch "$LT" --task gw --phase lead --runner orca
+refute "plan widening: absent field prints no widening" '^[Mm]odel scope widen' validate "$LT"
+for bad in non-array non-object unknown-key missing-key unknown-agent empty-efforts unknown-basis empty-reason whitespace-reason; do
+  expect "plan widening: $bad fails validation" 1 '^ERROR model_scope_widen' validate "$TMP/widen-$bad.json"
+done
+expect "plan widening: already in scope is a note" 0 '^NOTE  model_scope_widen\[0\]: .*already in the model scope' validate "$TMP/widen-covered.json"
+for cmd in validate status; do
+  if [ "$cmd" = validate ]; then label='Model scope widening:'; else label='model scope widening:'; fi
+  pp "$cmd" "$WIDE"
+  if [ "$RC" = 0 ] && [ "$(grep -c "^$label" <<<"$OUT")" = 2 ] && has_ere "$OUT" "^$label claude claude-haiku-4-5 .*basis owner-approved" && has_ere "$OUT" "^$label codex example-model .*basis necessary"; then
+    pass=$((pass + 1)); echo "PASS  plan widening: $cmd lists both entries"
+  else fail=$((fail + 1)); echo "FAIL  plan widening: $cmd lists both entries (rc=$RC)"; sed 's/^/      /' <<<"$OUT" | head -30; fi
+done
+expect "plan widening: another plan in the same state remains restricted" 2 'Nothing was dispatched' dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
+refute "plan widening: another plan dispatches nothing" '^orca |^# agent:' dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
+printf '{"scope":{"claude":{"claude-haiku-4-5":["medium"]}}}\n' > "$TMP/mp-plan-wide.json"
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-plan-wide.json" expect "plan widening: personal override still cannot widen" 1 'claude/claude-haiku-4-5 is outside the registry scope' dispatch "$WIDE" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-plan-wide.json" refute "plan widening: invalid personal override dispatches nothing" '^orca |^# agent:' dispatch "$WIDE" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
 # a verdict records what the session ran with
 MV=$(plan models-verdict "$(sed 's/"id":"demo"/"id":"demo-models"/' < "$OK")")
 SHA=$(git -C "$S" rev-parse HEAD)

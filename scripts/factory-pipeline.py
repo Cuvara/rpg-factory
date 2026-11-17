@@ -6,7 +6,8 @@ cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Se
 skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
 file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
 script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`
-and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE). Plan format: docs/schemas/pipeline-plan.schema.json.
+and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE).
+`model_scope_widen` records plan-specific model scope additions and their basis. Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
@@ -693,6 +694,10 @@ def session_model(a, agent, role):
         allowed = "; ".join(f"{m}: {', '.join(e)}" for m, e in (policy["scope"].get(agent) or {}).items()) or "none"
         die(f"--model/--effort: {agent} {model} / {effort} is outside the model scope (registry pipeline.models.scope "
             f"plus override; {agent}: {allowed}). Nothing was dispatched.")
+    entry = model_policy.widening_for(getattr(a, "base_policy", policy), getattr(a, "widen_entries", None),
+                                      agent, model, effort)
+    if entry:
+        print(f"model scope widened by plan {a.plan_id}: {model_policy.widening_text(entry)}")
     return {"model": model, "effort": effort, "role": role}
 
 
@@ -907,6 +912,14 @@ def xs_plan_errors(plan, reg, pipe, tasks):
 def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
+    notes = []
+    if plan.get("model_scope_widen") is not None:
+        try:
+            base_policy = model_policy.load(reg)
+            widen_errors, notes = model_policy.widen_problems(base_policy, plan["model_scope_widen"])
+            errors.extend(widen_errors)
+        except model_policy.PolicyError as e:
+            errors.append(str(e))
     if plan.get("schema") != SCHEMA:
         errors.append(f"schema must be {SCHEMA}")
     for k in ("id", "title", "topic", "tasks"):
@@ -1010,7 +1023,7 @@ def validate(plan, reg):
             if len(users) > 1:
                 warnings.append(f"wave {n + 1}: {', '.join(users)} share `{res['id']}` - {res['rule']}")
     no_wt = sorted({t["repo"] for t in tasks if t.get("repo") and not repo_info(plan, reg, t["repo"])["worktrees"]})
-    return {"errors": errors, "warnings": warnings, "waves": planned, "order": order,
+    return {"errors": errors, "warnings": warnings, "notes": notes, "waves": planned, "order": order,
             "no_worktree_repos": no_wt}
 
 
@@ -1028,7 +1041,7 @@ def plan_models(plan, reg, errors):
     lead sees the cost before any dispatch. A broken policy or a role it cannot resolve is an error."""
     pipe = settings(reg)
     try:
-        policy = model_policy.load(reg)
+        policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
         errors.append(str(e))
         return None
@@ -1065,12 +1078,25 @@ def model_text(m):
     return f"{m['agent']} {m['model']} {m['effort']}" if m else "unresolved"
 
 
+def valid_widenings(plan, reg):
+    """Entries safe to display even when the plan or personal policy is invalid."""
+    entries = plan.get("model_scope_widen")
+    if not isinstance(entries, list):
+        return []
+    try:
+        policy = model_policy.load(reg)
+    except model_policy.PolicyError:
+        return []
+    return [entry for entry in entries if not model_policy.widen_problems(policy, [entry])[0]]
+
+
 def cmd_validate(a, reg):
     plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     out = validate(plan, reg)
     out.pop("order")
     out["models"] = plan_models(plan, reg, out["errors"])
+    out["model_scope_widen"] = plan.get("model_scope_widen", [])
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -1078,6 +1104,10 @@ def cmd_validate(a, reg):
             print("ERROR " + e)
         for w in out.get("warnings", []):
             print("WARN  " + w)
+        for note in out["notes"]:
+            print("NOTE  " + note)
+        for entry in valid_widenings(plan, reg):
+            print("Model scope widening: " + model_policy.widening_text(entry))
         for n, w in enumerate(out["waves"], 1):
             print(f"Wave {n}: {', '.join(w)}")
         if out["no_worktree_repos"]:
@@ -1260,7 +1290,7 @@ def subplan_models(sub, plan, reg, errors):
     if task is None or not isinstance(task.get("repo"), str) or not isinstance(task.get("paths"), list)             or not task["paths"] or any(path_problem(p) for p in task["paths"]):
         return None  # validation names what is wrong with the parent task
     try:
-        policy = model_policy.load(reg)
+        policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
         errors.append(str(e))
         return None
@@ -1940,7 +1970,9 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "and READY_FOR_PR; a message alone can be lost), then report to the run lead (`orca orchestration send --to "
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <report>`): branch "
         f"{spec['branch']}, HEAD SHA, your Orca Run id, subtasks with commits, review and QA verdicts (state, SHA, model), "
-        "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings.",
+        "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings"
+        + (", the plan's model scope widenings (" + "; ".join(model_policy.widening_text(e) for e in valid_widenings(plan, reg)) + ")"
+           if valid_widenings(plan, reg) else "") + ".",
         f"7. {subagents}" if subagents else None,
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
@@ -2171,11 +2203,17 @@ def cmd_dispatch(a, reg):
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
-    a.policy = load_policy(reg)
+    a.base_policy = load_policy(reg)
     plan["_path"] = a.plan
     v = validate(plan, reg)
     if v["errors"]:
         die("plan is invalid; run `validate` first: " + v["errors"][0], 1)
+    try:
+        a.policy = model_policy.load_for_plan(reg, plan)
+    except model_policy.PolicyError as e:
+        die(str(e), 1)
+    a.widen_entries = plan.get("model_scope_widen")
+    a.plan_id = plan.get("id")
     if a.paths and a.phase != "implement":
         die("--paths (the subtask's paths) goes with --phase implement")
     if a.report_to and a.phase != "lead":
@@ -3368,6 +3406,8 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
     pipe = settings(reg)
     v = validate(plan, reg)
     blockers, notes, commands, unverified = list(v["errors"]), [], [], []
+    notes.extend("model scope widened by the plan: " + model_policy.widening_text(entry)
+                 for entry in valid_widenings(plan, reg))
     repos = sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")})
     heads = {}
     for key in repos:
@@ -4752,6 +4792,8 @@ def cmd_status(a, reg):
         for tid, roles in models.items():
             for role, model in roles.items():
                 print(f"model: {tid} {role} -> {model['agent']} ({model['why']})")
+    for entry in valid_widenings(plan, reg):
+        print("model scope widening: " + model_policy.widening_text(entry), file=sys.stderr if a.json else sys.stdout)
     out = status(plan, reg, a.orca_run)
     if a.json:
         out["models"] = models

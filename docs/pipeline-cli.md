@@ -315,4 +315,19 @@ The model policy is delivery.md section 10 "Model choice"; these are its flags a
   runner shows model and effort in its header.
 - **Personal override.** An optional JSON file with the same keys, at `$RPG_FACTORY_MODEL_POLICY` or
   `<persistent state dir>/model-policy.json`, may narrow `scope` and replace `profiles`. The result is checked again
-  and an out-of-scope profile is an error. It is not committed; it lets one person limit their own spend.
+  and an out-of-scope profile is an error. It is not committed; it lets one person limit their own spend. It can
+  never widen the scope.
+- **Plan scope widening.** An optional plan field `model_scope_widen` (`docs/schemas/pipeline-plan.schema.json`) lets
+  one plan use a model outside `models.scope`. It is a list of entries
+  `{agent, model, efforts, basis, reason}`: `agent` is a pipeline agent, `efforts` a non-empty list, `basis` is
+  `owner-approved` (`reason` holds the owner's word and its date) or `necessary` (`reason` says why no in-scope model
+  can do the work), and `reason` is never empty. The policy order is the registry, then the personal override (narrow
+  only), then the plan's widening; the widening applies to that plan alone and never to another plan.
+  - A widened model is used only when passed explicitly (`dispatch --model` and `--effort`); `profiles` do not
+    change. `subplan` validation uses the widened scope too. Without an entry a model outside the scope still exits 2.
+  - `validate` fails on a malformed entry, an unknown agent, an unknown basis or an empty reason, and prints a NOTE for
+    an entry whose model and efforts are already in scope. It prints `Model scope widening: ...` per entry, `status`
+    prints `model scope widening: ...` per entry (stderr with `--json`), and `gate` prints a note per widening
+    and the lead report lists them, so the final report shows them.
+  - Every command that accepts a widened model prints one line, for example
+    `model scope widened by plan <id>: <agent> <model> [<efforts>] (basis <basis>: <reason>)`.
