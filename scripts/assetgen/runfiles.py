@@ -151,13 +151,16 @@ def qa_errors(qa):
 
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
 TEXT_NODES = ("PrimitiveStringMultiline", "PrimitiveString")  # a prompt node: its "value" is the text it outputs
-GENERATION_NODES = ("NineRouterImage", "KSampler")
+SAMPLERS = ("KSampler", "KSamplerAdvanced")
+GENERATION_NODES = ("NineRouterImage",) + SAMPLERS
 CLIP_TEXT_INPUTS = {"CLIPTextEncode": ("text",), "CLIPTextEncodeSDXL": ("text_g", "text_l")}
 MODEL_LOADERS = {"CheckpointLoaderSimple": ("ckpt_name", "checkpoints"),
                  "LoraLoader": ("lora_name", "loras"), "ControlNetLoader": ("control_net_name", "controlnet"),
-                 "UpscaleModelLoader": ("model_name", "upscale_models")}
+                 "UpscaleModelLoader": ("model_name", "upscale_models"),
+                 "DepthAnythingPreprocessor": ("ckpt_name", "annotators"),
+                 "DWPosePreprocessor": (("bbox_detector", "pose_estimator"), "annotators")}
 PRESET_LOADERS = {"IPAdapterUnifiedLoader": ("preset", "ipadapter")}
-LOCAL_NODES = ("KSampler",) + tuple(MODEL_LOADERS) + tuple(PRESET_LOADERS)
+LOCAL_NODES = SAMPLERS + tuple(MODEL_LOADERS) + tuple(PRESET_LOADERS)
 RUN_PREFIX = "assetgen/"
 
 
@@ -221,7 +224,7 @@ def _source_details(source):
     if not isinstance(source, str) or not source:
         return None
     parsed = urlsplit(source)
-    if parsed.scheme in ("http", "https"):
+    if parsed.scheme in ("http", "https") or (not parsed.scheme and "filename" in parse_qs(parsed.query)):
         query = parse_qs(parsed.query, keep_blank_values=True)
         filename = query.get("filename", [None])[0]
         if not filename:
@@ -269,8 +272,42 @@ def _fetch_entries(run_dir):
     return entries
 
 
+def host_free_source(source):
+    """Remove URL authority while retaining the path and query used to classify fetch evidence."""
+    if not isinstance(source, str):
+        return source
+    try:
+        parsed = urlsplit(source)
+        if parsed.scheme in ("http", "https") or parsed.netloc:
+            return parsed.path + ("?" + parsed.query if parsed.query else "") + ("#" + parsed.fragment if parsed.fragment else "")
+    except ValueError:
+        return ""
+    return source
+
+
+def rewrite_fetch(run_dir):
+    """Remove hosts from fetch URL entries, preserving the JSON shape and entry order."""
+    path = os.path.join(run_dir, FETCH_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return
+    entries = data if isinstance(data, list) else [data]
+    changed = False
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("urls"), list):
+            urls = [host_free_source(url) for url in entry["urls"]]
+            changed |= urls != entry["urls"]
+            entry["urls"] = urls
+    if changed:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False)
+            f.write("\n")
+
+
 def _classify_source(result, source, prefixes, save_nodes, label, evidence, record=None):
-    result["source"] = source if isinstance(source, str) else None
+    result["source"] = host_free_source(source) if isinstance(source, str) else None
     if evidence == FETCH_FILE:
         result["evidence"] = evidence
     try:
@@ -370,7 +407,7 @@ def workflow_prompts(workflow):
         out.append(v)
     polarities, visited, pending = {}, set(), []
     for n in workflow.values():
-        if isinstance(n, dict) and n.get("class_type") == "KSampler" and isinstance(n.get("inputs"), dict):
+        if isinstance(n, dict) and n.get("class_type") in SAMPLERS and isinstance(n.get("inputs"), dict):
             pending.extend((n["inputs"].get(p), p) for p in ("positive", "negative"))
     while pending:
         link, polarity = pending.pop()
@@ -504,7 +541,7 @@ def local_generation(workflow, spec, hashes=None):
     def seed_param(nid):
         node = template_graph.get(nid)
         inputs = node.get("inputs") if isinstance(node, dict) else None
-        value = inputs.get("seed") if isinstance(inputs, dict) else None
+        value = inputs.get("noise_seed" if node.get("class_type") == "KSamplerAdvanced" else "seed") if isinstance(inputs, dict) else None
         if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str):
             source = template_graph.get(value[0])
             source_inputs = source.get("inputs") if isinstance(source, dict) else None
@@ -515,8 +552,8 @@ def local_generation(workflow, spec, hashes=None):
     for nid, node in nodes:
         cls = node["class_type"]
         inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
-        if cls == "KSampler":
-            seed = inputs.get("seed")
+        if cls in SAMPLERS:
+            seed = inputs.get("noise_seed" if cls == "KSamplerAdvanced" else "seed")
             if isinstance(seed, list) and len(seed) == 2 and isinstance(seed[0], str):
                 source = workflow.get(seed[0])
                 source_inputs = source.get("inputs") if isinstance(source, dict) else None
@@ -534,10 +571,13 @@ def local_generation(workflow, spec, hashes=None):
         else:
             preset = cls in PRESET_LOADERS
             key, kind = (PRESET_LOADERS if preset else MODEL_LOADERS)[cls]
-            name = inputs.get(key)
-            sha = digest(kind, name, preset)
-            result["models"].append({"node": nid, "class_type": cls, "kind": kind, "name": name,
-                                     "sha256": sha, "verified": sha is not None})
+            for model_key in key if isinstance(key, tuple) else (key,):
+                name = inputs.get(model_key)
+                if isinstance(key, tuple) and name in (None, "None", "none"):
+                    continue
+                sha = digest(kind, name, preset)
+                result["models"].append({"node": nid, "class_type": cls, "kind": kind, "name": name,
+                                         "sha256": sha, "verified": sha is not None})
     return result
 
 
@@ -672,7 +712,7 @@ def requested_size(workflow, spec):
             inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
             if node.get("class_type") == "NineRouterImage":
                 return inputs.get("size", "auto")
-            if node.get("class_type") == "KSampler":
+            if node.get("class_type") in SAMPLERS:
                 link = inputs.get("latent_image")
                 source = workflow.get(link[0]) if (isinstance(link, list) and len(link) == 2
                                                    and isinstance(link[0], str)) else None

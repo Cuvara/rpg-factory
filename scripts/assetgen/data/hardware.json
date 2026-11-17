@@ -105,6 +105,10 @@
     {
      "kind": "upscale_models",
      "need": "a 4x upscaler model"
+    },
+    {
+     "kind": "annotators",
+     "need": "pose or depth preprocessor model files when used"
     }
    ]
   },
@@ -183,6 +187,10 @@
     {
      "kind": "upscale_models",
      "need": "a 4x upscaler model"
+    },
+    {
+     "kind": "annotators",
+     "need": "pose or depth preprocessor model files when used"
     }
    ]
   }

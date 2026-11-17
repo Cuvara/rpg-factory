@@ -126,7 +126,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   sheets/             slice preserves the original sheets here without overwriting them
   sheet.json          slice records sheet hashes, cell bounds and outputs
   discards.json       append-only history of discarded outputs and their hashes and reasons
-  outputs-raw/<name>  defringe: the original of each output it rewrote (kept; never an output, never in a binding)
+  raw/<name>          fit: original before orientation padding (unique name, never overwritten)
+  outputs-raw/<name>  defringe: the input before defringe, reused on reruns while the output matches its record;
+                      replaced when a changed output is defringed again
   outputs-raw/pixelgrid/<name>  finalize --pixel-grid: the original of each output it reduced to its pixel grid
   pixelgrid.json      finalize --pixel-grid: {"schema": "rpg-factory.assetgen-pixelgrid/1", "params", "outputs"}
                       (scripts/assetgen/pixelgrid.py: grid detected, downsampled to one pixel per cell, alpha
@@ -199,7 +201,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       only on the person's explicit word; the person commits run.md and the record in one SSH-signed
                       commit whose signer principal is NAME (until then: present but not committed/signed)
 
-finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. It runs filter, optional slice, fit, defringe
+finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. Fit pads only alpha-channel outputs with a
+mismatched orientation that pass the size floors, when qa.size.fit is pad and qa.alpha is required; it preserves
+originals in raw/ with unique names. It runs filter, optional slice, fit, defringe
 (only for a purpose with qa.alpha required), optional pixel-grid, embed and qa in that order, and stops at the first FAIL naming
 the step. Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. It refuses (exit 1, nothing written) a run without
 spec.json, outputs/*.png or a readable workflow.ui.json, and an approved run (rewriting approved bytes would fail
@@ -1134,7 +1138,7 @@ def pixels_sha256(path):
 def defringe(run_dir, alpha_floor=None, force=False):
     """(rows, bound): rows {output, state: defringed|skipped|FAIL, reason, ...} of imaging.defringe on every output
     with transparent pixels, in place; bound names the records (qa.json, image reviews) --force made stale. The
-    original goes to outputs-raw/<name> first; defringe.json records the params and each output's before/after sha256
+    input goes to outputs-raw/<name> first, replacing an older copy when the output changed; defringe.json records the params and each output's before/after sha256
     (file bytes), its after_pixels_sha256 (decoded pixels: embed after defringe keeps them) and stats. Running it again
     on outputs it wrote (same pixels) starts from the kept originals, so the result depends only on the originals and
     the params. Text chunks (prompt, workflow) are carried over before IEND, and the colour-management and other safe
@@ -1482,6 +1486,14 @@ def manifest_text(front, run_dir=None, newline="\n"):
             for r in local["samplers"]) or "none"
         body.insert(5, "- Local stage (UNTESTED on RTX 5060): models %s (%d of %d sha256 unverified), LoRAs %s, sampler %s"
                     % (model_text, sum(not r["verified"] for r in rows), len(rows), lora_text, sampler_text))
+    fit_path = os.path.join(run_dir, "finalize.json") if run_dir else None
+    if fit_path and os.path.isfile(fit_path):
+        record = read_json(fit_path, "finalize record")
+        fitted = record.get("fitted", []) if isinstance(record, dict) else []
+        if isinstance(fitted, list) and fitted:
+            body.append("- Fit: orientation padding; originals in raw/ (finalize.json): " + ", ".join(
+                "%s %s -> %s" % (r.get("output"), r.get("original_size"), r.get("fitted_size"))
+                for r in fitted if isinstance(r, dict)))
     fringe = defringe_line(run_dir, s["outputs"], {r["output"] for r in discarded}) if run_dir else None
     if fringe:
         body.append(fringe)

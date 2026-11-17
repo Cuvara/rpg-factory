@@ -481,6 +481,7 @@ def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_gr
     spec, record, pixel_record = precheck(ag, run_dir)
     if discard_qa_fail:
         ag.discard.records(ag, run_dir)  # an unreadable discards.json refuses here, before any write
+    ag.runfiles.rewrite_fetch(run_dir)
     before = image_reviews(ag, run_dir)
     steps, qa_text, code, failed = [], [], 0, None
     discarded, discard_stale = [], []

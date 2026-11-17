@@ -1092,6 +1092,216 @@
      102
     ]
    }
+  },
+  "KSamplerAdvanced": {
+   "inputs": {
+    "model": {
+     "type": "MODEL",
+     "required": true
+    },
+    "add_noise": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "noise_seed": {
+     "type": "INT",
+     "required": true
+    },
+    "steps": {
+     "type": "INT",
+     "required": true
+    },
+    "cfg": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "sampler_name": {
+     "type": "COMBO",
+     "options": [
+      "euler",
+      "euler_cfg_pp",
+      "euler_ancestral",
+      "euler_ancestral_cfg_pp",
+      "heun",
+      "heunpp2",
+      "exp_heun_2_x0",
+      "exp_heun_2_x0_sde",
+      "dpm_2",
+      "dpm_2_ancestral",
+      "lms",
+      "dpm_fast",
+      "dpm_adaptive",
+      "dpmpp_2s_ancestral",
+      "dpmpp_2s_ancestral_cfg_pp",
+      "dpmpp_sde",
+      "dpmpp_sde_gpu",
+      "dpmpp_2m",
+      "dpmpp_2m_cfg_pp",
+      "dpmpp_2m_sde",
+      "dpmpp_2m_sde_gpu",
+      "dpmpp_2m_sde_heun",
+      "dpmpp_2m_sde_heun_gpu",
+      "dpmpp_3m_sde",
+      "dpmpp_3m_sde_gpu",
+      "ddpm",
+      "lcm",
+      "ipndm",
+      "ipndm_v",
+      "deis",
+      "cfgpp_ud10_ab",
+      "res_multistep",
+      "res_multistep_cfg_pp",
+      "res_multistep_ancestral",
+      "res_multistep_ancestral_cfg_pp",
+      "gradient_estimation",
+      "gradient_estimation_cfg_pp",
+      "er_sde",
+      "seeds_2",
+      "seeds_3",
+      "sa_solver",
+      "sa_solver_pece",
+      "ddim",
+      "uni_pc",
+      "uni_pc_bh2"
+     ],
+     "required": true
+    },
+    "scheduler": {
+     "type": "COMBO",
+     "options": [
+      "simple",
+      "sgm_uniform",
+      "karras",
+      "exponential",
+      "ddim_uniform",
+      "beta",
+      "normal",
+      "linear_quadratic",
+      "kl_optimal"
+     ],
+     "required": true
+    },
+    "positive": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "negative": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "latent_image": {
+     "type": "LATENT",
+     "required": true
+    },
+    "start_at_step": {
+     "type": "INT",
+     "required": true
+    },
+    "end_at_step": {
+     "type": "INT",
+     "required": true
+    },
+    "return_with_leftover_noise": {
+     "type": "COMBO",
+     "options": [
+      "disable",
+      "enable"
+     ],
+     "required": true
+    }
+   },
+   "outputs": [
+    "LATENT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     270
+    ]
+   }
+  },
+  "DepthAnythingPreprocessor": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "ckpt_name": {
+     "type": "STRING",
+     "required": true
+    },
+    "resolution": {
+     "type": "INT",
+     "required": false
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     102
+    ]
+   }
+  },
+  "DWPosePreprocessor": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "detect_hand": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "detect_body": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "detect_face": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "resolution": {
+     "type": "INT",
+     "required": true
+    },
+    "bbox_detector": {
+     "type": "STRING",
+     "required": true
+    },
+    "pose_estimator": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE",
+    "POSE_KEYPOINT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     198
+    ]
+   }
   }
  },
  "packs": {
@@ -1105,7 +1315,9 @@
   },
   "comfyui_controlnet_aux": {
    "nodes": [
-    "CannyEdgePreprocessor"
+    "CannyEdgePreprocessor",
+    "DepthAnythingPreprocessor",
+    "DWPosePreprocessor"
    ],
    "provider": "comfyui_controlnet_aux (Fannovel16)",
    "signatures": "pack source node_wrappers/canny.py at commit a587a4c15945, no saved object_info"
@@ -1131,6 +1343,9 @@
   "ControlNetLoader",
   "ControlNetApplyAdvanced",
   "UpscaleModelLoader",
-  "ImageUpscaleWithModel"
+  "ImageUpscaleWithModel",
+  "KSamplerAdvanced",
+  "DepthAnythingPreprocessor",
+  "DWPosePreprocessor"
  ]
 }

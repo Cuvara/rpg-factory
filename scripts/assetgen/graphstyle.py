@@ -79,6 +79,7 @@ ANY_PLACEHOLDER = re.compile(r"\{\{[^{}]*\}\}")
 ONE_PLACEHOLDER = re.compile(r"\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}")
 LEGACY = "legacy template without a ui block: the graph style is not enforced (see the staged templates)"
 SAMPLER, CHECKPOINT, CONTROLNET_APPLY = "KSampler", "CheckpointLoaderSimple", "ControlNetApply"
+SAMPLERS = (SAMPLER, "KSamplerAdvanced")
 # the text inputs that carry a prompt; NineRouterImage.user_prompt is always positive, an encoder's text is positive
 # when its CONDITIONING reaches a KSampler positive input
 TEXT_INPUTS = {IMAGE_NODE: ("user_prompt",), "CLIPTextEncode": ("text",), "CLIPTextEncodeSDXL": ("text_g", "text_l")}
@@ -170,7 +171,7 @@ def _check(nodes, groups):
             out.append("prompt: %s user_prompt is linked from %s, not a %s; %s"
                        % (_name(nodes, nid), _name(nodes, value[0]), PROMPT_NODE, fix))
     out += _fan_out(nodes)
-    sampler = any(nodes[nid]["type"] == SAMPLER for nid in ids)
+    sampler = any(nodes[nid]["type"] in SAMPLERS for nid in ids)
     if len(image_nodes) > 1 or (not image_nodes and not sampler):
         out.append("one-image-node: the graph has %d %s nodes%s; it needs exactly one%s"
                    % (len(image_nodes), IMAGE_NODE, " (%s)" % ", ".join(image_nodes) if image_nodes else "",
@@ -199,7 +200,7 @@ def _reaches(nodes, consumers, nid):
         seen.add(key)
         for dst, name in consumers.get(key, []):
             ctype = nodes[dst]["type"]
-            if ctype == SAMPLER and name in ("positive", "negative"):
+            if ctype in SAMPLERS and name in ("positive", "negative"):
                 found.add(name)
             elif ctype.startswith(CONTROLNET_APPLY) and name in ("positive", "conditioning", "negative"):
                 todo.append((dst, 1 if name == "negative" else 0))
@@ -376,8 +377,8 @@ def _local_types():
     (lint's own known-nodes checks FAIL then)."""
     if not _LOCAL:
         try:
-            with open(REGISTRY, encoding="utf-8") as f:
-                registry = json.load(f)
+            import lint  # lazy: lint imports graphstyle; both share lint's cached registry read
+            registry = lint.known_registry()
             local = {t for t in registry.get("local_model_nodes", []) if isinstance(t, str)}
             packs = {t for spec in registry.get("packs", {}).values() for t in spec.get("nodes", []) if isinstance(t, str)}
         except (OSError, ValueError, AttributeError, TypeError):
@@ -418,7 +419,7 @@ def _above(nodes, known, params, link, seen):
     ctype, inputs = nodes[nid]["type"], nodes[nid]["inputs"]
     if ctype == "EmptyLatentImage":
         return any(_is_num(c) and c > TILE_LIMIT for k in ("width", "height") for c in _candidates(inputs.get(k), params))
-    if ctype == SAMPLER:
+    if ctype in SAMPLERS:
         return _above(nodes, known, params, inputs.get("latent_image"), seen)
     if ctype == "VAEEncode":
         return _above(nodes, known, params, inputs.get("pixels"), seen)
@@ -494,7 +495,7 @@ def _profile_rules(data, nodes, known, profile, hardware):
                    "requires.offload true (one is unloaded before the next loads)"
                    % (_names(nodes, loaders), len(models), under))
     for nid in ids:
-        if nodes[nid]["type"] != SAMPLER:
+        if nodes[nid]["type"] not in SAMPLERS:
             continue
         nets = _conditioning_upstream(nodes, known, nid)
         if len(nets) > 1:
