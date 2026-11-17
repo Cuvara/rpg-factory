@@ -7,6 +7,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
+# Every run of the check in this suite keeps its evidence under a test dir, never in the real persistent state dir
+# (the evidence cases below set their own). The check writes nothing outside $TMP.
+export RPG_FACTORY_STATE_DIR="$TMP/state-default"
 chk() { if [ "$2" = "$3" ]; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1: expected '$2' got '$3'"; fi; }
 
 netcode() { # dir - a Netcode checkout pinning sgl-v9.9.9
@@ -48,7 +51,9 @@ cat > "$FAKE/dotnet" <<'SH'
 #!/usr/bin/env bash
 mkdir -p results
 executed=3; [ "${FAKE_DOTNET_MODE:-ok}" = empty ] && executed=0
-printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Completed"><Counters total="3" executed="%s" passed="%s" failed="0" error="0" timeout="0" aborted="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$executed" > results/results.trx
+failed=0; [ "${FAKE_DOTNET_MODE:-ok}" = counters ] && failed=1
+printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Completed"><Counters total="3" executed="%s" passed="%s" failed="%s" error="0" timeout="0" aborted="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$((executed - failed))" "$failed" > results/results.trx
+echo "fake dotnet log mode=${FAKE_DOTNET_MODE:-ok}"
 case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 10 ;; esac
 exit 0
 SH
@@ -65,6 +70,33 @@ grep -q "dotnet test exited 1" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$(
 chk "dotnet test times out with a zero-failure TRX -> 1" 1 "$(run_fake sleep)"
 grep -q "timed out" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  timeout not reported"; cat "$TMP/out.txt"; }
 chk "dotnet test passes but nothing executed -> 1" 1 "$(run_fake empty)"
+# the default runs above (two failing, one empty) left their evidence under the suite's temp state dir, not elsewhere
+DEFAULT_EV="$RPG_FACTORY_STATE_DIR/evidence/netcode-headless"
+n=$(find "$DEFAULT_EV" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+[ "${n:-0}" -ge 1 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  default failing runs left no evidence under \$TMP/state-default"; }
+
+# ---- a FAIL keeps its .trx files and the run log under the Factory state dir (persistent, never $TMPDIR or the
+# Netcode repo) and prints the path; a PASS cleans up and writes no evidence. The state dir is a test dir.
+STATE="$TMP/state"; EVROOT="$STATE/evidence/netcode-headless"
+run_ev() { rm -rf "$STATE"; mkdir -p "$STATE"; RPG_FACTORY_STATE_DIR="$STATE" run_fake "$1"; }
+ev_dirs() { find "$EVROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' '; }
+for mode in fail counters sleep; do
+  chk "failing run ($mode) -> 1" 1 "$(run_ev "$mode")"
+  chk "failing run ($mode) keeps one evidence dir" 1 "$(ev_dirs)"
+  ev=$(sed -n 's/^evidence: //p' "$TMP/out.txt" | tr -d '\r')
+  chk "failing run ($mode) prints the evidence path under the state dir" "$(fwd "$EVROOT")" "$(fwd "$(dirname "$ev")")"
+  [ -f "$ev/results/results.trx" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  evidence ($mode) has no results.trx"; }
+  grep -q "fake dotnet log mode=$mode" "$ev/dotnet.log" 2>/dev/null && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  evidence ($mode) has no dotnet.log"; }
+done
+chk "passing run -> 0" 0 "$(run_ev ok)"
+chk "passing run writes no evidence" 0 "$(ev_dirs)"
+grep -q "^evidence:" "$TMP/out.txt" && { fail=$((fail + 1)); echo "FAIL  passing run printed an evidence path"; } || pass=$((pass + 1))
+[ -z "$(find "$TMP" -maxdepth 1 -name '.tmp-netcode-headless-*' 2>/dev/null)" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  work copy left behind"; }
+# an unwritable state dir (a file where the directory must be) warns and keeps the verdict
+rm -rf "$STATE"; : > "$STATE"
+chk "failing run with an unusable state dir keeps exit 1" 1 "$(RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+grep -q "WARNING: evidence not saved" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  no warning for an unusable state dir"; cat "$TMP/out.txt"; }
+rm -f "$STATE"
 
 # Candidate identity must follow a linked worktree's distinct commit for both selectors.
 LINKED="$TMP/linked-netcode"; git -C "$NC" worktree add -qb linked-candidate "$LINKED"

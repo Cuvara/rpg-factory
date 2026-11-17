@@ -5,13 +5,16 @@
 #                           prints what changed to stdout
 # It only reads; it never repairs the config. The copy (GITCFG_COPY) is removed here only when the config is unchanged;
 # a changed config keeps it because the message names it, so the CALLER removes it on exit (tests/run-all.sh: runall_cleanup,
-# after a WARN and every exit but a shared-config FAIL).
+# after a WARN and every exit but a shared-config FAIL). A re-snapshot replaces the earlier one: gitcfg_snapshot removes the
+# previous copy (also when it records nothing, e.g. outside a repository) before it records anew, so one copy exists at most.
 
 _gitcfg_hash() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 
 gitcfg_snapshot() {
   local d="${1:-.}" common
-  GITCFG_FILE=""; GITCFG_HASH=""
+  # a re-snapshot (also one outside a repository) replaces the earlier one: its copy would otherwise leak
+  [ -n "${GITCFG_COPY:-}" ] && rm -f "$GITCFG_COPY"
+  GITCFG_FILE=""; GITCFG_HASH=""; GITCFG_COPY=""
   common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   [ -f "$common/config" ] || return 0
   GITCFG_FILE="$common/config"
