@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- None.
+- delivery.md headroom (plan-edit-followups, workflow-slim-followups) and four plugin-flow-5-followups lows: plan flow-lows (`docs/plans/flow-lows.json`).
 
 ## Open
 
