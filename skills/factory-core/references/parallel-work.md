@@ -81,6 +81,10 @@ lessons of this repo behind it, each with its reason.
 - Codex runs the rpg-factory hooks only after the user has trusted them once in Codex (a one-time step outside the
   run; `AGENTS.md`). A Codex session that stops at that trust prompt follows the "Codex, else Claude" fallback.
 - The run lead's waiter is `scripts/orca-wait.sh --run <id>`; its suite runs inside `tests/parallel-policy.test.sh`.
+- Claude Code stops that waiter under memory pressure (workflow-slim twice, path-audit, owner-policy) and may not
+  restart it on its own, so messages waited for an owner nudge. On every wake (task notification, owner message, "You
+  have N orchestration messages") run `orca orchestration check --run <id>` and `factory-pipeline.py status <plan>`;
+  restart the waiter only when the owner asks; on a loaded machine keep fewer task leads open.
 - The run report is `docs/plans/<plan>/report.md` (`docs/plans/README.md`); verdicts and specs stay in the
   per-machine state dir, so a new machine re-runs review and QA. The report layout is `report.md` in this folder's
   `references/`; it includes the Cost table (`skills/delivery/references/delivery.md` section 8).
