@@ -1184,6 +1184,7 @@ def cmd_plan_edit(a, reg):
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
+        shutil.copymode(plan_path, tmp)  # mkstemp creates 0600; keep the plan's mode
         os.replace(tmp, plan_path)
     except OSError as e:
         try:
@@ -1205,7 +1206,7 @@ def cmd_plan_edit(a, reg):
         print(f"NOTE  changed paths or acceptance make recorded verdicts of {', '.join(stale)} stale: re-run `status` "
               "after the plan edit")
     if a.commit:
-        rel = os.path.relpath(os.path.abspath(plan_path), top)
+        rel = os.path.relpath(os.path.abspath(plan_path), top).replace("\\", "/")
         message = a.message or f"docs(plans): edit plan {plan.get('id')}"
         _, rc = git(top, "add", "--", rel)
         if rc != 0:
