@@ -2918,7 +2918,7 @@ AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
   && [ "$(jq -c '[.schema, .run, .outputs, .failed_attempts, .used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" \
      = '["rpg-factory.assetgen-budget/1","bud-icon-003",1,["bud-icon-001"],2,3,1,"ok",0]' ] \
   && [ "$(jq -r '.reason | type' "$TMP/b.json")" = string ] \
-  && [ "$(jq -c 'keys' "$TMP/b.json")" = '["allowed","exit","failed_attempts","outputs","previews","reason","remaining","run","schema","state","used"]' ] \
+  && [ "$(jq -c 'keys' "$TMP/b.json")" = '["allowed","discarded","exit","failed_attempts","outputs","previews","reason","remaining","run","schema","state","used"]' ] \
   && [ "$(jq -c .previews "$TMP/b.json")" = 0 ] && ! lf "$TMP/o" | grep -q "not counted" \
   && [ "$(lf "$TMP/o" | wc -l)" -eq 1 ] && lf "$TMP/o" | grep -q "^budget ok: .*2 used.*of 3 allowed" \
   && ok "budget ok: used 2 = 1 output + 1 failed attempt (bud-icon-001; not the finished 002, the later 009 or another slug), allowed 3, remaining 1, exit 0" \
