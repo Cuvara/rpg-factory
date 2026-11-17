@@ -21,7 +21,10 @@ is the family "(none)") plus the style-wide "total" it reports:
                permitted maximum 441; tone.tolerance = the smallest
                tolerance, rounded up to 2 decimals, that keeps each approved output's mean luminance and saturation
                inside the range of its own run's selected anchor copies, as QA does. Outputs without usable selected
-               anchors are counted and excluded. Suggestions are never applied and are null with a reason when they
+               anchors are counted and excluded. The tone data reports two counts: "anchors", the distinct
+               selected anchors (distinct style_lock reference anchor_id values of the graded runs whose run copy is
+               a usable image), and "anchor_copies", the distinct selected anchor copy files; one anchor selected by
+               two runs is 1 anchor and 2 copies. Suggestions are never applied and are null with a reason when they
                cannot be computed. The style's valid active anchors are listed for information only.
 Styles: --style ID, else every style with a game file assetgen/styles/<id>.json, named by a run's style ref or holding
 anchor or rejection records, sorted. --json prints schema rpg-factory.assetgen-style-report/1 (indent 1, sorted keys).
@@ -167,7 +170,7 @@ def _approved_outputs(style_runs, palette):
         if run["status"] != "approved":
             continue
         selected = qa.style_anchors(run["dir"], run["spec"])
-        copies = set()
+        copies, anchor_ids = set(), set()
         for pick in runfiles.style_lock_references(run["spec"]):
             image = pick.get("image")
             if not isinstance(image, str) or not image:
@@ -176,6 +179,9 @@ def _approved_outputs(style_runs, palette):
             try:
                 if consistency.tone_stats(png.decode(path)) is not None:
                     copies.add(os.path.normcase(os.path.abspath(path)))
+                    aid = pick.get("anchor_id")
+                    if isinstance(aid, str) and aid:
+                        anchor_ids.add(aid)
             except (png.Invalid, png.Unsupported, OSError):
                 pass
         out_dir = os.path.join(run["dir"], "outputs")
@@ -191,7 +197,8 @@ def _approved_outputs(style_runs, palette):
             if rec is None:
                 skipped.append({"run": run["id"], "output": rel, "reason": "no opaque pixels"})
                 continue
-            used.append(dict(rec, run=run["id"], output=rel, family=run["family"], selected_anchors=selected, selected_copies=copies))
+            used.append(dict(rec, run=run["id"], output=rel, family=run["family"], selected_anchors=selected, selected_copies=copies,
+                             selected_anchor_ids=anchor_ids))
     return used, skipped
 
 
@@ -262,7 +269,8 @@ def _suggest_tone(outs, current):
     runs = {o["run"]: o["selected_anchors"] for o in graded}
     anchors = [a for selected in runs.values() for a in selected]
     copies = set().union(*(o.get("selected_copies", ()) for o in graded))
-    data = {"current": _r(current), "anchors": len(copies), "outputs": len(outs),
+    anchor_ids = set().union(*(o.get("selected_anchor_ids", ()) for o in graded))
+    data = {"current": _r(current), "anchors": len(anchor_ids), "anchor_copies": len(copies), "outputs": len(outs),
             "outputs_without_anchors": len(outs) - len(graded)}
     if not graded:
         reason = "no approved output with opaque pixels" if not outs else "no approved output has usable selected anchors"
@@ -373,7 +381,8 @@ def _suggestion_text(name, s):
         if "d_needed" in d:
             facts += ["d_needed %s" % _spread_text(d["d_needed"]), "%d pass at current" % d["pass_at_current"]]
     else:
-        facts = ["current %s" % _fmt(d["current"]), "%d selected anchor copy/copies" % d["anchors"], "%d approved output(s)" % d["outputs"],
+        facts = ["current %s" % _fmt(d["current"]), "%d selected anchor(s) (distinct)" % d["anchors"],
+                 "%d selected anchor copy/copies" % d["anchor_copies"], "%d approved output(s)" % d["outputs"],
                  "%d output(s) without anchors" % d["outputs_without_anchors"]]
         if "selected_anchor_range" in d:
             for key in ("luminance", "saturation"):

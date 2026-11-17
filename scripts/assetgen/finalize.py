@@ -527,17 +527,17 @@ def run(ag, run_dir, force=False, as_json=False, discard_qa_fail=False, pixel_gr
             elif checks:
                 data = ag.discard.records(ag, run_dir)
                 discard_stale = ag.discard.stale_records(ag, run_dir, set(checks))
-                rows = []
+                discard_rows = []
                 for output in current:
                     if output not in checks:
                         continue
                     names = ", ".join(checks[output])
                     entry = ag.discard.move(ag, run_dir, output, "qa FAIL: " + names, "finalize", data)
                     discarded.append(entry)
-                    rows.append({"state": "discarded", "output": output,
-                                 "reason": "-> %s: qa FAIL %s" % (entry["path"], names)})
+                    discard_rows.append({"state": "discarded", "output": output,
+                                         "reason": "-> %s: qa FAIL %s" % (entry["path"], names)})
                 steps.append({"step": "discard", "state": "discarded",
-                              "reason": "%d discarded to outputs-rejected/" % len(rows), "results": rows})
+                              "reason": "%d discarded to outputs-rejected/" % len(discard_rows), "results": discard_rows})
                 step, text, code = qa_step(ag, run_dir)
                 discard_stale = [n for n in discard_stale if n != "qa.json"]
                 qa_text.append(text)

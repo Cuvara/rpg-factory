@@ -219,8 +219,11 @@ sheet-hint prints a prompt snippet for review; slice --run or finalize --rows R 
 preserves the original in sheets/ and records the cells in sheet.json. Both dimensions are 1..8 with at least two cells.
 
 Spend guard (scripts/assetgen/budget.py): resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default
-4; not a whole number >= 1: exit 2). budget --run prints used (the run's outputs/*.png + the failed attempts of its
-series), allowed and remaining; it exits 1 only when used exceeds allowed or spec.budget is malformed. A spec.json
+4; not a whole number >= 1: exit 2). budget --run prints used (the generations made + the failed attempts of its
+series), allowed and remaining. The budget counts generations: a discarded output still counts (a discard never
+refunds a generation; a file moved back to outputs/ counts once) and a sliced sheet counts as one generation whether
+or not its cells were discarded. The text and --json (discarded, sheet_cells_discarded) say how many counted outputs
+are discarded. It exits 1 only when used exceeds allowed or spec.budget is malformed. A spec.json
 without budget (resolved before the spend guard) is unlimited, never a failure. The limit is advisory: the engine cannot
 stop comfy-mcp, so the asset-gen skill runs budget before each run_workflow. finalize prints the budget line before its
 summary line (--json: key "budget") and keeps its own exit code.
@@ -1312,41 +1315,10 @@ def failed_attempts(run_dir):
 
 
 def run_budget(run_dir, spec):
-    """budget.state of a run: its outputs plus the failed attempts of its series (none for a dir not <slug>-NNN)."""
+    """budget.state of a run: the generations made (a discard never refunds one, a sliced sheet counts once) plus the
+    failed attempts of its series (none for a dir not <slug>-NNN)."""
     name = os.path.basename(os.path.normpath(run_dir))
-    st = budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
-    try:
-        with open(os.path.join(run_dir, "sheet.json"), encoding="utf-8") as f:
-            record = json.load(f)
-    except (OSError, ValueError, UnicodeError):
-        return st
-    if not isinstance(record, dict):
-        return st
-    sheets = record.get("sheets")
-    sheets = [s for s in sheets if isinstance(s, dict)] if isinstance(sheets, list) else []
-    paths = set()
-    for sheet in sheets:
-        cells = sheet.get("cells")
-        for cell in cells if isinstance(cells, list) else []:
-            output = cell.get("output") if isinstance(cell, dict) else None
-            if (isinstance(output, str) and output.startswith("outputs/")
-                    and os.path.basename(output) == output[8:]
-                    and output.endswith(".png") and os.path.isfile(os.path.join(run_dir, *output.split("/")))):
-                paths.add(output)
-    st["sheet_cells"] = len(paths)
-    adjustment = len(sheets) - len(paths)
-    st["outputs"] += adjustment
-    st["used"] += adjustment
-    if st["state"] not in ("invalid", "unlimited"):
-        used, allowed = st["used"], st["allowed"]
-        st["remaining"] = max(0, allowed - used)
-        if used < allowed:
-            st.update(state="ok", exit=0, reason="%d of %d generations left in this run series" % (st["remaining"], allowed))
-        elif used == allowed:
-            st.update(state="at-limit", exit=0, reason="the run series used all %d allowed generations: do not run run_workflow again" % allowed)
-        else:
-            st.update(state="exceeded", exit=1, reason="the run series used %d generations, more than the %d allowed" % (used, allowed))
-    return st
+    return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
 
 
 def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False, pixel_grid=False, max_colors=None, rows=None, cols=None):
@@ -1504,6 +1476,7 @@ def manifest_text(front, run_dir=None, newline="\n"):
     sheet_path = os.path.join(run_dir, "sheet.json") if run_dir else None
     if sheet_path and os.path.isfile(sheet_path):
         record = read_json(sheet_path, "sheet record")
+        gone_names = {r["output"] for r in discarded}
         if isinstance(record, dict):
             for sheet in record.get("sheets", []):
                 if not isinstance(sheet, dict):
@@ -1511,9 +1484,14 @@ def manifest_text(front, run_dir=None, newline="\n"):
                 name, digest = sheet.get("sheet", ""), sheet.get("sha256", "")
                 path = os.path.join(run_dir, *name.split("/"))
                 stale = not os.path.isfile(path) or qa.sha256(path) != digest
-                body.append("- Sheet: %sx%s, %s (sha256 %s) -> %d outputs (sheet.json)%s" % (
-                    record.get("rows"), record.get("cols"), name, digest[:12], len(sheet.get("cells", [])),
-                    "; STALE" if stale else ""))
+                cells = [c.get("output") for c in sheet.get("cells", []) if isinstance(c, dict)]
+                kept = [o for o in cells if isinstance(o, str) and o.startswith("outputs/")
+                        and os.path.basename(o) == o[8:] and os.path.isfile(os.path.join(run_dir, *o.split("/")))]
+                gone = [o for o in cells if o in gone_names and o not in kept]
+                counts = "%d outputs, %d discarded (sheet.json, discards.json)" % (len(kept), len(gone)) if gone \
+                    else "%d outputs (sheet.json)" % len(kept)
+                body.append("- Sheet: %sx%s, %s (sha256 %s) -> %s%s" % (
+                    record.get("rows"), record.get("cols"), name, digest[:12], counts, "; STALE" if stale else ""))
     lock = s.get("style_lock")
     if isinstance(lock, dict):
         st = lock.get("style") or {}
