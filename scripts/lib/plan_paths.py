@@ -30,9 +30,29 @@ def _is_nt():
     return os.name == "nt"
 
 
+_MSYS_MNT = re.compile(r"^([A-Za-z]:/.*?)/mnt/[A-Za-z](?:/.*)?$")
+
+
+def _is_git_install_root(prefix):
+    """True when prefix (forward slashes) is a Git for Windows install root: its last segment is `Git`, or it
+    holds usr/bin/bash.exe or git-bash.exe."""
+    if prefix.rstrip("/").rsplit("/", 1)[-1].lower() == "git":
+        return True
+    return any(os.path.exists(prefix + "/" + marker) for marker in ("usr/bin/bash.exe", "git-bash.exe"))
+
+
 def _native(p):
-    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere."""
-    return native_abs(p) if p and _is_nt() else p
+    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere.
+
+    native_abs also reads `X:/.../mnt/<l>/...` as Git Bash's MSYS rewrite of a WSL path, which it is only when the
+    prefix before `/mnt/` is the Git for Windows install root; a native path that merely contains a `/mnt/<l>/`
+    segment (`C:/proj/mnt/d/new`) is returned unchanged."""
+    if not p or not _is_nt():
+        return p
+    m = _MSYS_MNT.match(p)
+    if m and not _is_git_install_root(m.group(1)):
+        return p
+    return native_abs(p)
 
 
 def _find_workspace_native(plan_dir, registry):
