@@ -192,7 +192,7 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
 
 From plan flow-lows (`docs/plans/flow-lows/report.md`):
 
-- `scripts/lib/workspace.py` `native_abs` keeps the broad `X:/.../mnt/<letter>/` rewrite for its other callers
+- `scripts/lib/workspace.py` `native_abs` keeps the broad rewrite of a drive path with a `/mnt/<letter>/` segment for its other callers
   (`context.py`, `run-checks.py`); only `plan_paths.py` is guarded. Move the Git-root check into `native_abs`.
 - The Git for Windows root check in `plan_paths.py` is a heuristic (last segment `Git`, or it holds `usr/bin/bash.exe`
   or `git-bash.exe`): a user directory named `Git` with a `/mnt/<letter>/` child still reads as the MSYS rewrite.
