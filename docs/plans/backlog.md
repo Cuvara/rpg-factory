@@ -187,14 +187,18 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 
 ### policy-followups-leftovers
 
-From plan policy-followups (`docs/plans/policy-followups/report.md`), owner decisions first:
+From plan policy-followups (`docs/plans/policy-followups/report.md`), the two decided items first:
 
-- Owner decision: a plan-scoped owner override cannot name a model outside `pipeline.models.scope` (the personal policy
-  file may only narrow it). Decide whether a plan may widen the scope for itself, with the owner's word recorded in the
-  plan.
-- Owner decision: the git guard's english-only check covers every command run inside the plugin checkout the guard
-  runs from (`in_scope()` in `scripts/lib/rpgf_guard/language.py`). Decide whether it should cover only that checkout
-  (current), every rpg-factory checkout and worktree (Orca task worktrees outside the workspace), or none.
+- Decided by the owner (2026-11-17), to implement: a plan may widen `pipeline.models.scope` for itself, but only
+  (a) after asking the owner, with the owner's word recorded in the plan, or (b) when the model is strictly necessary
+  for that plan, with the reason recorded in the plan. Today a plan-scoped owner override cannot name a model outside
+  the scope (the personal policy file may only narrow it). Run lead's reading: `validate` accepts an out-of-scope
+  model only with such a recorded approval or necessity reason, and the report lists every widening.
+- Decided by the owner (2026-11-17), to implement: the english-only check applies everywhere; only the chat report to
+  the owner uses `workspace.report_language`. Today the git guard covers only commands run inside the plugin checkout
+  the guard runs from (`in_scope()` in `scripts/lib/rpgf_guard/language.py`). Run lead's reading: cover every
+  rpg-factory checkout and worktree (Orca task worktrees outside the workspace included), in the git guard and in
+  `scripts/file-guard.py` alike.
 - `plan_branch` in `scripts/factory-pipeline.py` treats `<topic>-*` as this plan's, so a plan whose topic extends
   this one (`<topic>-v2`) can count as a child when Orca's lineage names this plan's worktree as its parent; an
   Orca-prefixed branch equal to the topic (`codex/<topic>`) is not matched by lineage.
