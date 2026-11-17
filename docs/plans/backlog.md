@@ -26,48 +26,17 @@ version is checked before the hash).
 `stylelock.EXTERNAL_PATH` still accepts `file:` URIs (with a drive letter) and `$HOME` / `%USERPROFILE%` forms in the
 `external_source` `origin` and `rights_note`. Refuse a `file:` scheme and environment-variable paths, with a test.
 
-### review-base-topic
-
-`review_base` for a task with no deps that was cut from the topic branch uses the plan base (`main`) and so selects
-every suite. Use the topic branch as the review base. Same root: `dispatch --phase lead` for a task added late, whose
-deps are all integrated, printed a worktree cut from the first dependency's old branch tip and wrote a
-`<task>__stack.json` naming it; the stale record later blocked verify and the gate ("integrated before its
-dependency") in plan assetgen-style until it was set aside by hand. A task whose deps are all integrated must start
-from the topic and get no stack record.
-
 ### assetgen-run-followups
 
 Left open by the plans assetgen-hybrid, assetgen-style and assetgen-batch (review notes and lead reports, none
-blocking):
+blocking). Plan assetgen-followups covered the rest (see Covered); what remains:
 
-- Engine: strip the host from `fetch.json` entries; a preprocessor/annotator model kind for pose and depth;
-  provenance for `KSamplerAdvanced` and the literal CLIP text check; the run.md `- Fit:` line and the `fit`/`raw`
-  docstrings in `assetgen.py`; lint re-reads known-nodes once per template.
-- Hybrid templates: the staged layout test globs only `staged-*.json`, while the hybrid and local templates have wires
-  crossing unrelated nodes; `anchor_target` lint checks only `results[0]`, and the fixture
-  `local/hybrid-anchor-template.json` uses `VAEDecode` where `local-8gb` wants tiled VAE.
-- comfy-desktop-setup: write the model-hash cache and `hardware-profile.json` from the skill's own steps.
-- Batch: in `finalize.py` the local `rows` of the `--discard-qa-fail` branch shadows the sheet `rows` parameter;
-  the manifest line "Sheet: ... -> N outputs" counts cells that were discarded later; the budget counts a discarded
-  output differently with and without a sheet (without one it leaves the count, with one a fully discarded sheet
-  still counts as one generation): decide the rule and test it.
-- Style report: the text label "selected anchor copies" and the JSON `anchors` count (one anchor selected by two
-  runs counts twice); the setup heredoc of the selected-anchor regression case is not checked for its exit status.
-- Docs: `docs/architecture/multi-discipline-factory.md` still says "5 tech skills".
 - Environment: the check "registry paths exist in workspace" fails inside Orca agent terminals and passes in a
   direct shell and in integration QA; the workspace path resolves differently there.
 - The local SDXL, IPAdapter and ControlNet paths of plan assetgen-hybrid have never run on the target hardware:
   the owner runs `docs/plans/assetgen-hybrid/e2e-local.md` on the RTX 5060.
-
-### run-all-orphan-after-reap
-
-When Claude Code stops a background command under memory pressure, the `tests/run-all.sh` it wrapped keeps running
-and keeps its test slot, while the session believes the run is dead. In the assetgen-style and assetgen-batch runs
-this produced duplicate runs of one checkout (both slots held), lost results (the log went to a closed terminal)
-and reruns of 30 to 60 minutes each. Make it visible and safe: `run-all.sh` writes its result summary to the slot's
-state directory so a later session can read it, a second run of the same checkout and arguments joins or refuses
-instead of starting a copy, and `parallel-work.md` tells a session to check the slot's `checkout` and `winpid`
-before a rerun. Related: `run-lead-waiter-reaped`.
+- The model-hash cache writer is missing: no command in this repo writes `<state>/comfy/model-hashes.json`, so
+  the manifest records local model sha256 as unverified (the assetgen check warns) until one exists.
 
 ### agent-runtime-quirks
 
@@ -234,6 +203,18 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   busy machine.
 
 ## Covered
+
+- **review-base-topic** and **run-all-orphan-after-reap**: shipped in plan assetgen-followups (task topic-start-base,
+  `changelog.d/topic-start-base.md`: a task whose deps are all integrated starts from the topic and gets no stack
+  record; task run-all-result-record, `changelog.d/run-all-result-record.md`: the run-all result record,
+  `--last-result`, duplicate-run detection and the `parallel-work.md` lesson).
+
+- **assetgen-run-followups** (engine, hybrid templates, comfy-desktop-setup, batch, style report and docs notes):
+  shipped in plan assetgen-followups (tasks engine-notes, batch-report-notes and followup-docs;
+  `changelog.d/assetgen-engine-notes.md`, `changelog.d/assetgen-batch-report-notes.md`,
+  `changelog.d/assetgen-followup-docs.md`: comfy-desktop-setup ends with saving `hardware-profile.json`, the
+  architecture doc states the tech skill count); the environment note, the owner's local e2e run and the missing
+  model-hash cache writer stay under assetgen-run-followups in Open.
 
 - **delivery.md headroom** (plan-edit-followups, workflow-slim-followups), the `tests/README.md` QA tiers restatement
   and four plugin-flow-5-followups lows (hook-perf `.new`, gitcfg re-snapshot, netcode-headless evidence, `/mnt/`

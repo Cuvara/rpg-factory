@@ -93,6 +93,16 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   branch name) in `<task>__stack.json`, outside the task fingerprint, so recorded verdicts stay valid. A fresh
   dispatch (no task branch yet) first removes a leftover `<task>__stack.json` and `<task>__sync.json`. Tier XS and
   no-worktree tasks keep the unchanged handoff.
+- Topic start base (no stack): a dependency whose task branch tip is already on the topic counts as settled even when
+  its recorded phase is still candidate or reviewed (its verdicts may be STALE after the plan changed), so a task
+  whose dependencies are all merged into the topic is not stackable. `--phase lead` then prints `git worktree add
+  --no-track -b <topic>-<id> <path> <topic>`, never a dependency's old branch tip, and removes any leftover
+  `<task>__stack.json`; no stack record exists afterwards. A task branch that exists and was cut from (or merged
+  into) the topic ahead of `repos.<key>.base` starts at the topic, with or without deps: its review base and own
+  start are the newest topic commit in its HEAD, so the tier command (`--affected`) and the review select only its
+  own delta instead of every suite. A stack record whose dependency was integrated into the topic before the task
+  branch was cut is ignored by `status` (no `stacked on` note), verify, review and QA dispatch and the gate (no
+  `integrated before its dependency` blocker). Stacking on one in-flight dependency is unchanged.
 - `dispatch plan.json --task <id> --phase implement --subplan subplan.json --subtask <sid> --runner orca` takes the
   subtask's paths, agent and placement; the ad hoc form is `--paths <subtask paths> [--agent claude|codex]
   [--placement shared|child]`. Paths outside the task's owned paths, or inside its exclusions, are refused; without

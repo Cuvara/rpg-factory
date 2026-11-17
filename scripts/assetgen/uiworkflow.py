@@ -13,7 +13,8 @@ to_ui(graph, known, extra=None, ui=None) -> the UI-format workflow {"last_node_i
   - links are [link_id, from_node, from_slot, to_node, to_slot, type], to_slot indexing the target's inputs list.
   Converting it back (widgets_values in input order, then each linked socket as [str(from_node), from_slot], _meta
   title from the node title) gives the API graph again; tests/assetgen.test.sh checks that round trip.
-An optional template ui block supplies groups, notes (ui_only Note nodes), node colors and row hints; it never
+An optional template ui block supplies groups, notes (ui_only Note nodes), node colors, row hints and explicit node
+  positions (ui.positions {node id: [x, y]}, applied after the computed layout and before group bounds); it never
   changes the API graph or workflow.json. Groups are laid out by stage with bounds around members and notes.
   A stage fed by a link that skips stages stays on its source's row and skipped stages move down; x never changes
   (the [order] rule sorts groups by x). Lanes are per stage: links inside a stage or into a later column of a
@@ -21,6 +22,7 @@ An optional template ui block supplies groups, notes (ui_only Note nodes), node 
 Raises ValueError for invalid UI metadata or a graph it cannot lay out (non-digit id, unknown node type, a widget value after a missing one).
 """
 
+import math
 import re
 from collections import deque
 
@@ -122,11 +124,21 @@ def _layout(graph, known, nodes, depth, ui):
     """Validate template UI metadata and lay out groups without changing graph data."""
     if not isinstance(ui, dict):
         raise ValueError("ui must be an object")
-    unknown = set(ui) - {"groups", "notes", "colors", "rows"}
+    unknown = set(ui) - {"groups", "notes", "colors", "rows", "positions"}
     if unknown:
         raise ValueError("ui: unknown key %s" % sorted(unknown, key=str)[0])
     groups, notes = ui.get("groups", []), ui.get("notes", [])
     colors, hints = ui.get("colors", {}), ui.get("rows", {})
+    positions = ui.get("positions", {})
+    if not isinstance(positions, dict):
+        raise ValueError("ui positions must be an object")
+    for nid, position in positions.items():
+        if not isinstance(nid, str) or nid not in graph:
+            raise ValueError("ui positions: unknown node id %r" % nid)
+        if (not isinstance(position, list) or len(position) != 2 or
+                any(isinstance(v, bool) or not isinstance(v, (int, float)) or
+                    (isinstance(v, float) and not math.isfinite(v)) for v in position)):
+            raise ValueError("ui positions: node %s needs a pair of finite numbers" % nid)
     if not isinstance(groups, list) or not isinstance(notes, list):
         raise ValueError("ui groups and notes must be lists")
     if not isinstance(colors, dict) or not isinstance(hints, dict):
@@ -187,6 +199,8 @@ def _layout(graph, known, nodes, depth, ui):
         note_nodes.append(node)
         grouped_notes[titles[title]].append(node)
     if not groups:
+        for nid, position in positions.items():
+            nodes[nid]["pos"] = list(position)
         return [], note_nodes
 
     upstream = {nid: [v[0] for v in node["inputs"].values() if _is_link(v) and v[0] in graph]
@@ -287,6 +301,8 @@ def _layout(graph, known, nodes, depth, ui):
         for node in contents:
             node["pos"][1] += offset
         bottom = max(node["pos"][1] + node["size"][1] + PAD for node in contents)
+    for nid, position in positions.items():
+        nodes[nid]["pos"] = list(position)
     result = []
     for i, group in enumerate(groups):
         contents = [nodes[n] for n in group["nodes"]] + grouped_notes[i]

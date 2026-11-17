@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.comfy-known-nodes/1",
- "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). The core image node entries (ImageScale through PrimitiveString) are written by nodesync.py from a saved object_info (live ComfyUI 0.45.2; fixture tests/fixtures/assetgen/object_info.json); the 9router and IO entries stay hand-kept. Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json. ui_only nodes (Note, MarkdownNote) exist only on the frontend canvas: lint rejects them in an API workflow. The 13 local core entries come from live ComfyUI 0.45.2 object_info (fixture tests/fixtures/assetgen/object_info.json); model-file combos are empty there, so ckpt_name, lora_name, control_net_name and model_name are STRING. The pack entries come from pack source at the pinned commits (fixture tests/fixtures/assetgen/object_info-packs.json) because no saved object_info from a machine with the packs exists. packs maps each hardware.json pack id to its nodes; local_model_nodes lists the nodes that need a template requires block. UNTESTED on RTX 5060: the local nodes have not run on the target machine.",
+ "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). The core image node entries (ImageScale through PrimitiveString) are written by nodesync.py from a saved object_info (live ComfyUI 0.45.2; fixture tests/fixtures/assetgen/object_info.json); the 9router and IO entries stay hand-kept. Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json. ui_only nodes (Note, MarkdownNote) exist only on the frontend canvas: lint rejects them in an API workflow. The 13 local core entries come from live ComfyUI 0.45.2 object_info (fixture tests/fixtures/assetgen/object_info.json); model-file combos are empty there, so ckpt_name, lora_name, control_net_name and model_name are STRING. KSamplerAdvanced, the 14th local core entry, is not in that fixture and nodesync does not check it. The pack entries come from pack source at the pinned commits (fixture tests/fixtures/assetgen/object_info-packs.json) because no saved object_info from a machine with the packs exists. packs maps each hardware.json pack id to its nodes; local_model_nodes lists the nodes that need a template requires block. UNTESTED on RTX 5060: the local nodes have not run on the target machine.",
  "nodes": {
   "NineRouterImage": {
    "inputs": {
@@ -1092,6 +1092,216 @@
      102
     ]
    }
+  },
+  "KSamplerAdvanced": {
+   "inputs": {
+    "model": {
+     "type": "MODEL",
+     "required": true
+    },
+    "add_noise": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "noise_seed": {
+     "type": "INT",
+     "required": true
+    },
+    "steps": {
+     "type": "INT",
+     "required": true
+    },
+    "cfg": {
+     "type": "FLOAT",
+     "required": true
+    },
+    "sampler_name": {
+     "type": "COMBO",
+     "options": [
+      "euler",
+      "euler_cfg_pp",
+      "euler_ancestral",
+      "euler_ancestral_cfg_pp",
+      "heun",
+      "heunpp2",
+      "exp_heun_2_x0",
+      "exp_heun_2_x0_sde",
+      "dpm_2",
+      "dpm_2_ancestral",
+      "lms",
+      "dpm_fast",
+      "dpm_adaptive",
+      "dpmpp_2s_ancestral",
+      "dpmpp_2s_ancestral_cfg_pp",
+      "dpmpp_sde",
+      "dpmpp_sde_gpu",
+      "dpmpp_2m",
+      "dpmpp_2m_cfg_pp",
+      "dpmpp_2m_sde",
+      "dpmpp_2m_sde_gpu",
+      "dpmpp_2m_sde_heun",
+      "dpmpp_2m_sde_heun_gpu",
+      "dpmpp_3m_sde",
+      "dpmpp_3m_sde_gpu",
+      "ddpm",
+      "lcm",
+      "ipndm",
+      "ipndm_v",
+      "deis",
+      "cfgpp_ud10_ab",
+      "res_multistep",
+      "res_multistep_cfg_pp",
+      "res_multistep_ancestral",
+      "res_multistep_ancestral_cfg_pp",
+      "gradient_estimation",
+      "gradient_estimation_cfg_pp",
+      "er_sde",
+      "seeds_2",
+      "seeds_3",
+      "sa_solver",
+      "sa_solver_pece",
+      "ddim",
+      "uni_pc",
+      "uni_pc_bh2"
+     ],
+     "required": true
+    },
+    "scheduler": {
+     "type": "COMBO",
+     "options": [
+      "simple",
+      "sgm_uniform",
+      "karras",
+      "exponential",
+      "ddim_uniform",
+      "beta",
+      "normal",
+      "linear_quadratic",
+      "kl_optimal"
+     ],
+     "required": true
+    },
+    "positive": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "negative": {
+     "type": "CONDITIONING",
+     "required": true
+    },
+    "latent_image": {
+     "type": "LATENT",
+     "required": true
+    },
+    "start_at_step": {
+     "type": "INT",
+     "required": true
+    },
+    "end_at_step": {
+     "type": "INT",
+     "required": true
+    },
+    "return_with_leftover_noise": {
+     "type": "COMBO",
+     "options": [
+      "disable",
+      "enable"
+     ],
+     "required": true
+    }
+   },
+   "outputs": [
+    "LATENT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     270
+    ]
+   }
+  },
+  "DepthAnythingPreprocessor": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "ckpt_name": {
+     "type": "STRING",
+     "required": true
+    },
+    "resolution": {
+     "type": "INT",
+     "required": false
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     102
+    ]
+   }
+  },
+  "DWPosePreprocessor": {
+   "inputs": {
+    "image": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "detect_hand": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "detect_body": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "detect_face": {
+     "type": "COMBO",
+     "options": [
+      "enable",
+      "disable"
+     ],
+     "required": true
+    },
+    "resolution": {
+     "type": "INT",
+     "required": true
+    },
+    "bbox_detector": {
+     "type": "STRING",
+     "required": true
+    },
+    "pose_estimator": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE",
+    "POSE_KEYPOINT"
+   ],
+   "ui": {
+    "size": [
+     320,
+     198
+    ]
+   }
   }
  },
  "packs": {
@@ -1105,10 +1315,12 @@
   },
   "comfyui_controlnet_aux": {
    "nodes": [
-    "CannyEdgePreprocessor"
+    "CannyEdgePreprocessor",
+    "DepthAnythingPreprocessor",
+    "DWPosePreprocessor"
    ],
    "provider": "comfyui_controlnet_aux (Fannovel16)",
-   "signatures": "pack source node_wrappers/canny.py at commit a587a4c15945, no saved object_info"
+   "signatures": "CannyEdgePreprocessor: pack source node_wrappers/canny.py at commit a587a4c15945, no saved object_info; DepthAnythingPreprocessor and DWPosePreprocessor: hand-written, unverified against the upstream pack (no source file or commit checked, no saved object_info; the ckpt_name, bbox_detector and pose_estimator inputs are COMBO in the upstream pack and recorded here as STRING)"
   },
   "cut-out (BiRefNet or rembg)": {
    "nodes": [
@@ -1131,6 +1343,7 @@
   "ControlNetLoader",
   "ControlNetApplyAdvanced",
   "UpscaleModelLoader",
-  "ImageUpscaleWithModel"
+  "ImageUpscaleWithModel",
+  "KSamplerAdvanced"
  ]
 }

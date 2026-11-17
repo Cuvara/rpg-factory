@@ -325,7 +325,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order stack-deps-merged stack-stale-record topic-start-no-deps"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -926,6 +926,53 @@ if case == 'stack-no-worktree':
     assert_unstacked_lead()
     print(case + ' assertions passed')
     sys.exit(0)
+if case == 'topic-start-no-deps':
+    # a no-deps task cut from a topic that is ahead of main starts at the topic: its review base, own start and the
+    # affected selection see only its own delta, not the topic's earlier wave; the same task cut from main keeps main
+    ta = plan['tasks'][0]
+    info = m.repo_info(plan, reg, 'fixture')
+    start_main = info['base_sha'] or info['base']
+    aspec = importlib.util.spec_from_file_location('affected_mod', root + '/tests/affected.py')
+    aff = importlib.util.module_from_spec(aspec); aspec.loader.exec_module(aff)
+    aff.ROOT = str(repo)  # affected.changed() reads the throwaway repo
+    wave1 = commit('wave 1', 'wave1.txt')  # on the topic: ahead of main, a file task a does not own
+    assert m.start_base(plan, info, ta, reg) == start_main  # no task branch yet: a fresh dispatch keeps the base
+    git('switch', '--no-track', '-c', 'topic-a')
+    ca = commit('a own', 'shared.txt')
+    def fork_of(base):
+        """The commit a base (branch name or SHA) forks from ca: where the review diff `base...ca` starts."""
+        return git('merge-base', base, ca)
+    start = m.start_base(plan, info, ta, reg)
+    assert start in (plan['topic'], wave1), start
+    rb, note = m.review_base(info, plan['topic'], start, ca)
+    assert note is None and fork_of(rb) == wave1, (rb, note, wave1)
+    os_ = m.own_start(plan, reg, info, ta, ca)
+    assert os_ and fork_of(os_) == wave1, (os_, wave1)
+    # affected selection: the task's own file only; against main it would also pull the topic's earlier file
+    assert aff.changed(rb) == ['shared.txt'], aff.changed(rb)
+    assert aff.changed(os_) == ['shared.txt'], aff.changed(os_)
+    assert aff.changed(start_main) == ['shared.txt', 'wave1.txt'], aff.changed(start_main)
+    # verify dispatch: the tier command and the review diff start at the topic, not at main
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/x.test.sh\\n"; exit 0 ;; esac\n'
+                                              'exit 1\n', newline='\n')
+    (repo / '.git' / 'info').mkdir(exist_ok=True)
+    with open(repo / '.git' / 'info' / 'exclude', 'a') as f:
+        f.write('\ntests/\n')
+    out = cli('dispatch', str(pf), '--task', 'a', '--phase', 'verify', '--sha', ca, '--runner', 'print').stdout
+    assert '--affected --base ' + rb in out and 'git diff ' + rb + '...' + ca in out, out
+    assert '--affected --base ' + start_main + ' ' not in out and 'git diff ' + start_main + '...' not in out, out
+    # the same task cut from main (the topic is ahead of it, the branch does not contain the topic's commit): main
+    git('switch', 'topic'); git('branch', '-D', 'topic-a')
+    git('switch', '--no-track', '-c', 'topic-a', start_main)
+    cm = commit('a own from main', 'shared.txt')
+    assert m.start_base(plan, info, ta, reg) == start_main
+    assert m.own_start(plan, reg, info, ta, cm) == start_main
+    rb2, note2 = m.review_base(info, plan['topic'], m.start_base(plan, info, ta, reg), cm)
+    assert rb2 == start_main and note2 is None, (rb2, note2)
+    assert aff.changed(rb2) == ['shared.txt'], aff.changed(rb2)
+    print(case + ' assertions passed')
+    sys.exit(0)
 git('switch', '--no-track', '-c', 'topic-a')
 a = commit('a')
 if case.startswith('stack-'):
@@ -971,6 +1018,69 @@ if case.startswith('stack-'):
             git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge c', 'topic-c')
             assert status_row('c')['phase'] == 'integrated'
             assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case == 'stack-deps-merged':
+        # a's branch is merged into the topic (--no-ff) but its verdicts leave it candidate or reviewed (none, or STALE):
+        # it counts as settled, so b is not stackable, starts from the topic and gets no stack record
+        tb['paths'] = ['b.txt']; save()
+        assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}  # before the merge
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+        topic_head = git('rev-parse', 'HEAD')
+        assert topic_head != a
+        def lead_b(leftover):
+            """`dispatch --phase lead --runner orca` of b: a worktree cut from the topic HEAD, no stack note or record."""
+            if leftover:  # the record of an earlier dispatch, written while a was still in flight
+                m.fstate.write_json(m.stack_file(plan, 'b'), {'dep': 'a', 'branch': 'topic-a', 'sha': a, 'at': 't'})
+                assert m.stack_record(plan, 'b')
+            with no_orca():
+                r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'orca')
+            adds = [x for x in argv_lines(r.stdout) if x[:2] == ['git', '-C'] and x[3:5] == ['worktree', 'add']]
+            assert len(adds) == 1, r.stdout
+            add = adds[0]
+            assert add[5:8] == ['--no-track', '-b', 'topic-b'] and len(add) == 10, add
+            assert add[-1] in (plan['topic'], topic_head) and add[-1] != a, add
+            assert 'stacks on' not in r.stdout + r.stderr and 'stacked on' not in r.stdout + r.stderr, (r.stdout, r.stderr)
+            for text in (r.stdout, spec_of(r.stdout) or ''):
+                assert 'Implement now' not in text and 'run no verify' not in text, text
+            assert not pathlib.Path(m.stack_file(plan, 'b')).exists()
+            assert m.stack_record(plan, 'b') is None, m.stack_record(plan, 'b')
+        for variant in ('no-review', 'stale-review'):
+            if variant == 'stale-review':
+                verdict('a', 'review', a)
+                plan['tasks'][0]['acceptance'] = ['reviewed', 'changed after the review']; save()  # a's PASS is STALE
+            assert status_row('a')['phase'] in m.STACK_PHASES, (variant, status_row('a'))
+            assert m.stackable(plan, reg, info, tb) is None, variant
+            assert m.start_base(plan, info, tb, reg) == plan['topic'], variant
+            assert not any('stackable' in n or 'stacked' in n for n in status_row('b')['notes']), status_row('b')
+            lead_b(False)  # no leftover record: none is written
+            lead_b(True)   # a leftover record: removed by the fresh dispatch
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case == 'stack-stale-record':
+        # a leftover b__stack.json names a's tip, but topic-b was cut from the topic after a was merged into it: the
+        # record is ignored by stack_base, stack_gate, verify dispatch, status and the gate
+        tb['paths'] = ['b.txt']; save()
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+        git('switch', '--no-track', '-c', 'topic-b', 'topic')
+        bh = commit('b', 'b.txt')
+        m.fstate.write_json(m.stack_file(plan, 'b'), {'dep': 'a', 'branch': 'topic-a', 'sha': a, 'at': 't'})
+        assert m.stack_record(plan, 'b')['sha'] == a
+        assert m.stack_record_live(plan, info, tb) is None
+        assert m.stack_base(plan, reg, info, tb, bh) is None
+        assert m.stack_gate(plan, reg, info, tb, bh) is None
+        # a has no review PASS: a live record would make b's verify dispatch exit 2 (`has no current review PASS`)
+        r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'verify', '--sha', bh, '--runner', 'print')
+        assert r.stdout and 'has no current review PASS' not in r.stderr and 'stacked on' not in r.stdout, (r.stdout, r.stderr)
+        row = status_row('b')
+        assert not any('stacked on' in n or 'sync:' in n for n in row['notes']), row
+        assert not any(x['dep'] == 'a' for x in m.stack_groups(plan, reg)), m.stack_groups(plan, reg)
+        # b's review PASS is recorded (a live record would refuse it) and merged after a: no stack blocker at the gate
+        cli('verdict', str(pf), '--task', 'b', '--phase', 'review', '--sha', bh, '--by', 'claude', '--state', 'PASS')
+        assert record('b', 'review')['sha'] == bh
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge b', 'topic-b')
+        blockers = m.gate(plan, reg)['blockers']
+        assert not any(x.startswith('b: stacked on a') or 'integrated before its dependency' in x for x in blockers), blockers
         print(case + ' assertions passed')
         sys.exit(0)
     if case.startswith(('stack-gate-', 'stack-sync-')):

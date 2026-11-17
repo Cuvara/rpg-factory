@@ -126,7 +126,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   sheets/             slice preserves the original sheets here without overwriting them
   sheet.json          slice records sheet hashes, cell bounds and outputs
   discards.json       append-only history of discarded outputs and their hashes and reasons
-  outputs-raw/<name>  defringe: the original of each output it rewrote (kept; never an output, never in a binding)
+  raw/<name>          fit: original before orientation padding (unique name, never overwritten)
+  outputs-raw/<name>  defringe: the input before defringe, reused on reruns while the output matches its record;
+                      replaced when a changed output is defringed again
   outputs-raw/pixelgrid/<name>  finalize --pixel-grid: the original of each output it reduced to its pixel grid
   pixelgrid.json      finalize --pixel-grid: {"schema": "rpg-factory.assetgen-pixelgrid/1", "params", "outputs"}
                       (scripts/assetgen/pixelgrid.py: grid detected, downsampled to one pixel per cell, alpha
@@ -199,7 +201,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       only on the person's explicit word; the person commits run.md and the record in one SSH-signed
                       commit whose signer principal is NAME (until then: present but not committed/signed)
 
-finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. It runs filter, optional slice, fit, defringe
+finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. Fit pads only alpha-channel outputs with a
+mismatched orientation that pass the size floors, when qa.size.fit is pad and qa.alpha is required; it preserves
+originals in raw/ with unique names. It runs filter, optional slice, fit, defringe
 (only for a purpose with qa.alpha required), optional pixel-grid, embed and qa in that order, and stops at the first FAIL naming
 the step. Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. It refuses (exit 1, nothing written) a run without
 spec.json, outputs/*.png or a readable workflow.ui.json, and an approved run (rewriting approved bytes would fail
@@ -215,8 +219,11 @@ sheet-hint prints a prompt snippet for review; slice --run or finalize --rows R 
 preserves the original in sheets/ and records the cells in sheet.json. Both dimensions are 1..8 with at least two cells.
 
 Spend guard (scripts/assetgen/budget.py): resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default
-4; not a whole number >= 1: exit 2). budget --run prints used (the run's outputs/*.png + the failed attempts of its
-series), allowed and remaining; it exits 1 only when used exceeds allowed or spec.budget is malformed. A spec.json
+4; not a whole number >= 1: exit 2). budget --run prints used (the generations made + the failed attempts of its
+series), allowed and remaining. The budget counts generations: a discarded output still counts (a discard never
+refunds a generation; a file moved back to outputs/ counts once) and a sliced sheet counts as one generation whether
+or not its cells were discarded. The text and --json (discarded, sheet_cells_discarded) say how many counted outputs
+are discarded. It exits 1 only when used exceeds allowed or spec.budget is malformed. A spec.json
 without budget (resolved before the spend guard) is unlimited, never a failure. The limit is advisory: the engine cannot
 stop comfy-mcp, so the asset-gen skill runs budget before each run_workflow. finalize prints the budget line before its
 summary line (--json: key "budget") and keeps its own exit code.
@@ -585,13 +592,17 @@ def ui_with_references(ui, workflow, template_workflow, note=REFERENCES_NOTE):
     """The template ui block for to_ui with the nodes render added to the template workflow (wire_references: style-lock
     anchors and their ImageBatch chain) in the References group: the existing group of that title, else a new one
     (palette color cyan, one Note) inserted at its graphstyle.STAGES position. A copy; spec and template data are never
-    changed. A ui that is not a dict with a non-empty groups list (legacy: no ui block, no groups) comes back as is."""
+    changed. A ui that is not a dict with a non-empty groups list (legacy: no ui block, no groups) comes back as is.
+    When render added nodes, the copy drops ui.positions: those fixed positions were chosen for the template's own nodes,
+    the added References nodes would overlap other groups, so such a render uses the computed layout (uiworkflow._layout);
+    a render that adds no nodes keeps the template's positions."""
     if not isinstance(ui, dict) or not isinstance(ui.get("groups"), list) or not ui["groups"]:
         return ui
     added = sorted((nid for nid in workflow if nid not in (template_workflow or {})), key=lambda n: (len(n), n))
     if not added:
         return ui
     ui = copy.deepcopy(ui)
+    ui.pop("positions", None)
     groups = ui["groups"]
     for group in groups:
         if isinstance(group, dict) and group.get("title") == REFERENCES:
@@ -1134,7 +1145,7 @@ def pixels_sha256(path):
 def defringe(run_dir, alpha_floor=None, force=False):
     """(rows, bound): rows {output, state: defringed|skipped|FAIL, reason, ...} of imaging.defringe on every output
     with transparent pixels, in place; bound names the records (qa.json, image reviews) --force made stale. The
-    original goes to outputs-raw/<name> first; defringe.json records the params and each output's before/after sha256
+    input goes to outputs-raw/<name> first, replacing an older copy when the output changed; defringe.json records the params and each output's before/after sha256
     (file bytes), its after_pixels_sha256 (decoded pixels: embed after defringe keeps them) and stats. Running it again
     on outputs it wrote (same pixels) starts from the kept originals, so the result depends only on the originals and
     the params. Text chunks (prompt, workflow) are carried over before IEND, and the colour-management and other safe
@@ -1304,41 +1315,10 @@ def failed_attempts(run_dir):
 
 
 def run_budget(run_dir, spec):
-    """budget.state of a run: its outputs plus the failed attempts of its series (none for a dir not <slug>-NNN)."""
+    """budget.state of a run: the generations made (a discard never refunds one, a sliced sheet counts once) plus the
+    failed attempts of its series (none for a dir not <slug>-NNN)."""
     name = os.path.basename(os.path.normpath(run_dir))
-    st = budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
-    try:
-        with open(os.path.join(run_dir, "sheet.json"), encoding="utf-8") as f:
-            record = json.load(f)
-    except (OSError, ValueError, UnicodeError):
-        return st
-    if not isinstance(record, dict):
-        return st
-    sheets = record.get("sheets")
-    sheets = [s for s in sheets if isinstance(s, dict)] if isinstance(sheets, list) else []
-    paths = set()
-    for sheet in sheets:
-        cells = sheet.get("cells")
-        for cell in cells if isinstance(cells, list) else []:
-            output = cell.get("output") if isinstance(cell, dict) else None
-            if (isinstance(output, str) and output.startswith("outputs/")
-                    and os.path.basename(output) == output[8:]
-                    and output.endswith(".png") and os.path.isfile(os.path.join(run_dir, *output.split("/")))):
-                paths.add(output)
-    st["sheet_cells"] = len(paths)
-    adjustment = len(sheets) - len(paths)
-    st["outputs"] += adjustment
-    st["used"] += adjustment
-    if st["state"] not in ("invalid", "unlimited"):
-        used, allowed = st["used"], st["allowed"]
-        st["remaining"] = max(0, allowed - used)
-        if used < allowed:
-            st.update(state="ok", exit=0, reason="%d of %d generations left in this run series" % (st["remaining"], allowed))
-        elif used == allowed:
-            st.update(state="at-limit", exit=0, reason="the run series used all %d allowed generations: do not run run_workflow again" % allowed)
-        else:
-            st.update(state="exceeded", exit=1, reason="the run series used %d generations, more than the %d allowed" % (used, allowed))
-    return st
+    return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
 
 
 def finalize_with_budget(run_dir, force, as_json, discard_qa_fail=False, pixel_grid=False, max_colors=None, rows=None, cols=None):
@@ -1482,12 +1462,21 @@ def manifest_text(front, run_dir=None, newline="\n"):
             for r in local["samplers"]) or "none"
         body.insert(5, "- Local stage (UNTESTED on RTX 5060): models %s (%d of %d sha256 unverified), LoRAs %s, sampler %s"
                     % (model_text, sum(not r["verified"] for r in rows), len(rows), lora_text, sampler_text))
+    fit_path = os.path.join(run_dir, "finalize.json") if run_dir else None
+    if fit_path and os.path.isfile(fit_path):
+        record = read_json(fit_path, "finalize record")
+        fitted = record.get("fitted", []) if isinstance(record, dict) else []
+        if isinstance(fitted, list) and fitted:
+            body.append("- Fit: orientation padding; originals in raw/ (finalize.json): " + ", ".join(
+                "%s %s -> %s" % (r.get("output"), r.get("original_size"), r.get("fitted_size"))
+                for r in fitted if isinstance(r, dict)))
     fringe = defringe_line(run_dir, s["outputs"], {r["output"] for r in discarded}) if run_dir else None
     if fringe:
         body.append(fringe)
     sheet_path = os.path.join(run_dir, "sheet.json") if run_dir else None
     if sheet_path and os.path.isfile(sheet_path):
         record = read_json(sheet_path, "sheet record")
+        gone_names = {r["output"] for r in discarded}
         if isinstance(record, dict):
             for sheet in record.get("sheets", []):
                 if not isinstance(sheet, dict):
@@ -1495,9 +1484,14 @@ def manifest_text(front, run_dir=None, newline="\n"):
                 name, digest = sheet.get("sheet", ""), sheet.get("sha256", "")
                 path = os.path.join(run_dir, *name.split("/"))
                 stale = not os.path.isfile(path) or qa.sha256(path) != digest
-                body.append("- Sheet: %sx%s, %s (sha256 %s) -> %d outputs (sheet.json)%s" % (
-                    record.get("rows"), record.get("cols"), name, digest[:12], len(sheet.get("cells", [])),
-                    "; STALE" if stale else ""))
+                cells = [c.get("output") for c in sheet.get("cells", []) if isinstance(c, dict)]
+                kept = [o for o in cells if isinstance(o, str) and o.startswith("outputs/")
+                        and os.path.basename(o) == o[8:] and os.path.isfile(os.path.join(run_dir, *o.split("/")))]
+                gone = [o for o in cells if o in gone_names and o not in kept]
+                counts = "%d outputs, %d discarded (sheet.json, discards.json)" % (len(kept), len(gone)) if gone \
+                    else "%d outputs (sheet.json)" % len(kept)
+                body.append("- Sheet: %sx%s, %s (sha256 %s) -> %s%s" % (
+                    record.get("rows"), record.get("cols"), name, digest[:12], counts, "; STALE" if stale else ""))
     lock = s.get("style_lock")
     if isinstance(lock, dict):
         st = lock.get("style") or {}

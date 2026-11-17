@@ -1,0 +1,35 @@
+{
+  "schema": "rpg-factory.comfy-model-hashes/1",
+  "models": [
+    {
+      "kind": "checkpoints",
+      "name": "sdxl.safetensors",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 1
+    },
+    {
+      "kind": "loras",
+      "name": "style.safetensors",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 1
+    },
+    {
+      "kind": "annotators",
+      "name": "depth_anything_vitl14.pth",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size": 1
+    },
+    {
+      "kind": "annotators",
+      "name": "yolox_l.onnx",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 1
+    },
+    {
+      "kind": "annotators",
+      "name": "dw-ll_ucoco_384.onnx",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size": 1
+    }
+  ]
+}

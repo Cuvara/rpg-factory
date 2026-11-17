@@ -71,8 +71,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
         exists, it carries the earlier waves; status still compares against the base; stacked: when exactly one
-        dependency in the same repo is candidate or reviewed and every other one is integrated, from that
-        dependency's branch tip, recorded by SHA in <task>__stack.json (not part of the task fingerprint); its review
+        dependency in the same repo is candidate or reviewed and not yet merged into <topic>, and every other one is
+        integrated, from that dependency's branch tip, recorded by SHA in <task>__stack.json (not part of the task
+        fingerprint; a dependency whose branch tip is already on <topic> counts as settled, so a task whose
+        dependencies are all merged starts from <topic> and gets no stack record); its review
         and QA base is then the newest dependency SHA in HEAD, and status names the merge when the dependency moves;
         tier XS and a no-worktree repo never stack), or resumed when that branch is already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
         own Orca Run, split into subtasks with disjoint paths (`subplan validate`), one fresh session per subtask in the
@@ -88,6 +90,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         names the integration checkout as parent, else the main checkout; its lead prompt says to implement now, in
         parallel with the dependency's verify, and to run no verify, review or QA dispatch before `status` clears it.
         A fresh dispatch (no task branch yet) removes a leftover <task>__stack.json and <task>__sync.json first.
+        A task branch that exists and was cut from (or merged) <topic> ahead of the base starts at <topic>: its review
+        and QA base is the newest <topic> commit in its HEAD, so the tier command and the review see only its own
+        delta. A stack record whose dependency was integrated into <topic> before the task branch was cut is ignored
+        by status, verify/review/qa dispatch and the gate (no `stacked on` note, no `integrated before its
+        dependency` blocker).
         A tier XS task starts no task lead: it prints the run lead's own steps (edit on plan.topic, commit with explicit
         paths, `dispatch --phase review --sha <sha>`, the task tier command, the `tier XS: lead ran task suites` QA
         verdict, gate); `--phase implement` on it is a usage error. Its review and QA read the topic checkout.
@@ -1449,18 +1456,37 @@ def start_base(plan, info, task, reg=None):
     plan.topic when it exists (it carries the earlier waves); otherwise the base. repos.<key>.base stays the
     comparison base of `status` and the gate.
 
-    Stacked (a worktree repo, not tier XS): once the task branch exists, a stack record (<task>__stack.json) means it
-    was cut from that dependency SHA. Before it exists and with `reg`, a task that is stackable() starts from the
-    tip of its one in-flight dependency (`dispatch --phase lead` records it)."""
+    A task branch that exists and whose fork point with the topic is not in the base (cut from or merged into the
+    topic ahead of the base) also starts at the topic, with or without deps: its own delta is what the topic does not
+    have before it. A fresh dispatch (no task branch yet) of a no-deps task keeps the base.
+
+    Stacked (a worktree repo, not tier XS): once the task branch exists, a live stack record (<task>__stack.json; see
+    stack_record_live: not one whose dependency was integrated before the branch was cut) means it was cut from that
+    dependency SHA. Before it exists and with `reg`, a task that is stackable() starts from the tip of its one
+    in-flight dependency (`dispatch --phase lead` records it)."""
     def unstacked():
-        if task.get("deps") and info["worktrees"] and info["path"]:
-            if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]:
-                return plan["topic"]
+        topic_ok = (info["worktrees"] and info["path"]
+                    and bool(git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]))
+        if topic_ok and task.get("deps"):
+            return plan["topic"]
+        if topic_ok and not pr.xs_plan(plan, task) and cut_from_topic():
+            return plan["topic"]
         return info["base_sha"] or info["base"]
+
+    def cut_from_topic():
+        # the task branch exists and its fork point with the topic is ahead of the base
+        path, base = info["path"], info["base_sha"] or info["base"]
+        if not base or not git(path, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")[0]:
+            return False
+        tip = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]
+        if not tip:
+            return False
+        mb, rc = git(path, "merge-base", f"refs/heads/{plan['topic']}", tip)
+        return rc == 0 and bool(mb) and not is_ancestor(path, mb, base)
     if pr.xs_plan(plan, task) or not info["worktrees"] or not info["path"]:
         return unstacked()
     if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
-        rec = stack_record(plan, task["id"])
+        rec = stack_record_live(plan, info, task)
         return rec["sha"] if rec else unstacked()
     if reg is not None:
         stk = stackable(plan, reg, info, task)
@@ -1487,6 +1513,34 @@ def stack_record(plan, task_id):
     return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
 
 
+def stack_record_live(plan, info, task, head=None):
+    """stack_record() unless it is stale: its dependency was already integrated into plan.topic before the task branch
+    was cut (a leftover of an earlier dispatch). `head` is the task's commit (default: the task branch tip; none to
+    judge by: the record stays). fork = the first commit of head's first-parent history that is on the topic's
+    first-parent chain; the record is stale when its SHA is an ancestor of fork. True stacking is unaffected: the
+    first-parent history of a task stacked on an in-flight dependency runs through the dependency's own commits (not on
+    the topic's chain) down to a topic commit older than the dependency's merge. A head on the topic chain itself
+    cannot be judged: the record stays."""
+    rec = stack_record(plan, task["id"])
+    path = info["path"]
+    if not rec or not info["worktrees"] or not path:
+        return rec
+    topic = f"refs/heads/{plan['topic']}"
+    if not git(path, "rev-parse", "--verify", "--quiet", topic)[0]:
+        return rec
+    head = head or f"refs/heads/{task_branch(plan, info, task)}"
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{head}^{{commit}}")[0]
+    if not full:
+        return rec
+    chain = set((git(path, "rev-list", "--first-parent", topic)[0] or "").split())
+    if full in chain:
+        return rec
+    fork = next((c for c in (git(path, "rev-list", "--first-parent", full)[0] or "").split() if c in chain), None)
+    if fork and is_ancestor(path, rec["sha"], fork):
+        return None
+    return rec
+
+
 def sync_file(plan, task_id):
     """The sync record of a stacked dependent: <task>__sync.json beside its verdicts, written by `sync` when its
     dependency moved past the dependent's HEAD. It is the durable signal (an Orca message is only a nudge); status
@@ -1502,7 +1556,7 @@ def sync_record(plan, task_id):
 
 def stacked_dependents(plan, reg, dep_id):
     """The plan tasks stacked on dep_id, in plan order: their stack record names it, same repo key, not tier XS, a
-    worktree repo with a checkout, and their task branch exists."""
+    worktree repo with a checkout, and their task branch exists. A stale record (stack_record_live) names no one."""
     dep = find_task(plan, dep_id)
     out = []
     for t in plan.get("tasks", []):
@@ -1513,7 +1567,8 @@ def stacked_dependents(plan, reg, dep_id):
         if not info["worktrees"] or not info["path"]:
             continue
         if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, t)}")[0]:
-            out.append(t)
+            if stack_record_live(plan, info, t):
+                out.append(t)
     return out
 
 
@@ -1531,6 +1586,9 @@ def stack_groups(plan, reg):
         d = by_id.get(rec.get("dep")) if rec else None
         if not d or d is t or d.get("repo") != t.get("repo") or pr.xs_plan(plan, t):
             continue
+        tinfo = repo_info(plan, reg, t["repo"])
+        if tinfo["worktrees"] and tinfo["path"] and not stack_record_live(plan, tinfo, t):
+            continue  # stale: its dependency was integrated before the task branch was cut
         on.setdefault(d["id"], []).append(t["id"])
     out, topic = [], plan["topic"]
     for d in tasks:
@@ -1566,18 +1624,27 @@ def stackable(plan, reg, info, task, phases=None):
     """{dep, branch, sha} when the task may start from the tip of one dependency, else None: a worktree repo, not tier
     XS, the task has deps, exactly one dependency D in the same repo key is candidate or reviewed with its task branch
     present (sha: its full tip), and every other dependency is integrated or qa. Two in-flight dependencies, or a
-    pending or implementing one, keep the task waiting. `phases` (id -> phase, e.g. status rows) spares task_status."""
+    pending or implementing one, keep the task waiting. A candidate or reviewed dependency whose task branch tip is
+    already on plan.topic was merged (its verdicts may be STALE after the plan changed): it counts as settled, so a task
+    whose dependencies are all merged is not stackable and starts from the topic. `phases` (id -> phase, e.g. status
+    rows) spares task_status."""
     deps = task.get("deps") or []
     if not deps or not info["worktrees"] or not info["path"] or pr.xs_plan(plan, task):
         return None
     inflight = []
+    topic = f"refs/heads/{plan['topic']}"
     for did in deps:
+        d = find_task(plan, did)
         if phases is not None and did in phases:
             phase = phases[did]
         else:
-            d = find_task(plan, did)
             phase = task_status(plan, reg, d, serial_count(plan, reg, d["repo"]))[0]["phase"]
         if phase in STACK_PHASES:
+            if d["repo"] == task["repo"] and not pr.xs_plan(plan, d):
+                dtip = git(info["path"], "rev-parse", "--verify", "--quiet",
+                           f"refs/heads/{task_branch(plan, info, d)}")[0]
+                if dtip and is_ancestor(info["path"], dtip, topic):
+                    continue  # merged into the topic: settled
             inflight.append(did)
         elif phase not in SETTLED_PHASES:
             return None
@@ -1592,16 +1659,19 @@ def stackable(plan, reg, info, task, phases=None):
 
 
 def stack_base(plan, reg, info, task, sha):
-    """(base, note) of a stacked task's own delta at `sha`, or None when the task is not stacked (no record, no task
-    branch, tier XS or a no-worktree repo). Once the recorded dependency SHA is on plan.topic, the task is a later wave
+    """(base, note) of a stacked task's own delta at `sha`, or None when the task is not stacked (no live record - none,
+    or one whose dependency was integrated before the branch was cut -, no task branch, tier XS or a no-worktree repo).
+    Once the recorded dependency SHA is on plan.topic, the task is a later wave
     cut from the topic: review_base. Before, the base is the newest dependency SHA contained in `sha`: the dependency's
     current review PASS, the merge-base with its branch, or the record (the PASS SHA when it is the same commit); with
     none contained, the record's SHA and a note."""
     path = info["path"]
     if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
         return None
-    rec = stack_record(plan, task["id"])
-    if not rec or not git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
+    if not git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
+        return None
+    rec = stack_record_live(plan, info, task)
+    if not rec:
         return None
     full = git(path, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")[0] or sha
     topic = plan["topic"]
@@ -1631,7 +1701,9 @@ def stack_notes(plan, reg, info, task, row):
     sb = stack_base(plan, reg, info, task, row["sha"])
     if sb is None:
         return
-    path, rec = info["path"], stack_record(plan, task["id"])
+    path, rec = info["path"], stack_record_live(plan, info, task)
+    if not rec:
+        return
     x = sb[0]
     if not re.fullmatch(r"[0-9a-f]{40}", str(x)):  # review_base may answer plan.topic: name its fork point
         x = git(path, "merge-base", x, row["sha"])[0] or x
@@ -1652,12 +1724,13 @@ def stack_gate(plan, reg, info, task, sha):
     """Why a stacked task may not be verified (or pass) at `sha`, or None: {dep, reason, merge}. A stacked task's
     verify, review and QA dispatch and its review/QA PASS wait until its dependency D has a current review PASS whose
     SHA X is an ancestor of `sha`; `merge` is what to merge to get there (D's branch when it contains X, else X), None
-    while D has no PASS. Not stacked (tier XS, a no-worktree repo, no stack record, or a record whose dependency is no
+    while D has no PASS. Not stacked (tier XS, a no-worktree repo, no stack record, a stale one - its dependency was
+    integrated into the topic before the commit's branch was cut, stack_record_live -, or a record whose dependency is no
     plan task): None. The task branch need not exist (the gate runs after it may be deleted)."""
     path = info["path"]
     if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
         return None
-    rec = stack_record(plan, task["id"])
+    rec = stack_record_live(plan, info, task, sha)
     if not rec or not plan_has_task(plan, rec.get("dep")):
         return None
     dep = rec["dep"]
@@ -2033,8 +2106,8 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     stacked = None
     if info["worktrees"]:
         stacked = spec.get("stacked_on") or (
-            stack_record(plan, task["id"]) if info["path"] and git(info["path"], "rev-parse", "--verify", "--quiet",
-                                                                    f"refs/heads/{spec['branch']}")[0] else None)
+            stack_record_live(plan, info, task) if info["path"] and git(info["path"], "rev-parse", "--verify", "--quiet",
+                                                                         f"refs/heads/{spec['branch']}")[0] else None)
     sync_in = (f" Stacked on {stacked.get('dep')}: at each subtask boundary run `<pipeline> status <plan>`; when it shows "
                f"`sync: {stacked.get('dep')} moved to <sha>`, run `git merge {stacked.get('branch')}` (never rebase), "
                "resolve conflicts inside your owned paths, then continue." if stacked else "")
@@ -3667,8 +3740,12 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                     blockers.append(f"{t['id']}: QA is STALE - owned paths changed after {tq['sha'][:10]}")
         # a stacked task (record of a dependency D in the same repo): its PASS must contain D's review PASS, and D is
         # integrated first (git merge --no-ff D, then the task)
-        stk = (stack_record(plan, t["id"]) if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t)
-               else None)
+        # (a record whose dependency was integrated before the task branch was cut is ignored: head = the task branch
+        # tip, else the reviewed SHA)
+        stk = None
+        if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
+            tip = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, t)}")[0]
+            stk = stack_record_live(plan, info, t, tip or rv["sha"])
         dep = by_id.get(stk.get("dep")) if stk else None
         if dep is not None and dep.get("repo") != key:
             dep = None
@@ -4444,7 +4521,8 @@ def changed_since(path, sha, head, paths):
 
 def own_start(plan, reg, info, task, head):
     """Where the task's own commits start on `head`, or None when it has none yet. Dependent tasks may own the same
-    paths, so the repo base is not enough: a branch cut from plan.topic starts at its fork point (none while it is still
+    paths, so the repo base is not enough: a branch cut from plan.topic (a later wave, or a no-deps task whose branch
+    forks from the topic ahead of the base: start_base) starts at its fork point (none while it is still
     on the topic's first-parent chain: cut there, nothing of its own), and a no-worktree task, which shares the topic,
     starts only after its serial predecessor's current QA PASS on an ancestor of head (otherwise it has not started,
     and the predecessor's commits are not its own). A stacked task starts at stack_base: the newest dependency SHA in
@@ -4465,7 +4543,9 @@ def own_start(plan, reg, info, task, head):
     if start != plan["topic"]:
         return base
     fork, note = review_base(info, plan["topic"], start, head)
-    return None if note else fork
+    if note:  # no merge commit marks its start: a no-deps task (topic only by start_base's fork rule) keeps the base
+        return None if task.get("deps") else base
+    return fork
 
 
 def task_status(plan, reg, task, n_in_repo, lineage=None):
@@ -4800,7 +4880,7 @@ def status(plan, reg, orca_run=None):
             if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
                 # the durable `sync` record; read-only here: the note goes once HEAD contains the SHA (file kept)
                 # only for the task's current dependency: a leftover record of another dependency shows nothing
-                syn, cur = sync_record(plan, t["id"]), stack_record(plan, t["id"])
+                syn, cur = sync_record(plan, t["id"]), stack_record_live(plan, info, t, row["sha"])
                 if (syn and cur and syn.get("dep") == cur.get("dep") and plan_has_task(plan, syn.get("dep"))
                         and not is_ancestor(info["path"], syn["sha"], row["sha"])):
                     row["notes"].append(f"sync: {syn['dep']} moved to {syn['sha'][:10]} ({syn.get('at')}): at the next "
@@ -4813,8 +4893,8 @@ def status(plan, reg, orca_run=None):
                     row["next"] = (orca_cmd.quote(["git", "-C", row["worktree"], "merge", g["merge"]] if row["worktree"]
                                                   else ["git", "merge", g["merge"]]) if g["merge"] else None)
             elif row["phase"] == "reviewed" and (row["review"] or {}).get("state") == "PASS":
-                stk = (stack_record(plan, t["id"]) if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t)
-                       else None)
+                stk = (stack_record_live(plan, info, t, row["sha"])
+                       if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t) else None)
                 dep = stk.get("dep") if stk else None
                 if dep in rows and rows[dep]["phase"] not in done:
                     row["notes"].append(f"integrate {dep} first (dependency first), then merge {row['branch']} with "
