@@ -18,8 +18,10 @@ never crashes a session (any error = no opinion).
           - secrets (.env, kubeconfig.local; case-insensitive)
   warn  a Read of secrets (.env, kubeconfig.local; case-insensitive)
   warn  rule english-only: a write whose text (Write content, Edit new_string, each MultiEdit new_string, NotebookEdit
-        new_source) is not English (lib/english.py) and whose target is inside a registered repo, the plugin checkout,
-        a docs/plans/ directory or a harness .claude/plans or .claude/projects/<x>/memory directory. Paths matching the
+        new_source) is not English (lib/english.py) and whose target is inside a registered repo or its worktree,
+        any rpg-factory checkout (the installed plugin root, any clone or linked worktree, wherever located), a
+        docs/plans/ directory or a harness .claude/plans or .claude/projects/<x>/memory directory. Unrelated paths
+        get no opinion. Paths matching the
         registry workspace.language_allow (fallback: skills/delivery/pipeline-defaults.json) and the plugin's
         english-only allowlist are skipped. A Read never triggers it.
   warn  a Read of a registered skill's SKILL.md: load it with the Skill tool instead
@@ -187,19 +189,6 @@ def written_text(payload):
     return "\n".join(p for p in parts if isinstance(p, str))
 
 
-def plugin_checkout(path):
-    """The plugin checkout (directory with .claude-plugin/plugin.json) holding path, else None: a stat walk upward."""
-    d = os.path.dirname(path)
-    for _ in range(16):
-        if os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json")):
-            return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            return None
-        d = parent
-    return None
-
-
 def language_allow_globs(registry):
     globs = (registry.get("workspace") or {}).get("language_allow")
     if globs is None:  # no registry setting: the plugin's workspace defaults
@@ -227,7 +216,7 @@ def language_advisory(payload, registry, path):
     low = norm.lower()
     if any(fnmatch.fnmatch(low, g.lower()) for g in language_allow_globs(registry)):
         return None
-    root = plugin_checkout(path)
+    root = workspace.plugin_checkout(os.path.dirname(path))
     segs = [s.lower() for s in norm.split("/")]
     harness = any(segs[i:i + 2] == [".claude", "plans"] or (segs[i] == ".claude" and segs[i + 1:i + 2] == ["projects"] and "memory" in segs[i + 3:i + 4])
                   for i in range(len(segs) - 1)) or any(segs[i:i + 2] == ["docs", "plans"] for i in range(len(segs) - 1))
