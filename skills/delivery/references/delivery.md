@@ -372,32 +372,34 @@ run-checks fast tier). Re-verify flags: `docs/pipeline-cli.md`, "verdict".
 | Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the affected suites in the background while the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` | the release session | release only |
 
-- **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide test slots
-  and, when all are busy, waits instead of slowing every suite 2-4x; a full run keeps its own lock (section 4). The
-  slot belongs to the run, not the session: stop a QA worker's test run before abandoning it.
-- **Pre-flight.** Read the suite count `dispatch --phase verify|qa` prints (`docs/pipeline-cli.md`, "dispatch").
-- **Cases.** A slow suite with cases runs only the cases the change touches (the case list `--phase verify` or
-  `--phase qa` prints). Frozen suite copies go under a temp dir, never into its folder.
+- **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide slots and,
+  when all are busy, waits instead of slowing every suite; a full run keeps its own lock (section 4). The slot
+  belongs to the run, not the session: stop a QA worker's test run before abandoning it.
+- **Pre-flight.** Read the suite count `dispatch --phase verify|qa` prints.
+- **Cases.** A slow suite with cases runs only the cases the change touches (the list `--phase verify` or `qa`
+  prints). Frozen suite copies go under a temp dir, never into its folder.
 - **CI is the merge gate.** CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
   `--no-workspace --no-claude`) and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single
-  required check. No full local run before a PR; while CI runs, start the next task, then fix a red check before
-  merging. Only a release runs a full local suite.
-- **Tier S.** `dispatch --phase verify` (and `--phase qa`) marks a task tier S when the plan or the task says so or
-  every owned path is prose (`docs/pipeline-cli.md`, "dispatch"). The gate accepts a lead's own QA verdict only for
-  the tier its note starts with (`tier S`, `tier XS`) and a fresh QA session's PASS for every tier (model: "Token rule").
+  required check. No full local run before a PR; while CI runs, start the next task, fix a red check before merging.
+  Only a release runs a full local suite.
+- **Tier S.** `dispatch --phase verify` (or `qa`) marks a task tier S when the plan or task says so or every owned
+  path is prose (`docs/pipeline-cli.md`, "dispatch"). The gate accepts a lead's own QA verdict only for the tier its
+  note starts with (`tier S`, `tier XS`) and a fresh QA session's PASS for every tier (model: "Token rule").
 - **Plans.** A task's `checks` name its own suites or the affected-suites command and run in the verify session;
-  neither checks nor acceptance require a full run. `validate` warns on a full run (`docs/pipeline-cli.md`,
-  "validate") and on a check that makes an implementer run a suite.
+  neither checks nor acceptance require a full run. `validate` warns on a full run or a check that makes an
+  implementer run a suite (`docs/pipeline-cli.md`, "validate").
 - The run-all lock, suite reuse and selection rules of this plugin repo's runner are in `tests/README.md`.
 
 ### Model choice
 
-Every pipeline session starts with an explicit model and effort, never the CLI default. Single copy;
-data: settings `models`; code: `scripts/lib/model_policy.py`; flags: `docs/pipeline-cli.md`.
+Every session starts with an explicit model and effort, never the CLI default. Single copy; data: settings
+`models`; code: `scripts/lib/model_policy.py`; flags: `docs/pipeline-cli.md`.
 
 - **Scope.** `models.scope` lists per agent the models and efforts that may run; nothing outside it is dispatched.
-- **Agent first.** Resolve the agent by "Which model" (fallbacks included), then its profile within its scope.
-- **Roles and profiles.** `models.profiles.<agent>` maps `planner`, `lead`, `implement` (by grade), `review` and
-  `qa` to a model and effort; a `heavy` task's review uses the `heavy` profile.
-- **Grades.** `light`, `standard` or `heavy` on a task or subtask, else derived from the tier; the task lead grades
-  subtasks by `models.rubric` and records the reason.
+  A plan may widen it for itself only with `model_scope_widen`: basis `owner-approved` (the owner's word recorded)
+  or `necessary` (the reason recorded).
+- **Agent first.** Resolve the agent by "Which model" (fallbacks included), then its profile.
+- **Profiles.** `models.profiles.<agent>` maps `planner`, `lead`, `implement` (by grade), `review` and `qa` to a
+  model and effort; a `heavy` task's review uses the `heavy` profile.
+- **Grades.** `light`, `standard` or `heavy` per task or subtask, else the tier's; the lead grades subtasks by
+  `models.rubric`, with the reason.
