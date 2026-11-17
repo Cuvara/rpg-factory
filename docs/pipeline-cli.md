@@ -42,6 +42,27 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 - Both reject an unknown grade or one the model policy cannot resolve, and print the resolved model and effort per
   task or subtask.
 
+## plan-edit
+
+`plan-edit <plan.json> --from <edited copy> [--commit [--message <text>]]` is the atomic plan edit of delivery.md
+section 8: edit a copy, never the plan, then let the verb check it and replace the plan.
+
+- It validates the copy with the `validate` code path (same registry or `--registry none`, same checks and warnings),
+  with the copy read as if it sat at the plan's path, so relative `repos.*.path` entries resolve exactly as they do
+  for the plan.
+- Only when validation has no error does it replace the plan, atomically: it writes a temp file in the plan's
+  directory, then `os.replace`s the plan with it. Warnings never block the replace.
+- On any validation error it prints the errors, leaves the plan file and the git index untouched (also with
+  `--commit`: no commit is made) and exits 1.
+- It exits 2, changing nothing, when the copy is missing or unreadable, when the copy's `id` differs from the plan's,
+  or when `--commit` is given and the plan is not inside a git checkout.
+- It prints what changed at task level: tasks added, tasks removed, and tasks whose owned paths, acceptance or deps
+  changed. For changed paths or acceptance it also prints the staleness note: the recorded verdicts of those tasks
+  go stale, so re-run `status` after the plan edit.
+- `--commit` stages only the plan file (never `git add -A`, so other dirty files stay unstaged) and commits it in the
+  plan's checkout. The default message is `docs(plans): edit plan <id>`; `--message <text>` replaces it. The verb
+  never pushes.
+
 ## dispatch
 
 - `--note TEXT` is repeatable; `RPG_FACTORY_SESSION_NOTE` supplies one additional note. Dispatch appends each as a
