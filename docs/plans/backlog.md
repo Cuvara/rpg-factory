@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- delivery.md headroom (plan-edit-followups, workflow-slim-followups) and four plugin-flow-5-followups lows: plan flow-lows (`docs/plans/flow-lows.json`).
+None.
 
 ## Open
 
@@ -104,9 +104,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 - `validate` warns "checks contain test suites" for every task whose `checks` name suites (single-verify rule of
   plan plugin-qa-lean), while `docs/plans/backlog.md` and `docs/plans/README.md` still tell plans to name suites in
   `checks`. Align the plan convention with the verify rule.
-- `skills/delivery/references/delivery.md` is 32420 of its 32768-byte cap (`tests/delivery-generic.test.sh`); the next
-  policy addition needs a move to `docs/pipeline-cli.md` first.
-- `tests/README.md` restates the QA tiers summary and the one-full-run rule of `delivery.md` (low).
 - `factory-pipeline.py` usage text: `verdict` lists no `verify` phase and still says a subtask needs its own review;
   factory-core `SKILL.md` step 11 is still titled "Review + QA".
 - The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
@@ -129,12 +126,9 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   Fix the frontmatter; the two run-all checks then pass.
 - The registry `root_default` (a WSL drive spelling) is not converted by Windows Python (`scripts/lib/workspace.py`); with
   `RPG_FACTORY_WORKSPACE` unset, 11 workspace checks fail on Windows. Convert it like `plan_paths.py` does.
-- `tests/hook-perf.test.sh:101` writes `"$cf.new"` with no guard; an empty `$cf` creates `.new` in the cwd.
 - LFS: the facts export says "LFS files stay pointers" (`tests/facts.test.sh:37,38,49`, the checks-lows changelog
   fragment), which is wrong when git-lfs is configured (`git archive` smudges, the suite is then not offline). No
   product repo has `filter=lfs` today.
-- `scripts/lib/plan_paths.py:57`: a not-yet-existing native path with a `/mnt/<letter>/` segment is rewritten by
-  `native_abs`.
 - The task-lead report and READY_FOR_PR are in `status` notes, not structured fields:
   `docs/schemas/pipeline-status.schema.json` forbids extra fields (add them).
 - `docs/pipeline-cli.md` lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6;
@@ -144,7 +138,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   gets no reuse record; an orphaned waiter is detected between checks, so it can lag one wait.
 - `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
   the plan task's owned paths); `--list-suites` hides `tests/plan-paths.test.sh` until it is wired.
-- `tests/git-env-isolation.test.sh` re-snapshots the git config without removing the earlier copy.
 - Lesson: a `status` message sent to a dispatch that has already finished creates an Orca follow-up worker (two
   appeared in this run). Send lead messages only to the run (`--to run:<id>`) of a live task lead, and put context in
   the start prompt.
@@ -157,9 +150,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   recorded base or the integration base it merged.
 - `status` still proposes `git merge --no-ff <task branch>` while the task QA is FAIL; the reviewed phase looks only at
   the review. Look at the QA verdict too (same class as the READY_FOR_PR fix of `lead-report`).
-- `netcode-headless` (`scripts/checks/netcode-headless.sh`) failed once (1 failed, 0 passed) and passed 720/720 on an
-  immediate rerun in integration QA; its cleanup removed the TRX, so the cause is unknown. Keep the failing TRX
-  (or its tail) when the check fails.
 - The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
   `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
@@ -190,7 +180,6 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
 
 From plan plan-edit (`docs/plans/plan-edit/report.md`):
 
-- `skills/delivery/references/delivery.md` is at 32767 of its 32768-byte cap: trim it before the next edit.
 - `plan-edit` re-reads the copy after validation, and repeats the no-worktree marker step instead of using
   `read_plan` (low, from review).
 - `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does.
@@ -198,6 +187,18 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
   plan-edit); a verify session must stop its own run before it reports.
 - Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
   start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
+
+### flow-lows-followups
+
+From plan flow-lows (`docs/plans/flow-lows/report.md`):
+
+- `scripts/lib/workspace.py` `native_abs` keeps the broad `X:/.../mnt/<letter>/` rewrite for its other callers
+  (`context.py`, `run-checks.py`); only `plan_paths.py` is guarded. Move the Git-root check into `native_abs`.
+- The Git for Windows root check in `plan_paths.py` is a heuristic (last segment `Git`, or it holds `usr/bin/bash.exe`
+  or `git-bash.exe`): a user directory named `Git` with a `/mnt/<letter>/` child still reads as the MSYS rewrite.
+- `netcode-headless` evidence directories under the Factory state dir are never pruned.
+- `tests/orca-wait.test.sh` failed one case once under memory pressure inside `tests/parallel-policy.test.sh` and passed
+  two reruns; the nested output prints only its tail, so the case name was lost. Print the failing case names.
 
 ### path-audit-followups
 
@@ -233,6 +234,11 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   busy machine.
 
 ## Covered
+
+- **delivery.md headroom** (plan-edit-followups, workflow-slim-followups), the `tests/README.md` QA tiers restatement
+  and four plugin-flow-5-followups lows (hook-perf `.new`, gitcfg re-snapshot, netcode-headless evidence, `/mnt/`
+  segment in `plan_paths.py`): shipped in plan flow-lows (`changelog.d/flow-lows.md`, delivery.md at 31497 bytes);
+  the lows moved to flow-lows-followups.
 
 - **plan-edit-verb**, **plan-edit-commit-guard** and **run-lead-waiter-reaped**: shipped in plan plan-edit
   (`changelog.d/plan-edit-verb.md`, the waiter lesson in `skills/factory-core/references/parallel-work.md`); the lows
