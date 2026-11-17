@@ -17,7 +17,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
+CASES='validate plan-edit subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -94,7 +94,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
+UNITS='chain plan-edit status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -2443,6 +2443,98 @@ then pass=$((pass + 1)); echo "PASS  schema: known_failing items require a non-e
 else fail=$((fail + 1)); echo "FAIL  schema: known_failing shape"; fi
 
 case_end validate
+fi
+
+if has_case plan-edit; then
+case_start
+echo "-- plan-edit"
+# plan-edit <plan> --from <copy> [--commit [--message TEXT]]: the plan is replaced only by a copy that validates with no
+# error; an invalid copy leaves the plan file, HEAD and the index untouched. Own git checkout, no other case's state.
+PE="$TMP/pe"; PEP="$PE/plans/demo.json"; PEC="$TMP/pe-copy.json"
+TA='{"id":"a","repo":"server","objective":"o","paths":["backend/gateway/"],"acceptance":["a"]}'
+TB='{"id":"b","repo":"server","objective":"o","paths":["backend/other/"],"acceptance":["a"]}'
+TBAD='{"id":"b","repo":"nope","objective":"o","paths":["backend/other/"],"acceptance":["a"]}'
+mkdir -p "$PE"; git init -q -b main "$PE"
+git -C "$PE" config user.email t@t; git -C "$PE" config user.name t; git -C "$PE" config commit.gpgsign false
+# pe_check <name> <command...>: PASS when the command succeeds
+pe_check() { local name="$1"; shift; if "$@"; then pass=$((pass + 1)); echo "PASS  $name"; else fail=$((fail + 1)); echo "FAIL  $name"; fi; }
+pe_same() { [ "$1" = "$2" ]; }
+# pe_reset: the plan holds task a and is committed; no other change in the checkout (notes.txt tracked, staged.txt gone)
+pe_reset() {
+  git -C "$PE" reset -q --hard 2>/dev/null; git -C "$PE" clean -qfd; mkdir -p "$PE/plans"
+  printf '%s\n' "{$HEAD,\"tasks\":[$TA]}" > "$PEP"; echo notes > "$PE/notes.txt"
+  git -C "$PE" add -A; git -C "$PE" commit -qm reset --allow-empty
+}
+# pe_copy <tasks JSON array content>: the edited copy, plan id demo
+pe_copy() { printf '%s\n' "{$HEAD,\"tasks\":[$1]}" > "$PEC"; }
+pe_head() { git -C "$PE" rev-parse HEAD; }
+pe_index() { git -C "$PE" diff --cached; }
+
+# a valid copy replaces the plan, byte for byte, and names the task-level change; nothing is committed without --commit
+pe_reset; pe_copy "$TA,$TB"; H0=$(pe_head)
+expect "valid copy: plan replaced, exit 0" 0 "^OK: plan replaced$" plan-edit "$PEP" --from "$PEC"
+expect "valid copy: the added task is named" 0 "^Task added: b$" plan-edit "$PEP" --from "$PEC"
+pe_check "valid copy: the plan equals the copy" pe_same "$(cat "$PEP")" "$(cat "$PEC")"
+pe_check "valid copy: no commit without --commit" pe_same "$(pe_head)" "$H0"
+pe_check "valid copy: the index is untouched without --commit" pe_same "$(pe_index)" ""
+pe_check "valid copy: no temp file is left in the plan's directory" pe_same "$(ls -A "$PE/plans")" "demo.json"
+# a changed acceptance carries the staleness note, a removed task is named
+pe_copy "$(sed 's/"acceptance":\["a"\]/"acceptance":["a2"]/' <<<"$TA")"
+expect "valid copy: a removed task is named" 0 "^Task removed: b$" plan-edit "$PEP" --from "$PEC"
+expect "valid copy: a changed acceptance is named" 0 "^Task changed: a \(acceptance\)$" plan-edit "$PEP" --from "$PEC"
+expect "valid copy: the staleness note names the task" 0 "^NOTE  changed paths or acceptance make recorded verdicts of a stale" plan-edit "$PEP" --from "$PEC"
+
+# an invalid copy never replaces the plan; plan bytes, HEAD and the index stay as they were, with and without --commit
+for mode in plain commit; do
+  pe_reset; echo more >> "$PE/notes.txt"; git -C "$PE" add notes.txt   # a staged change of another file
+  pe_copy "$TA,$TBAD"; P0=$(cat "$PEP"); H0=$(pe_head); I0=$(pe_index)
+  if [ "$mode" = commit ]; then extra=(--commit); else extra=(); fi
+  expect "invalid copy ($mode): exit 1 with the error" 1 "ERROR .*neither a registry repo nor in plan.repos" plan-edit "$PEP" --from "$PEC" "${extra[@]}"
+  expect "invalid copy ($mode): the plan is not replaced" 1 "^INVALID \(1 error\(s\)\): .*not replaced" plan-edit "$PEP" --from "$PEC" "${extra[@]}"
+  pe_check "invalid copy ($mode): the plan file is unchanged" pe_same "$(cat "$PEP")" "$P0"
+  pe_check "invalid copy ($mode): HEAD is unchanged" pe_same "$(pe_head)" "$H0"
+  pe_check "invalid copy ($mode): the index is unchanged" pe_same "$(pe_index)" "$I0"
+  pe_check "invalid copy ($mode): no temp file is left in the plan's directory" pe_same "$(ls -A "$PE/plans")" "demo.json"
+done
+
+# a copy with another id, an unreadable copy and --message without --commit exit 2 and change nothing
+pe_reset; pe_copy "$TA,$TB"; sed -i 's/"id":"demo"/"id":"other"/' "$PEC"; P0=$(cat "$PEP"); H0=$(pe_head)
+expect "id mismatch: exit 2 naming both ids" 2 'has id "other" but the plan has id "demo"' plan-edit "$PEP" --from "$PEC" --commit
+pe_check "id mismatch: the plan file is unchanged" pe_same "$(cat "$PEP")" "$P0"
+pe_check "id mismatch: HEAD is unchanged" pe_same "$(pe_head)" "$H0"
+expect "missing copy: exit 2" 2 "cannot read edited copy" plan-edit "$PEP" --from "$TMP/pe-no-such-copy.json"
+pe_check "missing copy: the plan file is unchanged" pe_same "$(cat "$PEP")" "$P0"
+pe_copy "$TA,$TB"
+expect "--message without --commit: exit 2" 2 "--message needs --commit" plan-edit "$PEP" --from "$PEC" --message x
+pe_check "--message without --commit: the plan file is unchanged" pe_same "$(cat "$PEP")" "$P0"
+
+# --commit stages and commits only the plan file, whatever else is dirty or staged, with the default message
+pe_reset; pe_copy "$TA,$TB"; H0=$(pe_head)
+echo dirty >> "$PE/notes.txt"                       # another tracked file, modified and not staged
+echo wip > "$PE/staged.txt"; git -C "$PE" add staged.txt   # another file, staged
+expect "--commit: exit 0 and the commit is named" 0 "^Committed plans/demo.json in .* at [0-9a-f]+$" plan-edit "$PEP" --from "$PEC" --commit
+pe_check "--commit: the commit holds only the plan file" pe_same "$(git -C "$PE" show --name-only --format= HEAD)" "plans/demo.json"
+pe_check "--commit: the commit has the default message" pe_same "$(git -C "$PE" log -1 --format=%s)" "docs(plans): edit plan demo"
+pe_check "--commit: the plan in HEAD equals the copy" pe_same "$(git -C "$PE" show HEAD:plans/demo.json)" "$(cat "$PEC")"
+pe_check "--commit: the other tracked file is still dirty" pe_same "$(git -C "$PE" diff --name-only)" "notes.txt"
+pe_check "--commit: the other staged file is still staged" pe_same "$(git -C "$PE" diff --cached --name-only)" "staged.txt"
+pe_check "--commit: exactly one new commit" pe_same "$(git -C "$PE" rev-list --count "$H0..HEAD")" "1"
+# --message overrides the default; an edit equal to HEAD commits nothing
+pe_copy "$TA,$TB,$(sed 's/"id":"b"/"id":"c"/; s#backend/other/#backend/third/#' <<<"$TB")"
+expect "--commit --message: exit 0" 0 "^Committed plans/demo.json" plan-edit "$PEP" --from "$PEC" --commit --message "docs(plans): custom text"
+pe_check "--commit --message: the message is the given one" pe_same "$(git -C "$PE" log -1 --format=%s)" "docs(plans): custom text"
+H0=$(pe_head)
+expect "--commit with no change: nothing to commit, exit 0" 0 "^Nothing to commit: plans/demo.json equals HEAD$" plan-edit "$PEP" --from "$PEC" --commit
+pe_check "--commit with no change: HEAD is unchanged" pe_same "$(pe_head)" "$H0"
+
+# --commit for a plan outside a git checkout exits 2 before anything is replaced
+NG="$TMP/pe-nogit"; mkdir -p "$NG"; printf '%s\n' "{$HEAD,\"tasks\":[$TA]}" > "$NG/demo.json"; pe_copy "$TA,$TB"; P0=$(cat "$NG/demo.json")
+GIT_CEILING_DIRECTORIES="$TMP" expect "--commit outside a git checkout: exit 2" 2 "is not inside a git checkout" plan-edit "$NG/demo.json" --from "$PEC" --commit
+pe_check "--commit outside a git checkout: the plan file is unchanged" pe_same "$(cat "$NG/demo.json")" "$P0"
+GIT_CEILING_DIRECTORIES="$TMP" expect "outside a git checkout without --commit: the plan is replaced" 0 "^OK: plan replaced$" plan-edit "$NG/demo.json" --from "$PEC"
+pe_check "outside a git checkout without --commit: the plan equals the copy" pe_same "$(cat "$NG/demo.json")" "$(cat "$PEC")"
+
+case_end plan-edit
 fi
 
 if has_case subplan; then

@@ -31,6 +31,14 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         paths alone: XS and S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy
         work: the heavy profile) and QA sessions. Tier XS (plan or task tier): exactly one task, every owned path prose,
         at most max_files paths, else an error naming the reason; its implementer is the run lead (pipeline.lead_agent).
+  plan-edit <plan.json> --from <edited copy> [--commit [--message TEXT]]
+        the atomic plan edit: validates the copy exactly like `validate` (same registry; the copy is read as if it were at
+        the plan's path, so relative `repos.*.path` resolve the same) and only with no error replaces the plan (temp file
+        in the plan's directory, then os.replace). With --commit it stages only the plan file and commits only that path in
+        the plan's checkout (default message `docs(plans): edit plan <id>`; never `git add -A`, never pushes). Prints the
+        task-level change (added, removed, changed paths/acceptance/deps) and, for changed paths or acceptance, that
+        recorded verdicts of those tasks go STALE. Exit 0 OK, 1 validation errors (plan, HEAD and index untouched),
+        2 usage: a missing or unreadable copy, a copy whose `id` differs from the plan's, --commit outside a git checkout.
   subplan validate <subplan.json> [--plan PATH] [--json]
         a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
@@ -1119,6 +1127,103 @@ def cmd_validate(a, reg):
                       f"review {model_text(m['review'])}, qa {model_text(m['qa'])}")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
+
+
+def plan_task_changes(old, new):
+    """Task-level difference of two plans: (added ids, removed ids, {id: [changed keys among paths/acceptance/deps]})."""
+    def by_id(plan):
+        return {t["id"]: t for t in plan.get("tasks") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)}
+    before, after = by_id(old), by_id(new)
+    added = [i for i in after if i not in before]
+    removed = [i for i in before if i not in after]
+    changed = {}
+    for tid in after:
+        if tid in before:
+            keys = [k for k in ("paths", "acceptance", "deps") if before[tid].get(k) != after[tid].get(k)]
+            if keys:
+                changed[tid] = keys
+    return added, removed, changed
+
+
+def cmd_plan_edit(a, reg):
+    """Replace a plan by an edited copy, only when the copy validates with no error (delivery.md section 8)."""
+    plan_path = a.plan
+    plan_old = read_json_file(plan_path, "plan")
+    copy_path = a.from_file
+    plan = read_json_file(copy_path, "edited copy")  # exit 2: missing, unreadable, not JSON
+    if plan.get("id") != plan_old.get("id"):
+        die(f"the edited copy has id {json.dumps(plan.get('id'))} but the plan has id {json.dumps(plan_old.get('id'))}: "
+            "a plan edit never changes the plan id")
+    if a.message is not None and not a.commit:
+        die("--message needs --commit")
+    plan_dir = os.path.dirname(os.path.abspath(plan_path))
+    top = None
+    if a.commit:  # decided before anything is replaced
+        top, rc = git(plan_dir, "rev-parse", "--show-toplevel")
+        if rc != 0 or not top:
+            die(f"--commit: {plan_path} is not inside a git checkout")
+    markers = plan.get("no_worktree_markers")
+    if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
+        reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
+    plan["_path"] = plan_path  # the copy is read as if it were the plan: relative repos.*.path resolve the same
+    out = validate(plan, reg)
+    out.pop("order", None)
+    plan_models(plan, reg, out["errors"])
+    for e in out["errors"]:
+        print("ERROR " + e)
+    for w in out.get("warnings", []):
+        print("WARN  " + w)
+    for note in out["notes"]:
+        print("NOTE  " + note)
+    if out["errors"]:
+        print(f"INVALID ({len(out['errors'])} error(s)): {plan_path} not replaced" + (", nothing committed" if a.commit else ""))
+        return 1
+    with open(copy_path, "rb") as fh:
+        data = fh.read()
+    fd, tmp = tempfile.mkstemp(prefix=".plan-edit-", suffix=".tmp", dir=plan_dir)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        shutil.copymode(plan_path, tmp)  # mkstemp creates 0600; keep the plan's mode
+        os.replace(tmp, plan_path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(f"cannot replace {plan_path}: {e}")
+    added, removed, changed = plan_task_changes(plan_old, plan)
+    for tid in added:
+        print(f"Task added: {tid}")
+    for tid in removed:
+        print(f"Task removed: {tid}")
+    for tid, keys in changed.items():
+        print(f"Task changed: {tid} ({', '.join(keys)})")
+    if not (added or removed or changed):
+        print("No task-level change (paths, acceptance, deps)")
+    stale = [tid for tid, keys in changed.items() if "paths" in keys or "acceptance" in keys]
+    if stale:
+        print(f"NOTE  changed paths or acceptance make recorded verdicts of {', '.join(stale)} stale: re-run `status` "
+              "after the plan edit")
+    if a.commit:
+        rel = os.path.relpath(os.path.abspath(plan_path), top).replace("\\", "/")
+        message = a.message or f"docs(plans): edit plan {plan.get('id')}"
+        _, rc = git(top, "add", "--", rel)
+        if rc != 0:
+            die(f"git add {rel} failed in {top}", 1)
+        _, unchanged = git(top, "diff", "--quiet", "HEAD", "--", rel)
+        if unchanged == 0:
+            print(f"Nothing to commit: {rel} equals HEAD")
+            print("OK: plan replaced")
+            return 0
+        out_text, rc = git(top, "commit", "-m", message, "--", rel)  # only this path, whatever else is staged
+        if rc != 0:
+            print(f"ERROR git commit failed in {top}: {out_text}")
+            return 1
+        head, _ = git(top, "rev-parse", "--short", "HEAD")
+        print(f"Committed {rel} in {top} at {head}")
+    print("OK: plan replaced")
+    return 0
 
 
 # ---------------------------------------------------------------- subplan
@@ -5000,6 +5105,11 @@ def main():
     p = sub.add_parser("validate", parents=[common])
     p.add_argument("plan")
     p.add_argument("--json", action="store_true")
+    pe = sub.add_parser("plan-edit", parents=[common])
+    pe.add_argument("plan")
+    pe.add_argument("--from", dest="from_file", required=True, metavar="COPY")
+    pe.add_argument("--commit", action="store_true")
+    pe.add_argument("--message")
     sp = sub.add_parser("subplan", parents=[common])
     sp.add_argument("action", choices=("validate",))
     sp.add_argument("subplan")
@@ -5089,7 +5199,7 @@ def main():
     reg = load_registry(a.registry)
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
-    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
+    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner, "dispatch": cmd_dispatch,
             "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
             "report": cmd_report, "sync": cmd_sync}[a.cmd](a, reg)
 

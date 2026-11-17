@@ -236,7 +236,7 @@ A task is done when integrated with its review and QA recorded; the run, when th
 - **Learning loop.** In the integration commit, the report's limitations and follow-ups go to the project's backlog
   (one topic each) and every new operating lesson to the file its learning-loop rule names (for example
   `docs/plans/backlog.md` and the Operating lessons in `CLAUDE.md`).
-- **Plan edits are atomic.** Edit a copy, `validate` it, replace the plan.
+- **Plan edits are atomic.** `plan-edit <plan> --from <copy> [--commit]` validates, then swaps.
 
 ### Session lifecycle
 
