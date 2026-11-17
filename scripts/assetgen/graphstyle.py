@@ -61,7 +61,6 @@ local_model_nodes and pack nodes, once, when a profile rule runs.
 """
 
 import json
-import os
 import re
 
 STAGES = ("Prompt", "References", "Generate", "Models", "Refine (local)", "Post-process", "Preview", "Output")

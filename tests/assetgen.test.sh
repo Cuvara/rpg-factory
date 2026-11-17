@@ -837,6 +837,9 @@ OIP="$ROOT/tests/fixtures/assetgen/object_info-packs.json"; HW="$ROOT/scripts/as
 pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor InspyrenetRembg)
 # the registry lists two more pack nodes (the annotator preprocessors) that object_info-packs.json does not carry
 registry_pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor DepthAnythingPreprocessor DWPosePreprocessor InspyrenetRembg)
+# local_model_nodes also holds KSamplerAdvanced, a core node that object_info.json does not carry; the preprocessors are pack
+# nodes, so lint and graphstyle already require the requires block for them and they stay out of local_model_nodes
+registry_local_names=("${local_names[@]}" KSamplerAdvanced)
 pack_args=(); for name in "${pack_names[@]}"; do pack_args+=(--node "$name"); done
 python3 -B "$NS" "$OIP" "${pack_args[@]}" > "$TMP/pack-nodes.json" 2>"$TMP/err"; rc=$?
 jq -c . "$TMP/pack-nodes.json" > "$TMP/pack-nodes-actual" 2>/dev/null
@@ -846,7 +849,7 @@ jq -c --slurpfile generated "$TMP/pack-nodes.json" '.nodes as $nodes | reduce ($
   || no "nodesync pack fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
 python3 -B "$NS" "$OIP" "${pack_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && ok "nodesync --check accepts committed pack entries" || no "nodesync --check packs rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
-python3 -B - "$KN" "$HW" "${#local_names[@]}" "${local_names[@]}" "${registry_pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
+python3 -B - "$KN" "$HW" "${#registry_local_names[@]}" "${registry_local_names[@]}" "${registry_pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
 import json, sys
 known_path, hardware_path, n_local = sys.argv[1], sys.argv[2], int(sys.argv[3])
 local_names, pack_names = sys.argv[4:4 + n_local], sys.argv[4 + n_local:]
