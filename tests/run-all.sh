@@ -7,7 +7,7 @@
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
 #                         [--inline-only] [--only-suites L [--only-cases C]] [--reuse] [--no-reuse] [--no-wait]
-#                         [--list-suites]
+#                         [--list-suites] [--attach] [--last-result [--checkout DIR]]
 #   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
 #                   same count and exit code. Read-only live-workspace checks (runl, block) run one at a time
 #                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
@@ -34,6 +34,12 @@
 #                   Conflicts (exit 2) with --affected, --base, --only-suites, --release, --workspace-only, --list-suites.
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when the full-run lock or every targeted test slot is busy
+#   --attach        if the same checkout and arguments already hold a live test slot, wait for its result and
+#                   return its exit status. Without this flag a duplicate exits 4 before running any check.
+#                   --no-wait and --attach are ignored when comparing arguments; all other arguments keep their order.
+#   --last-result   read-only: print this checkout's newest persistent result (exit 0), or say none exists (exit 1).
+#                   Also show live slots or a full run for this checkout; no check, lock or slot is started.
+#   --checkout DIR  checkout to inspect with --last-result (default: this checkout); requires --last-result.
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
 #                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
@@ -64,6 +70,7 @@
 #                   runs merge under the lock dir <persistent state dir>/locks/run-all-timings (waited for at most
 #                   10 s, then the write is skipped; a lock older than 60 s or held by a dead pid is taken over).
 set -uo pipefail
+RUNALL_ARGV=("$@")   # preserve the caller's arguments before parsing shifts them
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
@@ -75,6 +82,13 @@ RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-sui
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
 list_only=false; workspace_only=false; inline_only=false; base_given=false; affected_given=false
 only_cases=""; only_cases_given=false
+attach=false; last_result=false; result_checkout=""; checkout_given=false
+RUNALL_ARGS=""
+for runall_arg in "${RUNALL_ARGV[@]}"; do
+  case "$runall_arg" in --no-wait|--attach) continue ;; esac
+  printf -v runall_quoted '%q' "$runall_arg"
+  RUNALL_ARGS+="${RUNALL_ARGS:+ }$runall_quoted"
+done
 while [ $# -gt 0 ]; do
   case "$1" in --workspace-only) workspace_only=true ;; -h|--help) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF"; exit 0 ;; --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
     --reuse) reuse=true ;; --no-wait) no_wait=true ;; --no-reuse) suite_reuse=false ;;
@@ -83,11 +97,14 @@ while [ $# -gt 0 ]; do
     --only-cases) only_cases="${2:-}"; only_cases_given=true; [ $# -lt 2 ] || shift ;;
     --only-cases=*) only_cases="${1#--only-cases=}"; only_cases_given=true ;;
     --list-suites) list_only=true ;;
+    --attach) attach=true ;; --last-result) last_result=true ;;
+    --checkout) result_checkout="${2:-}"; checkout_given=true; [ -n "$result_checkout" ] || { echo 'run-all: --checkout needs a directory' >&2; exit 2; }; shift ;;
     --affected) affected=true; affected_given=true ;; --base) base="${2:-}"; base_given=true; shift ;;
     --inline-only) inline_only=true ;;
     -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; *) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF" >&2; exit 2 ;; esac
   shift
 done
+if $checkout_given && ! $last_result; then echo 'run-all: --checkout requires --last-result' >&2; exit 2; fi
 if $workspace_only && { ! $use_ws || $release; }; then
   echo "run-all: --workspace-only conflicts with --no-workspace and --release" >&2; exit 2
 fi
@@ -108,10 +125,10 @@ fi
 case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive integer, got '$jobs'" >&2; exit 2 ;; esac
 t_start=$(date +%s)
 AFF=""
-if $inline_only; then
+if $inline_only && ! $last_result; then
   AFF=$(mktemp_win)/changed.txt; : > "$AFF"
   echo "inline-only mode: inline checks only, no suite and no gated script runs"
-elif $affected && ! $release; then
+elif $affected && ! $release && ! $last_result; then
   # Without a working python3 affected.py cannot select, and the fallback below would widen the run to every suite:
   # fail loudly instead (Git Bash on Windows may find the Microsoft Store stub, which prints a hint and exits 9009).
   py_why=""
@@ -135,6 +152,7 @@ fi
 pass=0; fail=0; skip=0; warn=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
 STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
 SLOT=""; SLOT_TOKEN=""
+RESULT=""; RESULT_STARTED=""; RESULT_WINPID=""; RESULT_ADMITTED=false
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
 _ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
 _bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
@@ -165,7 +183,8 @@ SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.tes
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
       tests/devtools.test.sh tests/domains.test.sh tests/assetgen.test.sh testlab/tests/test_lab.py"
 runall_cleanup() {
-  local pid
+  local runall_rc=$? pid   # capture the original status before any cleanup command
+  if $RESULT_ADMITTED; then result_write "$runall_rc" >/dev/null 2>&1 || :; fi
   for pid in $(jobs -p); do kill "$pid" 2>/dev/null || :; done
   [ -z "$QD" ] || rm -rf "$QD"
   [ -z "$AFF" ] || rm -rf "${AFF%/*}"
@@ -173,18 +192,20 @@ runall_cleanup() {
   # shared-config FAIL, whose message names the copy
   [ -z "${GITCFG_COPY:-}" ] || [ -n "$GITCFG_KEEP" ] || rm -f "$GITCFG_COPY"
   if [ -n "$LOCK_TOKEN" ] && [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$LOCK_TOKEN" ]; then
-    rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
+    rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid" "$LOCK/args" "$LOCK/record"
     rmdir "$LOCK" 2>/dev/null || :
   fi
   if [ -n "$SLOT_TOKEN" ] && [ "$(cat "$SLOT/owner" 2>/dev/null)" = "$SLOT_TOKEN" ]; then
-    rm -f "$SLOT/owner" "$SLOT/pid" "$SLOT/checkout" "$SLOT/started" "$SLOT/winpid"
+    rm -f "$SLOT/owner" "$SLOT/pid" "$SLOT/checkout" "$SLOT/started" "$SLOT/winpid" "$SLOT/args" "$SLOT/record"
     rmdir "$SLOT" 2>/dev/null || :
   fi
+  return "$runall_rc"
 }
-[ "$jobs" -gt 1 ] && QD=$(mktemp_win)
+[ "$jobs" -gt 1 ] && ! $last_result && QD=$(mktemp_win)
 trap runall_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'exit 129' HUP
 queue() { # kind message [detail]
   if [ -z "$QD" ]; then "_$1" "$2" "${3:-}"; return; fi
   QK[qn]=$1; QM[qn]=$2; QX[qn]=${3:-}; qn=$((qn + 1)); flush
@@ -581,14 +602,119 @@ lock_still_stale() { # stale-pid stale-ident: under the reclaim guard, the lock 
   # guard now sits in: removing that would let two full runs start.
   [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$1" ] && [ -n "$2" ] && [ "$(dir_ident "$LOCK")" = "$2" ] && ! lock_alive
 }
+# One summary formatter for terminal output and persistent results, including interrupted runs.
+runall_summary() {
+  echo "run-all: $((pass + fail + skip)) checks, $pass passed, $fail failed, $skip skipped$( [ "$warn" -gt 0 ] && echo ", $warn warned")$( [ -n "$AFF$only_suites" ] && echo " ($naff not affected by the change)")"
+}
+result_init() {
+  local key stamp
+  RESULT_STARTED=$(date -u +%FT%TZ); stamp=${RESULT_STARTED//[-:]/}
+  key=$(printf '%s' "$ROOT" | sha256sum); key=${key%% *}
+  RESULT="$STATE/run-all/results/${key:0:16}/$stamp-$$.json"
+  RESULT_WINPID=$(cat "/proc/$$/winpid" 2>/dev/null) || RESULT_WINPID=""
+}
+result_write() {
+  [ -n "$RESULT" ] || return 0
+  python3 -B - "$RESULT" "$ROOT" "$RESULT_STARTED" "$1" "$HEAD_SHA" "$$" "$RESULT_WINPID" \
+    "$pass" "$fail" "$skip" "$warn" "$naff" "$(runall_summary)" "${#RUNALL_ARGV[@]}" "${RUNALL_ARGV[@]}" "${failures[@]}" <<'PY'
+import datetime, json, os, sys, tempfile
+path, checkout, started, status, head, pid, winpid = sys.argv[1:8]
+counts = dict(zip(('pass', 'fail', 'skip', 'warn', 'not_affected'), map(int, sys.argv[8:13])))
+summary, argc = sys.argv[13:15]
+argc = int(argc)
+r = dict(schema='rpg-factory.run-all-result/1', checkout=checkout, args=sys.argv[15:15+argc],
+         started=started, ended=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+         counts=counts, summary=summary, failed=sys.argv[15+argc:], head=head,
+         pid=int(pid), winpid=int(winpid) if winpid else None, **{'exit': int(status)})
+directory = os.path.dirname(path)
+os.makedirs(directory, exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix='.result-', suffix='.tmp', dir=directory)
+try:
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(r, f, indent=2)
+        f.write('\n')
+    os.replace(tmp, path)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+# Concurrent writers may already have pruned a candidate: deletion is best effort.
+records = []
+for name in os.listdir(directory):
+    if name.endswith('.json'):
+        candidate = os.path.join(directory, name)
+        try:
+            records.append((os.stat(candidate).st_mtime_ns, name, candidate))
+        except OSError:
+            pass
+for _, _, candidate in sorted(records, reverse=True)[20:]:
+    try:
+        os.unlink(candidate)
+    except OSError:
+        pass
+PY
+}
+result_print() { # record path [attach]: normal inspection exits 0 even when the recorded run failed
+  python3 -B - "$1" "${2:-}" <<'PY'
+import json, shlex, sys
+path, mode = sys.argv[1:]
+try:
+    with open(path, encoding='utf-8') as f:
+        r = json.load(f)
+    lines = [f'result: {path}', f"started: {r['started']}", f"ended: {r['ended']}",
+             f"exit: {r['exit']}", 'args: ' + shlex.join(r['args']), r['summary']]
+    lines.extend('FAILED ' + name for name in r['failed'])
+    status = int(r['exit']) if mode == 'attach' else 0
+except (OSError, ValueError, KeyError, TypeError):
+    sys.stdout.buffer.write(f'run-all: no result record available: {path or "(no record path)"}\n'.encode())
+    sys.exit(4 if mode == 'attach' else 1)
+sys.stdout.buffer.write(('\n'.join(lines) + '\n').encode())   # LF in Git Bash too
+sys.exit(status)
+PY
+}
+result_last() {
+  local checkout=${result_checkout:-$ROOT} LOCK holder record
+  python_path_fast >/dev/null
+  STATE=$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import fstate; print(fstate.persistent())' "${RUNALL_SELF%/tests/run-all.sh}/scripts/lib") || return 1
+  STATE=$(fwd "${STATE%$'\r'}")
+  if [ -d "$checkout" ]; then checkout=$(cd "$checkout" && { pwd -W 2>/dev/null || pwd; }); fi
+  for LOCK in "$STATE/locks/run-all-full" "$STATE"/locks/run-all-slots/*; do
+    [ "$(cat "$LOCK/checkout" 2>/dev/null)" = "$checkout" ] && lock_alive || continue
+    holder="slot ${LOCK##*/}"; [ "$LOCK" != "$STATE/locks/run-all-full" ] || holder='full run'
+    echo "running: $holder pid $(cat "$LOCK/pid" 2>/dev/null) (winpid $(cat "$LOCK/winpid" 2>/dev/null || echo unknown)) started $(cat "$LOCK/started" 2>/dev/null) args $(cat "$LOCK/args" 2>/dev/null)"
+  done
+  record=$(python3 -B - "$STATE" "$checkout" <<'PY'
+import hashlib, os, sys
+state, checkout = sys.argv[1:]
+directory = os.path.join(state, 'run-all', 'results', hashlib.sha256(checkout.encode()).hexdigest()[:16])
+records = []
+try:
+    for name in os.listdir(directory):
+        if name.endswith('.json'):
+            path = os.path.join(directory, name)
+            try:
+                records.append((os.stat(path).st_mtime_ns, name, path))
+            except OSError:
+                pass
+except OSError:
+    pass
+if records:
+    print(max(records)[2])
+PY
+  ) || return 1
+  record=$(fwd "${record%$'\r'}")
+  [ -n "$record" ] || { echo "run-all: no result record for checkout $checkout"; return 1; }
+  result_print "$record"
+}
 lock_publish() {
   LOCK_TOKEN="$$-$RANDOM-$(date +%s)"
   printf '%s\n' "$LOCK_TOKEN" > "$LOCK/owner"
-  printf '%s\n' "$$" > "$LOCK/pid"
   printf '%s\n' "$ROOT" > "$LOCK/checkout"
-  date -u +%FT%TZ > "$LOCK/started"
+  printf '%s\n' "$RESULT_STARTED" > "$LOCK/started"
+  printf '%s\n' "$RUNALL_ARGS" > "$LOCK/args"
+  printf '%s\n' "$RESULT" > "$LOCK/record"
   # Other MSYS/Cygwin runtimes cannot resolve this runtime's shell PID.
   cat "/proc/$$/winpid" > "$LOCK/winpid" 2>/dev/null || rm -f "$LOCK/winpid"
+  printf '%s\n' "$$" > "$LOCK/pid"   # readiness marker: the rest of the metadata is already published
 }
 full_lock() {
   local owner waited=false age stale_pid stale_ident
@@ -607,7 +733,7 @@ full_lock() {
       printf '%s\n' "$$" > "$LOCK/reclaim/pid"
       if lock_still_stale "$stale_pid" "$stale_ident"; then
         echo "run-all: taking over stale full-run lock ($(cat "$LOCK/pid" 2>/dev/null))"
-        rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
+        rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid" "$LOCK/args" "$LOCK/record"
         rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
       else rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" 2>/dev/null || :; fi
       continue
@@ -618,18 +744,55 @@ full_lock() {
   done
   lock_publish
 }
+slot_duplicate() { # LOCK is a live slot; snapshot its owner before inspecting or attaching to it
+  local token pid winpid started args record holder
+  token=$(cat "$LOCK/owner" 2>/dev/null)
+  [ -n "$token" ] && [ -f "$LOCK/pid" ] && [ -f "$LOCK/args" ] && lock_alive || return 1
+  [ "$(cat "$LOCK/checkout" 2>/dev/null)" = "$ROOT" ] && [ "$(cat "$LOCK/args" 2>/dev/null)" = "$RUNALL_ARGS" ] || return 1
+  pid=$(cat "$LOCK/pid" 2>/dev/null); winpid=$(cat "$LOCK/winpid" 2>/dev/null || echo unknown)
+  started=$(cat "$LOCK/started" 2>/dev/null); args=$(cat "$LOCK/args" 2>/dev/null); record=$(cat "$LOCK/record" 2>/dev/null)
+  [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$token" ] || return 1
+  holder="test slot ${LOCK##*/} (pid $pid, winpid $winpid, started $started, args $args)"
+  if $attach; then
+    echo "run-all: attaching to $holder"
+    while [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$token" ]; do sleep 1; done
+    result_print "$record" attach; exit $?
+  fi
+  echo "run-all: the same run already holds $holder; read its result with tests/run-all.sh --last-result"
+  return 0
+}
 test_slot() {
   # Dynamic locals let the full-run lock's liveness and reclaim helpers inspect this slot without changing LOCK.
   local LOCK="" LOCK_TOKEN="" cap=${RPG_FACTORY_TEST_SLOTS:-2} i age stale_pid stale_ident
-  local waited=false holders count
+  local waited=false holders count publishing
   [[ "$cap" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "run-all: RPG_FACTORY_TEST_SLOTS needs a non-negative integer, got '$cap'" >&2; return 2; }
   [ "$cap" != 0 ] || return 0
   mkdir -p "$STATE/locks/run-all-slots" || return 1
   while :; do
+    # Inspect every holder before claiming an empty lower-numbered slot, including slots above a lowered cap.
+    # A publisher writes pid last: wait for fresh metadata rather than racing past it into a second slot.
+    publishing=false
+    for LOCK in "$STATE"/locks/run-all-slots/*; do
+      [ -d "$LOCK" ] || continue
+      slot_duplicate && return 4
+      if [ ! -f "$LOCK/pid" ]; then
+        age=$(dir_age "$LOCK") || continue
+        [ "$age" -ge 10 ] || publishing=true
+      fi
+    done
+    if $publishing; then
+      sleep 0.2; continue
+    fi
     holders=""; count=0
     for ((i=1; i<=cap; i++)); do
       LOCK="$STATE/locks/run-all-slots/$i"
       if ! mkdir "$LOCK" 2>/dev/null; then
+        slot_duplicate && return 4
+        if [ ! -f "$LOCK/pid" ]; then
+          age=$(dir_age "$LOCK") || continue
+          # Another contender just claimed this slot. Restart the complete scan once it publishes.
+          if [ "$age" -lt 10 ]; then publishing=true; break; fi
+        fi
         # A fresh directory without metadata may still be publishing its PID.
         age=0
         [ -f "$LOCK/pid" ] || age=$(dir_age "$LOCK") || age=0
@@ -642,12 +805,17 @@ test_slot() {
             printf '%s\n' "$$" > "$LOCK/reclaim/pid"
             if lock_still_stale "$stale_pid" "$stale_ident"; then
               echo "run-all: taking over stale test slot $i ($stale_pid)"
-              rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
+              rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid" "$LOCK/args" "$LOCK/record"
               rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
             else rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" 2>/dev/null || :; fi
           fi
         fi
         if ! mkdir "$LOCK" 2>/dev/null; then
+          slot_duplicate && return 4
+          if [ ! -f "$LOCK/pid" ]; then
+            age=$(dir_age "$LOCK") || continue
+            if [ "$age" -lt 10 ]; then publishing=true; break; fi
+          fi
           count=$((count + 1))
           holders+="${holders:+, }$(cat "$LOCK/pid" 2>/dev/null || echo unknown) in $(cat "$LOCK/checkout" 2>/dev/null || echo "$LOCK")"
           continue
@@ -656,6 +824,9 @@ test_slot() {
       lock_publish || return 1
       SLOT=$LOCK; SLOT_TOKEN=$LOCK_TOKEN; return 0
     done
+    if $publishing; then
+      sleep 0.2; continue
+    fi
     if ! $waited; then echo "run-all: waiting for a test slot ($count in use: $holders)"; waited=true; fi
     $no_wait && return 3
     sleep 1
@@ -682,11 +853,13 @@ clean_tree() {
 }
 runall_prepare() {
   local suite hash candidate hash_output found; local -a suites=()
+  if $last_result; then result_last || return $?; return 10; fi
   python_path_fast
   STATE=$(python3 -B -c 'import sys; sys.path.insert(0, "scripts/lib"); import fstate; print(fstate.persistent())') || return 1
   STATE=$(fwd "${STATE%$'\r'}")
   TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null) || TREE=""
   HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || HEAD_SHA=""
+  result_init >/dev/null 2>&1 || :
   [ -n "$TREE" ] && clean_tree && CLEAN_START=true
   full_run=false; if $release || { ! $workspace_only && ! $affected && [ -z "$only_suites" ]; }; then full_run=true; fi
   if $full_run; then
@@ -715,6 +888,7 @@ runall_prepare() {
     if $only_cases_given; then only_cases_check "$only_suites" "$only_cases" || return 2; fi
   fi
   if ! $full_run && { $affected || [ -n "$only_suites" ]; }; then test_slot || return $?; fi
+  RESULT_ADMITTED=true
   [ -z "$AFF" ] || $inline_only || affected_select "${suites[@]}"
   if $suite_reuse && ! $release; then
     hash_output=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" hashes "${suites[@]}" 2>/dev/null) || hash_output=""
@@ -912,6 +1086,7 @@ PY
 
 # sourced (tests/run-all-parallel.test.sh): scheduler and config classifier only, no checks
 [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
+if $last_result; then result_last; exit $?; fi
 if $list_only; then python_path_fast >/dev/null; list_runnable "${RUNALL_SUITES_FROM:-$RUNALL_SELF}"; exit; fi
 runall_prepare; prep_rc=$?
 [ "$prep_rc" -eq 10 ] && exit 0
@@ -1315,8 +1490,7 @@ if ! $workspace_only && [ -n "${GITCFG_FILE:-}" ]; then
 elif ! $workspace_only; then skp "shared git config unchanged during the run" "not inside a git repository"; fi
 
 runall_finish
-total=$((pass + fail + skip))
 echo "----"
 echo "wall time: $(( $(date +%s) - t_start ))s (-j $jobs)"
-echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ "$warn" -gt 0 ] && echo ", $warn warned")$( [ -n "$AFF$only_suites" ] && echo " ($naff not affected by the change)")"
+runall_summary
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
