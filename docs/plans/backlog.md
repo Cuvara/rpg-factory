@@ -9,15 +9,9 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- None.
+None.
 
 ## Open
-
-### plan-edit-verb
-
-`delivery.md` section 8 documents the rule "plan edits are atomic: write a copy, validate it, then replace the
-plan". Optional follow-up: a `factory-pipeline.py plan-edit` verb (or a `validate --replace <plan>` mode) that does
-the copy, validation and replace in one step, with a test that an invalid edit never replaces the plan.
 
 ### core-style-v2
 
@@ -79,9 +73,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 - `validate` warns "checks contain test suites" for every task whose `checks` name suites (single-verify rule of
   plan plugin-qa-lean), while `docs/plans/backlog.md` and `docs/plans/README.md` still tell plans to name suites in
   `checks`. Align the plan convention with the verify rule.
-- `skills/delivery/references/delivery.md` is 32420 of its 32768-byte cap (`tests/delivery-generic.test.sh`); the next
-  policy addition needs a move to `docs/pipeline-cli.md` first.
-- `tests/README.md` restates the QA tiers summary and the one-full-run rule of `delivery.md` (low).
 - `factory-pipeline.py` usage text: `verdict` lists no `verify` phase and still says a subtask needs its own review;
   factory-core `SKILL.md` step 11 is still titled "Review + QA".
 - The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
@@ -95,20 +86,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
   `tests/affected.test.sh` through main-sync) and the run lead's `docs/plans/backlog.md` edit as "changes outside
   every task's owned paths"; credit both, like the plan file and the run report.
 
-### run-lead-waiter-reaped
-
-Claude Code stopped the run lead's background waiter (`scripts/orca-wait.sh --run <id>`) twice under memory pressure
-in plan workflow-slim, and the rule is not to restart it on its own. Messages then waited until the user nudged the
-session. Write the lesson into `parallel-work.md` (RPG Orca notes): on every wake the run lead runs
-`orca orchestration check --run <id>` and `factory-pipeline.py status` instead of relying on the waiter, and keep
-fewer task leads open at once on a loaded machine.
-
-### plan-edit-commit-guard
-
-In plan workflow-slim the run lead committed an INVALID plan for about a minute: the commit was chained with `&&`
-after `validate | grep`, so the exit code was grep's. Fold into plan-edit-verb above: the verb replaces and commits
-the plan only when `validate` itself exits 0, and a test proves an invalid copy is never committed.
-
 ### plugin-flow-5-followups
 
 Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
@@ -118,12 +95,9 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   Fix the frontmatter; the two run-all checks then pass.
 - The registry `root_default` (a WSL drive spelling) is not converted by Windows Python (`scripts/lib/workspace.py`); with
   `RPG_FACTORY_WORKSPACE` unset, 11 workspace checks fail on Windows. Convert it like `plan_paths.py` does.
-- `tests/hook-perf.test.sh:101` writes `"$cf.new"` with no guard; an empty `$cf` creates `.new` in the cwd.
 - LFS: the facts export says "LFS files stay pointers" (`tests/facts.test.sh:37,38,49`, the checks-lows changelog
   fragment), which is wrong when git-lfs is configured (`git archive` smudges, the suite is then not offline). No
   product repo has `filter=lfs` today.
-- `scripts/lib/plan_paths.py:57`: a not-yet-existing native path with a `/mnt/<letter>/` segment is rewritten by
-  `native_abs`.
 - The task-lead report and READY_FOR_PR are in `status` notes, not structured fields:
   `docs/schemas/pipeline-status.schema.json` forbids extra fields (add them).
 - `docs/pipeline-cli.md` lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6;
@@ -133,7 +107,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   gets no reuse record; an orphaned waiter is detected between checks, so it can lag one wait.
 - `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
   the plan task's owned paths); `--list-suites` hides `tests/plan-paths.test.sh` until it is wired.
-- `tests/git-env-isolation.test.sh` re-snapshots the git config without removing the earlier copy.
 - Lesson: a `status` message sent to a dispatch that has already finished creates an Orca follow-up worker (two
   appeared in this run). Send lead messages only to the run (`--to run:<id>`) of a live task lead, and put context in
   the start prompt.
@@ -146,9 +119,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   recorded base or the integration base it merged.
 - `status` still proposes `git merge --no-ff <task branch>` while the task QA is FAIL; the reviewed phase looks only at
   the review. Look at the QA verdict too (same class as the READY_FOR_PR fix of `lead-report`).
-- `netcode-headless` (`scripts/checks/netcode-headless.sh`) failed once (1 failed, 0 passed) and passed 720/720 on an
-  immediate rerun in integration QA; its cleanup removed the TRX, so the cause is unknown. Keep the failing TRX
-  (or its tail) when the check fails.
 - The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
   `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
@@ -156,24 +126,48 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 
 ### policy-followups-leftovers
 
-From plan policy-followups (`docs/plans/policy-followups/report.md`), the two decided items first:
+From plans policy-followups and owner-policy (`docs/plans/policy-followups/report.md`,
+`docs/plans/owner-policy/report.md`):
 
-- Decided by the owner (2026-11-17), to implement: a plan may widen `pipeline.models.scope` for itself, but only
-  (a) after asking the owner, with the owner's word recorded in the plan, or (b) when the model is strictly necessary
-  for that plan, with the reason recorded in the plan. Today a plan-scoped owner override cannot name a model outside
-  the scope (the personal policy file may only narrow it). Run lead's reading: `validate` accepts an out-of-scope
-  model only with such a recorded approval or necessity reason, and the report lists every widening.
-- Decided by the owner (2026-11-17), to implement: the english-only check applies everywhere; only the chat report to
-  the owner uses `workspace.report_language`. Today the git guard covers only commands run inside the plugin checkout
-  the guard runs from (`in_scope()` in `scripts/lib/rpgf_guard/language.py`). Run lead's reading: cover every
-  rpg-factory checkout and worktree (Orca task worktrees outside the workspace included), in the git guard and in
-  `scripts/file-guard.py` alike.
 - `plan_branch` in `scripts/factory-pipeline.py` treats `<topic>-*` as this plan's, so a plan whose topic extends
   this one (`<topic>-v2`) can count as a child when Orca's lineage names this plan's worktree as its parent; an
   Orca-prefixed branch equal to the topic (`codex/<topic>`) is not matched by lineage.
 - With concise `worker-list` rows (Orca without `--full`), a worker released through `terminalState` but without
   `state` is still counted in the "settledness not checked" note.
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
+
+- Lows of `model_scope_widen` (plan owner-policy): `validate` reports a malformed entry twice (once in `validate()`,
+  once through `load_for_plan`); `"model_scope_widen": null` passes `validate` while the schema requires an array;
+  `status --json` prints the widening lines on stderr (`pipeline-status.schema.json` has no field for them);
+  `lead_prompt` loads the policy twice.
+- The git guard's english-only check inspects only absolute path tokens: a relative `git -C ../clone` from an
+  unrelated directory gets no advisory.
+- A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
+  session must stop its own run before it reports.
+
+### plan-edit-followups
+
+From plan plan-edit (`docs/plans/plan-edit/report.md`):
+
+- `plan-edit` re-reads the copy after validation, and repeats the no-worktree marker step instead of using
+  `read_plan` (low, from review).
+- `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does.
+- Released verify sessions leave their `tests/run-all.sh` alive, holding test slots for hours (plans owner-policy and
+  plan-edit); a verify session must stop its own run before it reports.
+- Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
+  start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
+
+### flow-lows-followups
+
+From plan flow-lows (`docs/plans/flow-lows/report.md`):
+
+- `scripts/lib/workspace.py` `native_abs` keeps the broad rewrite of a drive path with a `/mnt/<letter>/` segment for its other callers
+  (`context.py`, `run-checks.py`); only `plan_paths.py` is guarded. Move the Git-root check into `native_abs`.
+- The Git for Windows root check in `plan_paths.py` is a heuristic (last segment `Git`, or it holds `usr/bin/bash.exe`
+  or `git-bash.exe`): a user directory named `Git` with a `/mnt/<letter>/` child still reads as the MSYS rewrite.
+- `netcode-headless` evidence directories under the Factory state dir are never pruned.
+- `tests/orca-wait.test.sh` failed one case once under memory pressure inside `tests/parallel-policy.test.sh` and passed
+  two reruns; the nested output prints only its tail, so the case name was lost. Print the failing case names.
 
 ### path-audit-followups
 
@@ -221,6 +215,19 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   `changelog.d/assetgen-followup-docs.md`: comfy-desktop-setup ends with saving `hardware-profile.json`, the
   architecture doc states the tech skill count); the environment note, the owner's local e2e run and the missing
   model-hash cache writer stay under assetgen-run-followups in Open.
+
+- **delivery.md headroom** (plan-edit-followups, workflow-slim-followups), the `tests/README.md` QA tiers restatement
+  and four plugin-flow-5-followups lows (hook-perf `.new`, gitcfg re-snapshot, netcode-headless evidence, `/mnt/`
+  segment in `plan_paths.py`): shipped in plan flow-lows (`changelog.d/flow-lows.md`, delivery.md at 31497 bytes);
+  the lows moved to flow-lows-followups.
+
+- **plan-edit-verb**, **plan-edit-commit-guard** and **run-lead-waiter-reaped**: shipped in plan plan-edit
+  (`changelog.d/plan-edit-verb.md`, the waiter lesson in `skills/factory-core/references/parallel-work.md`); the lows
+  moved to plan-edit-followups.
+
+- **policy-followups-leftovers, the two owner decisions of 2026-11-17**: shipped in plan owner-policy
+  (`changelog.d/owner-policy-scope-widen.md`, `changelog.d/owner-policy-english-scope.md`); the lows stay in
+  policy-followups-leftovers.
 
 - **repo-path-audit**: shipped in plan path-audit (`changelog.d/path-audit-pattern.md`,
   `changelog.d/path-audit-check.md`, `changelog.d/path-audit-affected.md`); the lows moved to path-audit-followups.

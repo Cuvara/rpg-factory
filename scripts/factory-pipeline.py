@@ -6,7 +6,8 @@ cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Se
 skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
 file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
 script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`
-and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE). Plan format: docs/schemas/pipeline-plan.schema.json.
+and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE).
+`model_scope_widen` records plan-specific model scope additions and their basis. Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
@@ -30,6 +31,14 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         paths alone: XS and S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy
         work: the heavy profile) and QA sessions. Tier XS (plan or task tier): exactly one task, every owned path prose,
         at most max_files paths, else an error naming the reason; its implementer is the run lead (pipeline.lead_agent).
+  plan-edit <plan.json> --from <edited copy> [--commit [--message TEXT]]
+        the atomic plan edit: validates the copy exactly like `validate` (same registry; the copy is read as if it were at
+        the plan's path, so relative `repos.*.path` resolve the same) and only with no error replaces the plan (temp file
+        in the plan's directory, then os.replace). With --commit it stages only the plan file and commits only that path in
+        the plan's checkout (default message `docs(plans): edit plan <id>`; never `git add -A`, never pushes). Prints the
+        task-level change (added, removed, changed paths/acceptance/deps) and, for changed paths or acceptance, that
+        recorded verdicts of those tasks go STALE. Exit 0 OK, 1 validation errors (plan, HEAD and index untouched),
+        2 usage: a missing or unreadable copy, a copy whose `id` differs from the plan's, --commit outside a git checkout.
   subplan validate <subplan.json> [--plan PATH] [--json]
         a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
@@ -700,6 +709,10 @@ def session_model(a, agent, role):
         allowed = "; ".join(f"{m}: {', '.join(e)}" for m, e in (policy["scope"].get(agent) or {}).items()) or "none"
         die(f"--model/--effort: {agent} {model} / {effort} is outside the model scope (registry pipeline.models.scope "
             f"plus override; {agent}: {allowed}). Nothing was dispatched.")
+    entry = model_policy.widening_for(getattr(a, "base_policy", policy), getattr(a, "widen_entries", None),
+                                      agent, model, effort)
+    if entry:
+        print(f"model scope widened by plan {a.plan_id}: {model_policy.widening_text(entry)}")
     return {"model": model, "effort": effort, "role": role}
 
 
@@ -914,6 +927,14 @@ def xs_plan_errors(plan, reg, pipe, tasks):
 def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
+    notes = []
+    if plan.get("model_scope_widen") is not None:
+        try:
+            base_policy = model_policy.load(reg)
+            widen_errors, notes = model_policy.widen_problems(base_policy, plan["model_scope_widen"])
+            errors.extend(widen_errors)
+        except model_policy.PolicyError as e:
+            errors.append(str(e))
     if plan.get("schema") != SCHEMA:
         errors.append(f"schema must be {SCHEMA}")
     for k in ("id", "title", "topic", "tasks"):
@@ -1017,7 +1038,7 @@ def validate(plan, reg):
             if len(users) > 1:
                 warnings.append(f"wave {n + 1}: {', '.join(users)} share `{res['id']}` - {res['rule']}")
     no_wt = sorted({t["repo"] for t in tasks if t.get("repo") and not repo_info(plan, reg, t["repo"])["worktrees"]})
-    return {"errors": errors, "warnings": warnings, "waves": planned, "order": order,
+    return {"errors": errors, "warnings": warnings, "notes": notes, "waves": planned, "order": order,
             "no_worktree_repos": no_wt}
 
 
@@ -1035,7 +1056,7 @@ def plan_models(plan, reg, errors):
     lead sees the cost before any dispatch. A broken policy or a role it cannot resolve is an error."""
     pipe = settings(reg)
     try:
-        policy = model_policy.load(reg)
+        policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
         errors.append(str(e))
         return None
@@ -1072,12 +1093,25 @@ def model_text(m):
     return f"{m['agent']} {m['model']} {m['effort']}" if m else "unresolved"
 
 
+def valid_widenings(plan, reg):
+    """Entries safe to display even when the plan or personal policy is invalid."""
+    entries = plan.get("model_scope_widen")
+    if not isinstance(entries, list):
+        return []
+    try:
+        policy = model_policy.load(reg)
+    except model_policy.PolicyError:
+        return []
+    return [entry for entry in entries if not model_policy.widen_problems(policy, [entry])[0]]
+
+
 def cmd_validate(a, reg):
     plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     out = validate(plan, reg)
     out.pop("order")
     out["models"] = plan_models(plan, reg, out["errors"])
+    out["model_scope_widen"] = plan.get("model_scope_widen", [])
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -1085,6 +1119,10 @@ def cmd_validate(a, reg):
             print("ERROR " + e)
         for w in out.get("warnings", []):
             print("WARN  " + w)
+        for note in out["notes"]:
+            print("NOTE  " + note)
+        for entry in valid_widenings(plan, reg):
+            print("Model scope widening: " + model_policy.widening_text(entry))
         for n, w in enumerate(out["waves"], 1):
             print(f"Wave {n}: {', '.join(w)}")
         if out["no_worktree_repos"]:
@@ -1096,6 +1134,103 @@ def cmd_validate(a, reg):
                       f"review {model_text(m['review'])}, qa {model_text(m['qa'])}")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
+
+
+def plan_task_changes(old, new):
+    """Task-level difference of two plans: (added ids, removed ids, {id: [changed keys among paths/acceptance/deps]})."""
+    def by_id(plan):
+        return {t["id"]: t for t in plan.get("tasks") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)}
+    before, after = by_id(old), by_id(new)
+    added = [i for i in after if i not in before]
+    removed = [i for i in before if i not in after]
+    changed = {}
+    for tid in after:
+        if tid in before:
+            keys = [k for k in ("paths", "acceptance", "deps") if before[tid].get(k) != after[tid].get(k)]
+            if keys:
+                changed[tid] = keys
+    return added, removed, changed
+
+
+def cmd_plan_edit(a, reg):
+    """Replace a plan by an edited copy, only when the copy validates with no error (delivery.md section 8)."""
+    plan_path = a.plan
+    plan_old = read_json_file(plan_path, "plan")
+    copy_path = a.from_file
+    plan = read_json_file(copy_path, "edited copy")  # exit 2: missing, unreadable, not JSON
+    if plan.get("id") != plan_old.get("id"):
+        die(f"the edited copy has id {json.dumps(plan.get('id'))} but the plan has id {json.dumps(plan_old.get('id'))}: "
+            "a plan edit never changes the plan id")
+    if a.message is not None and not a.commit:
+        die("--message needs --commit")
+    plan_dir = os.path.dirname(os.path.abspath(plan_path))
+    top = None
+    if a.commit:  # decided before anything is replaced
+        top, rc = git(plan_dir, "rev-parse", "--show-toplevel")
+        if rc != 0 or not top:
+            die(f"--commit: {plan_path} is not inside a git checkout")
+    markers = plan.get("no_worktree_markers")
+    if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
+        reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
+    plan["_path"] = plan_path  # the copy is read as if it were the plan: relative repos.*.path resolve the same
+    out = validate(plan, reg)
+    out.pop("order", None)
+    plan_models(plan, reg, out["errors"])
+    for e in out["errors"]:
+        print("ERROR " + e)
+    for w in out.get("warnings", []):
+        print("WARN  " + w)
+    for note in out["notes"]:
+        print("NOTE  " + note)
+    if out["errors"]:
+        print(f"INVALID ({len(out['errors'])} error(s)): {plan_path} not replaced" + (", nothing committed" if a.commit else ""))
+        return 1
+    with open(copy_path, "rb") as fh:
+        data = fh.read()
+    fd, tmp = tempfile.mkstemp(prefix=".plan-edit-", suffix=".tmp", dir=plan_dir)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        shutil.copymode(plan_path, tmp)  # mkstemp creates 0600; keep the plan's mode
+        os.replace(tmp, plan_path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(f"cannot replace {plan_path}: {e}")
+    added, removed, changed = plan_task_changes(plan_old, plan)
+    for tid in added:
+        print(f"Task added: {tid}")
+    for tid in removed:
+        print(f"Task removed: {tid}")
+    for tid, keys in changed.items():
+        print(f"Task changed: {tid} ({', '.join(keys)})")
+    if not (added or removed or changed):
+        print("No task-level change (paths, acceptance, deps)")
+    stale = [tid for tid, keys in changed.items() if "paths" in keys or "acceptance" in keys]
+    if stale:
+        print(f"NOTE  changed paths or acceptance make recorded verdicts of {', '.join(stale)} stale: re-run `status` "
+              "after the plan edit")
+    if a.commit:
+        rel = os.path.relpath(os.path.abspath(plan_path), top).replace("\\", "/")
+        message = a.message or f"docs(plans): edit plan {plan.get('id')}"
+        _, rc = git(top, "add", "--", rel)
+        if rc != 0:
+            die(f"git add {rel} failed in {top}", 1)
+        _, unchanged = git(top, "diff", "--quiet", "HEAD", "--", rel)
+        if unchanged == 0:
+            print(f"Nothing to commit: {rel} equals HEAD")
+            print("OK: plan replaced")
+            return 0
+        out_text, rc = git(top, "commit", "-m", message, "--", rel)  # only this path, whatever else is staged
+        if rc != 0:
+            print(f"ERROR git commit failed in {top}: {out_text}")
+            return 1
+        head, _ = git(top, "rev-parse", "--short", "HEAD")
+        print(f"Committed {rel} in {top} at {head}")
+    print("OK: plan replaced")
+    return 0
 
 
 # ---------------------------------------------------------------- subplan
@@ -1267,7 +1402,7 @@ def subplan_models(sub, plan, reg, errors):
     if task is None or not isinstance(task.get("repo"), str) or not isinstance(task.get("paths"), list)             or not task["paths"] or any(path_problem(p) for p in task["paths"]):
         return None  # validation names what is wrong with the parent task
     try:
-        policy = model_policy.load(reg)
+        policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
         errors.append(str(e))
         return None
@@ -2013,7 +2148,9 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "and READY_FOR_PR; a message alone can be lost), then report to the run lead (`orca orchestration send --to "
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <report>`): branch "
         f"{spec['branch']}, HEAD SHA, your Orca Run id, subtasks with commits, review and QA verdicts (state, SHA, model), "
-        "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings.",
+        "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings"
+        + (", the plan's model scope widenings (" + "; ".join(model_policy.widening_text(e) for e in valid_widenings(plan, reg)) + ")"
+           if valid_widenings(plan, reg) else "") + ".",
         f"7. {subagents}" if subagents else None,
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
@@ -2244,11 +2381,17 @@ def cmd_dispatch(a, reg):
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
-    a.policy = load_policy(reg)
+    a.base_policy = load_policy(reg)
     plan["_path"] = a.plan
     v = validate(plan, reg)
     if v["errors"]:
         die("plan is invalid; run `validate` first: " + v["errors"][0], 1)
+    try:
+        a.policy = model_policy.load_for_plan(reg, plan)
+    except model_policy.PolicyError as e:
+        die(str(e), 1)
+    a.widen_entries = plan.get("model_scope_widen")
+    a.plan_id = plan.get("id")
     if a.paths and a.phase != "implement":
         die("--paths (the subtask's paths) goes with --phase implement")
     if a.report_to and a.phase != "lead":
@@ -3441,6 +3584,8 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
     pipe = settings(reg)
     v = validate(plan, reg)
     blockers, notes, commands, unverified = list(v["errors"]), [], [], []
+    notes.extend("model scope widened by the plan: " + model_policy.widening_text(entry)
+                 for entry in valid_widenings(plan, reg))
     repos = sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")})
     heads = {}
     for key in repos:
@@ -4832,6 +4977,8 @@ def cmd_status(a, reg):
         for tid, roles in models.items():
             for role, model in roles.items():
                 print(f"model: {tid} {role} -> {model['agent']} ({model['why']})")
+    for entry in valid_widenings(plan, reg):
+        print("model scope widening: " + model_policy.widening_text(entry), file=sys.stderr if a.json else sys.stdout)
     out = status(plan, reg, a.orca_run)
     if a.json:
         out["models"] = models
@@ -5038,6 +5185,11 @@ def main():
     p = sub.add_parser("validate", parents=[common])
     p.add_argument("plan")
     p.add_argument("--json", action="store_true")
+    pe = sub.add_parser("plan-edit", parents=[common])
+    pe.add_argument("plan")
+    pe.add_argument("--from", dest="from_file", required=True, metavar="COPY")
+    pe.add_argument("--commit", action="store_true")
+    pe.add_argument("--message")
     sp = sub.add_parser("subplan", parents=[common])
     sp.add_argument("action", choices=("validate",))
     sp.add_argument("subplan")
@@ -5127,7 +5279,7 @@ def main():
     reg = load_registry(a.registry)
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
-    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
+    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner, "dispatch": cmd_dispatch,
             "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
             "report": cmd_report, "sync": cmd_sync}[a.cmd](a, reg)
 
