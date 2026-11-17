@@ -230,6 +230,64 @@ EOF
       AG finalize --run "$sh_run" --rows 3 > /dev/null 2>&1; sh_partial=$?
       [ "$sh_zero" -eq 2 ] && [ "$sh_nine" -eq 2 ] && [ "$sh_partial" -eq 2 ] \
         && ok "sheet: invalid dimensions exit 2" || no "sheet invalid arguments: $sh_zero $sh_nine $sh_partial" ;;
+    sheet-discard)
+      sh_setup sh-discard && sh_fixture 600 450 good || { no "sheet discard setup"; return; }
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --discard-qa-fail --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 0 ] \
+        && jq -e '[.steps[].step] == ["filter","slice","fit","defringe","embed","qa","discard"] and any(.steps[]; .step == "slice" and .state == "sliced") and any(.steps[]; .step == "discard" and .state == "skipped") and (.discarded | length) == 0' "$TMP/sh-result.json" >/dev/null \
+        && jq -e '.rows == 3 and .cols == 3 and (.sheets[0].cells | length) == 9' "$sh_run/sheet.json" >/dev/null \
+        && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 9 ] \
+        && [ ! -e "$sh_run/outputs-rejected" ] \
+        && ok "sheet: finalize --discard-qa-fail with --rows and --cols slices the given grid and discards nothing when QA passes" \
+        || no "sheet discard flags rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget-before.json" 2>> "$TMP/sh-err"
+      # one cell now fails QA (opaque corners): the same flags slice nothing again and discard exactly that cell
+      python3 -B - "$ROOT" "$sh_run/outputs/prop-r2c2.png" > "$TMP/sh-fault" 2>&1 <<'EOF2'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import png
+img = png.decode(sys.argv[2])
+open(sys.argv[2], 'wb').write(png.encode(img.width, img.height, bytes((90, 90, 90, 255)) * (img.width * img.height)))
+EOF2
+      sh_opaque_rc=$?
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --discard-qa-fail --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      AG manifest --run "$sh_run" > "$TMP/sh-manifest" 2>> "$TMP/sh-err"; sh_manifest_rc=$?
+      [ "$sh_opaque_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ "$sh_manifest_rc" -eq 0 ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped") and any(.steps[]; .step == "discard" and .state == "discarded") and [.discarded[].output] == ["outputs/prop-r2c2.png"]' "$TMP/sh-result.json" >/dev/null \
+        && [ ! -e "$sh_run/outputs/prop-r2c2.png" ] && [ -f "$sh_run/outputs-rejected/prop-r2c2.png" ] && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 8 ] \
+        && jq -e '.rows == 3 and .cols == 3' "$sh_run/sheet.json" >/dev/null \
+        && jq -e '(.discards | length) == 1 and .discards[0].output == "outputs/prop-r2c2.png"' "$sh_run/discards.json" >/dev/null \
+        && ok "sheet: --discard-qa-fail with --rows and --cols discards the QA-FAIL cell and keeps the recorded grid" \
+        || no "sheet discard cell rc=$sh_rc opaque=$sh_opaque_rc manifest=$sh_manifest_rc" "$(cat "$TMP/sh-fault" "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_discards=$(jq '.discards | length' "$sh_run/discards.json")
+      grep -q "^- Sheet: 3x3, sheets/prop.png (sha256 [0-9a-f]\{12\}) -> 8 outputs, ${sh_discards} discarded (sheet.json, discards.json)\$" "$sh_run/run.md" \
+        && ! grep -q 'STALE' <(grep '^- Sheet:' "$sh_run/run.md") \
+        && ok "sheet: the manifest Sheet line names the remaining cells and the discarded count of discards.json" \
+        || no "sheet manifest line" "$(grep '^- Sheet:' "$sh_run/run.md")"
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget-after.json" 2>> "$TMP/sh-err"; sh_json_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget" 2>> "$TMP/sh-err"; sh_text_rc=$?
+      [ "$sh_json_rc" -eq 0 ] && [ "$sh_text_rc" -eq 0 ] \
+        && jq -e '[.used, .outputs, .discarded, .sheet_cells, .sheet_cells_discarded] == [1,1,0,9,0]' "$TMP/sh-budget-before.json" >/dev/null \
+        && jq -e '[.used, .outputs, .discarded, .sheet_cells, .sheet_cells_discarded, .state] == [1,1,0,8,1,"ok"]' "$TMP/sh-budget-after.json" >/dev/null \
+        && grep -q '^budget ok: 1 used (1 output + 0 failed attempts) ' "$TMP/sh-budget" \
+        && ok "sheet: budget with a sheet counts one generation before and after a cell is discarded (sheet_cells_discarded 1, discarded 0)" \
+        || no "sheet budget after discard rc=$sh_json_rc/$sh_text_rc" "$(cat "$TMP/sh-budget-before.json" "$TMP/sh-budget-after.json" "$TMP/sh-budget" "$TMP/sh-err")"
+      # every cell discarded: the sheet still counts as one generation, and the text and --json name it
+      mkdir -p "$sh_run/outputs-rejected"
+      for sh_cell in "$sh_run"/outputs/prop-r?c?.png; do
+        sh_name=$(basename "$sh_cell"); sh_sha=$(sha256sum "$sh_cell" | cut -d' ' -f1)
+        mv "$sh_cell" "$sh_run/outputs-rejected/$sh_name"
+        jq --arg o "outputs/$sh_name" --arg p "outputs-rejected/$sh_name" --arg s "$sh_sha" \
+          '.discards += [{output: $o, path: $p, sha256: $s, reason: "test: discard every cell", by: "discard"}]' "$sh_run/discards.json" > "$TMP/sh-discards.json" \
+          && cp "$TMP/sh-discards.json" "$sh_run/discards.json" || no "sheet record discard $sh_name"
+      done
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget-all.json" 2>> "$TMP/sh-err"; sh_json_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget-all" 2>> "$TMP/sh-err"; sh_text_rc=$?
+      [ "$sh_json_rc" -eq 0 ] && [ "$sh_text_rc" -eq 0 ] \
+        && jq -e '[.used, .outputs, .discarded, .sheet_cells, .sheet_cells_discarded, .state] == [1,1,1,0,9,"ok"]' "$TMP/sh-budget-all.json" >/dev/null \
+        && grep -q '^budget ok: 1 used (1 output, 1 discarded + 0 failed attempts) ' "$TMP/sh-budget-all" \
+        && ok "sheet: a fully discarded sheet still counts as one generation (text and --json name the discard)" \
+        || no "sheet fully discarded budget rc=$sh_json_rc/$sh_text_rc" "$(cat "$TMP/sh-budget-all.json" "$TMP/sh-budget-all" "$TMP/sh-err")" ;;
     *) echo "Unknown case: $1" >&2; return 2 ;;
   esac
 }
@@ -2335,7 +2393,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
 
 echo "-- finalize: experimental sheet mode"
-for sh_name in sheet-sizes sheet-failures sheet-repeat sheet-cli; do sh_case "$sh_name"; done
+for sh_name in sheet-sizes sheet-failures sheet-repeat sheet-cli sheet-discard; do sh_case "$sh_name"; done
 echo "-- finalize: pixel-grid detection, palette and opt-in QA"
 # A 128x128 pattern enlarged fourfold, with transparent corners and several opaque colours.
 python3 -B - "$ROOT" "$TMP" <<'EOF'
@@ -2592,6 +2650,14 @@ AG finalize --run "$fitlive" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
   && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
   && jq -e '.fitted | length == 1' "$TMP/fit.json" >/dev/null \
   && ok "fit: second finalize skips fitting and preserves output and raw" || no "fit repeat rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+AG manifest --run "$fitlive" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(grep -c '^- Fit:' "$fitlive/run.md")" -eq 1 ] \
+  && grep -qF -- '- Fit: orientation padding; originals in raw/ (finalize.json): outputs/937cc86a_000.png 1536x1024 -> 1536x1536' "$fitlive/run.md" \
+  && ok "manifest: the run.md Fit line names each fitted output with its original and fitted size from finalize.json" \
+  || no "manifest fit line rc=$rc" "$(cat "$TMP/err"; grep -n 'Fit' "$fitlive/run.md")"
+fitplain="$RUNS/fit-plain-001"; finrun fit-plain-001 icon icon-ok.png
+AG finalize --run "$fitplain" >/dev/null 2>&1 && AG manifest --run "$fitplain" >/dev/null 2>&1 && ! grep -q '^- Fit:' "$fitplain/run.md" \
+  && ok "manifest: a run with no fitted output has no Fit line" || no "manifest without fit line" "$(grep -n 'Fit' "$fitplain/run.md" 2>&1)"
 
 fitsmall="$RUNS/fit-small-001"; finrun fit-small-001 icon svc-small.png
 AG finalize --run "$fitsmall" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
@@ -2764,6 +2830,24 @@ AG manifest --run "$batchd" >/dev/null 2>>"$TMP/err"; mrc=$?
   && grep -q '^- Discarded: outputs/bad.png' "$batchd/run.md" \
   && ok "batch finalize discards one QA failure byte-identically and manifests the three passing outputs" \
   || no "batch discard rc=$rc manifest=$mrc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+# the budget counts generations: a discard never refunds one (no sheet)
+batch_run batch-budget-001
+bb="$RUNS/batch-budget-001"
+AG embed --run "$bb" >/dev/null 2>"$TMP/err"
+AG budget --run "$bb" --json > "$TMP/bb-before.json" 2>>"$TMP/err"; brc=$?
+AG budget --run "$bb" > "$TMP/bb-before.txt" 2>>"$TMP/err"; brc2=$?
+AG finalize --run "$bb" --discard-qa-fail --json > "$TMP/bb-finalize.json" 2>>"$TMP/err"; rc=$?
+AG budget --run "$bb" --json > "$TMP/bb-after.json" 2>>"$TMP/err"; arc=$?
+AG budget --run "$bb" > "$TMP/bb-after.txt" 2>>"$TMP/err"; arc2=$?
+[ "$brc/$brc2/$rc/$arc/$arc2" = 0/0/0/0/0 ] && [ ! -e "$bb/outputs/bad.png" ] && [ -f "$bb/outputs-rejected/bad.png" ] \
+  && jq -e '[.used, .outputs, .discarded, .state, (.failed_attempts | length)] == [4,4,0,"at-limit",0] and (has("sheet_cells") | not)' "$TMP/bb-before.json" >/dev/null \
+  && jq -e '[.used, .outputs, .discarded, .state, (.failed_attempts | length)] == [4,4,1,"at-limit",0] and (has("sheet_cells") | not)' "$TMP/bb-after.json" >/dev/null \
+  && jq -e '[.budget.used, .budget.outputs, .budget.discarded] == [4,4,1]' "$TMP/bb-finalize.json" >/dev/null \
+  && grep -q '^budget at-limit: 4 used (4 outputs + 0 failed attempts) of 4 allowed' "$TMP/bb-before.txt" \
+  && grep -q '^budget at-limit: 4 used (4 outputs, 1 discarded + 0 failed attempts) of 4 allowed' "$TMP/bb-after.txt" \
+  && ok "budget without a sheet: the used count is the same before and after a discard, and the text and --json say how many counted outputs are discarded" \
+  || no "budget discard refund rc=$brc/$brc2/$rc/$arc/$arc2" "$(cat "$TMP/err" "$TMP/bb-before.json" "$TMP/bb-after.json" "$TMP/bb-after.txt")"
 
 finrun batch-allfail-001 icon icon-opaque.png
 ba="$RUNS/batch-allfail-001"; cp "$FX/icon-opaque.png" "$ba/outputs/second.png"
@@ -5774,15 +5858,39 @@ for g in props:props chars:characters total:total; do
     && ok "style report tone.tolerance suggestion ($k): the smallest two-decimal value that passes QA for all outputs" \
     || no "tone suggestion ($k)" "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\"") $(cat "$TMP/sr-tone-qa")"
 done
-[ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[4,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[1,1]' ] \
-  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .outputs]")" = '[5,5]' ] \
+[ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .anchor_copies, .outputs]")" = '[2,4,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .anchor_copies, .outputs]")" = '[1,1,1]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .anchor_copies, .outputs]")" = '[3,5,5]' ] \
   && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data.outputs_without_anchors")" = 1 ] \
   && [ "$(SRJ "$DG | .families.\"(none)\".suggestions.\"tone.tolerance\" | [.value, .data.outputs_without_anchors, (.reason | type)]")" = '[null,1,"string"]' ] \
-  && ok "style report counts selected copies and excludes outputs without usable anchors" || no "tone scope" "$(SRJ "$DG | .total.suggestions")"
+  && ok "style report counts distinct anchors and selected copies separately and excludes outputs without usable anchors" || no "tone scope" "$(SRJ "$DG | .total.suggestions")"
+# One anchor selected by two runs is one anchor and two selected copies (the label and the JSON count agree).
+SRD="$TMP/sr-dup-anchor"
+cp -R "$SR" "$SRD"
+python3 -B - "$SRD" > "$TMP/sr-dup.setup" 2>&1 <<'EOF'
+import json, os, re, sys
+for rid in ("r-props-1", "r-props-2"):
+    path = os.path.join(sys.argv[1], "assetgen", "runs", rid, "run.md")
+    text = open(path, encoding="utf-8", newline="").read()
+    match = re.match(r"\A---json\n(.*?)\n---\n", text, re.S)
+    front = json.loads(match.group(1))
+    refs = front["spec"]["style_lock"]["references"]
+    front["spec"]["style_lock"]["references"] = [r for r in refs if r["anchor_id"] == "props-a"]
+    assert len(front["spec"]["style_lock"]["references"]) == 1, refs
+    open(path, "w", encoding="utf-8", newline="").write("---json\n" + json.dumps(front) + "\n---\n" + text[match.end():])
+EOF
+sr_dup_rc=$?
+AG style report --authoring "$SRD" --style demo-game --json > "$TMP/sr-dup.json" 2> "$TMP/sr-dup.err"; rc=$?
+AG style report --authoring "$SRD" --style demo-game > "$TMP/sr-dup.txt" 2>> "$TMP/sr-dup.err"; rc2=$?
+[ "$sr_dup_rc" -eq 0 ] && [ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && [ "$(jq -c '.styles[0].families.props.suggestions["tone.tolerance"].data | [.anchors, .anchor_copies, .outputs]' "$TMP/sr-dup.json")" = '[1,2,3]' ] \
+  && [ "$(jq -c '.styles[0].total.suggestions["tone.tolerance"].data | [.anchors, .anchor_copies]' "$TMP/sr-dup.json")" = '[2,3]' ] \
+  && grep -qF "1 selected anchor(s) (distinct); 2 selected anchor copy/copies; 3 approved output(s)" "$TMP/sr-dup.txt" \
+  && ok "style report: one anchor selected by two runs is 1 distinct anchor and 2 selected copies (text and --json)" \
+  || no "style report anchor copies rc=$sr_dup_rc/$rc/$rc2" "$(cat "$TMP/sr-dup.setup" "$TMP/sr-dup.err"; jq -c '.styles[0].families.props.suggestions["tone.tolerance"].data' "$TMP/sr-dup.json" 2>&1; grep 'tone.tolerance' "$TMP/sr-dup.txt")"
 # The selected black and white anchors must not be pooled across families.
 SR_REPRO="$TMP/sr-selected"
 cp -R "$SR" "$SR_REPRO"
-python3 -B - "$ROOT" "$SR_REPRO" <<'EOF'
+python3 -B - "$ROOT" "$SR_REPRO" > "$TMP/sr-selected.setup" 2>&1 <<'EOF'
 import hashlib, json, os, shutil, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
 import png
@@ -5809,6 +5917,8 @@ for family, anchor, output in (("props", 0, 128), ("characters", 255, 255)):
              "references": [{"anchor_id": family, "image": "references/anchor.png"}]}}}
     open(os.path.join(run, "run.md"), "w", encoding="utf-8").write("---json\n" + json.dumps(front) + "\n---\n")
 EOF
+sr_setup_rc=$?
+[ "$sr_setup_rc" -eq 0 ] || no "selected-anchor regression: setup script failed rc=$sr_setup_rc" "$(cat "$TMP/sr-selected.setup")"
 AG style report --authoring "$SR_REPRO" --style demo-game --json > "$TMP/sr-selected.json" 2> "$TMP/sr-selected.err"
 python3 -B - "$ROOT" "$SR_REPRO" "$TMP/sr-selected.json" >> "$TMP/sr-selected.err" 2>&1 <<'EOF'
 import json, os, re, sys
@@ -5830,11 +5940,12 @@ for group, families in ((style["families"]["props"], ["props"]), (style["familie
     assert passes(tol)
     assert tol == 0 or not passes(round(tol - 0.01, 2))
 EOF
-[ $? -eq 0 ] && ok "tone suggestions pass QA against each run's selected black or white anchor" \
-  || no "selected-anchor tone regression" "$(cat "$TMP/sr-selected.err")"
+sr_verify_rc=$?
+[ "$sr_setup_rc" -eq 0 ] && [ "$sr_verify_rc" -eq 0 ] && ok "tone suggestions pass QA against each run's selected black or white anchor" \
+  || no "selected-anchor tone regression (setup rc=$sr_setup_rc, check rc=$sr_verify_rc)" "$(cat "$TMP/sr-selected.setup" "$TMP/sr-selected.err")"
 # the text prints each suggestion with its numbers and says not applied
 grep -q "^    palette.max_distance = 80 (suggestion only, not applied): current 48; min_share 0.6; 3 approved output(s); d_needed min 0 median 40 max 80; 2 pass at current" "$TMP/sr1.txt" \
-  && grep -Eq "^    tone.tolerance = 0\.[0-9]+ \(suggestion only, not applied\): current 0.05; 4 selected anchor copy/copies; 3 approved output\(s\); 0 output\(s\) without anchors; luminance selected anchors \[.*\] outputs \[.*\]; saturation selected anchors \[.*\] outputs \[.*\]; [0-9] inside at current" "$TMP/sr1.txt" \
+  && grep -Eq "^    tone.tolerance = 0\.[0-9]+ \(suggestion only, not applied\): current 0.05; 2 selected anchor\(s\) \(distinct\); 4 selected anchor copy/copies; 3 approved output\(s\); 0 output\(s\) without anchors; luminance selected anchors \[.*\] outputs \[.*\]; saturation selected anchors \[.*\] outputs \[.*\]; [0-9] inside at current" "$TMP/sr1.txt" \
   && grep -q "^read-only report: nothing was written; every suggestion is for a person to apply" "$TMP/sr1.txt" \
   && ok "style report text: each suggestion carries 'not applied' and its supporting numbers (current, d_needed, ranges), and the report says nothing was written" || no "suggestion text" "$(grep -n 'suggestion only' "$TMP/sr1.txt")"
 [ "$(grep -c 'suggestion only, not applied' "$TMP/sr1.txt")" -eq "$(grep -cE '^ +(palette\.max_distance|tone\.tolerance)' "$TMP/sr1.txt")" ] && [ "$(jq '[.. | objects | select(has("applied")) | .applied] | all(. == false)' "$TMP/sr1.json")" = true ] \
