@@ -169,7 +169,7 @@ config_case 'core key inserted before new section' FAIL
 # Persistence is tested in a disposable git repo with tiny suites; never run the real full suite.
 mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/scripts/checks" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
 cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
-printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
+printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ] || { echo "a broke here"; exit 1; }\n' > "$TMP/repo/tests/a.sh"
 cat > "$TMP/repo/tests/b.sh" <<'SUITE'
 #!/usr/bin/env bash
 # case-map: alpha scripts/alpha.py
@@ -249,6 +249,7 @@ runall_finish
 if [ -n "${CHECK_CFG:-}" ]; then
   if gitcfg_verify >/dev/null; then echo 'cfg unchanged'; else echo 'cfg changed'; rm -f "$GITCFG_COPY"; fi
 fi
+runall_summary
 echo "counts $pass $fail $skip"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
 PLAN
@@ -264,9 +265,11 @@ reset_cache
 out=$(cache_plan); rc=$?
 tree=$(git -C "$TMP/repo" rev-parse 'HEAD^{tree}')
 [ "$rc" = 0 ] && [ -f "$TMP/state/run-all/$tree.json" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && [ "$(find "$TMP/state/run-all/results" -type f -name '*.json' | wc -l)" -eq 1 ] \
   && good 'clean full PASS writes tree record and releases lock' || no 'full PASS record/lock' "$out"
 out=$(cache_plan --reuse); rc=$?
 [ "$rc" = 0 ] && grep -q '^reused full run at ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && [ "$(find "$TMP/state/run-all/results" -type f -name '*.json' | wc -l)" -eq 1 ] \
   && good '--reuse hits clean PASS tree without running suites' || no '--reuse clean hit' "$out"
 # Restricted coverage cannot satisfy an unrestricted request.
 python3 - "$TMP/state/run-all/$tree.json" <<'PY'
@@ -505,6 +508,10 @@ HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
 for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
 # the holder records its Windows PID where the runtime has one (MSYS/Cygwin /proc/<pid>/winpid), and no file elsewhere
 HL="$TMP/state/locks/run-all-full"; hpid=$(cat "$HL/pid" 2>/dev/null)
+inspection=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/repo"); irc=$?
+[ "$irc" = 1 ] && grep -q "^running: full run pid $hpid .* args --no-reuse$" <<<"$inspection" \
+  && [ "$(cat "$HL/args" 2>/dev/null)" = '--no-reuse' ] && [ -n "$(cat "$HL/record" 2>/dev/null)" ] \
+  && good 'printer shows the live full-run lock and its arguments before a result exists' || no 'running full-run inspection' "$inspection"
 if [ -r "/proc/$hpid/winpid" ]; then
   [ -n "$hpid" ] && [ "$(cat "$HL/winpid" 2>/dev/null)" = "$(cat "/proc/$hpid/winpid")" ]     && good 'full-run lock records the holder Windows PID' || no 'winpid recorded' "pid=$hpid winpid=$(cat "$HL/winpid" 2>&1)"
 else
@@ -536,6 +543,8 @@ git -C "$TMP/repo" config --remove-section rpgtest
 mkdir -p "$TMP/state/locks/run-all-full"
 printf '99999999\n' > "$TMP/state/locks/run-all-full/pid"
 printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
+printf 'old arguments\n' > "$TMP/state/locks/run-all-full/args"
+printf '/old/result.json\n' > "$TMP/state/locks/run-all-full/record"
 out=$(cache_plan --no-reuse); rc=$?
 [ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
@@ -622,14 +631,28 @@ if [ -r "/proc/$spid/winpid" ]; then
 else
   [ -n "$spid" ] && [ ! -e "$SL/1/winpid" ] && good 'targeted slot records shell PID without a Windows runtime' || no 'slot pid metadata'
 fi
-out=$(cache_plan --only-suites tests/a.sh --no-reuse --no-wait); rc=$?
+out=$(cache_plan --only-suites tests/a.sh --no-reuse -j 1 --no-wait); rc=$?
 [ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (2 in use:' <<<"$out" && [ ! -s "$RUN_LOG" ] \
   && good '--no-wait exits 3 when all targeted test slots are busy, before checks' || no 'targeted no-wait' "$out"
-cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/slot-waiter.out" 2>&1 & sw=$!
+cache_plan --only-suites tests/a.sh --no-reuse -j 1 > "$TMP/slot-waiter.out" 2>&1 & sw=$!
 slot_wait_for "$TMP/slot-waiter.out" 'waiting for a test slot'
 kill -0 "$sw" 2>/dev/null && [ ! -s "$RUN_LOG" ] && grep -q "$spid in " "$TMP/slot-waiter.out" \
   && good 'third targeted run queues and names its holders and checkouts' || no 'targeted wait message' "$(cat "$TMP/slot-waiter.out")"
+sleep 1; queued_until=$(date -u +%FT%TZ)   # one second into the wait: a start taken before the wait is earlier
 touch "$TMP/slot-held-1.release"; wait "$sh1"; sr1=$?; wait "$sw"; srw=$?
+waiter_start=$(python3 -B - "$TMP/state/run-all/results" <<'PY'
+import glob, json, os, sys
+for path in glob.glob(os.path.join(sys.argv[1], '*', '*.json')):
+    with open(path, encoding='utf-8') as f:
+        r = json.load(f)
+    if '-j' in r['args']:
+        print(r['started'] + ' ' + os.path.basename(path).split('-')[0])
+PY
+)
+read -r waiter_started waiter_stamp <<<"${waiter_start%$'\r'}"
+[ -n "$waiter_started" ] && [[ ! "$waiter_started" < "$queued_until" ]] && [ "$waiter_stamp" = "${waiter_started//[-:]/}" ] \
+  && good 'a queued run records its start at slot admission, not before its wait' \
+  || no 'queued run start time' "started '$waiter_started' file '$waiter_stamp' queued until $queued_until"
 touch "$TMP/slot-held-2.release"; wait "$sh2"; sr2=$?
 [ "$sr1 $sr2 $srw" = '0 0 0' ] && [ "$(grep -c 'waiting for a test slot' "$TMP/slot-waiter.out")" -eq 1 ] \
   && [ "$(sort "$RUN_LOG" | tr '\n' ' ')" = 'a a b ' ] && [ -z "$(ls -A "$SL")" ] \
@@ -647,6 +670,7 @@ out=$(RPG_FACTORY_TEST_SLOTS=bad cache_plan --affected --no-reuse 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q 'RPG_FACTORY_TEST_SLOTS needs a non-negative integer' <<<"$out" \
   && good 'invalid slot cap exits 2 before checks' || no 'invalid slot cap' "$out"
 mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"
+printf 'old arguments\n' > "$SL/1/args"; printf '/old/result.json\n' > "$SL/1/record"
 out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
 [ "$rc" = 0 ] && grep -q 'taking over stale test slot 1 (99999999)' <<<"$out" && [ ! -d "$SL/1" ] \
   && good 'dead targeted slot is reclaimed under guard and released' || no 'stale test slot' "$out"
@@ -667,6 +691,195 @@ slot_wait_for "$TMP/slot-signal"
 kill -TERM "$ss"; wait "$ss"; rc=$?
 [ "$rc" = 143 ] && [ -z "$(ls -A "$SL")" ] \
   && good 'targeted slot released on TERM' || no "slot release on TERM ($rc)" "$(cat "$TMP/slot-signal.out")"
+# Results survive lost terminals, preserve original arguments and describe failures independently of PASS reuse.
+last_result() { bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/repo"; }
+for broken in 0 1; do
+  reset_cache
+  out=$(BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh,tests/b.sh --no-reuse); rc=$?
+  printed=$(last_result); prc=$?
+  record=$(sed -n 's/^result: //p' <<<"$printed")
+  checked=$(python3 -B - "$record" "$TMP/repo" "$broken" "$out" <<'PY'
+import datetime, hashlib, json, os, re, subprocess, sys
+path, checkout, broken, output = sys.argv[1:]
+broken = int(broken)
+with open(path, encoding='utf-8') as f:
+    r = json.load(f)
+assert r['schema'] == 'rpg-factory.run-all-result/1'
+assert r['checkout'] == checkout
+assert r['args'] == ['--only-suites', 'tests/a.sh,tests/b.sh', '--no-reuse']
+assert r['exit'] == broken and type(r['exit']) is int
+assert r['counts'] == {'pass': 2-broken, 'fail': broken, 'skip': 0, 'warn': 0, 'not_affected': 0}
+# a timed suite keeps its wall time in the name, as run-all prints it ('a [1s]')
+assert len(r['failed']) == broken and all(re.fullmatch(r'a \[[0-9]+s\]', name) for name in r['failed'])
+if broken:   # the failure's output survives the run: its last lines, next to the unchanged failed list
+    [out] = r['failed_output']
+    assert sorted(out) == ['name', 'tail'] and out['name'] == r['failed'][0]
+    assert 'a broke here' in out['tail'].split('\n')
+else:
+    assert r['failed_output'] == []
+assert r['summary'] in output.splitlines()
+start, end = (datetime.datetime.fromisoformat(r[k].replace('Z', '+00:00')) for k in ('started', 'ended'))
+assert start <= end and r['started'].endswith('Z') and r['ended'].endswith('Z')
+assert r['head'] == subprocess.check_output(['git', '-C', checkout, 'rev-parse', 'HEAD'], text=True).strip()
+assert type(r['pid']) is int and r['pid'] > 0
+assert r['winpid'] is None or type(r['winpid']) is int and r['winpid'] > 0
+key = hashlib.sha256(checkout.encode()).hexdigest()[:16]
+assert os.path.dirname(path).replace('\\', '/').endswith('/run-all/results/' + key)
+assert re.fullmatch(r'\d{8}T\d{6}Z-\d+\.json', os.path.basename(path))
+assert os.path.basename(path) == start.strftime('%Y%m%dT%H%M%SZ') + f"-{r['pid']}.json"
+sys.stdout.buffer.write(b'record valid\n')
+PY
+  ); crc=$?
+  [ "$rc" = "$broken" ] && [ "$prc" = 0 ] && [ "$crc" = 0 ] && [ "$checked" = 'record valid' ] \
+    && grep -qx "exit: $broken" <<<"$printed" && grep -q '^started: .*Z$' <<<"$printed" \
+    && grep -q '^ended: .*Z$' <<<"$printed" && grep -qx 'args: --only-suites tests/a.sh,tests/b.sh --no-reuse' <<<"$printed" \
+    && { [ "$broken" = 0 ] || [ "$(grep -A1 -E '^FAILED a \[[0-9]+s\]$' <<<"$printed")" = "$(grep -E '^FAILED a \[[0-9]+s\]$' <<<"$printed")"$'\n''      a broke here' ]; } \
+    && good "persistent result has every field, exact counts and failures; printer reads it (exit $broken)" \
+    || no "result record (run $rc, printer $prc, validation $crc)" "$out"$'\n'"$printed"
+done
+# The default checkout works when the runner is sourced by the stand-in too.
+out=$(cache_plan --last-result); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$printed" ] \
+  && good '--last-result defaults to the current checkout and runs no check' || no 'default checkout printer' "$out"
+# Inspection is read-only, including when no record exists or a caller supplies parallel-job flags.
+before=$(find "$TMP/state" -type f -exec sha256sum {} \; | sort)
+out=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/unknown-checkout" -j 2); rc=$?
+after=$(find "$TMP/state" -type f -exec sha256sum {} \; | sort)
+[ "$rc" = 1 ] && grep -q 'no result record for checkout ' <<<"$out" && [ "$before" = "$after" ] \
+  && good '--last-result for an unknown checkout exits 1 without changing persistent state' || no 'unknown checkout result' "$out"
+out=$(bash "$ROOT/tests/run-all.sh" --checkout "$TMP/repo" 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q -- '--checkout requires --last-result' <<<"$out" \
+  && good '--checkout requires the read-only printer' || no '--checkout without printer' "$out"
+for broken in 0 1; do
+  reset_cache
+  mark="$TMP/duplicate-$broken"
+  HOLD_MARK="$mark" BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/duplicate-holder.out" 2>&1 & dh=$!
+  slot_wait_for "$mark"
+  dp=$(cat "$SL/1/pid" 2>/dev/null); ds=$(cat "$SL/1/started" 2>/dev/null); dr=$(cat "$SL/1/record" 2>/dev/null)
+  [ "$(cat "$SL/1/args" 2>/dev/null)" = '--only-suites tests/a.sh --no-reuse' ] && [[ "$dr" == "$TMP/state/run-all/results/"* ]] \
+    && good 'slot publishes normalized arguments and its absolute result path' || no 'slot arguments and record metadata'
+  out=$(cache_plan --no-wait --only-suites tests/a.sh --no-reuse); rc=$?
+  [ "$rc" = 4 ] && grep -q "same run already holds test slot 1 (pid $dp, winpid .*started $ds, args " <<<"$out" \
+    && grep -q -- '--last-result' <<<"$out" && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] && [ ! -f "$dr" ] \
+    && good 'same checkout and arguments exit 4 naming the holder, without a suite or another slot' || no "duplicate run (rc $rc)" "$out"
+  running=$(last_result); rrc=$?
+  [ "$rrc" = 1 ] && grep -q "^running: slot 1 pid $dp .*started $ds args --only-suites tests/a.sh --no-reuse$" <<<"$running" \
+    && good 'read-only inspection shows a live matching slot before its first result exists' || no 'running slot inspection' "$running"
+  cache_plan --attach --only-suites tests/a.sh --no-reuse --no-wait > "$TMP/attached.out" 2>&1 & da=$!
+  slot_wait_for "$TMP/attached.out" 'run-all: attaching to test slot 1'
+  kill -0 "$da" 2>/dev/null && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] \
+    && good '--attach waits on the original owner without taking another slot or starting a suite' || no 'attach wait' "$(cat "$TMP/attached.out")"
+  touch "$mark.release"; wait "$dh"; hrc=$?; wait "$da"; arc=$?
+  nr=$(find "$TMP/state/run-all/results" -name '*.json' -type f | wc -l | tr -d ' ')
+  [ "$hrc" = "$broken" ] && [ "$arc" = "$broken" ] && [ "$nr" = 1 ] && [ "$(cat "$RUN_LOG")" = a ] \
+    && grep -q '^result: ' "$TMP/attached.out" && grep -qx "exit: $broken" "$TMP/attached.out" && [ -z "$(ls -A "$SL")" ] \
+    && good "--attach prints the holder's only result and returns its exit status ($broken)" \
+    || no "attached result (holder $hrc, attached $arc, records $nr)" "$(cat "$TMP/attached.out")"
+done
+# A newer result wins over an older failure. Neither the printer nor a run writes into the checkout.
+out=$(cache_plan --only-suites tests/a.sh,tests/b.sh --no-reuse); rc=$?
+printed=$(last_result); prc=$?
+[ "$rc $prc" = '0 0' ] && grep -qx 'exit: 0' <<<"$printed" && ! grep -q '^FAILED ' <<<"$printed" \
+  && [ -z "$(git -C "$TMP/repo" status --porcelain)" ] \
+  && good 'printer selects the newest result for the checkout; fixture checkout stays clean' || no 'newest result and checkout pollution' "$printed"
+# Background a held run in a subshell, let that launching shell return, then release the orphaned run.
+reset_cache
+(
+  HOLD_MARK="$TMP/detached" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse \
+    > "$TMP/detached.out" 2>&1 < /dev/null &
+  printf '%s\n' "$!" > "$TMP/detached.pid"
+)
+launcher_rc=$?
+slot_wait_for "$TMP/detached"
+dr=$(cat "$SL/1/record" 2>/dev/null)
+touch "$TMP/detached.release"
+slot_wait_for "$dr"
+printed=$(last_result); prc=$?
+[ "$launcher_rc $prc" = '0 0' ] && [ -f "$dr" ] && grep -qx "result: $dr" <<<"$printed" \
+  && grep -qx 'exit: 0' <<<"$printed" && [ "$(cat "$RUN_LOG")" = a ] \
+  && good 'a run whose launching subshell already exited still writes its result' || no 'detached run result' "$printed"
+# A record is published before its slot is removed; wait for cleanup before resetting shared fixture state.
+for ((i=0; i<300; i++)); do [ -d "$SL/1" ] || break; sleep 0.1; done
+# Identical arguments in another checkout retain the ordinary second-slot behaviour.
+reset_cache
+cp -R "$TMP/repo" "$TMP/other-repo"
+HOLD_MARK="$TMP/checkout-one" cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/checkout-one.out" 2>&1 & co1=$!
+slot_wait_for "$TMP/checkout-one"
+HOLD_MARK="$TMP/checkout-two" bash "$TMP/cache-plan.sh" "$TMP/other-repo" --only-suites tests/a.sh --no-reuse > "$TMP/checkout-two.out" 2>&1 & co2=$!
+slot_wait_for "$TMP/checkout-two"
+[ "$(cat "$SL/1/checkout" 2>/dev/null)" = "$TMP/repo" ] && [ "$(cat "$SL/2/checkout" 2>/dev/null)" = "$TMP/other-repo" ] \
+  && good 'same arguments in another checkout take the second slot' || no 'other checkout slot' "$(cat "$TMP/checkout-two.out")"
+touch "$TMP/checkout-one.release" "$TMP/checkout-two.release"
+wait "$co1"; c1=$?; wait "$co2"; c2=$?
+out=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/other-repo"); rc=$?
+[ "$c1 $c2 $rc" = '0 0 0' ] && grep -qx 'exit: 0' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && [ -z "$(git -C "$TMP/other-repo" status --porcelain)" ] \
+  && good 'each checkout publishes its own result and runs its own suite' || no 'checkout-isolated results' "$out"
+# HUP exits 129, publishes partial counts and releases its slot just like TERM.
+reset_cache
+HOLD_MARK="$TMP/slot-hup" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/slot-hup.out" 2>&1 & hs=$!
+slot_wait_for "$TMP/slot-hup"
+kill -HUP "$hs"; wait "$hs"; hrc=$?
+printed=$(last_result); prc=$?
+[ "$hrc $prc" = '129 0' ] && grep -qx 'exit: 129' <<<"$printed" && [ -z "$(ls -A "$SL")" ] \
+  && good 'HUP publishes an interrupted result and releases its targeted slot' || no 'HUP result and cleanup' "$printed"
+# Zero slots still records the run, retaining the original flags omitted only from duplicate matching.
+reset_cache
+out=$(RPG_FACTORY_TEST_SLOTS=0 cache_plan --only-suites tests/a.sh --no-reuse --no-wait --attach); rc=$?
+printed=$(last_result); prc=$?
+[ "$rc $prc" = '0 0' ] && grep -qx 'args: --only-suites tests/a.sh --no-reuse --no-wait --attach' <<<"$printed" \
+  && [ -z "$(ls -A "$SL")" ] && grep -q '^run-all: 2 checks, 1 passed, 0 failed, 1 skipped (1 not affected by the change)$' <<<"$printed" \
+  && good 'disabled slot cap still publishes counts and all original arguments' || no 'result without slot admission' "$printed"
+# Seed old records without running suites repeatedly: writing the next real result keeps exactly the newest 20.
+record=$(sed -n 's/^result: //p' <<<"$printed")
+python3 -B - "$record" <<'PY'
+import json, os, sys
+directory = os.path.dirname(sys.argv[1])
+with open(sys.argv[1], encoding='utf-8') as f:
+    r = json.load(f)
+for i in range(25):
+    path = os.path.join(directory, f'20000101T000000Z-{i}.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(r, f)
+    os.utime(path, (i+1, i+1))
+PY
+out=$(cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+printed=$(last_result); prc=$?
+nr=$(find "${record%/*}" -type f -name '*.json' | wc -l | tr -d ' ')
+[ "$rc $prc" = '0 0' ] && [ "$nr" = 20 ] && [ ! -e "${record%/*}/20000101T000000Z-0.json" ] \
+  && grep -qx 'args: --only-suites tests/a.sh --no-reuse' <<<"$printed" \
+  && good 'result writes prune old records to the newest 20 per checkout' || no "result retention ($nr files)" "$printed"
+# A failed record write is silent and leaves the holder's result untouched; attachment reports the missing record.
+reset_cache; mkdir -p "$TMP/state/run-all"; : > "$TMP/state/run-all/results"
+HOLD_MARK="$TMP/result-unwritable" cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/result-unwritable.out" 2>&1 & uh=$!
+slot_wait_for "$TMP/result-unwritable"
+cache_plan --only-suites tests/a.sh --no-reuse --attach > "$TMP/result-missing.out" 2>&1 & ua=$!
+slot_wait_for "$TMP/result-missing.out" 'run-all: attaching to'
+touch "$TMP/result-unwritable.release"; wait "$uh"; urc=$?; wait "$ua"; arc=$?
+[ "$urc $arc" = '0 5' ] && grep -q 'no result record available' "$TMP/result-missing.out" \
+  && ! grep -Eqi 'traceback|error|result' "$TMP/result-unwritable.out" && [ -z "$(ls -A "$SL")" ] \
+  && good 'record errors do not change output or exit; attachment with no record exits 5' \
+  || no "record write failure (holder $urc, attached $arc)" "$(cat "$TMP/result-unwritable.out" "$TMP/result-missing.out")"
+# A holder killed without its EXIT trap (SIGKILL) keeps its owner file and writes no record: an attached run notices
+# the dead holder, ends with exit 5 and says there is no record, without starting a suite.
+reset_cache
+HOLD_MARK="$TMP/killed-holder" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/killed-holder.out" 2>&1 & kh=$!
+slot_wait_for "$TMP/killed-holder"
+cache_plan --only-suites tests/a.sh --no-reuse --attach > "$TMP/killed-attach.out" 2>&1 & ka=$!
+slot_wait_for "$TMP/killed-attach.out" 'run-all: attaching to test slot 1'
+kill -KILL "$kh"; wait "$kh" 2>/dev/null
+for ((i=0; i<300; i++)); do kill -0 "$ka" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$ka" 2>/dev/null; then
+  kill "$ka" 2>/dev/null; wait "$ka" 2>/dev/null
+  no '--attach to a killed holder ends' "$(cat "$TMP/killed-attach.out")"
+else
+  wait "$ka"; arc=$?
+  [ "$arc" = 5 ] && grep -q 'no result record available' "$TMP/killed-attach.out" && [ -f "$SL/1/owner" ] \
+    && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] \
+    && good '--attach to a holder killed without its EXIT trap ends with exit 5 and no record' \
+    || no "attach to killed holder (rc $arc)" "$(cat "$TMP/killed-attach.out")"
+fi
+rm -rf "$SL/1"
 # With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
 # listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
 live_case() { # name want-log want-counts args...
@@ -751,11 +964,14 @@ for a in '--only-suites' '--only-suites=' '-j 0' '--jobs x' '--only-suites tests
   # shellcheck disable=SC2086
   TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" $a >/dev/null 2>&1; args+="$? "
 done
+early_records=$(find "$TMP/state/run-all/results" -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
 cache_plan >/dev/null; TMPDIR="$CT" cache_plan --reuse >/dev/null; r3=$?
 mkdir -p "$TMP/state/locks/run-all-full"; printf '%s
 ' "$$" > "$TMP/state/locks/run-all-full/pid"
 TMPDIR="$CT" cache_plan --no-reuse --no-wait >/dev/null; r4=$?; rm -rf "$TMP/state/locks/run-all-full"
 left=$(ls -A "$CT")
+[ "$early_records" = 0 ] && [ "$(find "$TMP/state/run-all/results" -type f -name '*.json' | wc -l)" -eq 1 ] \
+  && good 'usage errors, list, reuse hits and no-wait exits publish no result record' || no 'early-exit result records'
 [ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ "$args" = '2 2 2 2 2 ' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, bad arguments, release-only suite, --reuse hit, --no-wait) leave no git-config copy'   || no "early-exit temp files (rc $r1 $r2 $r3 $r4, arguments $args)" "$left"
 # A shared-config WARN is counted, the copy is removed on WARN and kept on FAIL, and a passing suite's RETRY lines are
 # shown under its PASS line. End to end: the stand-in plan sources the real scheduler and ends with the real tail of
@@ -797,7 +1013,7 @@ wrun() { # jobs [VAR=value...]: sets out, rc and leaves the temp dir listing in 
     bash "$TMP/warn-plan.sh" "$WF" -j "$j" --only-suites tests/w.sh,tests/r.sh 2>&1); rc=$?
   left=$(ls -A "$CT2")
 }
-if [ -n "$tail_src" ] && grep -q 'gitcfg_verify' <<<"$tail_src" && grep -q '^echo "run-all: \$total checks' <<<"$tail_src"; then
+if [ -n "$tail_src" ] && grep -q 'gitcfg_verify' <<<"$tail_src" && grep -qx 'runall_summary' <<<"$tail_src"; then
   for j in 1 2; do
     wrun "$j" CFG_MODE=warn
     [ "$rc" = 0 ] && grep -q "^WARN  shared git config: only other sessions' branch/worktree sections were added" <<<"$out" \
