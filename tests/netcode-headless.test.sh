@@ -7,6 +7,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
+# Every run of the check in this suite keeps its evidence under a test dir, never in the real persistent state dir
+# (the evidence cases below set their own). The check writes nothing outside $TMP.
+export RPG_FACTORY_STATE_DIR="$TMP/state-default"
 chk() { if [ "$2" = "$3" ]; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1: expected '$2' got '$3'"; fi; }
 
 netcode() { # dir - a Netcode checkout pinning sgl-v9.9.9
@@ -67,6 +70,10 @@ grep -q "dotnet test exited 1" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$(
 chk "dotnet test times out with a zero-failure TRX -> 1" 1 "$(run_fake sleep)"
 grep -q "timed out" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  timeout not reported"; cat "$TMP/out.txt"; }
 chk "dotnet test passes but nothing executed -> 1" 1 "$(run_fake empty)"
+# the default runs above (two failing, one empty) left their evidence under the suite's temp state dir, not elsewhere
+DEFAULT_EV="$RPG_FACTORY_STATE_DIR/evidence/netcode-headless"
+n=$(find "$DEFAULT_EV" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+[ "${n:-0}" -ge 1 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  default failing runs left no evidence under \$TMP/state-default"; }
 
 # ---- a FAIL keeps its .trx files and the run log under the Factory state dir (persistent, never $TMPDIR or the
 # Netcode repo) and prints the path; a PASS cleans up and writes no evidence. The state dir is a test dir.
