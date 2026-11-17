@@ -27,7 +27,7 @@ Code is cited as `path:line` at `0bbe51a`. Documents are cited by section.
 
 ## 1. Executive summary and goals
 
-rpg-factory today is an **engineering factory**. It routes repo-relative file paths in five product git repos
+At the baseline rpg-factory is an **engineering factory**. It routes repo-relative file paths in five product git repos
 (server, client, netcode, unitydots, uitoolkit) to 14 skills: 9 leads and 5 reference ("tech") skills. Every
 task must already be a file in one of those repos. Nothing models a discipline, an artifact that is not code,
 or a handoff between disciplines.
@@ -98,7 +98,7 @@ graph TD
   R --> A2["2D Art lead"]
   R --> A3["3D Art lead"]
   R --> VX["VFX lead"]
-  R --> EN["Engineering<br/>existing 9 leads + 5 tech skills, unchanged"]
+  R --> EN["Engineering<br/>existing 9 leads + 5 engineering tech skills, unchanged<br/>(the registry now holds 13 tech skills in all)"]
   GD -- "handoff contract" --> UX
   GD -- "handoff contract" --> EN
   UX -- "handoff" --> A2
