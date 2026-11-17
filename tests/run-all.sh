@@ -40,6 +40,7 @@
 #                   --no-wait and --attach are ignored when comparing arguments; all other arguments keep their order.
 #   --last-result   read-only: print this checkout's newest persistent result (exit 0), or say none exists (exit 1).
 #                   Also show live slots or a full run for this checkout; no check, lock or slot is started.
+#                   The record keeps the last 40 output lines of each failure, printed indented under its FAILED line.
 #   --checkout DIR  checkout to inspect with --last-result (default: this checkout); requires --last-result.
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
@@ -150,13 +151,16 @@ elif $affected && ! $release && ! $last_result; then
   else echo "affected mode: no base, running everything"; rm -rf "${AFF%/*}"; AFF=""; fi
 fi
 
-pass=0; fail=0; skip=0; warn=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
+pass=0; fail=0; skip=0; warn=0; naff=0; cleanup=(); failures=(); failure_tails=(); GITCFG_KEEP=""
 STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
 SLOT=""; SLOT_TOKEN=""
 RESULT=""; RESULT_DIR=""; RESULT_STARTED=""; RESULT_WINPID=""; RESULT_ADMITTED=false
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
 _ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
-_bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
+# failure_tails keeps, in step with failures, the last 40 detail lines of each failure ("" without detail) for the
+# result record, so a failed suite's output survives a run whose terminal is gone.
+_bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; failure_tails+=("")
+  if [ -n "${2:-}" ]; then echo "$2" | sed 's/^/      /'; failure_tails[${#failure_tails[@]}-1]=$(tail -n 40 <<<"$2"); fi; }
 _skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
 _note() { echo "$1"; }
 # A WARN is counted apart (never a pass or a fail, the exit code ignores it) and shown in the summary only when non-zero.
@@ -297,7 +301,7 @@ gated() { suite_selected "$1" && return 0; not_affected; return 1; }
 replay() { # rc output name: the lines a block printed, counted by their prefix
   local l done=""
   while IFS= read -r l; do
-    case "$l" in "PASS  "*) pass=$((pass + 1)) ;; "WARN  "*) warn=$((warn + 1)) ;; "FAIL  "*) fail=$((fail + 1)); failures+=("${l#FAIL  }") ;; "SKIP  "*) skip=$((skip + 1)) ;;
+    case "$l" in "PASS  "*) pass=$((pass + 1)) ;; "WARN  "*) warn=$((warn + 1)) ;; "FAIL  "*) fail=$((fail + 1)); failures+=("${l#FAIL  }"); failure_tails+=("") ;; "SKIP  "*) skip=$((skip + 1)) ;;
       "<not affected>") skip=$((skip + 1)); naff=$((naff + 1)); continue ;;
       "<end of block>") done=1; continue ;; esac
     printf '%s\n' "$l"
@@ -619,16 +623,31 @@ result_start() { # at admission, after any lock or slot wait: the record's start
 }
 result_write() {
   [ -n "$RESULT" ] || return 0
-  python3 -B - "$RESULT" "$ROOT" "$RESULT_STARTED" "$1" "$HEAD_SHA" "$$" "$RESULT_WINPID" \
-    "$pass" "$fail" "$skip" "$warn" "$naff" "$(runall_summary)" "${#RUNALL_ARGV[@]}" "${RUNALL_ARGV[@]}" "${failures[@]}" <<'PY'
+  # The failure tails can be long: they go through a NUL-separated side file next to the record (never argv, never
+  # the checkout). The writer reads and removes it; this function removes it too when the writer fails.
+  local tails="$RESULT.tails" rc=0
+  mkdir -p "$RESULT_DIR" && : > "$tails" || return 1
+  [ ${#failure_tails[@]} -eq 0 ] || printf '%s\0' "${failure_tails[@]}" > "$tails" || { rm -f "$tails"; return 1; }
+  python3 -B - "$RESULT" "$ROOT" "$RESULT_STARTED" "$1" "$HEAD_SHA" "$$" "$RESULT_WINPID" "$pass" "$fail" "$skip" \
+    "$warn" "$naff" "$(runall_summary)" "$tails" "${#RUNALL_ARGV[@]}" "${RUNALL_ARGV[@]}" "${failures[@]}" <<'PY' || rc=$?
 import datetime, json, os, sys, tempfile
 path, checkout, started, status, head, pid, winpid = sys.argv[1:8]
 counts = dict(zip(('pass', 'fail', 'skip', 'warn', 'not_affected'), map(int, sys.argv[8:13])))
-summary, argc = sys.argv[13:15]
+summary, tails_path, argc = sys.argv[13:16]
 argc = int(argc)
-r = dict(schema='rpg-factory.run-all-result/1', checkout=checkout, args=sys.argv[15:15+argc],
+failed = sys.argv[16 + argc:]
+try:
+    with open(tails_path, 'rb') as f:
+        data = f.read().decode('utf-8', 'replace')
+finally:
+    os.unlink(tails_path)
+tails = data.split('\0')[:-1] if data else []
+tails += [''] * (len(failed) - len(tails))
+failed_output = [dict(name=name, tail='\n'.join(line.rstrip('\r') for line in tail.split('\n')) if tail else '')
+                 for name, tail in zip(failed, tails)]
+r = dict(schema='rpg-factory.run-all-result/1', checkout=checkout, args=sys.argv[16:16 + argc],
          started=started, ended=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-         counts=counts, summary=summary, failed=sys.argv[15+argc:], head=head,
+         counts=counts, summary=summary, failed=failed, failed_output=failed_output, head=head,
          pid=int(pid), winpid=int(winpid) if winpid else None, **{'exit': int(status)})
 directory = os.path.dirname(path)
 os.makedirs(directory, exist_ok=True)
@@ -656,6 +675,8 @@ for _, _, candidate in sorted(records, reverse=True)[20:]:
     except OSError:
         pass
 PY
+  rm -f "$tails"
+  return "$rc"
 }
 result_print() { # record path [attach]: normal inspection exits 0 even when the recorded run failed
   python3 -B - "$1" "${2:-}" <<'PY'
@@ -666,7 +687,14 @@ try:
         r = json.load(f)
     lines = [f'result: {path}', f"started: {r['started']}", f"ended: {r['ended']}",
              f"exit: {r['exit']}", 'args: ' + shlex.join(r['args']), r['summary']]
-    lines.extend('FAILED ' + name for name in r['failed'])
+    outputs = r.get('failed_output')
+    if not (isinstance(outputs, list) and len(outputs) == len(r['failed'])):
+        outputs = [{}] * len(r['failed'])   # a record without failed_output: names only
+    for name, out in zip(r['failed'], outputs):
+        lines.append('FAILED ' + name)
+        tail = out.get('tail') if isinstance(out, dict) else None
+        if tail:
+            lines.extend('      ' + line for line in tail.split('\n'))
     status = int(r['exit']) if mode == 'attach' else 0
 except (OSError, ValueError, KeyError, TypeError):
     sys.stdout.buffer.write(f'run-all: no result record available: {path or "(no record path)"}\n'.encode())

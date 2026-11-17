@@ -169,7 +169,7 @@ config_case 'core key inserted before new section' FAIL
 # Persistence is tested in a disposable git repo with tiny suites; never run the real full suite.
 mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/scripts/checks" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
 cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
-printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
+printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ] || { echo "a broke here"; exit 1; }\n' > "$TMP/repo/tests/a.sh"
 cat > "$TMP/repo/tests/b.sh" <<'SUITE'
 #!/usr/bin/env bash
 # case-map: alpha scripts/alpha.py
@@ -709,7 +709,14 @@ assert r['checkout'] == checkout
 assert r['args'] == ['--only-suites', 'tests/a.sh,tests/b.sh', '--no-reuse']
 assert r['exit'] == broken and type(r['exit']) is int
 assert r['counts'] == {'pass': 2-broken, 'fail': broken, 'skip': 0, 'warn': 0, 'not_affected': 0}
-assert r['failed'] == (['a'] if broken else [])
+# a timed suite keeps its wall time in the name, as run-all prints it ('a [1s]')
+assert len(r['failed']) == broken and all(re.fullmatch(r'a \[[0-9]+s\]', name) for name in r['failed'])
+if broken:   # the failure's output survives the run: its last lines, next to the unchanged failed list
+    [out] = r['failed_output']
+    assert sorted(out) == ['name', 'tail'] and out['name'] == r['failed'][0]
+    assert 'a broke here' in out['tail'].split('\n')
+else:
+    assert r['failed_output'] == []
 assert r['summary'] in output.splitlines()
 start, end = (datetime.datetime.fromisoformat(r[k].replace('Z', '+00:00')) for k in ('started', 'ended'))
 assert start <= end and r['started'].endswith('Z') and r['ended'].endswith('Z')
@@ -726,7 +733,7 @@ PY
   [ "$rc" = "$broken" ] && [ "$prc" = 0 ] && [ "$crc" = 0 ] && [ "$checked" = 'record valid' ] \
     && grep -qx "exit: $broken" <<<"$printed" && grep -q '^started: .*Z$' <<<"$printed" \
     && grep -q '^ended: .*Z$' <<<"$printed" && grep -qx 'args: --only-suites tests/a.sh,tests/b.sh --no-reuse' <<<"$printed" \
-    && { [ "$broken" = 0 ] || grep -qx 'FAILED a' <<<"$printed"; } \
+    && { [ "$broken" = 0 ] || [ "$(grep -A1 -E '^FAILED a \[[0-9]+s\]$' <<<"$printed")" = "$(grep -E '^FAILED a \[[0-9]+s\]$' <<<"$printed")"$'\n''      a broke here' ]; } \
     && good "persistent result has every field, exact counts and failures; printer reads it (exit $broken)" \
     || no "result record (run $rc, printer $prc, validation $crc)" "$out"$'\n'"$printed"
 done
