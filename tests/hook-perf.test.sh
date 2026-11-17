@@ -98,7 +98,13 @@ rm -rf "$GL"
 [ "$(level Write "$C/Packages/com.gdk.core/s.cs")" = warn ] && ok "first write into the submodule warns" || no "submodule write"
 cf=$(find "$GL" -name '*.json' 2>/dev/null | head -1)
 [ -n "$cf" ] && jq -e '.gitlinks == ["Packages/com.gdk.core"] and (.index | length == 2)' "$cf" >/dev/null && ok "gitlinks cached in the state dir" || no "no gitlinks cache" "$cf"
-jq '.gitlinks += ["Assets/Fake"]' "$cf" > "$cf.new" && mv "$cf.new" "$cf"   # a marker only the cache knows
+# no cache file found: the check above already failed; write nothing (an empty $cf would create ".new" in the cwd) and
+# point the later checks at a path inside the temp dir so they fail without crashing
+if [ -n "$cf" ] && [ -f "$cf" ]; then
+  jq '.gitlinks += ["Assets/Fake"]' "$cf" > "$cf.new" && mv "$cf.new" "$cf"   # a marker only the cache knows
+else
+  no "no gitlinks cache file to mark" "$GL"; cf="$TMP/no-gitlinks-cache.json"
+fi
 [ "$(level Write "$C/Assets/Fake/x.cs")" = warn ] && ok "second write uses the cache (no git ls-files)" || no "cache not used"
 echo b > "$C/Assets/b.cs"; gc "$C" add Assets/b.cs                          # .git/index changes
 [ "$(level Write "$C/Assets/Fake/x.cs")" = allow ] && ok "changed .git/index recomputes the gitlinks" || no "stale gitlinks after an index change"

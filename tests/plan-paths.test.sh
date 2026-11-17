@@ -79,6 +79,16 @@ with windows():
                              (MSYS_WSL + '/repo', 'C:/ws/repo'), ('C:/ws/repo', 'C:/ws/repo'),
                              ('C:\\ws\\repo', 'C:\\ws\\repo'), ('repo/x', 'repo/x'), ('', '')):
         expect('_native nt ' + repr(spelling), real_native(spelling), wanted)
+    # only a leading /mnt/<letter>/ is a WSL mount (its MSYS rewrite sits under the Git install root); a native
+    # path that merely contains a /mnt/<letter>/ segment is kept
+    for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', 'C:/Program Files/Gitx/mnt/c/ws', 'D:/mnt/c'):
+        expect('_native nt keeps ' + spelling, real_native(spelling), spelling)
+    for spelling, wanted in (('/mnt/d/x', 'D:/x'), ('C:/Program Files/Git/mnt/d/x', 'D:/x'),
+                             ('C:/Program Files (x86)/git/mnt/c/ws', 'C:/ws'), ('D:/tools/Git/mnt/e', 'E:/')):
+        expect('_native nt converts ' + spelling, real_native(spelling), wanted)
+for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', '/mnt/d/x', 'C:/Program Files/Git/mnt/d/x'):
+    with posix():
+        expect('_native posix identity ' + spelling, real_native(spelling), spelling)
 for spelling in ('C:/ws/repo', MSYS_WSL, '/mnt/c/ws', '/c/ws'):
     with posix():
         expect('_native posix ' + spelling, real_native(spelling), spelling)

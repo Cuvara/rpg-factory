@@ -138,6 +138,34 @@ if bad:
 sys.exit(0)
 PY
 counters_rc=$?
-if [ "$dotnet_rc" -eq 124 ]; then echo "FAIL: dotnet test timed out after ${NETCODE_HEADLESS_TIMEOUT:-900} s"; exit 1; fi
-if [ "$dotnet_rc" -ne 0 ]; then echo "FAIL: dotnet test exited $dotnet_rc"; exit 1; fi
-exit "$counters_rc"
+
+# On FAIL the EXIT trap removes the work copy with the .trx files and the run log, and a one-off failure
+# would lose its cause. Keep them under the Factory state dir (lib/fstate.py persistent(): never $TMPDIR,
+# never a product repo) and print the path. A PASS keeps today's cleanup; --keep keeps the work copy itself.
+# A state dir that cannot be resolved or written is a warning: the exit code stays the check's verdict.
+save_evidence() {
+  $keep && return 0
+  local state ev shown
+  state=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate; print(fstate.persistent())" "$PLUGIN_ROOT/scripts/lib" 2>/dev/null | tr -d '\r')
+  if [ -z "$state" ]; then echo "WARNING: evidence not saved: Factory state dir not resolved"; return 0; fi
+  if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then state=$(cygpath -u "$state"); fi
+  is_abs "$state" || { echo "WARNING: evidence not saved: Factory state dir is not absolute: $state"; return 0; }
+  ev="$state/evidence/netcode-headless/$(date +%Y%m%dT%H%M%S)-$$"
+  if mkdir -p "$ev" 2>/dev/null \
+     && cp "$run_log" "$ev/dotnet.log" 2>/dev/null \
+     && { [ ! -d "$work/Tests~/Headless/results" ] || cp -r "$work/Tests~/Headless/results" "$ev/results" 2>/dev/null; }; then
+    # mkdir/cp used the POSIX form; print the form a Windows user and Windows tools can open (C:/...)
+    shown="$ev"
+    if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then shown=$(cygpath -m "$ev" 2>/dev/null || echo "$ev"); fi
+    echo "evidence: $shown"
+  else
+    echo "WARNING: evidence not saved under $ev"
+  fi
+  return 0
+}
+
+rc="$counters_rc"
+if [ "$dotnet_rc" -eq 124 ]; then echo "FAIL: dotnet test timed out after ${NETCODE_HEADLESS_TIMEOUT:-900} s"; rc=1
+elif [ "$dotnet_rc" -ne 0 ]; then echo "FAIL: dotnet test exited $dotnet_rc"; rc=1; fi
+[ "$rc" -eq 0 ] || save_evidence
+exit "$rc"
