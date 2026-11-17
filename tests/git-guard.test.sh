@@ -1028,6 +1028,21 @@ lang() { # yes|no cwd command [tool-name] [field]  (field: command, or prompt fo
   if [ "$rc" -eq 0 ] && [ "$got" = "$expect" ] && [[ "$out" != *permissionDecision* ]] && { [ "$got" = no ] || [[ "$out" == *'advisory (warn)'* ]]; }; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL english-only expected=%s got=%s rc=%s tool=%s cmd=%q\n  out=%s\n' "$expect" "$got" "$rc" "$tool" "$cmd" "$out"; fi
 }
+# Clone-like and linked-worktree fixtures outside the workspace, with no host git setup.
+LANG_CLONE="$TMP/language-clone"; LANG_WT="$TMP/language-worktree"; LANG_OTHER="$TMP/language-other"
+mkdir -p "$LANG_CLONE/.git/worktrees/wt" "$LANG_CLONE/.claude-plugin" "$LANG_WT" "$LANG_OTHER/.git" "$LANG_OTHER/.claude-plugin"
+printf '%s\n' '{"name":"rpg-factory"}' > "$LANG_CLONE/.claude-plugin/plugin.json"
+printf 'gitdir: %s/.git/worktrees/wt\n' "$LANG_CLONE" > "$LANG_WT/.git"
+printf '%s\n' '{"name":"other-plugin"}' > "$LANG_OTHER/.claude-plugin/plugin.json"
+for checkout in "$LANG_CLONE" "$LANG_WT"; do
+  lang yes "$checkout" "git commit -m \"$vi_msg\""
+  lang yes "$checkout" "$vi_msg" Agent prompt
+  lang yes "$checkout" "gh pr create --title \"$vi_msg\""
+  lang yes "$checkout" "orca orchestration send --body \"$vi_msg\""
+done
+lang yes "$OUT" "git -C $LANG_CLONE commit -m \"$vi_msg\""
+lang no "$LANG_OTHER" "git commit -m \"$vi_msg\""
+lang no "$LANG_OTHER" "$vi_msg" Agent prompt
 lang yes "$FEATURE" "git commit -m \"$vi_msg\""
 lang yes "$FEATURE" "git commit --message \"$vi_msg\""
 lang yes "$FEATURE" "git commit --message=\"$vi_msg\""
