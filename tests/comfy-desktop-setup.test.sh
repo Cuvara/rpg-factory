@@ -6,7 +6,8 @@
 # --check writes nothing (exit 1 on a missing provider, 3 on gaps), cloud-only is ACTION, --apply copies the node, registers
 # both CLIs with the port read from comfy-procs/port-locks, is idempotent, replaces a registration on a changed port, a
 # not-yet-loaded node is ACTION (restart), --generate-test posts the low-quality graph with the template's model, and
-# hardware profiles, advisory missing assets, comfy-cli and COMFY_BIN registration; no output ever carries the key.
+# hardware profiles, advisory missing assets, comfy-cli and COMFY_BIN registration, the SKILL.md save-the-profile step run
+# as documented into a temp state dir (exit 3, valid profile, nothing else written); no output ever carries the key.
 # No network, no real ComfyUI, no real CLI.
 # Usage: tests/comfy-desktop-setup.test.sh   (standalone; own temp dir)
 set -uo pipefail
@@ -174,6 +175,22 @@ rm -f "$VENV/Scripts/comfy.exe" "$VENV/bin/comfy"
 : > "$FAKE_CLI_LOG"; S --check > "$TMP/hardware-output/cli-missing" 2>&1; rc=$?
 [ $rc -eq 3 ] && grep -q '^comfy-cli  *MISSING' "$TMP/hardware-output/cli-missing" && ! grep -q '^pip ' "$FAKE_CLI_LOG" \
   && ok "missing comfy-cli: MISSING, exit 3, no pip" || no "missing comfy-cli rc=$rc" "$(cat "$TMP/hardware-output/cli-missing")"
+echo "-- save the profile (SKILL.md step 6)"
+SKILL="$ROOT/skills/comfy-desktop-setup/SKILL.md"
+SAVE='comfy-desktop-setup.py --check --json > ~/.local/state/rpg-factory/assetgen/hardware-profile.json'
+grep -qF "$SAVE" "$SKILL" && grep -q '^  6\. \*\*Save the profile\*\*' "$SKILL" \
+  && ok "SKILL.md: the ordered steps end with the documented save command" || no "SKILL.md lost the save step or its command"
+grep -qF 'no command in this repo' "$SKILL" && grep -qF 'model-hashes.json' "$SKILL" \
+  && ok "SKILL.md: states that no repo command writes the model-hash cache" || no "SKILL.md lost the model-hash cache note"
+PROFILE="$RPG_FACTORY_STATE_DIR/assetgen/hardware-profile.json"
+rm -rf "$RPG_FACTORY_STATE_DIR"; before=$(snap)
+mkdir -p "$RPG_FACTORY_STATE_DIR/assetgen" && S --check --json > "$PROFILE" 2>/dev/null; rc=$?
+ids=$(jq -c '[.profiles[].id]' "$ROOT/scripts/assetgen/data/hardware.json")
+[ $rc -eq 3 ] && jq -e --argjson ids "$ids" '(.profile.id | IN($ids[])) and (.steps | any(.state != "OK"))' "$PROFILE" >/dev/null \
+  && ok "saved profile: exit 3 (a step needs action), valid JSON, profile.id is a hardware.json profile" || no "saved profile rc=$rc" "$(cat "$PROFILE")"
+[ "$(snap)" = "$before" ] && [ "$(find "$RPG_FACTORY_STATE_DIR" -type f | wc -l | tr -d ' ')" -eq 1 ] \
+  && ok "the save step wrote only hardware-profile.json (no model-hash cache, nothing in the machine)" || no "save step wrote more than the profile" "$(find "$RPG_FACTORY_STATE_DIR" -type f)"
+[ ! -e "$RPG_FACTORY_STATE_DIR/comfy/model-hashes.json" ] && ok "no model-hash cache after the documented steps (the skill says so)" || no "model-hashes.json exists"
 : > "$VENV/Scripts/comfy.exe"; : > "$VENV/bin/comfy"
 rm -rf "$VENV/Lib/site-packages/comfy_cli-"*.dist-info "$VENV/lib/python3.12/site-packages/comfy_cli-"*.dist-info
 mkdir -p "$VENV/Lib/site-packages/comfy_cli-1.13.0.dist-info"

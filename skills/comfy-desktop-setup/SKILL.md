@@ -55,16 +55,24 @@ what the person asked for by invoking this; still ask before `--apply` when the 
 
 ## Idioms
 
-- **Order:** `setup --check` -> do the human steps it names -> `setup --apply` -> human restart -> `setup --check`
-  until READY (exit 0) -> **save the profile** -> new session -> the `comfyui` run sequence. `--generate-test` proves the
-  whole chain once.
-- **Save the profile:** `assetgen.py resolve --profile auto` reads `<state>/assetgen/hardware-profile.json` and nothing
-  else writes it (`scripts/assetgen/assetgen.py` `recorded_profile_path`; `<state>` is `scripts/lib/fstate.py`
+- **Order (the skill's own steps end with step 6):**
+  1. `setup --check`.
+  2. Do the human steps it names.
+  3. `setup --apply`.
+  4. Human restart (Stop + Launch).
+  5. `setup --check` until READY (exit 0); `--generate-test` proves the whole chain once.
+  6. **Save the profile** (below): `hardware-profile.json` is written. Then a new session and the `comfyui` run sequence.
+- **Save the profile (step 6):** `assetgen.py resolve --profile auto` reads `<state>/assetgen/hardware-profile.json` and
+  nothing else writes it (`scripts/assetgen/assetgen.py` `recorded_profile_path`; `<state>` is `scripts/lib/fstate.py`
   `persistent`: `$RPG_FACTORY_STATE_DIR` if absolute, else `$XDG_STATE_HOME/rpg-factory`, else `~/.local/state/rpg-factory`).
   In Git Bash: `mkdir -p ~/.local/state/rpg-factory/assetgen && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py --check --json > ~/.local/state/rpg-factory/assetgen/hardware-profile.json`
   (adjust the directory when a state variable is set). The script exits 3 while a step needs action but still prints the
   JSON: never chain on its exit code. Save again after a GPU, driver or instance change; without the file `auto` means
-  `api-only`.
+  `api-only`. `tests/comfy-desktop-setup.test.sh` checks this command is here and runs the same redirect into a temp state dir.
+- **No command writes the model-hash cache yet:** `assetgen.py` reads `<state>/comfy/model-hashes.json` (schema
+  `rpg-factory.comfy-model-hashes/1`, `scripts/assetgen/assetgen.py` `model_hashes`), but no command in this repo
+  writes it, so these steps cannot produce it. Until one exists, a local model's sha256 stays unverified in the run
+  manifest and the asset-gen check warns; say so in the report, never write the file by hand or invent a command.
 - **Human steps an agent cannot do** (give them as a short list, then stop): (1) Desktop starts with only a "Comfy
   Cloud" instance: Dashboard > New Instance > Standalone / Local (for the `api-only` profile a CPU instance is enough, only API nodes run; the local profiles need the GPU the `profile` row reports). (2) Launch the
   instance. (3) After `--apply` copies the node: Stop + Launch the instance (custom nodes load only at start).
