@@ -1,0 +1,14 @@
+### Changed
+
+- Asset generation: the engine writes and reports fetch evidence without a host. `finalize` rewrites an older `<run>/fetch.json` so every URL keeps only its path and query (the part the output filter classifies files by), and the run record names no scheme, host or port. A `fetch.json` that still has hosts keeps working, and a host-free one filters the same files.
+- Asset generation: a model kind `annotators` (preprocessor and annotator models, for example the `DepthAnythingPreprocessor` and `DWPosePreprocessor` files) is part of the local node registry, the hardware profiles' model list and the local provenance record, so such a model is recorded with its node, name and sha256 like a checkpoint, LoRA or upscaler, and an unknown preprocessor kind, node or undeclared pack still fails lint. The disabled DWPose model inputs (`None`) are not recorded as models.
+- Asset generation: provenance and the graph style lint treat `KSamplerAdvanced` like `KSampler`: the sampler row (its `noise_seed` is recorded as `seed`, with steps, cfg, sampler and scheduler), the generation inputs, the requested size, the literal CLIP text check, the ControlNet and tiled-VAE walks and the local registry all cover it.
+- Asset generation: `lint` reads `known-nodes.json` once per invocation instead of once per template; the lint and graph-style results are unchanged.
+- Asset generation: the `- Fit:` line of `run.md` and the fit and defringe docstrings in `assetgen.py` describe what the code does (fit pads alpha-channel outputs with a mismatched orientation and keeps the originals in `raw/`; defringe keeps its input in `outputs-raw/`).
+- Asset generation templates: `ui.positions` places chosen nodes of a template's `workflow.ui.json` layout. The hybrid and local templates (`hybrid-character`, `hybrid-environment`, `hybrid-icon-ui`, `local-variation`) use it so no wire crosses an unrelated node; only node positions changed, never nodes, links, params or widget values, so the golden workflows are unchanged.
+
+### Fixed
+
+- Asset generation tests: the staged layout test runs over every core workflow template, not only `staged-*.json`, and a second check proves the re-laid templates differ from the base branch only in `ui.positions`; `ui.positions` validation (unknown node id, non-pair, non-finite number, bool) is covered.
+- Asset generation tests: the `anchor_target` lint cases assert the result count and the state and reasons of every entry of `results`, not only `results[0]`, and the hybrid anchor fixture (and the `target-*` lint fixtures derived from it) decodes with `VAEDecodeTiled`, as the `local-8gb` profile wants, so the profile lint reports nothing on it.
+- UNTESTED on RTX 5060: nothing was generated or measured; the tests use fixtures and in-process checks only, and no image, endpoint or credential is involved.
