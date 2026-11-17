@@ -638,7 +638,21 @@ cache_plan --only-suites tests/a.sh --no-reuse -j 1 > "$TMP/slot-waiter.out" 2>&
 slot_wait_for "$TMP/slot-waiter.out" 'waiting for a test slot'
 kill -0 "$sw" 2>/dev/null && [ ! -s "$RUN_LOG" ] && grep -q "$spid in " "$TMP/slot-waiter.out" \
   && good 'third targeted run queues and names its holders and checkouts' || no 'targeted wait message' "$(cat "$TMP/slot-waiter.out")"
+sleep 1; queued_until=$(date -u +%FT%TZ)   # one second into the wait: a start taken before the wait is earlier
 touch "$TMP/slot-held-1.release"; wait "$sh1"; sr1=$?; wait "$sw"; srw=$?
+waiter_start=$(python3 -B - "$TMP/state/run-all/results" <<'PY'
+import glob, json, os, sys
+for path in glob.glob(os.path.join(sys.argv[1], '*', '*.json')):
+    with open(path, encoding='utf-8') as f:
+        r = json.load(f)
+    if '-j' in r['args']:
+        print(r['started'] + ' ' + os.path.basename(path).split('-')[0])
+PY
+)
+read -r waiter_started waiter_stamp <<<"${waiter_start%$'\r'}"
+[ -n "$waiter_started" ] && [[ ! "$waiter_started" < "$queued_until" ]] && [ "$waiter_stamp" = "${waiter_started//[-:]/}" ] \
+  && good 'a queued run records its start at slot admission, not before its wait' \
+  || no 'queued run start time' "started '$waiter_started' file '$waiter_stamp' queued until $queued_until"
 touch "$TMP/slot-held-2.release"; wait "$sh2"; sr2=$?
 [ "$sr1 $sr2 $srw" = '0 0 0' ] && [ "$(grep -c 'waiting for a test slot' "$TMP/slot-waiter.out")" -eq 1 ] \
   && [ "$(sort "$RUN_LOG" | tr '\n' ' ')" = 'a a b ' ] && [ -z "$(ls -A "$SL")" ] \
@@ -835,10 +849,30 @@ slot_wait_for "$TMP/result-unwritable"
 cache_plan --only-suites tests/a.sh --no-reuse --attach > "$TMP/result-missing.out" 2>&1 & ua=$!
 slot_wait_for "$TMP/result-missing.out" 'run-all: attaching to'
 touch "$TMP/result-unwritable.release"; wait "$uh"; urc=$?; wait "$ua"; arc=$?
-[ "$urc $arc" = '0 4' ] && grep -q 'no result record available' "$TMP/result-missing.out" \
+[ "$urc $arc" = '0 5' ] && grep -q 'no result record available' "$TMP/result-missing.out" \
   && ! grep -Eqi 'traceback|error|result' "$TMP/result-unwritable.out" && [ -z "$(ls -A "$SL")" ] \
-  && good 'record errors do not change output or exit; attachment with no record exits 4' \
+  && good 'record errors do not change output or exit; attachment with no record exits 5' \
   || no "record write failure (holder $urc, attached $arc)" "$(cat "$TMP/result-unwritable.out" "$TMP/result-missing.out")"
+# A holder killed without its EXIT trap (SIGKILL) keeps its owner file and writes no record: an attached run notices
+# the dead holder, ends with exit 5 and says there is no record, without starting a suite.
+reset_cache
+HOLD_MARK="$TMP/killed-holder" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/killed-holder.out" 2>&1 & kh=$!
+slot_wait_for "$TMP/killed-holder"
+cache_plan --only-suites tests/a.sh --no-reuse --attach > "$TMP/killed-attach.out" 2>&1 & ka=$!
+slot_wait_for "$TMP/killed-attach.out" 'run-all: attaching to test slot 1'
+kill -KILL "$kh"; wait "$kh" 2>/dev/null
+for ((i=0; i<300; i++)); do kill -0 "$ka" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$ka" 2>/dev/null; then
+  kill "$ka" 2>/dev/null; wait "$ka" 2>/dev/null
+  no '--attach to a killed holder ends' "$(cat "$TMP/killed-attach.out")"
+else
+  wait "$ka"; arc=$?
+  [ "$arc" = 5 ] && grep -q 'no result record available' "$TMP/killed-attach.out" && [ -f "$SL/1/owner" ] \
+    && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] \
+    && good '--attach to a holder killed without its EXIT trap ends with exit 5 and no record' \
+    || no "attach to killed holder (rc $arc)" "$(cat "$TMP/killed-attach.out")"
+fi
+rm -rf "$SL/1"
 # With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
 # listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
 live_case() { # name want-log want-counts args...

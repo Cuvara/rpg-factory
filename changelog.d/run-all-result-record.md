@@ -8,6 +8,6 @@
   later session reads the result of a run whose terminal is gone.
 - **Duplicate run guard.** A second targeted run of the same checkout with the same arguments while the first is alive
   starts no copy: it names the holder (slot, pid, winpid, started, arguments) and exits 4; with `--attach` it waits for
-  the holder, prints its record and exits with its status.
+  the holder, prints its record and exits with its status (5 when the holder died without a record).
 - **Operating lesson.** `parallel-work.md` tells sessions to check the slot directories and read the result record
   before rerunning a tier command whose wrapper is gone.

@@ -35,7 +35,8 @@
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when the full-run lock or every targeted test slot is busy
 #   --attach        if the same checkout and arguments already hold a live test slot, wait for its result and
-#                   return its exit status. Without this flag a duplicate exits 4 before running any check.
+#                   return its exit status; exit 5 when the holder ended (or died) without a result record.
+#                   Without this flag a duplicate exits 4 before running any check.
 #                   --no-wait and --attach are ignored when comparing arguments; all other arguments keep their order.
 #   --last-result   read-only: print this checkout's newest persistent result (exit 0), or say none exists (exit 1).
 #                   Also show live slots or a full run for this checkout; no check, lock or slot is started.
@@ -152,7 +153,7 @@ fi
 pass=0; fail=0; skip=0; warn=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
 STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
 SLOT=""; SLOT_TOKEN=""
-RESULT=""; RESULT_STARTED=""; RESULT_WINPID=""; RESULT_ADMITTED=false
+RESULT=""; RESULT_DIR=""; RESULT_STARTED=""; RESULT_WINPID=""; RESULT_ADMITTED=false
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
 _ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
 _bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
@@ -606,12 +607,15 @@ lock_still_stale() { # stale-pid stale-ident: under the reclaim guard, the lock 
 runall_summary() {
   echo "run-all: $((pass + fail + skip)) checks, $pass passed, $fail failed, $skip skipped$( [ "$warn" -gt 0 ] && echo ", $warn warned")$( [ -n "$AFF$only_suites" ] && echo " ($naff not affected by the change)")"
 }
-result_init() {
-  local key stamp
-  RESULT_STARTED=$(date -u +%FT%TZ); stamp=${RESULT_STARTED//[-:]/}
+result_init() { # the checkout's record directory; the start time and file name are set at admission (result_start)
+  local key
   key=$(printf '%s' "$ROOT" | sha256sum); key=${key%% *}
-  RESULT="$STATE/run-all/results/${key:0:16}/$stamp-$$.json"
+  [ -z "$key" ] || RESULT_DIR="$STATE/run-all/results/${key:0:16}"
   RESULT_WINPID=$(cat "/proc/$$/winpid" 2>/dev/null) || RESULT_WINPID=""
+}
+result_start() { # at admission, after any lock or slot wait: the record's start time excludes the queue time
+  RESULT_STARTED=$(date -u +%FT%TZ)
+  [ -z "$RESULT_DIR" ] || RESULT="$RESULT_DIR/${RESULT_STARTED//[-:]/}-$$.json"
 }
 result_write() {
   [ -n "$RESULT" ] || return 0
@@ -666,7 +670,7 @@ try:
     status = int(r['exit']) if mode == 'attach' else 0
 except (OSError, ValueError, KeyError, TypeError):
     sys.stdout.buffer.write(f'run-all: no result record available: {path or "(no record path)"}\n'.encode())
-    sys.exit(4 if mode == 'attach' else 1)
+    sys.exit(5 if mode == 'attach' else 1)
 sys.stdout.buffer.write(('\n'.join(lines) + '\n').encode())   # LF in Git Bash too
 sys.exit(status)
 PY
@@ -706,6 +710,7 @@ PY
   result_print "$record"
 }
 lock_publish() {
+  result_start
   LOCK_TOKEN="$$-$RANDOM-$(date +%s)"
   printf '%s\n' "$LOCK_TOKEN" > "$LOCK/owner"
   printf '%s\n' "$ROOT" > "$LOCK/checkout"
@@ -755,8 +760,9 @@ slot_duplicate() { # LOCK is a live slot; snapshot its owner before inspecting o
   holder="test slot ${LOCK##*/} (pid $pid, winpid $winpid, started $started, args $args)"
   if $attach; then
     echo "run-all: attaching to $holder"
-    while [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$token" ]; do sleep 1; done
-    result_print "$record" attach; exit $?
+    # A holder killed without its EXIT trap (SIGKILL, taskkill /F) keeps its owner file: stop once it is dead too.
+    while [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$token" ] && lock_alive; do sleep 1; done
+    result_print "$record" attach; exit $?   # 5 when the holder left no record
   fi
   echo "run-all: the same run already holds $holder; read its result with tests/run-all.sh --last-result"
   return 0
@@ -888,6 +894,7 @@ runall_prepare() {
     if $only_cases_given; then only_cases_check "$only_suites" "$only_cases" || return 2; fi
   fi
   if ! $full_run && { $affected || [ -n "$only_suites" ]; }; then test_slot || return $?; fi
+  [ -n "$RESULT_STARTED" ] || result_start   # admitted without a lock or slot (workspace-only, RPG_FACTORY_TEST_SLOTS=0)
   RESULT_ADMITTED=true
   [ -z "$AFF" ] || $inline_only || affected_select "${suites[@]}"
   if $suite_reuse && ! $release; then
