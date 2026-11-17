@@ -13,12 +13,6 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## Open
 
-### plan-edit-verb
-
-`delivery.md` section 8 documents the rule "plan edits are atomic: write a copy, validate it, then replace the
-plan". Optional follow-up: a `factory-pipeline.py plan-edit` verb (or a `validate --replace <plan>` mode) that does
-the copy, validation and replace in one step, with a test that an invalid edit never replaces the plan.
-
 ### core-style-v2
 
 Bump the six core styles under `templates/assetgen/styles/` to structured v2 (`palette.colors`, `tone`, `canvas`),
@@ -126,20 +120,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
   `tests/affected.test.sh` through main-sync) and the run lead's `docs/plans/backlog.md` edit as "changes outside
   every task's owned paths"; credit both, like the plan file and the run report.
 
-### run-lead-waiter-reaped
-
-Claude Code stopped the run lead's background waiter (`scripts/orca-wait.sh --run <id>`) twice under memory pressure
-in plan workflow-slim, and the rule is not to restart it on its own. Messages then waited until the user nudged the
-session. Write the lesson into `parallel-work.md` (RPG Orca notes): on every wake the run lead runs
-`orca orchestration check --run <id>` and `factory-pipeline.py status` instead of relying on the waiter, and keep
-fewer task leads open at once on a loaded machine.
-
-### plan-edit-commit-guard
-
-In plan workflow-slim the run lead committed an INVALID plan for about a minute: the commit was chained with `&&`
-after `validate | grep`, so the exit code was grep's. Fold into plan-edit-verb above: the verb replaces and commits
-the plan only when `validate` itself exits 0, and a test proves an invalid copy is never committed.
-
 ### plugin-flow-5-followups
 
 Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
@@ -206,6 +186,19 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
 - A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
   session must stop its own run before it reports.
 
+### plan-edit-followups
+
+From plan plan-edit (`docs/plans/plan-edit/report.md`):
+
+- `skills/delivery/references/delivery.md` is at 32767 of its 32768-byte cap: trim it before the next edit.
+- `plan-edit` re-reads the copy after validation, and repeats the no-worktree marker step instead of using
+  `read_plan` (low, from review).
+- `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does.
+- Released verify sessions leave their `tests/run-all.sh` alive, holding test slots for hours (plans owner-policy and
+  plan-edit); a verify session must stop its own run before it reports.
+- Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
+  start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
+
 ### path-audit-followups
 
 Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
@@ -240,6 +233,10 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   busy machine.
 
 ## Covered
+
+- **plan-edit-verb**, **plan-edit-commit-guard** and **run-lead-waiter-reaped**: shipped in plan plan-edit
+  (`changelog.d/plan-edit-verb.md`, the waiter lesson in `skills/factory-core/references/parallel-work.md`); the lows
+  moved to plan-edit-followups.
 
 - **policy-followups-leftovers, the two owner decisions of 2026-11-17**: shipped in plan owner-policy
   (`changelog.d/owner-policy-scope-widen.md`, `changelog.d/owner-policy-english-scope.md`); the lows stay in
