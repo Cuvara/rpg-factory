@@ -92,7 +92,7 @@ each subtask with its commit, and the verify verdict (state, SHA, model).
 - **Shared exclusive resources** (settings `exclusive_resources`: an editor or test runner, a container stack, a test
   lab, fixed ports) go to one task at a time; a task without one reports the check `NOT_RUN`.
 - **Full test runs are shared:** one per machine (section 10 "QA tiers"); where the runner checks the shared
-  `.git/config`, a worktree or branch created while one runs must not touch it ("Orca visibility").
+  `.git/config`, never create a worktree or branch while one runs ("Orca visibility").
 - **Orca visibility: a plain git worktree has no Orca lineage.** Create a task worktree with
   `git worktree add --no-track -b <branch> <path> <base>`, never `orca worktree create` (it writes
   `branch.<name>.base` into the shared `.git/config`, breaking checks that hash it). Unregistered it is hidden in Orca
@@ -116,7 +116,7 @@ Either level may place a session in an Orca child worktree when that is faster o
 | child | parallel subtasks that both run full suites or write generated or build output; risky or experimental work; QA that needs a clean frozen checkout while others still edit | `orca orchestration worker-start --worktree new-child` (a session) or `orca worktree create --parent-worktree <selector>` (a worktree); `placement: "child"` + `reason` |
 
 - **Run lead.** `dispatch --phase lead` creates, registers and launches the task worktree ("Orca visibility").
-  Integration QA (`--placement child`) or a quick fix may run in a child of it.
+  Integration QA (`--placement child`) or a quick fix may run in a child of the integration checkout.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child` + `reason`); `dispatch --subtask`
   prints the matching `--worktree` (`${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`, "dispatch").
 - A child session commits on its own child branch (`<task branch>--<subtask or phase>`) with explicit paths. Review
@@ -273,7 +273,7 @@ review and race the task lead's commits. Registry `pipeline.subagents` holds thi
 Default model: `claude-sonnet-5-5` via the `rpg-factory:factory-explorer` agent (Codex: the `pipeline.subagents`
 codex model), inside `pipeline.models.scope`. Use one only when the answer needs many files or an open search, with a
 brief of at most 200 words (objective, paths, return `path:line`). It never edits, writes to git, uses Orca,
-dispatches or starts a subagent; its result is never a verdict. A reviewer never uses one of the
+dispatches, records a verdict or starts a subagent; its result is never a verdict. A reviewer never uses one of the
 other model (`codex:codex-rescue` in a Claude review). The session report names the subagents used.
 
 ## 9. Not authorized by this policy
