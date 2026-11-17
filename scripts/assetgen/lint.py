@@ -64,7 +64,7 @@ FORBIDDEN = [
 HARDWARE = os.path.join(layers.HERE, "data", "hardware.json")
 REQUIRES_KEYS = ("profile", "peak_vram_gb", "ram_gb", "packs", "models", "offload")
 MODEL_KEYS = ("kind", "name", "size_gb")
-EXTRA_MODEL_KINDS = ("loras", "vae")  # model folders a template may name that no hardware profile lists
+EXTRA_MODEL_KINDS = ("loras", "vae", "annotators")  # model folders a template may name that no hardware profile lists
 
 
 @functools.lru_cache(maxsize=1)

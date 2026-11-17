@@ -589,13 +589,17 @@ def ui_with_references(ui, workflow, template_workflow, note=REFERENCES_NOTE):
     """The template ui block for to_ui with the nodes render added to the template workflow (wire_references: style-lock
     anchors and their ImageBatch chain) in the References group: the existing group of that title, else a new one
     (palette color cyan, one Note) inserted at its graphstyle.STAGES position. A copy; spec and template data are never
-    changed. A ui that is not a dict with a non-empty groups list (legacy: no ui block, no groups) comes back as is."""
+    changed. A ui that is not a dict with a non-empty groups list (legacy: no ui block, no groups) comes back as is.
+    When render added nodes, the copy drops ui.positions: those fixed positions were chosen for the template's own nodes,
+    the added References nodes would overlap other groups, so such a render uses the computed layout (uiworkflow._layout);
+    a render that adds no nodes keeps the template's positions."""
     if not isinstance(ui, dict) or not isinstance(ui.get("groups"), list) or not ui["groups"]:
         return ui
     added = sorted((nid for nid in workflow if nid not in (template_workflow or {})), key=lambda n: (len(n), n))
     if not added:
         return ui
     ui = copy.deepcopy(ui)
+    ui.pop("positions", None)
     groups = ui["groups"]
     for group in groups:
         if isinstance(group, dict) and group.get("title") == REFERENCES:
