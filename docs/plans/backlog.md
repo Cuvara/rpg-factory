@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- None.
+- policy-followups-leftovers, the two decided items: plan owner-policy (`docs/plans/owner-policy.json`).
 
 ## Open
 
