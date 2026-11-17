@@ -80,6 +80,11 @@
 # row, rejections by reason and suggested palette.max_distance and tone.tolerance printed with their data and never
 # applied; a group without approved outputs gives null suggestions with a reason; an unreadable output is skipped;
 # --style restricts, a malformed --style exits 2, an unknown style exits 1),
+# the engine notes (an older fetch.json with hosts is finalized and rewritten host-free; the annotators model kind, pose and
+# depth preprocessor models and an unknown one; KSamplerAdvanced provenance and the literal CLIP text check like KSampler;
+# lint reading known-nodes.json once; the layout check over every core workflow template, the re-laid templates differing
+# only in ui.positions and ui.positions validation; every result row of the anchor_target lint cases; the tiled VAE decode
+# of the hybrid anchor fixture),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -606,11 +611,12 @@ def contains(a, b):
 def intersects(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
-templates = sorted((root / "templates/assetgen/workflows").glob("staged-*.json"))
-assert templates, "no staged templates found"
+templates = sorted((root / "templates/assetgen/workflows").glob("*.json"))
+assert templates, "no core workflow templates found"
 for path in templates:
     t = json.loads(path.read_text(encoding="utf-8"))
-    ui = uiworkflow.to_ui(t["workflow"], known, None, t["ui"])
+    block = t.get("ui") or {}  # legacy templates (image-edit, image-generate) have no ui block: no groups, no notes
+    ui = uiworkflow.to_ui(t["workflow"], known, None, t.get("ui"))
     nodes = {n["id"]: n for n in ui["nodes"]}
     for link in ui["links"]:
         _, src, src_slot, dst, dst_slot, _ = link
@@ -629,11 +635,11 @@ for path in templates:
                 x1, y1, x2, y2 = rect(node)
                 assert not (x1 < x < x2 and y1 < y < y2), (path.name, link, nid)
     notes = [n for n in ui["nodes"] if n["type"] == "Note"]
-    assert len(notes) == len(t["ui"].get("notes", [])), path.name
-    assert len(ui["groups"]) == len(t["ui"]["groups"]), path.name
-    for group, decl in zip(ui["groups"], t["ui"]["groups"]):
+    assert len(notes) == len(block.get("notes", [])), path.name
+    assert len(ui["groups"]) == len(block.get("groups", [])), path.name
+    for group, decl in zip(ui["groups"], block.get("groups", [])):
         members = {int(n) for n in decl["nodes"]}
-        members.update(n["id"] for n, note in zip(notes, t["ui"].get("notes", [])) if note["group"] == group["title"])
+        members.update(n["id"] for n, note in zip(notes, block.get("notes", [])) if note["group"] == group["title"])
         box = bounds(group)
         assert all(contains(box, rect(nodes[n])) for n in members), (path.name, group)
         assert all(not intersects(box, rect(n)) for nid, n in nodes.items() if nid not in members), (path.name, group)
@@ -646,8 +652,71 @@ for path in templates:
 print("ok")
 EOF
 staged_layout_rc=$?
-[ $staged_layout_rc -eq 0 ] && ok "workflow.ui.json staged templates: no wire crosses an unrelated node, Save off the preview row, groups hold members and notes" \
-  || no "workflow.ui.json staged templates layout rc=$staged_layout_rc" "$(cat "$TMP/staged-layout-check")"
+[ $staged_layout_rc -eq 0 ] && ok "workflow.ui.json every core workflow template: no wire crosses an unrelated node, Save off the preview row, groups hold members and notes" \
+  || no "workflow.ui.json core templates layout rc=$staged_layout_rc" "$(cat "$TMP/staged-layout-check")"
+# Each re-laid template's ui.positions apply to its layout, and ui.positions validates: unknown node id, non-pair, non-finite number,
+# bool and a non-object each raise a ValueError naming ui positions; a position overrides the computed one.
+python3 -B - "$ROOT" > "$TMP/positions-check" 2>&1 <<'EOF'
+import copy, json, math, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts/assetgen"))
+import uiworkflow
+
+known = json.loads((root / "scripts/assetgen/data/known-nodes.json").read_text(encoding="utf-8"))["nodes"]
+RELAID = ("hybrid-character", "hybrid-environment", "hybrid-icon-ui", "local-variation")
+workflows = root / "templates/assetgen/workflows"
+for name in RELAID:
+    t = json.loads((workflows / (name + ".json")).read_text(encoding="utf-8"))
+    positions = t["ui"].get("positions")
+    assert isinstance(positions, dict) and positions and set(positions) <= set(t["workflow"]), name
+    ui = uiworkflow.to_ui(t["workflow"], known, None, t["ui"])
+    nodes = {str(n["id"]): n for n in ui["nodes"]}
+    assert all(nodes[nid]["pos"] == list(pos) for nid, pos in positions.items()), name
+
+graph = json.loads((root / "tests/fixtures/assetgen/local/hybrid-anchor-template.json").read_text(encoding="utf-8"))
+def lay(positions, groups=True):
+    ui = copy.deepcopy(graph["ui"]) if groups else {}
+    if positions is not None:
+        ui["positions"] = positions
+    return uiworkflow.to_ui(graph["workflow"], known, None, ui)
+def refuses(positions, *words):
+    try:
+        lay(positions)
+    except ValueError as exc:
+        assert "ui positions" in str(exc), (positions, str(exc))
+        assert all(w in str(exc) for w in words), (positions, str(exc))
+        return
+    raise AssertionError("accepted %r" % (positions,))
+refuses({"99": [0, 0]}, "unknown node id")
+refuses({"1": [0]}, "pair")
+refuses({"1": [0, 1, 2]}, "pair")
+refuses({"1": "0,1"}, "pair")
+refuses({"1": [0, float("nan")]}, "finite")
+refuses({"1": [float("inf"), 0]}, "finite")
+refuses({"1": [True, 0]}, "finite")
+refuses({"1": [0, "1"]}, "finite")
+refuses([["1", 0, 0]], "must be an object")
+refuses({1: [0, 0]}, "unknown node id")
+for groups in (True, False):
+    plain = {str(n["id"]): n for n in lay(None, groups)["nodes"]}
+    moved = lay({"5": [123, 456.5]}, groups)
+    nodes = {str(n["id"]): n for n in moved["nodes"]}
+    assert nodes["5"]["pos"] == [123, 456.5], (groups, nodes["5"]["pos"])
+    assert all(nodes[k]["pos"] == plain[k]["pos"] for k in plain if k != "5" and plain[k]["type"] != "Note"), groups
+# a moved member stays inside its group box: positions apply before the group bounds
+moved = lay({"5": [9000, 40000]})
+node = next(n for n in moved["nodes"] if str(n["id"]) == "5")
+group = next(g for g in moved["groups"] if g["title"] == "Generate")
+x, y, w, h = group["bounding"]
+assert x <= node["pos"][0] and node["pos"][0] + node["size"][0] <= x + w and y <= node["pos"][1] - 30 and node["pos"][1] + node["size"][1] <= y + h
+print("ok")
+EOF
+positions_rc=$?
+[ $positions_rc -eq 0 ] && grep -qx ok "$TMP/positions-check" \
+  && ok "ui.positions: unknown id, non-pair, non-finite, bool and non-object raise a ValueError naming ui positions; a position overrides the computed one and stays inside its group" \
+  || no "ui.positions validation rc=$positions_rc" "$(cat "$TMP/positions-check")"
 cp "$ROOT/tests/fixtures/assetgen/ui-layout.json" "$GL/templates/ui-layout.json"
 mkrun ui-layout-001 icon --style stylized-painterly --authoring "$AUTH" --template ui-layout
 ud="$RUNS/ui-layout-001"
@@ -766,6 +835,11 @@ python3 -B "$NS" "$OI" "${node_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 # pack sources (known-nodes packs[].signatures names each); the registry entries must still be nodesync's output of it
 OIP="$ROOT/tests/fixtures/assetgen/object_info-packs.json"; HW="$ROOT/scripts/assetgen/data/hardware.json"
 pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor InspyrenetRembg)
+# the registry lists two more pack nodes (the annotator preprocessors) that object_info-packs.json does not carry
+registry_pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor DepthAnythingPreprocessor DWPosePreprocessor InspyrenetRembg)
+# local_model_nodes also holds KSamplerAdvanced, a core node that object_info.json does not carry; the preprocessors are pack
+# nodes, so lint and graphstyle already require the requires block for them and they stay out of local_model_nodes
+registry_local_names=("${local_names[@]}" KSamplerAdvanced)
 pack_args=(); for name in "${pack_names[@]}"; do pack_args+=(--node "$name"); done
 python3 -B "$NS" "$OIP" "${pack_args[@]}" > "$TMP/pack-nodes.json" 2>"$TMP/err"; rc=$?
 jq -c . "$TMP/pack-nodes.json" > "$TMP/pack-nodes-actual" 2>/dev/null
@@ -775,7 +849,7 @@ jq -c --slurpfile generated "$TMP/pack-nodes.json" '.nodes as $nodes | reduce ($
   || no "nodesync pack fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
 python3 -B "$NS" "$OIP" "${pack_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && ok "nodesync --check accepts committed pack entries" || no "nodesync --check packs rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
-python3 -B - "$KN" "$HW" "${#local_names[@]}" "${local_names[@]}" "${pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
+python3 -B - "$KN" "$HW" "${#registry_local_names[@]}" "${registry_local_names[@]}" "${registry_pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
 import json, sys
 known_path, hardware_path, n_local = sys.argv[1], sys.argv[2], int(sys.argv[3])
 local_names, pack_names = sys.argv[4:4 + n_local], sys.argv[4 + n_local:]
@@ -2431,6 +2505,56 @@ for malformed in invalid missing-urls; do
     && [ -f "$fmrun/outputs/937cc86a_000.png" ] && [ -f "$fmrun/outputs/937cc86a_001.png" ] && filter_files_intact "$fmrun" "$count" \
     && ok "filter ignores malformed fetch evidence ($malformed), retaining both files" || no "filter malformed $malformed rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
 done
+# Fetch evidence the engine keeps has no host: an older fetch.json that still has one (scheme, host and port) filters and
+# finalizes as before and is rewritten host-free; a host-free fetch.json (path and query only) filters identically.
+filter_run filter-hosted-icon-001 || no "filter hosted setup"
+fh="$FILTER_RUN"; count=$(filter_count "$fh")
+fhprefix=$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix][0]' "$fh/workflow.json")
+fhbase=${fhprefix##*/}; fhdir=${fhprefix%/*}
+cp "$fh/fetch.json" "$TMP/fetch-legacy.json"
+AG finalize --run "$fh" --json > "$TMP/filter-hosted.json" 2>"$TMP/err"; rc=$?
+hits=$(grep -rFl -e '127.0.0.1' -e ':8188' "$fh" "$TMP/filter-hosted.json" 2>/dev/null)
+[ "$rc" -eq 0 ] && jq -e 'all(.urls[]; startswith("http://127.0.0.1:8188/view?"))' "$TMP/fetch-legacy.json" >/dev/null \
+  && jq -e '.steps[0].step == "filter" and .steps[0].state == "moved" and ([.steps[0].results[] | select(.state == "moved") | .output] == ["outputs/937cc86a_001.png"])' "$TMP/filter-hosted.json" >/dev/null \
+  && [ -f "$fh/outputs/937cc86a_000.png" ] && [ ! -e "$fh/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fh/previews/937cc86a_001.png" && filter_files_intact "$fh" "$count" \
+  && jq -e '([.results[].output] | unique) == ["outputs/937cc86a_000.png"]' "$fh/qa.json" >/dev/null \
+  && jq -e --arg save "/view?filename=${fhbase}_00001_.png&subfolder=${fhdir}&type=output" \
+       '.prompt_id == "937cc86a-b67c-4a32-ad68-2652a5ef3425" and .urls == [$save, "/view?filename=ComfyUI_temp_abcde_00001_.png&subfolder=&type=temp"]' "$fh/fetch.json" >/dev/null \
+  && [ -z "$hits" ] \
+  && ok "filter: an older fetch.json with hosts still filters and finalizes as before, is rewritten host-free, and no run file or finalize output names the host" \
+  || no "filter hosted fetch.json rc=$rc" "$(cat "$TMP/err" "$TMP/filter-hosted.json"; echo "host in: $hits"; cat "$fh/fetch.json")"
+filter_run filter-hostfree-icon-001 || no "filter host-free setup"
+fn="$FILTER_RUN"; count=$(filter_count "$fn")
+jq '.urls |= map(sub("^http://[^/]+"; ""))' "$fn/fetch.json" > "$TMP/fetch-hostfree.json" && cp "$TMP/fetch-hostfree.json" "$fn/fetch.json"
+AG finalize --run "$fn" --json > "$TMP/filter-hostfree.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 0 ] && jq -e 'all(.urls[]; startswith("/view?filename="))' "$fn/fetch.json" >/dev/null \
+  && jq -e '.steps[0].step == "filter" and .steps[0].state == "moved" and ([.steps[0].results[] | select(.state == "moved") | .output] == ["outputs/937cc86a_001.png"])' "$TMP/filter-hostfree.json" >/dev/null \
+  && [ -f "$fn/outputs/937cc86a_000.png" ] && [ ! -e "$fn/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fn/previews/937cc86a_001.png" && filter_files_intact "$fn" "$count" \
+  && cmp -s "$TMP/fetch-hostfree.json" "$fn/fetch.json" \
+  && ok "filter: a host-free fetch.json classifies the same files and stays byte-identical" \
+  || no "filter host-free fetch.json rc=$rc" "$(cat "$TMP/err" "$TMP/filter-hostfree.json")"
+# A malformed URL (an unterminated IPv6 authority) is kept as recorded by rewrite_fetch, never replaced by an empty string;
+# a well-formed hosted URL in the same entry is still rewritten host-free.
+python3 -B - "$ROOT" "$TMP/fetch-malformed" > "$TMP/fetch-malformed.out" 2>&1 <<'EOF'
+import json, os, sys
+root, work = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "scripts/assetgen"))
+import runfiles
+os.makedirs(work, exist_ok=True)
+bad = "http://[::1/view?filename=x.png"
+with open(os.path.join(work, "fetch.json"), "w", encoding="utf-8") as f:
+    json.dump({"prompt_id": "p1", "urls": [bad, "http://127.0.0.1:8188/view?filename=y.png&type=output"]}, f)
+assert runfiles.host_free_source(bad) == bad
+runfiles.rewrite_fetch(work)
+data = json.load(open(os.path.join(work, "fetch.json"), encoding="utf-8"))
+assert data["urls"] == [bad, "/view?filename=y.png&type=output"], data
+print("ok")
+EOF
+[ $? -eq 0 ] && grep -qx ok "$TMP/fetch-malformed.out" \
+  && ok "rewrite_fetch keeps a malformed fetch URL unchanged and still strips the host of a valid one" \
+  || no "rewrite_fetch malformed URL" "$(cat "$TMP/fetch-malformed.out")"
 # A live-shaped staged SaveImage output is fitted before embedding and QA.
 fitlive="$RUNS/fit-live-icon-001"
 mkrun fit-live-icon-001 icon --style stylized-painterly --template staged-icon && AG render --run "$fitlive" >/dev/null 2>"$TMP/err" \
@@ -3422,6 +3546,34 @@ local_step 'local literal render' AG render --run "$literal" --param seed=123
 cp "$FX/icon-ok.png" "$literal/outputs/local.png"; local_step 'local literal qa' AG qa --run "$literal"
 bound "$literal" prompt PASS codex > "$literal/review-prompt.json"; bound "$literal" image PASS codex > "$literal/review-image.json"
 ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local literal manifest' AG manifest --run "$literal"
+# Engine notes: pose and depth preprocessor models (annotators kind) and the KSamplerAdvanced form of the hybrid fixture
+# get full provenance runs; both are also checked below against the unverified-hash path.
+LOCALFX="$ROOT/tests/fixtures/assetgen/local"
+cp "$LOCALFX/hybrid-advanced-template.json" "$GL/templates/hybrid-advanced.json"
+cp "$LOCALFX/annotator-template.json" "$GL/templates/annotator-provenance.json"
+local_run() { # local_run RUN-ID TEMPLATE-ID HASH-CACHE: a rendered, reviewed and manifested hybrid run
+  local id="$1" tmpl="$2" cache="$3" d="$RUNS/$1"
+  mkrun "$id" sprite-2d --style stylized-painterly --template "$tmpl" --authoring "$AUTH"
+  local_step "$id render" AG render --run "$d" --param seed=123
+  cp "$FX/icon-ok.png" "$d/outputs/local.png"; local_step "$id qa" AG qa --run "$d"
+  bound "$d" prompt PASS codex > "$d/review-prompt.json"; bound "$d" image PASS codex > "$d/review-image.json"
+  bound "$d" image PASS claude > "$d/review-image-claude.json"
+  ASSETGEN_MODEL_HASHES="$cache" local_step "$id manifest" AG manifest --run "$d"
+}
+local_run local-adv-001 hybrid-advanced "$LOCALFX/model-hashes.json"
+local_run local-annot-001 annotator-provenance "$LOCALFX/model-hashes-annotators.json"
+local_run local-annot-unverified-001 annotator-provenance "$TMP/missing-hashes.json"
+for id in local-adv-prompt-001 local-adv-cfg-001; do
+  cp -R "$RUNS/local-adv-001" "$RUNS/$id"; rm "$RUNS/$id/run.md"
+  python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + sys.argv[2]; json.dump(s, open(p, "w"))' "$RUNS/$id/spec.json" "$id"
+  ASSETGEN_MODEL_HASHES="$LOCALFX/model-hashes.json" local_step "$id manifest" AG manifest --run "$RUNS/$id"
+done
+jq ' .["11"] = {"class_type":"PrimitiveString", "inputs":{"value":"another prompt"}} | .["6"].inputs.text = ["11",0]' "$RUNS/local-adv-prompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/local-adv-prompt-001/workflow.json"
+fmset "$RUNS/local-adv-cfg-001" 'obj["spec"]["generation"]["local"]["samplers"][0]["cfg"] = 99'
+cp -R "$RUNS/local-annot-001" "$RUNS/local-annot-drop-001"; rm "$RUNS/local-annot-drop-001/run.md"
+python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/local-annot-drop-001"; json.dump(s, open(p, "w"))' "$RUNS/local-annot-drop-001/spec.json"
+ASSETGEN_MODEL_HASHES="$LOCALFX/model-hashes-annotators.json" local_step 'local-annot-drop-001 manifest' AG manifest --run "$RUNS/local-annot-drop-001"
+fmset "$RUNS/local-annot-drop-001" 'obj["spec"]["generation"]["local"]["models"] = [m for m in obj["spec"]["generation"]["local"]["models"] if m["kind"] != "annotators"]'
 cp "$TMP/local-unverified.md" "$localrun/run.md"
 python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2> "$TMP/err" <<'EOF'
 import importlib.util, json, re, sys
@@ -3457,9 +3609,180 @@ case_ local-cfg-001 gen-run-provenance FAIL 'spec.generation.local differs' 'tam
 case_ local-missing-001 gen-run-provenance FAIL 'records no spec.generation.local' 'missing local record fails provenance'
 case_ local-hash-001 gen-run-provenance FAIL 'claims a verified sha256 it does not carry' 'invalid verified hash fails provenance'
 case_ local-literal-001 gen-run-provenance FAIL 'seed is not a rendered param' 'literal seed fails provenance'
+case_ local-annot-001 gen-run-provenance PASS '' 'annotator models (pose and depth) with a cached hash pass provenance'
+case_ local-annot-unverified-001 gen-run-provenance WARN 'annotators/depth_anything_vitl14.pth sha256 unverified' 'an annotator model without a cached hash warns like the other local model kinds'
+case_ local-annot-drop-001 gen-run-provenance FAIL 'spec.generation.local differs from workflow.json in models' 'a record that omits the annotator models fails provenance'
+case_ local-adv-001 gen-run-provenance PASS '' 'KSamplerAdvanced form passes provenance with a cached hash (same as the KSampler form)'
+case_ local-adv-prompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' 'KSamplerAdvanced: CLIP prompt mismatch fails provenance like KSampler'
+case_ local-adv-cfg-001 gen-run-provenance FAIL 'spec.generation.local differs' 'KSamplerAdvanced: tampered sampler fails provenance like KSampler'
+python3 -B - "$RUNS/local-annot-001/run.md" "$RUNS/local-annot-unverified-001/run.md" "$RUNS/local-adv-001/run.md" "$RUNS/local-cached-001/run.md" > "$TMP/local-engine-record" 2>&1 <<'EOF'
+import json, re, sys
+def local(p):
+    s = open(p, encoding='utf-8').read()
+    return json.loads(re.match(r'\A---json\s*\n(.*?)\n---', s, re.S).group(1))['spec']['generation']['local']
+annot, bare, adv, plain = (local(p) for p in sys.argv[1:5])
+rows = [(m['node'], m['class_type'], m['kind'], m['name'], m['sha256'], m['verified']) for m in annot['models']]
+assert rows == [('4', 'CheckpointLoaderSimple', 'checkpoints', 'sdxl.safetensors', 'a' * 64, True),
+                ('11', 'DepthAnythingPreprocessor', 'annotators', 'depth_anything_vitl14.pth', 'c' * 64, True),
+                ('12', 'DWPosePreprocessor', 'annotators', 'yolox_l.onnx', 'd' * 64, True),
+                ('12', 'DWPosePreprocessor', 'annotators', 'dw-ll_ucoco_384.onnx', 'e' * 64, True)], rows
+assert [(m['kind'], m['verified'], m['sha256']) for m in bare['models'] if m['kind'] == 'annotators'] == [('annotators', False, None)] * 3
+assert [x['name'] for x in annot['loras']] == [x['name'] for x in bare['loras']] == ['style.safetensors'] and annot['requires_sha256'] != plain['requires_sha256']
+# the KSamplerAdvanced record equals the KSampler one except class_type and the denoise it does not have
+a, p = adv['samplers'][0], plain['samplers'][0]
+assert a['class_type'] == 'KSamplerAdvanced' and a['denoise'] is None and p['denoise'] == 0.45, (a, p)
+assert {k: v for k, v in a.items() if k not in ('class_type', 'denoise')} == {k: v for k, v in p.items() if k not in ('class_type', 'denoise')}, (a, p)
+assert a['seed'] == 123 and a['seed_param'] == 'seed'
+assert adv['models'] == plain['models'] and adv['loras'] == plain['loras']
+print('ok')
+EOF
+grep -qx ok "$TMP/local-engine-record" && ok "manifest records annotator models under kind annotators with their hashes and the KSamplerAdvanced sampler row like the KSampler row" \
+  || no "local engine record" "$(cat "$TMP/local-engine-record")"
 ! grep -q '"local"\|Local stage' "$good/run.md" && [ "$(st AGEN-qp-icon-001 gen-run-provenance)" = PASS ] && ok 'old run retains provenance PASS without local record' || no 'old run changed' "$(why AGEN-qp-icon-001 gen-run-provenance)"
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$AUTH" --registry "$ROOT/registry.json" > "$TMP/local-lint" 2>&1
 grep -q '^PASS AGEN-local-hybrid-001$' "$TMP/local-lint" && ok 'hybrid manifest passes artifact schema lint' || no 'hybrid artifact lint' "$(grep 'AGEN-local-hybrid-001' "$TMP/local-lint")"
+
+echo "-- engine notes: annotator model kind, KSamplerAdvanced like KSampler, lint reads known-nodes once (UNTESTED on RTX 5060)"
+python3 -B - "$ROOT" > "$TMP/engine-notes-unit" 2>&1 <<'EOF'
+import copy, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import runfiles as r
+root = sys.argv[1]
+def load(name):
+    return json.load(open(os.path.join(root, 'tests/fixtures/assetgen/local', name), encoding='utf-8'))
+def check(label, f):
+    try:
+        assert f()
+        print('ok ' + label)
+    except Exception as e:
+        print('no ' + label + ' | ' + repr(e))
+hybrid, adv, annot = load('hybrid-template.json'), load('hybrid-advanced-template.json'), load('annotator-template.json')
+def rendered(t, seed=123):
+    wf = copy.deepcopy(t['workflow'])
+    for n in wf.values():
+        for k, v in n['inputs'].items():
+            if v == '{{seed}}':
+                n['inputs'][k] = seed
+    return wf, {'params': {'seed': seed}, 'template': {'data': t}}
+def annotators():
+    wf, spec = rendered(annot)
+    rows = r.local_generation(wf, spec, {'annotators/yolox_l.onnx': 'd' * 64})['models']
+    got = [(m['node'], m['class_type'], m['kind'], m['name'], m['verified']) for m in rows]
+    assert got == [('4', 'CheckpointLoaderSimple', 'checkpoints', 'sdxl.safetensors', False),
+                   ('11', 'DepthAnythingPreprocessor', 'annotators', 'depth_anything_vitl14.pth', False),
+                   ('12', 'DWPosePreprocessor', 'annotators', 'yolox_l.onnx', True),
+                   ('12', 'DWPosePreprocessor', 'annotators', 'dw-ll_ucoco_384.onnx', False)], got
+    assert r.local_record_key(rows[1]) == 'annotators/depth_anything_vitl14.pth'
+    # a disabled DWPose model input (None) is not a model
+    wf['12']['inputs']['bbox_detector'] = 'None'; wf['12']['inputs']['pose_estimator'] = 'none'
+    assert [m['name'] for m in r.local_generation(wf, spec)['models'] if m['kind'] == 'annotators'] == ['depth_anything_vitl14.pth']
+    # a preprocessor graph is a local graph even without a sampler
+    only = {'11': copy.deepcopy(annot['workflow']['11'])}
+    return r.local_generation(only, spec) is not None
+check('annotator preprocessors are recorded under the annotators kind with node order, hashes and None skipped', annotators)
+def sampler_rows():
+    wk, sk = rendered(hybrid); wa, sa = rendered(adv)
+    a = r.local_generation(wa, sa)['samplers'][0]; k = r.local_generation(wk, sk)['samplers'][0]
+    strip = lambda row: {x: y for x, y in row.items() if x not in ('class_type', 'denoise')}
+    assert (a['class_type'], a['denoise'], k['class_type'], k['denoise']) == ('KSamplerAdvanced', None, 'KSampler', 0.45)
+    assert strip(a) == strip(k) and a['seed'] == 123 and a['seed_param'] == 'seed'
+    # a linked noise_seed resolves to the rendered value and parameter, like seed on KSampler
+    wl, sl = copy.deepcopy(wa), copy.deepcopy(sa)
+    wl['9']['inputs']['noise_seed'] = ['12', 0]; wl['12'] = {'inputs': {'value': 123}}
+    sl['template']['data']['workflow']['9']['inputs']['noise_seed'] = ['12', 0]
+    sl['template']['data']['workflow']['12'] = {'inputs': {'value': '{{seed}}'}}
+    linked = r.local_generation(wl, sl)['samplers'][0]
+    assert linked['seed'] == 123 and linked['seed_param'] == 'seed', linked
+    # a literal noise_seed has no seed_param, like a literal seed
+    wf = copy.deepcopy(wa); wf['9']['inputs']['noise_seed'] = 123
+    spec = copy.deepcopy(sa); spec['template']['data']['workflow']['9']['inputs']['noise_seed'] = 123
+    return r.local_generation(wf, spec)['samplers'][0]['seed_param'] is None
+check('KSamplerAdvanced sampler row equals the KSampler row (seed from noise_seed, linked and literal)', sampler_rows)
+def prompts():
+    g = {'1': {'class_type': 'PrimitiveString', 'inputs': {'value': 'hello'}}, '2': {'class_type': 'PrimitiveStringMultiline', 'inputs': {'value': 'world'}}, '3': {'class_type': 'CLIPTextEncode', 'inputs': {'text': ['1', 0]}}, '4': {'class_type': 'CLIPTextEncodeSDXL', 'inputs': {'text_g': ['1', 0], 'text_l': ['2', 0]}}, '5': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'literal'}}, '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': ['2', 0]}}, '7': {'class_type': 'ControlNetApplyAdvanced', 'inputs': {'positive': ['3', 0], 'negative': ['6', 0]}}, '8': {'class_type': 'KSampler', 'inputs': {'positive': ['7', 0], 'negative': ['7', 1]}}, '9': {'class_type': 'CLIPTextEncode', 'inputs': {'text': ['2', 0]}}, '10': {'class_type': 'KSampler', 'inputs': {'negative': ['9', 0]}}}
+    h = copy.deepcopy(g)
+    for n in h.values():
+        if n['class_type'] == 'KSampler':
+            n['class_type'] = 'KSamplerAdvanced'
+    assert r.workflow_prompts(g) == ['hello', 'hello', 'world']
+    # same linked positive texts, same literal and negative-only exclusions
+    assert r.workflow_prompts(h) == r.workflow_prompts(g)
+    only_advanced = {k: v for k, v in h.items() if k in ('1', '2', '3', '5', '6', '8')}
+    only_advanced['8'] = {'class_type': 'KSamplerAdvanced', 'inputs': {'positive': ['3', 0], 'negative': ['6', 0]}}
+    out = r.workflow_prompts(only_advanced)
+    assert out == ['hello'] and 'literal' not in out, out
+    return all(isinstance(r.workflow_prompts(x), list) for x in ({'x': {'class_type': 'KSamplerAdvanced', 'inputs': {'negative': ['x', 0]}}},))
+check('CLIP prompts follow KSamplerAdvanced positive and negative like KSampler (literals and negative-only excluded)', prompts)
+def generation():
+    wf, spec = rendered(adv)
+    gi = r.generation_inputs({'9': {'class_type': 'KSamplerAdvanced'}}, spec)
+    assert set(gi) == {'graph', 'references'}, gi
+    size = {'1': {'class_type': 'EmptyLatentImage', 'inputs': {'width': 1024, 'height': 1536}},
+            '9': {'class_type': 'KSamplerAdvanced', 'inputs': {'latent_image': ['1', 0]}}}
+    sized = {'params': {}, 'template': {'data': {'primary_node': '9'}}}  # the primary node is the sampler
+    assert r.requested_size(size, sized) == '1024x1536', r.requested_size(size, sized)
+    return r.local_generation({'9': {'class_type': 'KSamplerAdvanced', 'inputs': {}}}, spec) is not None
+check('KSamplerAdvanced counts as a generation node: inputs bound, requested size read, local record made', generation)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "engine notes unit unexpected output" "$line" ;; esac
+done < "$TMP/engine-notes-unit"
+[ "$(grep -c '^ok ' "$TMP/engine-notes-unit")" -eq 4 ] || no "engine notes unit cases stopped early" "$(cat "$TMP/engine-notes-unit")"
+# profile lint of an annotator template: the requires block accepts the annotators kind and the pack; an unknown
+# preprocessor model kind, an unknown preprocessor node and an undeclared pack still FAIL
+an_lint() { AG lint "$1" --json 2>&1; }
+an_lint "$LOCALFX/annotator-template.json" > "$TMP/an-lint.json"
+jq -e '([.results[] | select(.check == "assetgen-lint") | .state] == ["PASS"]) and ([.results[] | select(.state == "FAIL")] | length == 0) and ([.results[].reasons[] | select(test("unknown|not a model kind|not declared|requires"))] | length == 0)' "$TMP/an-lint.json" >/dev/null \
+  && jq -e '[.requires.models[] | select(.kind == "annotators")] | length == 3' "$LOCALFX/annotator-template.json" >/dev/null \
+  && ok "lint: a template with pose and depth preprocessor models (kind annotators, pack comfyui_controlnet_aux) passes the requires and profile rules" \
+  || no "lint annotator template" "$(cat "$TMP/an-lint.json")"
+for c in "kind|.requires.models[2].kind = \"preprocessors\"|requires.models[2].kind 'preprocessors' is not a model kind" \
+         "node|.workflow[\"11\"].class_type = \"OpenposePreprocessor\"|node 11: unknown node type OpenposePreprocessor" \
+         "pack|.requires.packs = []|node 11 uses DepthAnythingPreprocessor from pack comfyui_controlnet_aux, not declared in requires.packs"; do
+  IFS='|' read -r label filter want <<< "$c"
+  jq "$filter" "$LOCALFX/annotator-template.json" > "$TMP/an-$label.json"
+  an_lint "$TMP/an-$label.json" > "$TMP/an-$label.out"; rc=$?
+  [ "$rc" -eq 1 ] && jq -e --arg w "$want" '([.results[] | select(.check == "assetgen-lint") | .state] == ["FAIL"]) and ([.results[] | select(.check == "assetgen-lint") | .reasons[] | select(contains($w))] | length == 1)' "$TMP/an-$label.out" >/dev/null \
+    && ok "lint FAILs an unknown preprocessor model ($label): $want" || no "lint annotator $label rc=$rc" "$(cat "$TMP/an-$label.out")"
+done
+# KSamplerAdvanced gets the same lint and graph-style result as its KSampler form (only the node name differs)
+an_lint "$LOCALFX/hybrid-template.json" | jq -c '[.results[] | [.check, .state, (.reasons | map(sub("KSamplerAdvanced"; "KSampler")))]]' > "$TMP/adv-lint-plain.json"
+an_lint "$LOCALFX/hybrid-advanced-template.json" | jq -c '[.results[] | [.check, .state, (.reasons | map(sub("KSamplerAdvanced"; "KSampler")))]]' > "$TMP/adv-lint-adv.json"
+[ -s "$TMP/adv-lint-plain.json" ] && cmp -s "$TMP/adv-lint-plain.json" "$TMP/adv-lint-adv.json" \
+  && jq -e 'length == 2 and (map(.[1]) | all(. != "FAIL")) and ([.[1][2][] | select(startswith("tiled-vae:"))] | length == 1)' "$TMP/adv-lint-adv.json" >/dev/null \
+  && ok "lint and graph-style rows of the KSamplerAdvanced hybrid fixture equal the KSampler form's (the tiled-VAE walk passes through KSamplerAdvanced)" \
+  || no "KSamplerAdvanced lint parity" "$(cat "$TMP/adv-lint-plain.json" "$TMP/adv-lint-adv.json")"
+# lint over several templates reads data/known-nodes.json once per invocation (lint._load_known_registry, process-wide
+# cache) and the rows equal those of one fresh process per template
+python3 -B - "$ROOT" > "$TMP/lint-once" 2>&1 <<'EOF'
+import copy, json, os, subprocess, sys
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+os.chdir(root)
+import lint
+lint._load_known_registry.cache_clear()
+paths = ['templates/assetgen/workflows/image-edit.json', 'templates/assetgen/workflows/image-generate.json',
+         'templates/assetgen/workflows/hybrid-character.json', 'templates/assetgen/workflows/local-variation.json',
+         'tests/fixtures/assetgen/local/annotator-template.json', 'tests/fixtures/assetgen/local/hybrid-advanced-template.json']
+rows = [lint.lint_rows(path) for path in paths]
+assert len(rows) == len(paths) and all(len(result) == 2 for result in rows), rows
+info = lint._load_known_registry.cache_info()
+assert info.misses == 1 and info.hits > 0, info
+# the copies are defensive: changing one never changes what the next call sees
+first = lint.known_registry()
+first['nodes'].clear(); first['packs'].clear()
+assert lint.known_registry()['nodes'] and lint.known_registry()['packs'] and lint.known_nodes()
+assert lint._load_known_registry.cache_info().misses == 1
+fresh = []
+for path in paths:
+    out = subprocess.run([sys.executable, '-B', 'scripts/assetgen/assetgen.py', 'lint', path, '--json'], capture_output=True, text=True)
+    assert out.returncode in (0, 1), out.stderr
+    fresh.append(json.loads(out.stdout)['results'])
+assert [[dict(row) for row in result] for result in rows] == fresh, (rows, fresh)
+print('ok')
+EOF
+grep -qx ok "$TMP/lint-once" && ok "lint over six templates loads known-nodes.json once (cache misses 1) with the same rows as one process per template" \
+  || no "lint reads known-nodes once" "$(cat "$TMP/lint-once")"
 
 echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
 SL="$TMP/stylelock-authoring"
@@ -4150,9 +4473,21 @@ anchor_bad primary-class '.template.data.primary_node = "4"' 'FAIL primary_node 
 anchor_bad primary-ambiguous 'del(.template.data.primary_node) | .template.data.workflow["13"] = .template.data.workflow["1"]' 'FAIL the template has 2 NineRouterImage nodes: declare primary_node'
 # lint runs the same check on the template's own workflow: a bad anchor_target or primary_node FAILs lint, not only render
 LF="$ROOT/tests/fixtures/assetgen/local"
-lint_target() { AG lint "$LF/$1.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))'; }
+# lint_target prints the result count, then check|state|reasons of every entry of .results (lint and graph-style rows):
+# a wrong state or reason in any entry, or a changed count, fails the case, not only results[0]
+lint_target() { AG lint "$LF/$1.json" --json 2>&1 | jq -r '"results=\(.results | length)", (.results[] | "\(.check)|\(.state)|\(.reasons | join("; "))")'; }
 got=$(lint_target hybrid-anchor-template)
-[ "$got" = "PASS " ] && ok "lint: the hybrid anchor template (anchor_target 12.image, primary_node 1) PASSES" || no "lint hybrid anchor template" "$got"
+[ "$got" = "$(printf 'results=2\nassetgen-lint|PASS|\nassetgen-graph-style|PASS|')" ] \
+  && ok "lint: the hybrid anchor template (anchor_target 12.image, primary_node 1) PASSES every result row" || no "lint hybrid anchor template" "$got"
+# the fixture decodes with VAEDecodeTiled, which the local-8gb profile wants for a base image above 1024 px
+# (data/hardware.json, data/template-profiles.json): the graph-style row has no tiled-vae reason, and the plain decode has
+jq -e '.workflow["10"].class_type == "VAEDecodeTiled" and (.requires.profile == "local-8gb")' "$LF/hybrid-anchor-template.json" >/dev/null \
+  && ! printf '%s\n' "$got" | grep -q 'tiled-vae' \
+  && jq '.workflow["10"] |= (.class_type = "VAEDecode" | .inputs |= {samples, vae})' "$LF/hybrid-anchor-template.json" > "$TMP/anchor-untiled.json" \
+  && { AG lint "$TMP/anchor-untiled.json" --json > "$TMP/anchor-untiled.out" 2>&1; true; } \
+  && jq -e '[.results[] | select(.check == "assetgen-graph-style" and .state == "FAIL") | .reasons[] | select(startswith("tiled-vae:") and contains("VAEDecodeTiled"))] | length == 1' "$TMP/anchor-untiled.out" >/dev/null \
+  && ok "hybrid anchor fixture decodes with VAEDecodeTiled: no tiled-vae reason under local-8gb (the plain VAEDecode form is reported)" \
+  || no "hybrid anchor fixture tiled decode" "$got"
 for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of the workflow" \
          "target-anchor-missing-input|anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)" \
          "target-anchor-disallowed|anchor_target KSampler.latent_image cannot take anchors" \
@@ -4160,8 +4495,8 @@ for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of th
          "target-primary-not-generation|primary_node 4 (CheckpointLoaderSimple) is not a generation node"; do
   f=${c%%|*}; got=$(lint_target "$f")
   jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LF/$f.json" >/dev/null \
-    && case "$got" in "FAIL ${c#*|}"*) : ;; *) false ;; esac \
-    && ok "lint FAILs $f: ${c#*|}" || no "lint $f" "$got"
+    && case "$got" in "results=2"$'\n'"assetgen-lint|FAIL|${c#*|}"*$'\n'"assetgen-graph-style|PASS|") : ;; *) false ;; esac \
+    && ok "lint FAILs $f: ${c#*|} (two results, graph-style PASS)" || no "lint $f" "$got"
 done
 # every core template that declares anchor_target, rendered in the style lock repo for the purpose its cases file
 # names (the first cases/<purpose>--<template>.json), family props: its anchors reach anchor_target after the template's

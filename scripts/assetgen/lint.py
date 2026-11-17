@@ -36,6 +36,8 @@ reads). A node of a known-nodes pack needs its pack id in requires.packs, and a 
 the block and a profile with a GPU (hardware.json requires.gpu true; api-only has none and stays valid for an
 API-only graph). No requires and no such node: nothing changes.
 """
+import copy
+import functools
 import json
 import math
 import os
@@ -62,13 +64,19 @@ FORBIDDEN = [
 HARDWARE = os.path.join(layers.HERE, "data", "hardware.json")
 REQUIRES_KEYS = ("profile", "peak_vram_gb", "ram_gb", "packs", "models", "offload")
 MODEL_KEYS = ("kind", "name", "size_gb")
-EXTRA_MODEL_KINDS = ("loras", "vae")  # model folders a template may name that no hardware profile lists
+EXTRA_MODEL_KINDS = ("loras", "vae", "annotators")  # model folders a template may name that no hardware profile lists
+
+
+@functools.lru_cache(maxsize=1)
+def _load_known_registry():
+    """Read the registry once per process; cache_info().misses exposes the load count."""
+    with open(KNOWN, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def known_registry():
     """The whole data/known-nodes.json: nodes, packs {pack id: {nodes, ...}} and local_model_nodes."""
-    with open(KNOWN, encoding="utf-8") as f:
-        return json.load(f)
+    return copy.deepcopy(_load_known_registry())
 
 
 def known_nodes():
