@@ -210,6 +210,26 @@ fi
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
+# Process starts dominate this suite and python3 -B compiles the 7000-line factory-pipeline.py on every start (the
+# main script is never cached): run it through a launcher that loads its bytecode from a cache under $TMP (never the
+# repository; set in the process only, children see no such variable), with the same argv[0], __file__, sys.path[0] and
+# __main__ namespace. Any other python3 call is untouched.
+cat > "$TMP/fp-launch.py" <<'LAUNCH'
+import importlib.machinery, os, sys
+p = sys.argv[1]
+sys.pycache_prefix = os.environ.pop('PIPELINE_TEST_PYC')
+code = importlib.machinery.SourceFileLoader('__main__', p).get_code('__main__')
+sys.argv = [p] + sys.argv[2:]
+sys.path[0] = os.path.dirname(p)
+g = sys.modules['__main__'].__dict__
+g['__file__'] = p
+exec(code, g)
+LAUNCH
+PIPELINE_MAIN="$P"
+python3() {
+  if [ "${1:-}" = -B ] && [ "${2:-}" = "$PIPELINE_MAIN" ] && [ "$P" = "$PIPELINE_MAIN" ]; then shift 2; PIPELINE_TEST_PYC="$TMP/pycache" command python3 "$TMP/fp-launch.py" "$PIPELINE_MAIN" "$@"
+  else command python3 "$@"; fi
+}
 # a caller's session note must not leak into any dispatch (the session-note cases set it on purpose)
 unset RPG_FACTORY_SESSION_NOTE
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
@@ -223,7 +243,7 @@ pass=0; fail=0
 # Capture once: consecutive assertions on one command (same arguments, directory, PATH and env prefix, no other
 # top-level command in between) share one run of factory-pipeline.py. The DEBUG trap (top level only: functions and
 # subshells do not inherit it) drops the capture before every other command - git, a verdict, a file edit, a plan.
-# verdict, agents and a dispatch without --runner print always run (they write state). PIPELINE_TEST_REUSE=0 runs every assertion's command;
+# verdict and agents always run (they write state; a dispatch only writes a content-named spec, so it is reused). PIPELINE_TEST_REUSE=0 runs every assertion's command;
 # PIPELINE_TEST_REUSE=check also re-runs each reused command and fails the case when its output or exit code differs.
 REUSE="${PIPELINE_TEST_REUSE:-1}"; MEMO_KEY=; MEMO_ENV=(); MEMO_OUT=; MEMO_RC=0; MEMO_SPEC=; MEMO_SRC=; reused=0
 memo_trap() {
@@ -231,7 +251,7 @@ memo_trap() {
   while [[ $c =~ ^([A-Za-z_][A-Za-z_0-9]*)=(\"[^\"]*\"|\'[^\']*\'|[^ ]*)\ +(.*)$ ]]; do
     names+=("${BASH_REMATCH[1]}"); c="${BASH_REMATCH[3]}"
   done
-  case "${c%% *}" in expect|refute|expect_spec|refute_spec|opath|oref|inorca|st_phase|agree|for) MEMO_ENV=("${names[@]}") ;; *) MEMO_KEY= ;; esac
+  case "${c%% *}" in expect|refute|expect_spec|refute_spec|opath|oref|inorca|st_phase|agree|pp|pp_spec|for) MEMO_ENV=("${names[@]}") ;; *) MEMO_KEY= ;; esac
 }
 [ "$REUSE" = 0 ] || trap memo_trap DEBUG
 # pp <args...>: OUT and RC of `factory-pipeline.py <args>` (stdout and stderr), reused per the capture-once rule
@@ -239,7 +259,7 @@ pp() {
   local IFS=$'\x1f' key n env=
   for n in "${MEMO_ENV[@]}"; do env+="$n=${!n-}$IFS"; done
   key="$PWD$IFS$PATH$IFS${ORCA_WORKTREE_ID-}$IFS$env$IFS$*"
-  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]      && { [[ "$IFS$*$IFS" != *"${IFS}dispatch$IFS"* ]] || [[ "$IFS$*$IFS" == *"${IFS}--runner${IFS}print$IFS"* ]]; }; then
+  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]; then
     OUT="$MEMO_OUT"; RC="$MEMO_RC"; reused=$((reused + 1))
     if [ "$REUSE" = check ]; then
       local fresh rc; fresh=$(python3 -B "$P" "$@" 2>&1); rc=$?
@@ -3472,8 +3492,8 @@ expect "a subplan of another task is a usage error" 2 "splits task gw, not c1" d
 # child in a no-worktree repo: usage error, nothing on stdout
 for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "--task c1 --phase lead" "--task integration:client --phase qa --sha abc1234"; do
   # shellcheck disable=SC2086
-  out=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>/dev/null); rc=$?
-  err=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>&1 >/dev/null)
+  out=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>"$TMP/dd.err"); rc=$?
+  err=$(<"$TMP/dd.err")
   if [ "$rc" = 2 ] && [ -z "$out" ] && grep -q "takes no worktree" <<<"$err"; then pass=$((pass + 1)); echo "PASS  child in the Unity project ($args): usage error, nothing printed"
   else fail=$((fail + 1)); echo "FAIL  child in the Unity project ($args) (rc=$rc)"; head -5 <<<"$out$err"; fi
 done
@@ -3482,8 +3502,8 @@ expect "new task worktree without an integration checkout: git no-track" 0 "^git
 expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 # topic checked out nowhere: the Orca parent falls back to the main checkout, loudly (stderr only; stdout is unchanged)
-out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
-err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>"$TMP/dd.err")
+err=$(<"$TMP/dd.err")
 if grep -q "^factory-pipeline: Orca parent: no checkout has the topic branch feat/core/demo checked out, .*falls back to the main checkout .*rpg-mmo-server; set plan.topic to your own integration branch" <<<"$err" \
    && ! grep -q "Orca parent:" <<<"$out" && grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
   pass=$((pass + 1)); echo "PASS  topic not checked out: stderr hint names the main-checkout fallback, stdout has none and the parent is the main checkout"
@@ -3510,8 +3530,8 @@ expect "new task worktree beside integration checkout" 0 "^git -C .* worktree ad
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
-out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
-err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>"$TMP/dd.err")
+err=$(<"$TMP/dd.err")
 if ! grep -q "Orca parent:" <<<"$err" && grep -Eq -- "--parent-worktree '?path:[^' ]*demo-int'? " <<<"$out" && ! grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
   pass=$((pass + 1)); echo "PASS  topic checked out: no Orca parent hint and the parent is the integration checkout"
 else fail=$((fail + 1)); echo "FAIL  topic checked out: Orca parent hint"; head -5 <<<"$err"; fi
