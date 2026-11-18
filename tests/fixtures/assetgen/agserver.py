@@ -11,18 +11,23 @@ visible to the subshells of `$(AG ...)` and `AG ... | jq`):
   DIR/go/ID      marker, created after the request is complete; the server consumes it
   DIR/c/ID.out, ID.err   the captured streams, then DIR/c/ID.rc (written last, atomically): the exit code
   DIR/ready      created once assetgen is imported; DIR/quit asks the server to stop (it also stops when DIR is gone
-                 or when it has had no request for IDLE seconds)
-Usage: agserver.py ASSETGEN-DIR DIR
+                 when the suite process OWNER is gone (a killed suite never runs its exit trap; DIR is removed then), or
+                 when it has had no request for IDLE seconds)
+Usage: agserver.py ASSETGEN-DIR DIR [OWNER-PID]
+OWNER-PID is the suite shell's pid in the form this interpreter can look up: the POSIX pid on Linux, the Windows pid on
+Windows (Git Bash passes /proc/$$/winpid). Without it, or when the lookup is not possible, the owner counts as alive.
 """
 import contextlib
 import io
 import os
+import shutil
 import sys
 import time
 import traceback
 
 IDLE = 1800
 assetgen_dir, base = sys.argv[1:3]
+owner = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 0
 sys.dont_write_bytecode = True
 sys.path.insert(0, assetgen_dir)
 import assetgen  # noqa: E402
@@ -30,6 +35,31 @@ import assetgen  # noqa: E402
 HOME = os.getcwd()  # the working directory between calls: never a directory the suite deletes
 ENCODING = sys.stdout.encoding or "utf-8"
 calls, goes = os.path.join(base, "c"), os.path.join(base, "go")
+
+
+def owner_alive():
+    """False only when the owner process is certainly gone. os.kill(pid, 0) is the POSIX existence probe; on Windows
+    os.kill would terminate the process, so the handle is queried instead."""
+    if owner <= 0:
+        return True
+    try:
+        if os.name == "nt":
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            handle = kernel.OpenProcess(0x1000, False, owner)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return kernel.GetLastError() != 87  # ERROR_INVALID_PARAMETER: no such process
+            code = ctypes.c_ulong()
+            alive = not kernel.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code)) or code.value == 259
+            kernel.CloseHandle(ctypes.c_void_p(handle))
+            return alive
+        os.kill(owner, 0)
+    except ProcessLookupError:
+        return False
+    except Exception:  # PermissionError (it exists) or a platform detail: no opinion means alive
+        return True
+    return True
 
 
 def capture(errors="strict"):
@@ -94,8 +124,13 @@ def serve(call_id):
 
 def main():
     open(os.path.join(base, "ready"), "w").close()
-    last = time.monotonic()
+    last = checked = time.monotonic()
     while os.path.isdir(base) and not os.path.exists(os.path.join(base, "quit")):
+        if time.monotonic() - checked > 2:
+            checked = time.monotonic()
+            if not owner_alive():
+                shutil.rmtree(base, ignore_errors=True)
+                break
         try:
             pending = sorted(os.listdir(goes))
         except OSError:

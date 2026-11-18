@@ -101,11 +101,13 @@
 # with the stdlib converter ui2api.py; the suite reports every result line with ok/no), jq runs with -b on Windows (no tr
 # process behind it), and the lint rows are read without a pipeline (lint_res). Every assertion text and count is kept.
 # The case-map lines below name, per group, the inputs it reads (affected.py case_map: every file the suite selects
-# that a changed file reaches must match a pattern, else every group runs). Measured: every scripts/assetgen/*.py module
-# reaches assetgen.py (the CLI each group runs), approval.py, the quality plugin, the command wrapper and the
-# graph-style and style self-tests, so an engine change has no honest narrower map: it selects every group, and ALL is
-# the fallback for any file not listed. Data, fixtures and the plugin side are narrower; a file is listed under every
-# group that might read it, never fewer.
+# that a changed file reaches must match a pattern, else every group runs). Measured with tests/affected.py cases: only
+# tests/fixtures/assetgen/loops.py, templates/assetgen/gen-run.md and docs/schemas/kinds/gen-run.schema.json narrow today.
+# Every scripts/assetgen/*.py module reaches assetgen.py (the CLI each group runs), approval.py, the quality plugin, the
+# command wrapper and the graph-style and style self-tests; the data JSON, scripts/checks/domains/assetgen.py, the quality
+# plugin and the golden, cases, local and graph-style fixture trees reach the engine or agserver.py, so they select all
+# or nearly all groups. ALL is the fallback for any file not listed; a file is listed under every group that might read
+# it, never fewer. Narrowing further needs a finer reach graph in tests/affected.py (not part of this suite).
 # case-map: list-show scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
 # case-map: resolve scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
 # case-map: render-golden scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/loops.py tests/fixtures/assetgen/ui2api.py
@@ -263,13 +265,15 @@ no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && printf '%s\n' "$2
 # AG ARGS...: assetgen.py. Every call is served by ONE interpreter for the whole run (tests/fixtures/assetgen/agserver.py:
 # argv, working directory, the environment variables listed in AG_ENV, stdout, stderr and the exit code carry over), because a
 # process start costs 0.5-1.5 s on a Windows host and the suite makes hundreds of calls. AG_DIRECT is the plain process; AG
-# falls back to it when the server did not start, died or a call outlived the wait.
+# falls back to it when the server did not start, or died before it took a call (a call it had already taken fails
+# visibly instead of running twice).
 AG_DIRECT() { python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
-AG_SRV=; AG_PWD=; AG_CWD=; AG_DIR=
+AG_SRV=; AG_PWD=; AG_CWD=; AG_DIR=; AG_PID=
 AG_ENV=(ASSETGEN_NO_PIL ASSETGEN_MODEL_HASHES RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT RPG_FACTORY_COMFY_JOBS_DIR RPG_FACTORY_STATE_DIR TMPDIR CLAUDE_PLUGIN_ROOT)
-ag_wait() { # ag_wait FILE SECONDS: wait for FILE; a read timeout on a fifo nobody writes is the sleep (no process is started)
+ag_wait() { # ag_wait FILE SECONDS: wait for FILE; 1 = timeout, 2 = the server is gone. A read timeout on a fifo nobody writes is the sleep (no process is started)
   local t=$SECONDS
   until [ -e "$1" ]; do
+    if [ -n "$AG_PID" ] && ! kill -0 "$AG_PID" 2>/dev/null; then [ -e "$1" ] && return 0; return 2; fi
     if [ -n "${AG_SLEEP:-}" ]; then read -r -t 0.005 -u "$AG_SLEEP" ag_unused; fi
     [ $((SECONDS - t)) -lt "$2" ] || return 1
   done
@@ -278,7 +282,10 @@ ag_start() {
   AG_DIR="$(mktemp_win)" || { AG_DIR=; return 0; }
   mkdir -p "$AG_DIR/c" "$AG_DIR/go" || return 0
   if mkfifo "$AG_DIR/sleep" 2>/dev/null; then exec {AG_SLEEP}<>"$AG_DIR/sleep"; fi
-  python3 -B "$ROOT/tests/fixtures/assetgen/agserver.py" "$ROOT/scripts/assetgen" "$AG_DIR" </dev/null >/dev/null &
+  # the server stops when the suite shell is gone (a killed suite never runs its trap); on Git Bash $$ is an MSYS pid,
+  # /proc/$$/winpid is the Windows pid the server can look up
+  local owner=$$; [ ! -r "/proc/$$/winpid" ] || read -r owner < "/proc/$$/winpid"
+  python3 -B "$ROOT/tests/fixtures/assetgen/agserver.py" "$ROOT/scripts/assetgen" "$AG_DIR" "$owner" </dev/null >/dev/null &
   AG_PID=$!
   if ag_wait "$AG_DIR/ready" 120; then AG_SRV=1; else AG_SRV=; kill "$AG_PID" 2>/dev/null; fi
 }
@@ -302,7 +309,13 @@ AG() {
     done
     printf '%s\0' "$@"; } > "$f.req"
   : > "$AG_DIR/go/${f##*/}"
-  ag_wait "$f.rc" 3600 || { AG_DIRECT "$@"; return; }
+  ag_wait "$f.rc" 3600 || {
+    # the server died or the call outlived the wait. Its go marker still present: the server never took the call, so
+    # withdraw it and run the call directly. Consumed: the call may have run (and written), so fail it, never run it twice.
+    if rm "$AG_DIR/go/${f##*/}" 2>/dev/null; then AG_SRV=; AG_DIRECT "$@"; return; fi
+    echo "AG: the asset-gen server stopped or timed out while serving this call: $*" >&2
+    return 1
+  }
   read -r rc < "$f.rc"
   if [ -s "$f.out" ]; then IFS= read -r -d '' o < "$f.out"; printf '%s' "$o"; fi
   if [ -s "$f.err" ]; then IFS= read -r -d '' e < "$f.err"; printf '%s' "$e" >&2; fi
@@ -747,7 +760,9 @@ done
 # an API template links NineRouterImage.user_prompt; a local-only template (no NineRouterImage) links a CLIP encoder's
 # text; either way no input outside the prompt node inlines {{prompt}} (graphstyle checks the full fan-out)
 prompt_files=(); for t in $CORE_TEMPLATES; do prompt_files+=("$ROOT/templates/assetgen/workflows/$t.json"); done
+prompt_rows=0
 while IFS=$'\t' read -r t good kind; do # one jq call over every core template: id, verdict, what the prompt is linked into
+  prompt_rows=$((prompt_rows + 1))
   [ "$good" = true ] && ok "core template $t: no inline prompt, $kind is a link" || no "template $t user_prompt"
 done < <(jq -r '(try (([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
     | (if $n > 0 then [.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]
@@ -755,6 +770,8 @@ done < <(jq -r '(try (([.workflow[] | select(.class_type == "NineRouterImage")] 
     and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)) catch false) as $good
   | [(input_filename | split("/") | last | rtrimstr(".json")), ($good == true),
      (try (if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end) catch "")] | @tsv' "${prompt_files[@]:-/dev/null}")
+# a template that is not JSON aborts the one jq call and drops the rows after it: every core template needs its row
+[ "$prompt_rows" -eq "${#prompt_files[@]}" ] || no "template user_prompt: $prompt_rows of ${#prompt_files[@]} core templates produced a row (a template is not JSON?)"
 python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
