@@ -189,7 +189,11 @@ SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.tes
       tests/devtools.test.sh tests/domains.test.sh tests/assetgen.test.sh testlab/tests/test_lab.py"
 runall_cleanup() {
   local runall_rc=$? pid   # capture the original status before any cleanup command
-  if $RESULT_ADMITTED; then result_write "$runall_rc" >/dev/null 2>&1 || :; fi
+  # The record path is the last line of the output (also after a signal), so a caller that keeps only the tail can find
+  # the FAIL blocks. Printed only when the record exists; result_write itself stays silent.
+  if $RESULT_ADMITTED && result_write "$runall_rc" >/dev/null 2>&1 && [ -n "$RESULT" ] && [ -f "$RESULT" ]; then
+    echo "run-all: result record $RESULT (FAIL blocks: tests/run-all.sh --last-result)"
+  fi
   for pid in $(jobs -p); do kill "$pid" 2>/dev/null || :; done
   [ -z "$QD" ] || rm -rf "$QD"
   [ -z "$AFF" ] || rm -rf "${AFF%/*}"
