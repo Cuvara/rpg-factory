@@ -51,12 +51,12 @@ REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "
 RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 
 
-def git(cwd, *args, timeout=60):
-    try:
-        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
-        return r.stdout if r.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError):
-        return None
+GIT_TIMEOUT = 60  # seconds per git call; tests patch it down
+
+
+def git(cwd, *args, timeout=None):
+    """git's raw stdout, or None on a failure or a timeout (repo_state uses workspace.git_result to tell them apart)."""
+    return workspace.git_result(cwd, *args, timeout=GIT_TIMEOUT if timeout is None else timeout)[0]
 
 
 def parse_args(argv):
@@ -242,8 +242,11 @@ def norm_paths(paths, d, rep, key=None, reg=None, ws=None):
 
 
 def repo_state(key, d, rep, args, reg, ws=None):
-    if git(d, "rev-parse", "--is-inside-work-tree") is None:
-        return {"repo": key, "path": d, "error": "not a git work tree"}
+    probe, why = workspace.git_result(d, "rev-parse", "--is-inside-work-tree", timeout=GIT_TIMEOUT)
+    if probe is None:
+        # a timeout under load is not a missing work tree: report it as what it is
+        error = f"git timed out after {GIT_TIMEOUT} s" if why == "timeout" else "not a git work tree"
+        return {"repo": key, "path": d, "error": error}
     default = rep["default_branch"]
     branch = (git(d, "branch", "--show-current") or "").strip() or "(detached)"
     head = (git(d, "rev-parse", "--short", "HEAD") or "").strip()

@@ -6,7 +6,9 @@ The caller surfaces path_reason when workspace discovery fails.
 
 On Windows Python an absolute path or a workspace root written in the Git Bash (`/c/ws`) or WSL (`/mnt/c/ws`)
 spelling is converted with workspace.native_abs first, which also undoes the rewrite Git Bash applies to a WSL
-argument or environment value before Windows Python sees it (`/mnt/c/ws` arrives as `C:/Program Files/Git/mnt/c/ws`);
+argument or environment value before Windows Python sees it (`/mnt/c/ws` arrives as `C:/Program Files/Git/mnt/c/ws`;
+native_abs applies that rewrite only under a Git for Windows install root, a directory holding usr/bin/bash.exe or
+git-bash.exe, so `C:/proj/mnt/d/new` is kept);
 elsewhere nothing changes (native_abs would turn `C:/...` into `/mnt/c/...` on POSIX, so it is gated on Windows).
 """
 import os
@@ -30,29 +32,10 @@ def _is_nt():
     return os.name == "nt"
 
 
-_MSYS_MNT = re.compile(r"^([A-Za-z]:/.*?)/mnt/[A-Za-z](?:/.*)?$")
-
-
-def _is_git_install_root(prefix):
-    """True when prefix (forward slashes) is a Git for Windows install root: its last segment is `Git`, or it
-    holds usr/bin/bash.exe or git-bash.exe."""
-    if prefix.rstrip("/").rsplit("/", 1)[-1].lower() == "git":
-        return True
-    return any(os.path.exists(prefix + "/" + marker) for marker in ("usr/bin/bash.exe", "git-bash.exe"))
-
-
 def _native(p):
-    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere.
-
-    native_abs also reads `X:/.../mnt/<l>/...` as Git Bash's MSYS rewrite of a WSL path, which it is only when the
-    prefix before `/mnt/` is the Git for Windows install root; a native path that merely contains a `/mnt/<l>/`
-    segment (`C:/proj/mnt/d/new`) is returned unchanged."""
-    if not p or not _is_nt():
-        return p
-    m = _MSYS_MNT.match(p)
-    if m and not _is_git_install_root(m.group(1)):
-        return p
-    return native_abs(p)
+    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere (native_abs owns the
+    Git install-root guard of the MSYS rewrite)."""
+    return native_abs(p) if p and _is_nt() else p
 
 
 def _find_workspace_native(plan_dir, registry):
