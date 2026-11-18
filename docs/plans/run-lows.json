@@ -1,0 +1,105 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "run-lows",
+  "title": "Backlog lows: Windows path helpers, run evidence and test slots, factory-pipeline status and cleanup lows",
+  "topic": "run-lows",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "workspace-paths",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "path helpers used by context.py, run-checks.py and plan_paths.py; a wrong rewrite breaks every Windows caller",
+      "objective": "Backlog topics flow-lows-followups, plugin-flow-5-followups and path-audit-followups (docs/plans/backlog.md). First check whether main already fixed each item and say so if it did. (1) scripts/lib/workspace.py `native_abs` still rewrites a not-yet-existing Windows drive path that contains a `/mnt/<letter>/` segment as an MSYS-converted WSL mount for every caller (context.py, run-checks.py); only scripts/lib/plan_paths.py guards it with its Git for Windows root check. Move that check into `native_abs` (the rewrite applies only when the prefix before `/mnt/<letter>/` is a Git for Windows install root), make plan_paths.py use it instead of its own copy, and tighten the heuristic so a user directory named `Git` without `usr/bin/bash.exe` or `git-bash.exe` is not taken as the install root. Cases in tests/plan-paths.test.sh and tests/workspace-default.test.sh (they must pass on Linux CI: simulate the Windows branch the way the existing cases do). (2) plugin-flow-5-followups: the registry `root_default` (WSL drive spelling) is said not to be converted by Windows Python; `default_workspace` and `find_workspace` now call `native_path`, so confirm with a case that it is converted and report it as fixed, or fix it. (3) path-audit-followups: `git_out` (5 s timeout) returns an empty string on a timeout, so a caller reports a product repo as \"not a git work tree\" under load. Let callers tell a timeout from a failure (keep `git_out`'s current return contract for existing callers; add a variant or flag) and make the snapshot report a timeout as a timeout; add a case with a fake slow git. Changelog fragment changelog.d/run-lows-paths.md (### Fixed). The machine is short on memory: run one test command at a time; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "scripts/lib/workspace.py",
+        "scripts/lib/plan_paths.py",
+        "scripts/lib/context.py",
+        "tests/plan-paths.test.sh",
+        "tests/workspace-default.test.sh",
+        "changelog.d/run-lows-paths.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/plan-paths.test.sh",
+        "tests/workspace-default.test.sh",
+        "tests/compat.test.sh"
+      ],
+      "acceptance": [
+        "native_abs rewrites a drive path with a /mnt/<letter>/ segment only under a Git for Windows install root, for every caller",
+        "root_default conversion is confirmed by a case or fixed",
+        "a git timeout is reported as a timeout, not as a missing work tree",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "run-evidence",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "run-all is the QA entry point of every plan; its slot and lock logic is shared by all sessions on the machine",
+      "objective": "Backlog topics path-audit-followups and flow-lows-followups (docs/plans/backlog.md). First check whether main already fixed each item and say so if it did. (1) tests/run-all.sh keeps no log of a run, so a caller that keeps only the tail loses the FAIL lines. Write the FAIL blocks of a run to a file under the Factory state dir (resolve it the way run-all already resolves `run-all/`, never $TMPDIR directly) and print that path in the summary; keep only the newest few logs. (2) A test slot (`RPG_FACTORY_TEST_SLOTS`) stays recorded for a holder whose process was killed (low-memory stop); the next run that waits for a slot must release a slot whose holder PID is gone (on Git Bash check the Windows PID too, as the slot record already stores it), and say so on stderr. Never release a slot whose holder is alive. (3) tests/parallel-policy.test.sh runs tests/orca-wait.test.sh nested and prints only its tail on failure, so the failing case name was lost once; print the failing case names of the nested run. (4) scripts/checks/netcode-headless.sh keeps failed-run evidence directories under the Factory state dir and never prunes them; keep the newest few and remove older ones. Cases in tests/run-all-parallel.test.sh, tests/parallel-policy.test.sh and tests/netcode-headless.test.sh; tests set RPG_FACTORY_STATE_DIR and TMPDIR to a temp dir. Changelog fragment changelog.d/run-lows-evidence.md (### Fixed / ### Added). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time; stop your own test run before you report; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/parallel-policy.test.sh",
+        "tests/orca-wait.test.sh",
+        "scripts/checks/netcode-headless.sh",
+        "tests/netcode-headless.test.sh",
+        "tests/README.md",
+        "changelog.d/run-lows-evidence.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/netcode-headless.test.sh",
+        "tests/parallel-policy.test.sh --case portable-plans"
+      ],
+      "acceptance": [
+        "a run-all run with a FAIL writes the FAIL blocks to a state-dir file and prints its path",
+        "a slot whose holder PID is gone is released by the next run; a live holder never is",
+        "a nested orca-wait failure prints the failing case names",
+        "netcode-headless evidence directories are pruned to the newest few",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "pipeline-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "small independent fixes in status, cleanup and validate output, each with a case, plus frontmatter of three files",
+      "objective": "Lows of backlog topics workflow-slim-followups, path-audit-followups, plugin-flow-5-followups and policy-followups-leftovers (docs/plans/backlog.md). First check whether main already fixed each item and say so if it did. In scripts/factory-pipeline.py: (1) `cleanup` lists each leftover directory twice (forward slashes and backslashes); normalise the path before the duplicate check. (2) `status` lists another plan's worktree as a leftover child of `integration:plugin`; list only worktrees of its own plan. (3) `status` proposes `git merge --no-ff <task branch>` while the task QA verdict is FAIL; the reviewed phase must look at the QA verdict too. (4) The `slot_holders` docstring omits `winpid`. (5) `model_scope_widen`: `validate` reports a malformed entry twice; `\"model_scope_widen\": null` passes `validate` while the schema requires an array; `lead_prompt` loads the policy twice. Cases in tests/pipeline.test.sh for (1), (2), (3) and (5). (6) plugin-flow-5-followups: `claude plugin validate --strict` fails on the YAML frontmatter of skills/pin-bump/SKILL.md, skills/unity-client-tech/SKILL.md and commands/assetgen.md; fix the frontmatter (quote values with colons or other YAML-significant characters) without changing the meaning, and keep tests/skills-lint.sh green. If `claude` is not on PATH, validate the frontmatter with a strict YAML parser instead and say so. Changelog fragment changelog.d/run-lows-pipeline.md (### Fixed). The machine is short on memory: run one test command at a time; stop your own test run before you report; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "skills/pin-bump/SKILL.md",
+        "skills/unity-client-tech/SKILL.md",
+        "commands/assetgen.md",
+        "changelog.d/run-lows-pipeline.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "cleanup lists each leftover directory once",
+        "status lists only its own plan's worktrees and proposes no merge while task QA is FAIL",
+        "model_scope_widen null fails validate and a malformed entry is reported once",
+        "the three frontmatter blocks parse as strict YAML",
+        "the named suites pass"
+      ]
+    }
+  ]
+}

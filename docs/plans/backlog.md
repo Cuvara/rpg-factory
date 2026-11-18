@@ -9,7 +9,9 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None.
+- **run-lows** (`docs/plans/run-lows.json`): native_abs Git root check, root_default, git timeouts; run-all FAIL log,
+  dead slot release, nested orca-wait case names, netcode evidence pruning; cleanup, status and model_scope_widen lows,
+  plugin validate frontmatter.
 
 ## Open
 
