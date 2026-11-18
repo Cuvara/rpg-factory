@@ -41,6 +41,47 @@ sel 0 "UI data next to ui_plan.py selects ui-commands (tree rule)" tests/ui-comm
 sel 0 "UI data next to ui_plan.py selects ui-skill-routing (tree rule)" tests/ui-skill-routing.test.sh scripts/ui/data/intents.json
 sel 1 "UI data skips an unrelated suite" tests/changelog.test.sh scripts/ui/data/intents.json
 sel 0 "a testlab scenario selects the testlab unit tests (tree rule)" testlab/tests/test_lab.py testlab/scenarios/S01-bootstrap.json
+# workspace checks (run-all --workspace-only --base B selects them through select/select-many): WORKSPACE_INPUTS decides.
+# A docs file no workspace check names selects none of them; the keys are the paths run-all passes to its run lines, plus
+# the pseudo key claude-plugin-validate (no file).
+WSKEYS=(tests/routing.test.sh tests/routing-properties.test.py tests/facts.test.sh scripts/check-registry.sh
+        tests/orca-commands.test.sh scripts/checks/skill-citations.py scripts/checks/sgl-determinism.py
+        scripts/checks/pin-status.py scripts/checks/wire-parity.sh scripts/checks/pin-plan.py
+        scripts/checks/package-ready.py scripts/checks/netcode-headless.sh scripts/factory-context.sh
+        scripts/factory-status.py claude-plugin-validate)
+wsel() { # <name> <want: space-separated keys, or none | all> <changed files...>
+  local name="$1" want="$2" got exp; shift 2
+  printf '%s
+' "$@" > "$TMP/wsch"
+  got=$(python3 -B "$A" select-many "$TMP/wsch" "${WSKEYS[@]}" | sort | tr '
+' ' ')
+  case "$want" in none) exp="" ;; all) exp=$(printf '%s
+' "${WSKEYS[@]}" | sort | tr '
+' ' ') ;;
+    *) exp=$(tr ' ' '
+' <<<"$want" | sort | tr '
+' ' ') ;; esac
+  if [ "$got" = "$exp" ]; then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name: want [$exp] got [$got]"; fi
+}
+wsel "workspace: a docs-only change selects no workspace check" none docs/hardware.md
+wsel "workspace: a skill change selects routing replay, routing properties and facts"   "tests/routing.test.sh tests/routing-properties.test.py tests/facts.test.sh scripts/check-registry.sh scripts/checks/skill-citations.py claude-plugin-validate"   skills/vfx/SKILL.md
+wsel "workspace: a registry fragment change selects every workspace check, claude-plugin-validate included" all registry/core.json
+wsel "workspace: registry.json (global) selects every workspace check" all registry.json
+wsel "workspace: a top-level file selects every workspace check" all new-unknown-file
+wsel "workspace: an eval scenario selects the routing checks only"   "tests/routing.test.sh tests/routing-properties.test.py" evals/asset-gen-icon/prompt.md
+sel 0 "workspace: scripts/factory_session.py selects routing replay" tests/routing.test.sh scripts/factory_session.py
+sel 0 "workspace: scripts/factory_session.py selects routing properties" tests/routing-properties.test.py scripts/factory_session.py
+sel 1 "workspace: scripts/factory_session.py does not select claude-plugin-validate" claude-plugin-validate scripts/factory_session.py
+sel 1 "workspace: claude-plugin-validate is not selected by a docs-only change" claude-plugin-validate docs/hardware.md
+sel 0 "workspace: claude-plugin-validate is selected by a command change" claude-plugin-validate commands/check.md
+sel 0 "workspace: claude-plugin-validate is selected by a top-level file" claude-plugin-validate README.md
+sel 1 "workspace: facts is not selected by a docs-only change" tests/facts.test.sh docs/hardware.md
+sel 1 "workspace: routing properties is not selected by a docs-only change" tests/routing-properties.test.py docs/hardware.md
+sel 1 "workspace: routing replay is not selected by a docs-only change" tests/routing.test.sh docs/hardware.md
+sel 0 "workspace: a skill change selects routing replay" tests/routing.test.sh skills/vfx/SKILL.md
+sel 0 "workspace: a skill change selects routing properties" tests/routing-properties.test.py skills/vfx/SKILL.md
+sel 1 "workspace: a skill change does not select the pin-status check" scripts/checks/pin-status.py skills/vfx/SKILL.md
 # select-many: the same answer as select for every suite, from one call (one import graph)
 printf '%s\n' scripts/lib/plan_paths.py scripts/ui/data/intents.json skills/vfx/SKILL.md > "$TMP/many"
 many=(tests/pipeline.test.sh tests/changelog.test.sh tests/skills-lint.sh tests/release-check.test.sh tests/ui-commands.test.sh

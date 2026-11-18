@@ -71,6 +71,11 @@ included code file imports, loads or runs, plus the trees of those, until nothin
 in a reached script's tree imports is an input of that script's suites). Only the index docs stay named-only,
 library modules are included by import as single files (not their scripts/lib tree), and suites directly in
 tests/ are not tree data.
+Workspace checks (run-all --workspace-only: routing replay, routing properties, facts, the live product-repo checks, the
+two `claude plugin validate` lines) carry their plugin-side inputs in WORKSPACE_INPUTS next to EXTRA, keyed by the path
+run-all runs (and the pseudo key claude-plugin-validate, which has no file). They are part of selects(), so needed(),
+cases and the reuse hashes see them; a pseudo key is needed only by a global or top-level file or its own patterns,
+every other missing file stays unsure and runs. A docs-only change therefore selects none of them.
 Read-only. Integration owns the full run before a PR.
 """
 import ast
@@ -140,6 +145,51 @@ EXTRA = {
     "tests/codex-plugin.test.sh": [".agents/*", "docs/codex.md"],
     "tests/dogfood-grader.test.sh": ["tests/dogfood/*", "evals/*"],
     "tests/release-check.test.sh": ["VERSION", "README.md", "CHANGELOG.md"],
+}
+# Workspace checks (run-all --workspace-only, the regions between '# workspace-list-begin' and '# workspace-list-end' and
+# the check-registry.sh line): the plugin-side files each reads that its text does not name (data, skills, docs, schemas)
+# and the code it runs. Keys are the paths run-all passes to its run/runl/run1/gated lines; "claude-plugin-validate"
+# is a pseudo key (no file: the two `claude plugin validate --strict` lines). A key is needed when a changed file
+# matches its patterns, besides every rule above (needed() / selects()); a pseudo key is needed only by a global or
+# top-level file or its patterns. The product repos these checks read are not plugin files: only a plugin change is
+# scoped here. Unsure means run: a check that reads something not listed here must list it.
+ROUTING_INPUTS = SKILL_TEXT + ["scripts/factory-context.sh", "scripts/factory_session.py", "scripts/lib/routing*",
+                               "scripts/lib/context.py", "scripts/lib/resolve.jq", "evals/*"]
+WORKSPACE_INPUTS = {
+    # routing replay (tests/routing.test.sh) and routing properties (tests/routing-properties.test.py): the routing
+    # code, the registry (global), the skills the routing reads and the evals scenarios
+    "tests/routing.test.sh": ROUTING_INPUTS,
+    "tests/routing-properties.test.py": ROUTING_INPUTS,
+    # registry facts re-probed in the repos: the registry (global) and the probes in check-registry.sh; it greps
+    # skills/ for volatile values
+    "tests/facts.test.sh": ["skills/*", "scripts/check-registry.sh", "scripts/lib/compat.sh"],
+    # registry paths exist in the workspace: registry.json (global), the schemas, the quality plugins and the
+    # {plugin_root} files the registry names (scripts/checks/*), the skill directories and the policy libraries
+    "scripts/check-registry.sh": ["docs/schemas/*", "docs/registry.schema.json", "scripts/checks/*", "skills/*",
+                                  "scripts/lib/model_policy.py", "scripts/lib/subagent_policy.py",
+                                  "scripts/lib/compat.sh"],
+    # orca commands cited in the policies are checked against `orca --help`
+    "tests/orca-commands.test.sh": ["skills/delivery/references/delivery.md",
+                                    "skills/factory-core/references/parallel-work.md", "docs/pipeline-cli.md"],
+    # citations in the skills against the integration branches (cite_roots live in the registry, global)
+    "scripts/checks/skill-citations.py": SKILL_TEXT + ["scripts/lib/workspace.py"],
+    # read-only product-repo checks: the plugin side is the script, the registry (global) and the libraries it loads
+    "scripts/checks/sgl-determinism.py": [],
+    "scripts/checks/pin-status.py": ["scripts/lib/plugin_registry.py", "scripts/lib/workspace.py"],
+    "scripts/checks/wire-parity.sh": ["scripts/lib/workspace.sh", "scripts/lib/compat.sh"],
+    "scripts/checks/pin-plan.py": ["scripts/lib/plugin_registry.py", "scripts/lib/workspace.py"],
+    "scripts/checks/package-ready.py": [],
+    "scripts/checks/netcode-headless.sh": ["scripts/lib/fstate.py", "scripts/lib/workspace.sh",
+                                           "scripts/lib/compat.sh"],
+    # factory-context live snapshot of every repo (the script is global; the code it loads)
+    "scripts/factory-context.sh": ["scripts/lib/context.py", "scripts/lib/resolve.jq"],
+    # factory-status on the real workspace: the registry (global), the evidence and state libraries
+    "scripts/factory-status.py": ["scripts/lib/evidence.py", "scripts/lib/fstate.py", "scripts/lib/artifacts.py",
+                                  "scripts/lib/workspace.py", "scripts/lib/plugin_registry.py"],
+    # `claude plugin validate --strict` reads the plugin manifests, the marketplace, the skills, commands, agents
+    # and hooks
+    "claude-plugin-validate": [".claude-plugin/*", ".codex-plugin/*", ".agents/*", "skills/*", "commands/*",
+                               "agents/*", "hooks/*"],
 }
 PATH_RE = re.compile(
     r"(?<![\w.-])((?:scripts|skills|commands|templates|docs|testlab|evals|hooks|tests)/[A-Za-z0-9_./*-]+)")
@@ -692,8 +742,11 @@ def closure(path, conservative=False):
 
 @lru_cache(None)
 def selects(path, suite):
-    """A reached path selects the suite: it is the suite, a path its text names or one of its EXTRA patterns."""
-    return path == suite or hit(path, suite_patterns(suite)) or hit(path, EXTRA.get(suite, []))
+    """A reached path selects the suite: it is the suite, a path its text names, one of its EXTRA patterns or (a
+    workspace check) one of its WORKSPACE_INPUTS patterns. WORKSPACE_INPUTS is part of selects(), so the reuse hash
+    (hashes) covers it too."""
+    return (path == suite or hit(path, suite_patterns(suite) or ()) or hit(path, EXTRA.get(suite, []))
+            or hit(path, WORKSPACE_INPUTS.get(suite, [])))
 
 
 def names(path, suite):
@@ -714,7 +767,13 @@ def always(path):
 def needed(files, suite):
     if any(always(f) for f in files) or suite in files:
         return True
-    if suite_patterns(suite) is None or library_graph()[2]:
+    if library_graph()[2]:
+        return True
+    if suite_patterns(suite) is None:
+        # a pseudo workspace check (no file: claude-plugin-validate) runs for a global/top-level file (above) or when
+        # a changed file is one of its inputs; any other missing file is unsure and runs
+        if suite in WORKSPACE_INPUTS and "/" not in suite:
+            return any(hit(f, WORKSPACE_INPUTS[suite]) for f in files)
         return True
     for f in files:
         if f in DIRECT_SUITES:
