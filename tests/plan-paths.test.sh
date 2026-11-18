@@ -50,10 +50,23 @@ def windows_native(p):
     return str(drive) + r[2:] if r.startswith('C:/') else r
 
 
+INSTALL_ROOTS = ('C:/Program Files/Git', 'C:/Program Files (x86)/git', 'D:/tools/Git')
+
+
 @contextlib.contextmanager
-def windows():
-    """Run plan_paths and workspace as on Windows."""
-    with patch.object(plan_paths, '_is_nt', lambda: True), patch.object(workspace, 'os', NtOs()):
+def windows(roots=INSTALL_ROOTS):
+    """Run plan_paths and workspace as on Windows. `roots` are the Git for Windows install roots that exist: each
+    holds usr/bin/bash.exe, except a root ending in /git (lower case) that holds git-bash.exe instead."""
+    markers = set()
+    for root in roots:
+        markers.add(root + ('/git-bash.exe' if root.endswith('/git') else '/usr/bin/bash.exe'))
+    real_exists = os.path.exists
+
+    def exists(p):
+        return str(p) in markers or real_exists(p)
+
+    with patch.object(plan_paths, '_is_nt', lambda: True), patch.object(workspace, 'os', NtOs()), \
+            patch.object(os.path, 'exists', exists):
         yield
 
 
@@ -80,12 +93,36 @@ with windows():
                              ('C:\\ws\\repo', 'C:\\ws\\repo'), ('repo/x', 'repo/x'), ('', '')):
         expect('_native nt ' + repr(spelling), real_native(spelling), wanted)
     # only a leading /mnt/<letter>/ is a WSL mount (its MSYS rewrite sits under the Git install root); a native
-    # path that merely contains a /mnt/<letter>/ segment is kept
-    for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', 'C:/Program Files/Gitx/mnt/c/ws', 'D:/mnt/c'):
+    # path that merely contains a /mnt/<letter>/ segment is kept. A directory named Git is not an install root
+    # unless it holds usr/bin/bash.exe or git-bash.exe.
+    for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', 'C:/Program Files/Gitx/mnt/c/ws', 'D:/mnt/c',
+                     'C:/Users/x/Git/mnt/c/y'):
         expect('_native nt keeps ' + spelling, real_native(spelling), spelling)
     for spelling, wanted in (('/mnt/d/x', 'D:/x'), ('C:/Program Files/Git/mnt/d/x', 'D:/x'),
                              ('C:/Program Files (x86)/git/mnt/c/ws', 'C:/ws'), ('D:/tools/Git/mnt/e', 'E:/')):
         expect('_native nt converts ' + spelling, real_native(spelling), wanted)
+    # native_abs itself (every caller: context.py, run-checks.py) applies the same guard, not only plan_paths
+    for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/Git/mnt/c/y', 'C:/Users/x/mnt/c/y'):
+        expect('native_abs nt keeps ' + spelling, workspace.native_abs(spelling), spelling)
+    for spelling, wanted in ((MSYS_WSL, 'C:/ws'), ('C:/Program Files/Git/mnt/d/x', 'D:/x'),
+                             ('C:/Program Files (x86)/git/mnt/c/ws/repo', 'C:/ws/repo'), ('/mnt/c/ws', 'C:/ws'),
+                             ('C:/ws', 'C:/ws')):
+        expect('native_abs nt converts ' + spelling, workspace.native_abs(spelling), wanted)
+    # the markers decide: git-bash.exe or usr/bin/bash.exe under a directory with any name qualifies, a directory
+    # named Git without either does not
+    with windows(roots=('C:/Users/x/Git',)):
+        expect('native_abs nt converts under a user directory named Git that holds bash.exe',
+               workspace.native_abs('C:/Users/x/Git/mnt/c/y'), 'C:/y')
+    with windows(roots=('C:/Users/x/git',)):
+        expect('native_abs nt converts under a root that holds git-bash.exe',
+               workspace.native_abs('C:/Users/x/git/mnt/c/y'), 'C:/y')
+    with windows(roots=()):
+        expect('native_abs nt keeps a Git directory without markers',
+               workspace.native_abs(MSYS_WSL), MSYS_WSL)
+        expect('_native nt keeps a Git directory without markers', real_native(MSYS_WSL), MSYS_WSL)
+    # an existing path is never rewritten, whatever its prefix
+    with windows(), patch.object(os.path, 'exists', lambda p: True):
+        expect('native_abs nt keeps an existing path', workspace.native_abs(MSYS_WSL), MSYS_WSL)
 for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', '/mnt/d/x', 'C:/Program Files/Git/mnt/d/x'):
     with posix():
         expect('_native posix identity ' + spelling, real_native(spelling), spelling)

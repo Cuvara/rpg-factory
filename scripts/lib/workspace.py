@@ -5,6 +5,9 @@
   linked_worktree(d)               (toplevel, main checkout) of a linked worktree, read from its `.git` file (no git call)
   plugin_checkout(d)              the rpg-factory checkout holding d, else None (no git call)
   native_path(p) / native_abs(p)   a path written in another shell's drive form as this platform resolves it
+                                   (native_abs also undoes git-bash's MSYS rewrite, only under a Git install root)
+  git_out(cwd, *args)              git's stripped stdout, "" on any failure
+  git_result(cwd, *args)           (stdout, error): error is None, "timeout" or "failed"
   default_workspace(env, nt, registry)  the configured workspace or the registry default in native form
   registry_workspace_default(registry)  the registry's workspace default as written (raw, None when absent)
 
@@ -19,13 +22,22 @@ PLUGIN_NAME = "rpg-factory"
 WSL_WORKSPACE_DEFAULT = "/mnt/c/Workspaces/UnityIndie"
 
 
-def git_out(cwd, *args, timeout=5):
-    """git's stripped stdout, or "" when git fails or is missing."""
+def git_result(cwd, *args, timeout=5):
+    """(stdout, error) of `git -C cwd args`: the raw stdout and None on exit 0; (None, "timeout") when git ran
+    past `timeout` seconds; (None, "failed") on a nonzero exit or when git is missing or cannot be run."""
     try:
         r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        return r.stdout.strip() if r.returncode == 0 else ""
+    except subprocess.TimeoutExpired:
+        return None, "timeout"
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return None, "failed"
+    return (r.stdout, None) if r.returncode == 0 else (None, "failed")
+
+
+def git_out(cwd, *args, timeout=5):
+    """git's stripped stdout, or "" when git fails, times out or is missing (git_result tells them apart)."""
+    out, _ = git_result(cwd, *args, timeout=timeout)
+    return out.strip() if out is not None else ""
 
 
 def native_path(p, nt=None):
@@ -52,18 +64,28 @@ def default_workspace(env=None, nt=None, registry=None):
     )
 
 
+def _is_git_install_root(prefix):
+    """True when prefix (forward slashes) is a Git for Windows install root: it holds usr/bin/bash.exe or
+    git-bash.exe. A directory merely named `Git` does not qualify."""
+    return any(os.path.exists(prefix + "/" + marker) for marker in ("usr/bin/bash.exe", "git-bash.exe"))
+
+
 def native_abs(p):
     """Map a forward-slash path written in another shell's drive form to this platform's form: on Windows
     the git-bash `/c/...` and WSL `/mnt/c/...` forms become `C:/...`; elsewhere `C:/...` becomes
-    `/mnt/c/...`. Anything else is returned unchanged."""
+    `/mnt/c/...`. Anything else is returned unchanged.
+
+    On Windows `X:/<prefix>/mnt/<l>/rest` is also read as git-bash's MSYS rewrite of the WSL argument
+    `/mnt/<l>/rest` (`C:/Program Files/Git/mnt/c/ws` is `/mnt/c/ws`), which it is only when it does not exist and
+    <prefix> is a Git for Windows install root; a native path that merely contains a `/mnt/<l>/` segment
+    (`C:/proj/mnt/d/new`) is returned unchanged."""
     if os.name == "nt":
         m = re.match(r"^/(?:mnt/)?([A-Za-z])(/.*)?$", p)
         if m:
             return f"{m.group(1).upper()}:{m.group(2) or '/'}"
-        # git-bash rewrites an argument /mnt/c/x into <Git install>/mnt/c/x (MSYS path conversion)
-        m = re.match(r"^[A-Za-z]:/.*?/mnt/([A-Za-z])(/.*)?$", p)
-        if m and not os.path.exists(p):
-            return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+        m = re.match(r"^([A-Za-z]:/.*?)/mnt/([A-Za-z])(/.*)?$", p)
+        if m and not os.path.exists(p) and _is_git_install_root(m.group(1)):
+            return f"{m.group(2).upper()}:{m.group(3) or '/'}"
     else:
         m = re.match(r"^([A-Za-z]):(/.*)?$", p)
         if m:
