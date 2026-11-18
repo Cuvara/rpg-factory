@@ -319,9 +319,11 @@ RUNALL_PLAIN = re.compile(r'(?:env -u TMPDIR[ \t]+)?(?:bash[ \t]+)?(?:\./)?tests
 DO_NOT_RUN = ('DO NOT RUN (run-all inside a check that is not one plain scoped run-all over known suites; full runs '
               'belong to integration QA; report it NOT_RUN): ')
 # run-all flags (tests/run-all.sh's argument loop) a plain scoped check may carry; --release and --list-suites are no
-# task QA. RUNALL_VALUE_FLAGS take the next word as their value.
+# task QA. RUNALL_VALUE_FLAGS take the next word as their value; --within names suites like --only-suites (the scoped
+# task QA form).
 RUNALL_FLAGS = frozenset({'--no-workspace', '--no-claude', '--reuse', '--no-wait', '--no-reuse'})
-RUNALL_VALUE_FLAGS = frozenset({'--only-suites', '--base', '-j', '--jobs'})
+RUNALL_VALUE_FLAGS = frozenset({'--only-suites', '--within', '--base', '-j', '--jobs'})
+RUNALL_SUITE_FLAGS = ('--only-suites', '--within')
 SUITE_PATH = re.compile(r'tests/[\w.-]+\.(?:sh|py)')
 # a suite path verdict --failed-suites accepts without run-all's list (run-all itself excluded: RUNALL_WORD)
 FAILED_SUITE_PATH = re.compile(r'(?:tests|testlab|scripts)/(?:[\w.-]+/)*[\w.-]+\.(?:sh|py)')
@@ -369,9 +371,9 @@ def strip_comments(check):
 
 def runall_args(words):
     """run-all's own argument loop over the words after tests/run-all.sh (tests/run-all.sh's `case "$1"`): a flag that
-    takes a value consumes the next word, as there. Returns (affected, only-suites value or None, unknown words); a
-    word run-all ignores (`--only-suitesXYZ`, `--affected=1`) is unknown, and a value that is itself a flag (`--base
-    --affected`) is unknown too: run-all would take it as the value, never as the flag."""
+    takes a value consumes the next word, as there. Returns (affected, suites value (--only-suites or --within) or
+    None, unknown words); a word run-all ignores (`--only-suitesXYZ`, `--affected=1`) is unknown, and a value that is
+    itself a flag (`--base --affected`) is unknown too: run-all would take it as the value, never as the flag."""
     affected, only, unknown, i = False, None, [], 0
     while i < len(words):
         w = words[i]
@@ -379,13 +381,14 @@ def runall_args(words):
             value = words[i + 1] if i + 1 < len(words) else ''
             if not value or value.startswith('-'):
                 unknown.append(w)
-            elif w == '--only-suites':
+            elif w in RUNALL_SUITE_FLAGS:
                 only = value
             i += 2
             continue
-        if w.startswith('--only-suites='):
-            if w[len('--only-suites='):]:
-                only = w[len('--only-suites='):]
+        flag = next((f for f in RUNALL_SUITE_FLAGS if w.startswith(f + '=')), None)
+        if flag:
+            if w[len(flag) + 1:]:
+                only = w[len(flag) + 1:]
             else:
                 unknown.append(w)
         elif w == '--affected':
@@ -397,9 +400,9 @@ def runall_args(words):
 
 
 def runall_words(check):
-    """The --only-suites entries of a check that is exactly one plain, scoped run-all invocation (RUNALL_PLAIN, only
-    flags run-all knows, with --affected or a non-empty --only-suites list), else None. An empty list: --affected
-    alone."""
+    """The --only-suites or --within entries of a check that is exactly one plain, scoped run-all invocation
+    (RUNALL_PLAIN, only flags run-all knows, with --affected or a non-empty suite list), else None. An empty list:
+    --affected alone."""
     match = RUNALL_PLAIN.fullmatch(check.strip(' \t'))
     if not match:
         return None
@@ -482,7 +485,7 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
 
 def full_run(check):
     """A check that starts a full run-all: one command of it (standalone or a part of a compound command) runs
-    tests/run-all.sh without --affected or --only-suites. Shell operators and redirections split words even without
+    tests/run-all.sh without --affected or a suite list (--only-suites, --within). Shell operators and redirections split words even without
     spaces (`tests/run-all.sh>qa.log`, `2>&1`, `|tee`); a redirection target is no argument; a quoted word (`bash -c
     '...'`) or an assignment value is checked as a command of its own. A comment ends at its line end: the next line
     stays a command of its own. Unbalanced quotes (anything unparsable): any run-all inside is full."""
@@ -521,16 +524,31 @@ def full_run(check):
     return False
 
 
-def qa_warnings(task):
+def names_test_suite(checks):
+    """Whether any check names a test suite or runs a test command: a tests/ suite script, a scoped run-all (with
+    --affected or a suite list) or a product repo's own test runner."""
+    return any(SUITE_CHECK.search(c) or mentions_runall(c) or
+               re.search(r'\b(?:dotnet test|go test|pytest|npm test|cargo test)\b', c)
+               for c in checks)
+
+
+def qa_warnings(task, names_suite=None):
+    """Plan warnings of one task's checks and acceptance. names_suite: whether its checks name a test suite (default:
+    read from the checks; task_qa_warnings passes the answer for the whole list, as it hides the scoped run-all checks
+    from this call)."""
     out = []
-    if any(SUITE_CHECK.search(c) or mentions_runall(c) or
-           re.search(r'\b(?:dotnet test|go test|pytest|npm test|cargo test)\b', c)
-           for c in task.get('checks', [])):
-        out.append(f"task {task.get('id')}: checks contain test suites; implementers run syntax checks only, verify runs suites")
+    if names_suite is None:
+        names_suite = names_test_suite(task.get('checks', []))
+    raw_paths = task.get('paths')
+    # Malformed paths (not a list, non-string entries) are ignored for this rule; validate reports them elsewhere.
+    paths = [p for p in raw_paths if isinstance(p, str)] if isinstance(raw_paths, list) else []
+    if paths and not all(prose_path(p.replace('\\', '/')) for p in paths) and not names_suite:
+        out.append(f"task {task.get('id')}: checks name no test suite; name the suites that test the changed behaviour "
+                   "(task QA runs only them with --within)")
     if any(full_run(c) for c in task.get('checks', [])):
         out.append(f"task {task.get('id')}: full run in checks; full runs belong to integration QA")
     for text in task.get('acceptance', []):
-        scoped = '--affected' in text or '--only-suites' in text
+        scoped = '--affected' in text or '--only-suites' in text or '--within' in text
         if not scoped and re.search(r'full.*run-all|run-all\.sh.*0 failed'
                                     r'|\b(?:full|whole|entire|complete)\s+(?:test\s+)?suites?\b|\ball\s+(?:the\s+)?suites\b',
                                     text, re.I):

@@ -96,8 +96,13 @@ tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace 
 tests/run-all.sh --no-claude        # skip `claude plugin validate`
 tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh
 tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base (tests/affected.py); not the PR gate
-tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected; task QA: the task's checks);
-                                    # with --affected or --only-suites, live blocks and script checks (skill-citations,
+tests/run-all.sh --affected --base REF --within LIST -j 1  # task QA: only the named check suites (comma list) that the
+                                    # change selects, each with its affected cases; a named suite the change misses still
+                                    # runs in full; the rest of the selection is left to CI (one 'left to CI: N suites' line)
+tests/run-all.sh --workspace-only --base REF  # integration QA: only the workspace checks the change reaches (no --base: all)
+tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected); the explicit suite
+                                    # selector, no longer the task QA; with --affected or --only-suites, live blocks and
+                                    # script checks (skill-citations,
                                     # factory-context, pin-plan, package-ready, netcode-headless...) are gated like suites
 tests/run-all.sh --inline-only      # only the inline checks, no suite; CI runs it on both OSes
 python3 -B scripts/ci-plan.py --base REF   # print the CI plan (suites and OS matrix) as JSON
