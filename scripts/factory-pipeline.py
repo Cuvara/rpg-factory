@@ -4786,8 +4786,16 @@ def task_progress_since(plan, reg, task, ts):
     except OSError:
         pass
     me = glob.escape(safe_name(task["id"]))
-    for pattern in (f"{me}__review*.json", f"{me}__qa*.json", f"{me}@*__review*.json", f"{me}@*__qa*.json"):
+    # verdict files only: `<task>[@<subtask>]__review.json|__qa.json` and their `__<suffix>` forms. The implementer and
+    # reviewer model records (`*.model.json`) are written by dispatch together with the spec: not progress.
+    patterns = []
+    for stem in (me, f"{me}@*"):
+        for kind in ("review", "qa"):
+            patterns += [f"{stem}__{kind}.json", f"{stem}__{kind}__*.json"]
+    for pattern in patterns:
         for path in glob.glob(os.path.join(glob.escape(verdict_dir(plan)), pattern)):
+            if path.endswith(".model.json"):
+                continue
             try:
                 if os.path.getmtime(path) > ts:
                     return "verdict"

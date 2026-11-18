@@ -4736,6 +4736,13 @@ nrun "$ND" --task wr
 nok "a pointer wrapped after 'at' (indented continuation) is recognised" "^wr  term_wrap  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-wrap-implement-0123456789abcdef\.md\)$"
 nok "a path wrapped in the middle is recognised" "^wr  term_mid  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-mid-implement-0123456789abcdef\.md\)$"
 nchk "the wrapped screens send nothing without --send" nsends 0
+# dispatch writes the implementer and reviewer model records together with the spec: they are not task progress
+printf '{}\n' > "$NREC/wr__reviewer__0123456789ab.model.json"; printf '{}\n' > "$NREC/wr@sub__implementer.model.json"
+touch -d "@$((T0 + 100))" "$NREC/wr__reviewer__0123456789ab.model.json" "$NREC/wr@sub__implementer.model.json"
+nrun "$ND" --task wr
+nok "model records newer than the spec are no progress: the terminal is still STUCK" "^wr  term_wrap  idle [0-9]+s  STUCK  start prompt not submitted"
+nno "and no progress is reported for the model records" "progress since the spec was written"
+rm -f "$NREC/wr__reviewer__0123456789ab.model.json" "$NREC/wr@sub__implementer.model.json"
 
 # 7. no Orca: a note and exit 0, nothing sent or written
 NPATH="$noorca" nrun "$ND" --send
