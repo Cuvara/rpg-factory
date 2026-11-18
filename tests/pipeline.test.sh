@@ -3006,6 +3006,76 @@ note_forward() {
 }
 note_forward "lead -> implement: notes starting with - and --" '' -x --foo -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note=-x --note=--foo
 note_forward "lead -> implement: an environment note starting with -" -e -e -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
+# --note-file FILE (repeatable): the file's text reaches the spec verbatim under 'Session note file <abs path>:'; a missing
+# or blank file exits 2. The lead spec forwards it as --note-file=<abs path>.
+printf 'forward me\nsecond line\n' > "$TMP/nf-fwd.txt"
+printf ' \n\t\n\n' > "$TMP/nf-blank.txt"
+expect "dispatch: a missing --note-file exits 2 and names the option" 2 '--note-file' dispatch "$TOOL" --task t --phase implement --runner orca --note-file "$TMP/nf-missing.txt"
+expect "dispatch: a blank --note-file exits 2 and names the option" 2 '--note-file' dispatch "$TOOL" --task t --phase implement --runner orca --note-file "$TMP/nf-blank.txt"
+expect "dispatch: a missing --note-file on a lead dispatch exits 2" 2 '--note-file' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note-file "$TMP/nf-missing.txt"
+for phase in 'implement' 'verify --sha abc1234' 'lead --report-to run:x'; do
+  expect_spec "$phase spec: the note file header names the file" '^Session note file .*nf-fwd\.txt:$' dispatch "$TOOL" --task t --phase $phase --runner orca --note-file "$TMP/nf-fwd.txt"
+  expect_spec "$phase spec: the note file text follows its header" '^forward me$' dispatch "$TOOL" --task t --phase $phase --runner orca --note-file "$TMP/nf-fwd.txt"
+  refute_spec "$phase spec: no note file section without --note-file" 'Session note file' dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+expect_spec "lead spec: dispatch forwards --note-file" '<dispatch>.*--note-file=.*nf-fwd\.txt' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note-file "$TMP/nf-fwd.txt"
+refute_spec "lead spec: no --note-file forwarded without one" '--note-file=' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
+note_forward "lead -> implement: a forwarded --note-file dispatch runs" '' one -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note-file "$TMP/nf-fwd.txt"
+# Launch notes never travel on the command line (cmd.exe misreads parentheses and quotes): every launch line carries
+# only the one-line pointer, whatever the notes contain; the spec holds them, the --note-file text unchanged.
+if python3 -B - "$P" "$TOOL" "$TMP" <<'PY'
+import os, pathlib, shlex, subprocess, sys
+p, plan, tmp = sys.argv[1:]
+env = {k: v for k, v in os.environ.items() if k != "RPG_FACTORY_SESSION_NOTE"}
+body = 'file ( ) " \' & | text\n  indented   line with  gaps (x)\n\nlast line\n'
+note = 'run ( ) " \' & | note\nwith  a second line'
+nfile = pathlib.Path(tmp) / "nf-tricky.txt"
+def dispatch(phase, notes, text):
+    nfile.write_bytes(text.encode("utf-8"))  # bytes: no newline translation on Windows
+    args = ["dispatch", plan, "--task", "t", *phase, "--runner", "orca"]
+    for n in notes:
+        args += ["--note", n]
+    args += ["--note-file", str(nfile)]
+    r = subprocess.run([sys.executable, "-B", p, *args], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, (args, r.stderr)
+    return r.stdout
+def pointers(out):
+    found = []
+    for line in out.splitlines():
+        if "Read your task spec at" not in line:
+            continue
+        argv = shlex.split(line)
+        flag = "--prompt" if "--prompt" in argv else "--spec"
+        found.append(argv[argv.index(flag) + 1])
+    assert found, out
+    return found
+def spec_of(prompt):
+    prefix, suffix = "Read your task spec at ", " and follow it."
+    assert prompt.startswith(prefix) and prompt.endswith(suffix) and "\n" not in prompt, repr(prompt)
+    path = pathlib.Path(prompt[len(prefix):-len(suffix)])
+    assert path.is_absolute(), path
+    return path.read_text(encoding="utf-8")
+collapsed = " ".join(note.split())
+paths = []
+for phase in (["lead", "--report-to", "run:x"], ["implement"]):
+    out = dispatch(phase, [note], body)
+    assert "run (" not in out and "last line" not in out and "second line" not in out, out  # no note text on any line
+    for prompt in pointers(out):
+        spec = spec_of(prompt)
+        assert f"Session note: {collapsed}" in spec, spec
+        header = f"Session note file {os.path.abspath(nfile)}:\n"
+        assert header + body[:-1] in spec, spec  # verbatim: gaps, indentation and the blank line are kept
+        paths.append(prompt)
+# two dispatches that differ only in a note, or only in the note file's text, name two different spec files
+a = pointers(dispatch(["implement"], [note], body))
+b = pointers(dispatch(["implement"], [note + " more"], body))
+c = pointers(dispatch(["implement"], [note], body + "one more line\n"))
+assert len({a[-1], b[-1], c[-1]}) == 3, (a, b, c)
+assert "last line" in spec_of(a[-1]) and "one more line" not in spec_of(a[-1])  # the first spec is not overwritten
+assert "one more line" in spec_of(c[-1])
+PY
+then pass=$((pass + 1)); echo "PASS  launch notes stay off the command line; the spec holds --note and --note-file verbatim"
+else fail=$((fail + 1)); echo "FAIL  launch notes stay off the command line; the spec holds --note and --note-file verbatim"; fi
 if python3 -B - "$ROOT" "$TMP" <<'PY'
 import importlib.util, pathlib, shlex, sys, tempfile
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
@@ -3111,10 +3181,12 @@ value["tasks"] = [value["tasks"][0]]
 fresh.write_text(json.dumps(value), encoding="utf-8")
 check(["dispatch", str(fresh), "--task", "gw", "--phase", "lead"])  # no task branch/worktree yet
 check(["dispatch", str(fresh), "--task", "integration:server", "--phase", "qa", "--sha", "abc1234"])
-# the planner's one line also names the request, whitespace runs collapsed; the spec keeps it verbatim
+# the planner's one line is only the pointer (the request no longer rides on the command line); the spec keeps the
+# request verbatim under 'Run lead notes:'
 request = "add a thing\n  with a\tsecond requirement\n"
-spec = check(["planner", "--request", request], "_planner", " Request: add a thing with a second requirement")
-assert f"Request: {request}" in spec.read_text(encoding="utf-8")
+spec = check(["planner", "--request", request], "_planner")
+text = spec.read_text(encoding="utf-8")
+assert f"Request: {request}" in text and "Run lead notes:\n" in text, text
 # A second prompt must never alter a spec an already-launched session has yet to read.
 assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full in saved.items())
 PY
