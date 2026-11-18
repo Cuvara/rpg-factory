@@ -17,7 +17,7 @@
       "id": "external-path-uri",
       "repo": "plugin",
       "kind": "code",
-      "objective": "Backlog external-path-uri. scripts/assetgen/stylelock.py EXTERNAL_PATH (checked for external_source.origin and rights_note) still accepts file: URIs (file:///C:/..., file:/x, FILE://host/share) and environment-variable paths ($HOME/..., ${HOME}/..., %USERPROFILE%\\... and %USERPROFILE%/...). Refuse those forms, in any letter case, with the existing error message, through EXTERNAL_PATH or a second pattern checked beside it. Keep accepting plain prose, https:// and http:// URLs, relative names, a price like $5 and a percentage like 100%.",
+      "objective": "Backlog external-path-uri. scripts/assetgen/stylelock.py EXTERNAL_PATH (checked for external_source.origin and rights_note) still accepts file: URIs (file:///<drive>:/..., file:/x, FILE://host/share) and environment-variable paths ($HOME/..., ${HOME}/..., %USERPROFILE%\\... and %USERPROFILE%/...). Refuse those forms, in any letter case, with the existing error message, through EXTERNAL_PATH or a second pattern checked beside it. Keep accepting plain prose, https:// and http:// URLs, relative names, a price like $5 and a percentage like 100%.",
       "paths": [
         "scripts/assetgen/stylelock.py",
         "tests/assetgen.test.sh",
@@ -32,7 +32,7 @@
         "tests/assetgen.test.sh"
       ],
       "acceptance": [
-        "promote-anchor --external (or the style validation it runs) refuses each of file:///C:/art/a.png, file:/art/a.png, FILE://host/share/a.png, $HOME/art/a.png, ${HOME}/art/a.png, %USERPROFILE%\\art\\a.png and %USERPROFILE%/art/a.png in origin and in rights_note, with the existing message",
+        "promote-anchor --external (or the style validation it runs) refuses each of file:///<drive>:/art/a.png, file:/art/a.png, FILE://host/share/a.png, $HOME/art/a.png, ${HOME}/art/a.png, %USERPROFILE%\\art\\a.png and %USERPROFILE%/art/a.png in origin and in rights_note, with the existing message",
         "https://example.com/a.png, 'bought for $5' and '100% original work' are still accepted",
         "every existing assetgen case passes"
       ]
