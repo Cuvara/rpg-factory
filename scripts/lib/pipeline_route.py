@@ -539,8 +539,10 @@ def qa_warnings(task, names_suite=None):
     out = []
     if names_suite is None:
         names_suite = names_test_suite(task.get('checks', []))
-    paths = task.get('paths') or []
-    if paths and not all(prose_path(p) for p in paths) and not names_suite:
+    raw_paths = task.get('paths')
+    # Malformed paths (not a list, non-string entries) are ignored for this rule; validate reports them elsewhere.
+    paths = [p for p in raw_paths if isinstance(p, str)] if isinstance(raw_paths, list) else []
+    if paths and not all(prose_path(p.replace('\\', '/')) for p in paths) and not names_suite:
         out.append(f"task {task.get('id')}: checks name no test suite; name the suites that test the changed behaviour "
                    "(task QA runs only them with --within)")
     if any(full_run(c) for c in task.get('checks', [])):
