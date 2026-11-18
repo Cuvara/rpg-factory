@@ -86,8 +86,162 @@
 # only in ui.positions and ui.positions validation; every result row of the anchor_target lint cases; the tiled VAE decode
 # of the hybrid anchor fixture),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
-# Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
+# Usage: tests/assetgen.test.sh [--case NAMES | --only NAMES] [--list-cases] [--update-golden] [-h|--help]
+#   (standalone; temp authoring git repo; no network). The suite is a list of case groups, each one coherent feature
+#   of the engine; no selector runs every group in the order of the text above. NAMES is a comma-separated list of
+#   group names (--list-cases prints them); selectors may be repeated; an empty name, an unknown name or an unknown
+#   option exits 2. A group that reads the state of another one (its run directories, authoring repos or helper files)
+#   names that prerequisite in case_deps below and the prerequisite runs first, once; the authoring repo shared by most
+#   groups is built only when a selected group needs it. ASSETGEN_TEST_TIMES=1 prints the wall time of each group
+#   ("-- group NAME 1.234s"); ASSETGEN_TEST_PLAN=1 prints the groups that would run and exits.
+#   --update-golden rewrites the golden workflows (render-golden group).
+# The case-map lines below name, per group, the inputs it reads (affected.py case_map: every file the suite selects
+# that a changed file reaches must match a pattern, else every group runs). Measured: every scripts/assetgen/*.py module
+# reaches assetgen.py (the CLI each group runs), approval.py, the quality plugin, the command wrapper and the
+# graph-style and style self-tests, so an engine change has no honest narrower map: it selects every group, and ALL is
+# the fallback for any file not listed. Data, fixtures and the plugin side are narrower; a file is listed under every
+# group that might read it, never fewer.
+# case-map: list-show scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: resolve scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: render-golden scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/cases/*
+# case-map: ui-workflow scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/*
+# case-map: ui-layout scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/ui-layout.json
+# case-map: filename-prefix scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: lint scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/object_info.json tests/fixtures/assetgen/object_info-packs.json
+# case-map: graph-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/graph-style/* tests/fixtures/assetgen/graphstyle_selftest.py
+# case-map: fixture-pngs scripts/assetgen/*.py
+# case-map: png-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: review-cmd scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/factory-cmd.py
+# case-map: embed scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: e2e3 scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
+# case-map: sheet-sizes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: sheet-failures scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: sheet-repeat scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: sheet-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: sheet-discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: pixel-grid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: output-filter scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/comfy-job-state.json
+# case-map: fit scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: finalize-core scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: budget scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: publish scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: manifest scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json docs/artifact.schema.json
+# case-map: gen-run-plugin scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
+# case-map: local-hybrid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/local/*
+# case-map: engine-notes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/*
+# case-map: style-lock scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
+# case-map: style-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/graph-style/*
+# case-map: anchor-target scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/local/*
+# case-map: profile-routing scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/*
+# case-map: style-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
+# case-map: gen-run-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
+# case-map: style-init scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
+# case-map: style-derive scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
+# case-map: style-bump scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
+# case-map: style-report scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
+# case-map: selftests scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/consistency_selftest.py tests/fixtures/assetgen/imaging_selftest.py tests/fixtures/assetgen/style_selftest.py tests/fixtures/assetgen/pixelgrid_selftest.py tests/fixtures/assetgen/slicer_selftest.py
+# case-map: hygiene scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
 set -uo pipefail
+ALL_GROUPS='list-show resolve render-golden ui-workflow ui-layout filename-prefix lint graph-style fixture-pngs png-qa review-cmd embed e2e3 sheet-sizes sheet-failures sheet-repeat sheet-cli sheet-discard pixel-grid output-filter fit finalize-core discard budget publish manifest gen-run-plugin local-hybrid engine-notes style-lock style-cli anchor-target profile-routing style-qa gen-run-style style-init style-derive style-bump style-report selftests hygiene'
+usage() {
+  printf '%s\n' 'Usage: assetgen.test.sh [--case NAMES | --only NAMES] [--list-cases] [--update-golden] [-h|--help]' \
+    'NAMES is a comma-separated list of case groups; selectors may be repeated. No selector runs every group.' \
+    'Prerequisite groups run automatically; dependencies are documented beside case_deps below.' \
+    'ASSETGEN_TEST_TIMES=1 prints the wall time of each group; ASSETGEN_TEST_PLAN=1 prints the groups that would run and exits.' \
+    '--update-golden rewrites the golden workflows.'
+}
+SELECTED=; list_cases=0; update_golden=false
+# one selector value (the argument of --case/--only) is validated as it is parsed, before the commas become spaces: an
+# empty or whitespace-only value and an empty name inside the list (leading, trailing or doubled comma) are usage errors,
+# never silently dropped and never "run everything"
+add_selector() {
+  local compact="${1//[[:space:]]/}"
+  case "$compact" in
+    ''|,*|*,|*,,*) printf 'Empty case name in selector: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  SELECTED+=" ${1//,/ }"
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --list-cases) list_cases=1; shift ;;
+    --update-golden) update_golden=true; shift ;;
+    --case|--only)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_selector "$2"; shift 2 ;;
+    --case=*|--only=*) add_selector "${1#*=}"; shift ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before creating any fixture (also with --list-cases).
+unique_selected=
+for selected in $SELECTED; do
+  [[ " $ALL_GROUPS " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+  [[ " $unique_selected " == *" $selected "* ]] || unique_selected+=" $selected"
+done
+SELECTED="$unique_selected"
+if [ "$list_cases" = 1 ]; then printf '%s\n' $ALL_GROUPS; exit 0; fi
+[ -n "$SELECTED" ] || SELECTED="$ALL_GROUPS"
+# case_deps GROUP: the groups whose state GROUP reads (run directories, authoring repos, helper files). The helpers every
+# group may call (mkrun, case_params, finrun, st, ...) are defined for every selection further down and need no entry.
+case_deps() {
+  case "$1" in
+    ui-workflow) echo render-golden ;;
+    lint) echo render-golden ;;
+    graph-style) echo render-golden ;;
+    png-qa) echo lint fixture-pngs ;;
+    review-cmd) echo png-qa fixture-pngs ;;
+    embed) echo fixture-pngs ;;
+    e2e3) echo fixture-pngs ;;
+    pixel-grid) echo fixture-pngs ;;
+    output-filter) echo fixture-pngs ;;
+    fit) echo fixture-pngs ;;
+    finalize-core) echo fixture-pngs ;;
+    discard) echo finalize-core fixture-pngs ;;
+    budget) echo fixture-pngs ;;
+    publish) echo embed ;;
+    manifest) echo fixture-pngs ;;
+    gen-run-plugin) echo manifest discard graph-style png-qa fixture-pngs ;;
+    local-hybrid) echo gen-run-plugin ;;
+    style-cli) echo gen-run-plugin render-golden fixture-pngs ;;
+    anchor-target) echo style-cli ;;
+    style-qa) echo style-cli fixture-pngs ;;
+    gen-run-style) echo fixture-pngs ;;
+    style-derive) echo style-init fixture-pngs ;;
+    style-bump) echo style-init style-cli ;;
+    style-report) echo style-init ;;
+  esac
+}
+has_group() { [[ " $SELECTED " == *" $1 "* ]]; }
+# Expand to a fixed point so even the last requested group brings all of its setup.
+pending="$SELECTED"
+while [ -n "$pending" ]; do
+  next_pending=
+  for selected in $pending; do
+    for dependency in $(case_deps "$selected"); do
+      if [[ " $SELECTED " != *" $dependency "* ]]; then SELECTED+=" $dependency"; next_pending+=" $dependency"; fi
+    done
+  done
+  pending="$next_pending"
+done
+# ASSETGEN_TEST_PLAN=1 prints the groups that would run (selection plus prerequisites, in suite order) and exits
+if [ "${ASSETGEN_TEST_PLAN:-0}" = 1 ]; then
+  plan=; for selected in $ALL_GROUPS; do has_group "$selected" && plan+=" $selected"; done
+  printf 'plan:%s\n' "$plan"; exit 0
+fi
+# group_begin NAME succeeds when the group is selected; group_end prints its wall time with ASSETGEN_TEST_TIMES=1
+group_begin() {
+  has_group "$1" || return 1
+  GROUP_NAME="$1"; GROUP_START="$EPOCHREALTIME"
+}
+group_end() {
+  if [ "${ASSETGEN_TEST_TIMES:-0}" = 1 ]; then
+    local now="$EPOCHREALTIME" elapsed
+    elapsed=$(( ${now/./} - ${GROUP_START/./} ))
+    printf -- '-- group %s %d.%03ds\n' "$GROUP_NAME" "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
+  fi
+}
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
@@ -95,7 +249,6 @@ export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state" CLAUDE_PLUGIN_ROOT="$ROO
 # no case reads the machine's comfy-cli job state: the output filter cases write their own job files here
 export RPG_FACTORY_COMFY_JOBS_DIR="$TMP/comfy-jobs"; mkdir -p "$RPG_FACTORY_COMFY_JOBS_DIR"
 unset ASSETGEN_NO_PIL
-update_golden=false; [ "${1:-}" = "--update-golden" ] && update_golden=true
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      /'; return 0; }
@@ -291,15 +444,13 @@ EOF2
     *) echo "Unknown case: $1" >&2; return 2 ;;
   esac
 }
-if [ "${1:-}" = --case ]; then
-  [ "$#" -eq 2 ] || { echo 'Usage: assetgen.test.sh --case NAME' >&2; exit 2; }
-  sh_case "$2" || exit $?
-  echo "assetgen: $pass passed, $fail failed"
-  [ "$fail" -eq 0 ]; exit $?
-fi
 
-# -- temp authoring repo with a game layer
+# The temp authoring repo with a game layer is built by setup_base (below) only when a selected group needs it.
+NOBASE_GROUPS='sheet-sizes sheet-failures sheet-repeat sheet-cli sheet-discard fixture-pngs engine-notes style-lock profile-routing gen-run-style style-init style-derive style-bump style-report selftests hygiene'
 AUTH="$TMP/game-authoring"; GL="$AUTH/assetgen"
+CORE="$ROOT/templates/assetgen"
+core_ids() { local f; for f in "$CORE/$1"/*.json; do [ -f "$f" ] && basename "$f" .json; done | LC_ALL=C sort; }
+setup_base() {
 mkdir -p "$GL/purposes" "$GL/styles" "$GL/templates" "$GL/runs"
 cat > "$GL/purposes/icon.json" <<'EOF'
 {"extends": "icon", "title": "RPG item icon", "params": {"quality": "medium"}, "qa": {"size": {"mode": "exact", "fit": "none"}}}
@@ -316,11 +467,92 @@ EOF
 git init -q -b main "$AUTH" && git -C "$AUTH" add -A && git -C "$AUTH" "${G[@]}" commit -qm "game layer"
 
 # core ids come from the core data files, so a new purpose, style or template needs no edit here
-CORE="$ROOT/templates/assetgen"
-core_ids() { local f; for f in "$CORE/$1"/*.json; do [ -f "$f" ] && basename "$f" .json; done | LC_ALL=C sort; }
 CORE_PURPOSES=$(core_ids purposes); CORE_STYLES=$(core_ids styles); CORE_TEMPLATES=$(core_ids workflows)
 n_p=$(wc -w <<<"$CORE_PURPOSES"); n_s=$(wc -w <<<"$CORE_STYLES"); n_t=$(wc -w <<<"$CORE_TEMPLATES"); n_core=$((n_p + n_s + n_t))
+}
+need_base=0
+for selected in $SELECTED; do [[ " $NOBASE_GROUPS " == *" $selected "* ]] || need_base=1; done
+[ "$need_base" = 0 ] || setup_base
 
+# Shared helpers and constants of several groups: definitions only (no process runs), so they are cheap to define for every selection.
+RUNS="$GL/runs"
+mkrun() { # mkrun NAME PURPOSE [resolve args...]
+  local d="$RUNS/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
+  AG resolve --purpose "$p" "$@" --out "$d/spec.json" > /dev/null || return 1
+  printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
+}
+CASES="$ROOT/tests/fixtures/assetgen/cases"
+# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant
+# TEMPLATE: the top-level render_params of cases/<purpose>--<template>.json, else variants.<template> of cases/<purpose>.json)
+case_params() {
+  local f="$CASES/$1.json" v="$CASES/$1--${2:-}.json"
+  if [ -n "${2:-}" ] && [ -f "$v" ]; then
+    jq -r '(.render_params // {}) | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$v"; return 0
+  fi
+  [ -f "$f" ] || return 0
+  jq -r --arg t "${2:-}" '(if $t == "" then .render_params else .variants[$t].render_params end) // {}
+    | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$f"
+}
+# case_variants PURPOSE: the variant template ids of the purpose, from variants in cases/<purpose>.json and from the
+# cases/<purpose>--<template>.json files, sorted, each once
+case_variants() {
+  local f="$CASES/$1.json" v
+  { [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f"
+    for v in "$CASES/$1--"*.json; do [ -f "$v" ] && { v=$(basename "$v" .json); echo "${v#"$1--"}"; }; done
+  } | LC_ALL=C sort -u; return 0
+}
+# stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
+# input order, then each linked socket; the result must equal workflow.json
+cat > "$TMP/ui2api.py" <<'EOF'
+import json, sys
+known = json.load(open(sys.argv[1], encoding="utf-8"))["nodes"]
+ui = json.load(open(sys.argv[2], encoding="utf-8"))
+api = json.load(open(sys.argv[3], encoding="utf-8"))
+WIDGETS = ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO")
+by_id = {n["id"]: n for n in ui["nodes"]}
+links = {l[0]: l for l in ui["links"]}
+assert len(links) == len(ui["links"]) and ui["last_link_id"] == max(links, default=0) and ui["last_node_id"] == max(by_id)
+assert sorted(n["order"] for n in ui["nodes"]) == list(range(len(ui["nodes"])))
+graph = {}
+for node in ui["nodes"]:
+    spec = known[node["type"]]
+    assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
+    if spec.get("ui_only"):
+        continue
+    values, inputs = iter(node["widgets_values"]), {}
+    for name, decl in spec["inputs"].items():
+        if decl["type"] in WIDGETS:
+            try:
+                inputs[name] = next(values)
+            except StopIteration:
+                if decl.get("required"):
+                    raise ValueError("missing widget %s.%s" % (node["type"], name))
+    for i, socket in enumerate(node.get("inputs", [])):
+        if socket.get("link") is None:
+            continue
+        link = links[socket["link"]]
+        assert link[3] == node["id"] and link[4] == i, link
+        src = by_id[link[1]]
+        assert src["outputs"][link[2]]["type"] == link[5] and link[0] in src["outputs"][link[2]]["links"], link
+        inputs[socket["name"]] = [str(link[1]), link[2]]
+    graph[str(node["id"])] = {"class_type": node["type"], "inputs": inputs, "_meta": {"title": node["title"]}}
+for nid in api:
+    api[nid].setdefault("_meta", {"title": api[nid]["class_type"]})
+assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent=1, sort_keys=True)
+print("ok")
+EOF
+KN="$ROOT/scripts/assetgen/data/known-nodes.json"
+FX="$TMP/png"; LOCALFX="$ROOT/tests/fixtures/assetgen/local"
+st() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/q.json"; }
+# finrun NAME PURPOSE PNG [render args...]: a rendered run with the fixture PNG as its only output
+finrun() {
+  local name="$1" p="$2" f="$3"; shift 3
+  mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
+}
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+
+if group_begin list-show; then
 echo "-- list / show"
 AG list --json > "$TMP/l.json" 2>"$TMP/err"; rc=$?
 n=$(jq '[.entries[] | select(.layer == "core")] | length' "$TMP/l.json")
@@ -344,6 +576,8 @@ AG show image-edit > /dev/null 2>"$TMP/err"; rc=$?
 AG show image-edit --kind template --json | jq -e '.data.workflow["1"].class_type == "LoadImage"' >/dev/null \
   && ok "show --kind template image-edit" || no "show --kind template"
 
+group_end; fi
+if group_begin resolve; then
 echo "-- resolve: precedence and per-field sources"
 AG resolve --purpose icon --style pixel-art --template image-generate --authoring "$AUTH" --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
 r() { jq -r "$1" "$TMP/r.json"; }
@@ -414,35 +648,11 @@ grep -q "^FAIL game:assetgen/purposes/icon.json: constraints.palette: not a tech
 got=$(AG lint "$HA/assetgen/purposes/sprite-2d.json" --authoring "$HA" 2>&1)
 grep -q "constraints.lighting must be a non-empty string" <<<"$got" && ok "lint: a constraint must be a non-empty string" || no "constraint type lint" "$got"
 
+group_end; fi
+if group_begin render-golden; then
 echo "-- render: every purpose against its golden workflow"
-RUNS="$GL/runs"
-mkrun() { # mkrun NAME PURPOSE [resolve args...]
-  local d="$RUNS/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
-  AG resolve --purpose "$p" "$@" --out "$d/spec.json" > /dev/null || return 1
-  printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
-}
 mkdir -p "$GOLD"
 # cases files (optional): tests/fixtures/assetgen/cases/<purpose>.json and cases/<purpose>--<template>.json, see its README.md
-CASES="$ROOT/tests/fixtures/assetgen/cases"
-# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant
-# TEMPLATE: the top-level render_params of cases/<purpose>--<template>.json, else variants.<template> of cases/<purpose>.json)
-case_params() {
-  local f="$CASES/$1.json" v="$CASES/$1--${2:-}.json"
-  if [ -n "${2:-}" ] && [ -f "$v" ]; then
-    jq -r '(.render_params // {}) | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$v"; return 0
-  fi
-  [ -f "$f" ] || return 0
-  jq -r --arg t "${2:-}" '(if $t == "" then .render_params else .variants[$t].render_params end) // {}
-    | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$f"
-}
-# case_variants PURPOSE: the variant template ids of the purpose, from variants in cases/<purpose>.json and from the
-# cases/<purpose>--<template>.json files, sorted, each once
-case_variants() {
-  local f="$CASES/$1.json" v
-  { [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f"
-    for v in "$CASES/$1--"*.json; do [ -f "$v" ] && { v=$(basename "$v" .json); echo "${v#"$1--"}"; }; done
-  } | LC_ALL=C sort -u; return 0
-}
 # a variant is declared once: either in cases/<purpose>.json variants or as cases/<purpose>--<template>.json
 for p in $CORE_PURPOSES; do
   for t in $(case_variants "$p"); do
@@ -579,48 +789,9 @@ print("ok")
 EOF
 grep -qx ok "$TMP/o" && ok "image review requirements hash covers the prompt node value (whole rendered graph)" || no "binding covers prompt node" "$(cat "$TMP/o")"
 
+group_end; fi
+if group_begin ui-workflow; then
 echo "-- workflow.ui.json: the same graph for the ComfyUI frontend"
-# stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
-# input order, then each linked socket; the result must equal workflow.json
-cat > "$TMP/ui2api.py" <<'EOF'
-import json, sys
-known = json.load(open(sys.argv[1], encoding="utf-8"))["nodes"]
-ui = json.load(open(sys.argv[2], encoding="utf-8"))
-api = json.load(open(sys.argv[3], encoding="utf-8"))
-WIDGETS = ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO")
-by_id = {n["id"]: n for n in ui["nodes"]}
-links = {l[0]: l for l in ui["links"]}
-assert len(links) == len(ui["links"]) and ui["last_link_id"] == max(links, default=0) and ui["last_node_id"] == max(by_id)
-assert sorted(n["order"] for n in ui["nodes"]) == list(range(len(ui["nodes"])))
-graph = {}
-for node in ui["nodes"]:
-    spec = known[node["type"]]
-    assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
-    if spec.get("ui_only"):
-        continue
-    values, inputs = iter(node["widgets_values"]), {}
-    for name, decl in spec["inputs"].items():
-        if decl["type"] in WIDGETS:
-            try:
-                inputs[name] = next(values)
-            except StopIteration:
-                if decl.get("required"):
-                    raise ValueError("missing widget %s.%s" % (node["type"], name))
-    for i, socket in enumerate(node.get("inputs", [])):
-        if socket.get("link") is None:
-            continue
-        link = links[socket["link"]]
-        assert link[3] == node["id"] and link[4] == i, link
-        src = by_id[link[1]]
-        assert src["outputs"][link[2]]["type"] == link[5] and link[0] in src["outputs"][link[2]]["links"], link
-        inputs[socket["name"]] = [str(link[1]), link[2]]
-    graph[str(node["id"])] = {"class_type": node["type"], "inputs": inputs, "_meta": {"title": node["title"]}}
-for nid in api:
-    api[nid].setdefault("_meta", {"title": api[nid]["class_type"]})
-assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent=1, sort_keys=True)
-print("ok")
-EOF
-KN="$ROOT/scripts/assetgen/data/known-nodes.json"
 for p in $CORE_PURPOSES; do
   # re-render with the cases params only: earlier tests re-rendered some runs with other params
   d="$RUNS/golden-$p-001"; mapfile -t args < <(case_params "$p"); AG render --run "$d" "${args[@]}" >/dev/null
@@ -647,6 +818,8 @@ u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
   && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
 
+group_end; fi
+if group_begin ui-layout; then
 echo "-- workflow.ui.json: ui block groups, notes, colors"
 python3 -B - "$ROOT" >"$TMP/staged-layout-check" 2>&1 <<'EOF'
 import json, math, sys
@@ -840,6 +1013,8 @@ for bad in unknown-node duplicate-node unknown-group; do
 done
 rm -f "$GL/templates/ui-layout.json"
 
+group_end; fi
+if group_begin filename-prefix; then
 echo "-- filename_prefix: one value in spec.json, workflow.json, review prompts and run.md"
 mkrun prefix-icon-001 icon --style stylized-painterly; pd="$RUNS/prefix-icon-001"; want=assetgen/prefix-icon-001
 AG render --run "$pd" >/dev/null 2>"$TMP/err" && AG manifest --run "$pd" >/dev/null 2>>"$TMP/err"
@@ -858,6 +1033,8 @@ out=$(AG render --run "$pd" --param filename_prefix=elsewhere 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "a run's prefix is $want" <<<"$out" && ok "render --run refuses --param filename_prefix" || no "prefix override rc=$rc" "$out"
 rm -rf "$RUNS/prefix-copy-001"
 
+group_end; fi
+if group_begin lint; then
 echo "-- lint: errors and warnings"
 LA="$TMP/lint-authoring"; mkdir -p "$LA/assetgen/templates" "$LA/assetgen/purposes"
 tmpl() { printf '{"schema": "rpg-factory.comfy-template/1", "title": "t", "output_node": "2", "params": {"prompt": {"type": "string", "required": true}%s}, "workflow": %s}\n' "$2" "$3" > "$LA/assetgen/templates/$1.json"; }
@@ -1267,6 +1444,8 @@ AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "$((n_core + 2 + gs_pass)
   && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no usable structured style fields" "$TMP/o" \
   && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without usable structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
 
+group_end; fi
+if group_begin graph-style; then
 echo "-- graph style lint: graph-lint verb and assetgen-graph-style lint rows (graphstyle.py)"
 # every rule with a passing and a failing case, template and UI form: tests/fixtures/assetgen/graphstyle_selftest.py
 python3 -B "$ROOT/tests/fixtures/assetgen/graphstyle_selftest.py" > "$TMP/cs" 2>&1; rc=$?
@@ -1382,8 +1561,10 @@ AG graph-lint --run "$gsx" > "$TMP/o3" 2>&1; rc3=$?
   && ok "graph-lint without extra.assetgen: --run checks the suffix against the run (suffixed exit 0, unsuffixed exit 1); a bare PATH FAILS as unchecked" \
   || no "graph-lint lost extra.assetgen rc=$rc/$rc2/$rc3" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3")"
 
+group_end; fi
+if group_begin fixture-pngs; then
 echo "-- fixture PNGs"
-FX="$TMP/png"; mkdir -p "$FX"
+mkdir -p "$FX"
 cat > "$TMP/mk.py" <<'EOF'
 import math, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -1446,6 +1627,8 @@ open(os.path.join(out, "not-a-png.png"), "wb").write(b"GIF89a not a png")
 EOF
 python3 -B "$TMP/mk.py" "$ROOT" "$FX" && [ -f "$FX/corrupt.png" ] && ok "fixture PNGs generated (stdlib encoder)" || no "fixture generation"
 
+group_end; fi
+if group_begin png-qa; then
 echo "-- qa"
 qarun() { # qarun NAME PURPOSE PNG...  -> rc in $rc, report in $TMP/q.json
   local name="$1" p="$2"; shift 2
@@ -1454,7 +1637,6 @@ qarun() { # qarun NAME PURPOSE PNG...  -> rc in $rc, report in $TMP/q.json
   for f in "$@"; do cp "$FX/$f" "$RUNS/$name/outputs/"; done
   AG qa --run "$RUNS/$name" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
 }
-st() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/q.json"; }
 qarun qa-icon-ok-001 icon icon-ok.png
 [ $rc -eq 0 ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] && [ "$(st png-alpha)/$(st png-corners)/$(st png-not-blank)/$(st png-size)" = "PASS/PASS/PASS/PASS" ] \
   && ok "icon: transparent disc passes alpha, corners, not-blank, square aspect" || no "icon ok rc=$rc" "$(jq -c '.results' "$TMP/q.json")"
@@ -1635,6 +1817,8 @@ ASSETGEN_NO_PIL=1 AG qa --run "$RUNS/qa-trns-001" --json > "$TMP/q.json"; rc=$?
 [ $rc -eq 0 ] && [ "$(st png-alpha)/$(st png-corners)/$(st png-not-blank)" = "PASS/PASS/PASS" ] \
   && ok "QA without Pillow: a gray PNG transparent through tRNS passes alpha required and corners" || no "tRNS qa rc=$rc" "$(jq -c .results "$TMP/q.json")"
 
+group_end; fi
+if group_begin review-cmd; then
 echo "-- review-cmd (prints only)"
 d="$RUNS/qa-icon-ok-001"
 out=$(AG review-cmd --phase prompt --run "$d" 2>&1); rc=$?
@@ -1829,6 +2013,8 @@ AG embed --run "$TMP/missing/dir-001" >/dev/null 2>"$TMP/err"; rc=$?
   || no "missing run path rc=$rc" "$(cat "$TMP/err")"
 AG qa --help | grep -q "run id <slug>-NNN" && AG resolve --help | grep -q -- "--verbose" && ok "CLI help documents --run RUN-ID and resolve --verbose" || no "CLI help"
 
+group_end; fi
+if group_begin embed; then
 echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
 ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly --template image-generate && AG render --run "$ed" >/dev/null
 python3 -B - "$ROOT" "$FX/icon-ok.png" "$ed/outputs/comfy.png" <<'EOF'
@@ -1913,6 +2099,8 @@ AG embed --run "$RUNS/embed-noui-001" > /dev/null 2>"$TMP/err"; rc=$?
   && ok "embed without workflow.ui.json: error, outputs untouched" || no "embed no ui rc=$rc" "$(cat "$TMP/err")"
 rm -rf "$RUNS/embed-noui-001"
 
+group_end; fi
+if group_begin e2e3; then
 echo "-- e2e3: edge fringe QA, defringe, composites in the image review"
 # item 1: a prop whose low-alpha edge pixels carry a coloured speckle (barrel-prop-001) fails png-edge-fringe;
 # defringe (refused while qa.json binds the outputs, --force names what is stale) repairs it and QA passes
@@ -2383,17 +2571,25 @@ cp "$FX/icon-ok.png" "$ar/outputs/prop.png"; AG manifest --run "$ar" > "$TMP/o" 
   && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = proposed ] \
   && ok "manifest after the approved outputs changed: proposed, names what the approval no longer binds" || no "manifest reset rc=$rc" "$(cat "$TMP/o")"
 
+group_end; fi
+if group_begin sheet-sizes; then
 echo "-- finalize: filter, fit, defringe (alpha purposes only), embed, qa in one fixed order"
-# finrun NAME PURPOSE PNG [render args...]: a rendered run with the fixture PNG as its only output
-finrun() {
-  local name="$1" p="$2" f="$3"; shift 3
-  mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
-}
-sha() { sha256sum "$1" | cut -d' ' -f1; }
-steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
-
 echo "-- finalize: experimental sheet mode"
-for sh_name in sheet-sizes sheet-failures sheet-repeat sheet-cli sheet-discard; do sh_case "$sh_name"; done
+sh_case sheet-sizes
+group_end; fi
+if group_begin sheet-failures; then
+sh_case sheet-failures
+group_end; fi
+if group_begin sheet-repeat; then
+sh_case sheet-repeat
+group_end; fi
+if group_begin sheet-cli; then
+sh_case sheet-cli
+group_end; fi
+if group_begin sheet-discard; then
+sh_case sheet-discard
+group_end; fi
+if group_begin pixel-grid; then
 echo "-- finalize: pixel-grid detection, palette and opt-in QA"
 # A 128x128 pattern enlarged fourfold, with transparent corners and several opaque colours.
 python3 -B - "$ROOT" "$TMP" <<'EOF'
@@ -2479,6 +2675,8 @@ EOF
 AG finalize --run "$pg_plain" --max-colors 4 > "$TMP/pg-invalid" 2>&1; pg_rc=$?
 [ "$pg_rc" -eq 2 ] && ok "finalize --max-colors without --pixel-grid exits 2" || no "pixel-grid missing flag rc=$pg_rc" "$(cat "$TMP/pg-invalid")"
 
+group_end; fi
+if group_begin output-filter; then
 # Live fetch_outputs names encode the prompt and index, not the source type. Each run gets its own rendered prefix.
 filter_run() {
   local name="$1"
@@ -2613,6 +2811,8 @@ EOF
 [ $? -eq 0 ] && grep -qx ok "$TMP/fetch-malformed.out" \
   && ok "rewrite_fetch keeps a malformed fetch URL unchanged and still strips the host of a valid one" \
   || no "rewrite_fetch malformed URL" "$(cat "$TMP/fetch-malformed.out")"
+group_end; fi
+if group_begin fit; then
 # A live-shaped staged SaveImage output is fitted before embedding and QA.
 fitlive="$RUNS/fit-live-icon-001"
 mkrun fit-live-icon-001 icon --style stylized-painterly --template staged-icon && AG render --run "$fitlive" >/dev/null 2>"$TMP/err" \
@@ -2707,6 +2907,8 @@ AG finalize --run "$fitrgb" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
   && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped") | .results[] | select(.state == "skipped" and (.reason | contains("no alpha channel")))] | length == 1' "$TMP/fit.json" >/dev/null \
   && ok "fit: RGB output is not padded and QA grades the missing alpha" || no "fit RGB rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
 
+group_end; fi
+if group_begin finalize-core; then
 # alpha purpose: filter, fit, defringe, embed, qa in that order; the run ends embedded, defringed and graded
 fz="$RUNS/fin-icon-001"; finrun fin-icon-001 icon fringe.png
 AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
@@ -2800,6 +3002,8 @@ find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$
 f_help=$(AG finalize --help 2>&1); grep -q -- "--force" <<<"$f_help" && grep -q "finalize --run RUN" "$ROOT/scripts/assetgen/assetgen.py" \
   && ok "finalize is a subcommand (--run, --authoring, --force, --json) listed in the assetgen.py usage" || no "finalize usage" "$f_help"
 
+group_end; fi
+if group_begin discard; then
 echo "-- batch discard and finalize QA failures"
 batch_run() {
   finrun "$1" icon icon-ok.png || return 1
@@ -2884,6 +3088,8 @@ ds="$RUNS/discard-single-001"; AG finalize --run "$ds" >/dev/null; AG manifest -
 batch_front "$ds" | jq -e '.spec.trace | has("discarded") | not' >/dev/null && ! grep -q '^- Discarded:' "$ds/run.md" \
   && ok "single-output manifest retains its existing trace and body without discards" || no "single-output discard compatibility"
 
+group_end; fi
+if group_begin budget; then
 echo "-- budget: advisory spend guard (resolve --max-outputs, budget --run, finalize)"
 lf() { tr -d '\r' < "$1"; }
 # resolve records spec.budget.max_outputs: default 4 (--json and --out), --max-outputs N, invalid values are usage errors
@@ -2992,6 +3198,8 @@ b_help=$(AG budget --help 2>&1); r_help=$(AG resolve --help 2>&1)
 grep -q -- "--run" <<<"$b_help" && grep -q -- "--json" <<<"$b_help" && grep -q -- "--max-outputs" <<<"$r_help" \
   && ok "budget is a subcommand (--run, --json); resolve has --max-outputs" || no "budget usage" "$b_help $r_help"
 
+group_end; fi
+if group_begin publish; then
 echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
 cat > "$TMP/fake-comfy.py" <<'EOF'
 import json, os, socket, subprocess, sys, threading
@@ -3038,6 +3246,8 @@ for u in "ftp-host:8188" "file:///etc" "http://127.0.0.1:1/?x=1"; do
 done
 [ "$(snap)" = "$s0" ] && ok "refused publish calls write nothing" || no "publish wrote into the run dir"
 
+group_end; fi
+if group_begin manifest; then
 echo "-- manifest (run.md, gen-run)"
 d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art --template image-generate; AG render --run "$d" >/dev/null
 cp "$FX/icon-ok.png" "$d/outputs/iron-sword.png"; AG qa --run "$d" >/dev/null
@@ -3092,6 +3302,8 @@ mkdir -p "$RUNS/Bad_Name"; cp "$d/spec.json" "$d/prompt.md" "$RUNS/Bad_Name/"
 AG manifest --run "$RUNS/Bad_Name" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <slug>-NNN" "$TMP/err" && ok "run dir name must be <slug>-NNN" || no "bad run name rc=$rc"
 
+group_end; fi
+if group_begin gen-run-plugin; then
 echo "-- quality plugin (scripts/checks/domains/assetgen.py) and artifact-lint on manifest-produced run.md"
 good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly --template image-generate --authoring "$AUTH"
 AG render --run "$good" >/dev/null && cp "$FX/icon-ok.png" "$good/outputs/qp-icon.png" && AG qa --run "$good" >/dev/null \
@@ -3518,6 +3730,8 @@ T2="$TMP/tmpl"; mkdir -p "$T2" && cp "$ROOT/templates/assetgen/gen-run.md" "$T2/
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T2" --registry "$ROOT/registry.json" | grep -q '^PASS AGEN-example-icon-001$' \
   && ok "kind template templates/assetgen/gen-run.md is a schema-valid draft" || no "gen-run template lint"
 
+group_end; fi
+if group_begin local-hybrid; then
 echo "-- local and hybrid provenance (UNTESTED on RTX 5060)"
 cp "$ROOT/tests/fixtures/assetgen/local/hybrid-template.json" "$GL/templates/hybrid-provenance.json"
 cp "$ROOT/tests/fixtures/assetgen/local/literal-seed-template.json" "$GL/templates/literal-seed.json"
@@ -3632,7 +3846,6 @@ bound "$literal" prompt PASS codex > "$literal/review-prompt.json"; bound "$lite
 ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local literal manifest' AG manifest --run "$literal"
 # Engine notes: pose and depth preprocessor models (annotators kind) and the KSamplerAdvanced form of the hybrid fixture
 # get full provenance runs; both are also checked below against the unverified-hash path.
-LOCALFX="$ROOT/tests/fixtures/assetgen/local"
 cp "$LOCALFX/hybrid-advanced-template.json" "$GL/templates/hybrid-advanced.json"
 cp "$LOCALFX/annotator-template.json" "$GL/templates/annotator-provenance.json"
 local_run() { # local_run RUN-ID TEMPLATE-ID HASH-CACHE: a rendered, reviewed and manifested hybrid run
@@ -3726,6 +3939,8 @@ grep -qx ok "$TMP/local-engine-record" && ok "manifest records annotator models 
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$AUTH" --registry "$ROOT/registry.json" > "$TMP/local-lint" 2>&1
 grep -q '^PASS AGEN-local-hybrid-001$' "$TMP/local-lint" && ok 'hybrid manifest passes artifact schema lint' || no 'hybrid artifact lint' "$(grep 'AGEN-local-hybrid-001' "$TMP/local-lint")"
 
+group_end; fi
+if group_begin engine-notes; then
 echo "-- engine notes: annotator model kind, KSamplerAdvanced like KSampler, lint reads known-nodes once (UNTESTED on RTX 5060)"
 python3 -B - "$ROOT" > "$TMP/engine-notes-unit" 2>&1 <<'EOF'
 import copy, json, os, sys
@@ -3868,6 +4083,8 @@ EOF
 grep -qx ok "$TMP/lint-once" && ok "lint over six templates loads known-nodes.json once (cache misses 1) with the same rows as one process per template" \
   || no "lint reads known-nodes once" "$(cat "$TMP/lint-once")"
 
+group_end; fi
+if group_begin style-lock; then
 echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
 SL="$TMP/stylelock-authoring"
 python3 -B - "$ROOT" "$SL" > "$TMP/sl" 2>&1 <<'EOF'
@@ -4113,6 +4330,8 @@ while IFS= read -r line; do
 done < "$TMP/sl"
 grep -qE '^(ok|no) drift' "$TMP/sl" && ok "style lock cases ran to the end" || no "style lock cases stopped early" "$(tail -5 "$TMP/sl")"
 
+group_end; fi
+if group_begin style-cli; then
 echo "-- style lock through the CLI: resolve --family/--style-override, render wiring, promote-anchor, reject, drift"
 SC="$TMP/stylelock-cli"; SG="$SC/assetgen"; SR="$SG/runs"
 mkdir -p "$SG/styles" "$SG/purposes" "$SR"
@@ -4501,6 +4720,8 @@ AG lint --authoring "$SC" "$SG/styles/rpg-base/rejections/too-detailed-001.json"
 slrun sl-icon-004 icon && [ "$(lk '[.style_lock.rejections[].id] | join(",")' sl-icon-004)" = "palette-off-001,r-props,too-detailed-001,too-detailed-002" ] \
   && ok "resolve records the new relevant rejections (family props, any version)" || no "rejections after reject" "$(lk .style_lock.rejections sl-icon-004)"
 
+group_end; fi
+if group_begin anchor-target; then
 echo "-- anchor_target: anchors into NineRouterImage or IPAdapterAdvanced (UNTESTED on RTX 5060)"
 mkdir -p "$SG/templates"
 cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$SG/templates/hybrid-anchor.json"
@@ -4651,6 +4872,8 @@ grep -qx ok "$TMP/anchor-size" && ok "requested_size: declared primary, numeric 
   || no "requested_size cases" "$(cat "$TMP/anchor-size")"
 rm -f "$SG/templates/hybrid-anchor.json" "$SG/purposes/icon-two.json"
 
+group_end; fi
+if group_begin profile-routing; then
 echo "-- profile routing: resolve --profile (UNTESTED on RTX 5060)"
 # Nothing here generates or measures anything: routing picks a template id and refuses one above the chosen profile.
 PR="$TMP/profile-authoring"; PF="$TMP/profile-fallback"; PB="$TMP/profile-badroutes"
@@ -4784,6 +5007,8 @@ line=$(grep '^profile api-only ' "$TMP/prof.txt")
 [ $rc -eq 0 ] && [ -n "$line" ] && ! printf '%s\n' "$line" | grep -qF UNTESTED \
   && ok "text output: profile api-only line without UNTESTED" || no "api-only text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
 
+group_end; fi
+if group_begin style-qa; then
 echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
 # fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc
 python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
@@ -4996,6 +5221,8 @@ AG drift --authoring "$SC" > "$TMP/dr.txt" 2>"$TMP/err"; rc=$?
   && ok "drift text: same version, changed style data -> hash-changed" || no "drift hash-changed rc=$rc" "$(cat "$TMP/err" "$TMP/dr.txt")"
 git -C "$SC" checkout -q -- .
 
+group_end; fi
+if group_begin gen-run-style; then
 echo "-- gen-run-style (quality plugin): style lock refs, anchor approval, image bytes, source runs, override"
 python3 -B - "$ROOT" "$TMP/style-plugin" "$FX/icon-ok.png" > "$TMP/gs" 2>&1 <<'EOF'
 import hashlib, importlib.util, json, os, sys
@@ -5147,6 +5374,8 @@ SP="$TMP/style-plugin"; rm -rf "$SP/assetgen/runs/seed-001"
 [ $rc -eq 1 ] && grep -q "a-good.json: .*seed-001 is missing" "$TMP/o" \
   && ok "assetgen-lint (registry command, in the authoring repo): an active anchor whose source run.md is gone FAILS" || no "assetgen-lint rc=$rc" "$(grep -v '^PASS' "$TMP/o")"
 
+group_end; fi
+if group_begin style-init; then
 echo "-- style init: draft game style, family stub and project.json skeleton (style_cmd.py)"
 SI="$TMP/style-init"; mkdir -p "$SI"
 tpl_hash() { find "$ROOT/templates/assetgen" -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1; }
@@ -5225,6 +5454,8 @@ jq -e '.warnings | length == 1 and (.[0] | contains("WARN:") and contains("palet
 [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
   && ok "style init changed nothing under templates/assetgen" || no "templates/assetgen changed" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
+group_end; fi
+if group_begin style-derive; then
 echo "-- style derive: palette, tone and canvas proposed from the anchors, --apply into a draft only (style_derive.py)"
 SD="$TMP/style-derive"; mkdir -p "$SD"
 AG style init --id demo-game --extends pixel-art --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err" || no "style derive setup: style init" "$(cat "$TMP/sd.err")"
@@ -5408,6 +5639,8 @@ EOF
 [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
   && ok "style derive changed nothing under templates/assetgen" || no "templates/assetgen changed by derive" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
+group_end; fi
+if group_begin style-bump; then
 echo "-- style bump: draft version N+1, proposed anchor copies and the re-approval report (style_cmd.py)"
 # fixture: an ACTIVE game style at version 1 (init, anchors, derive --apply into the draft, then activated), anchors
 # chars-a and props-a-v1 (active), props-p (proposed), props-old (retired), a run of the style at version 1, and the
@@ -5621,6 +5854,8 @@ done
 [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
   && ok "style bump changed nothing under templates/assetgen" || no "templates/assetgen changed by bump" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
+group_end; fi
+if group_begin style-report; then
 echo "-- style report: spreads, QA rates, rejections and suggested thresholds, read-only (style_report.py)"
 # fixture: a draft game style at version 1 (init, anchors chars-a / props-a / props-b, derive --apply: palette of 4 colours,
 # tone.tolerance 0.05, palette.max_distance 48 and min_share 0.6 by default), then runs, qa.json files and rejections:
@@ -6067,6 +6302,8 @@ AG style report --authoring "$SR" --style no-such-style > "$TMP/sr.out" 2> "$TMP
 [ "$(sr_sig "$SR")" = "$sig_sr" ] && [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
   && ok "style report left the authoring fixture and templates/assetgen unchanged after every case" || no "fixture or templates/assetgen changed by report" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
 
+group_end; fi
+if group_begin selftests; then
 echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
 n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
@@ -6079,6 +6316,8 @@ for st_ in imaging_selftest style_selftest pixelgrid_selftest slicer_selftest; d
   [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "$st_: $n_ok cases passed" || no "$st_ rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 done
 
+group_end; fi
+if group_begin hygiene; then
 echo "-- no endpoints or credentials in core data or engine"
 hits=$(grep -rnIE '://|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost:[0-9]|Bearer [A-Za-z0-9]|sk-[A-Za-z0-9]{12}|"(api[_-]?key|authorization|base_url)" *:' \
   "$ROOT/templates/assetgen" "$ROOT/scripts/assetgen" 2>/dev/null)
@@ -6089,5 +6328,6 @@ done
 ok "every data file carries a versioned schema id"
 [ -z "$(find "$ROOT/scripts/assetgen" -name '__pycache__')" ] && ok "no __pycache__ left by -B runs" || no "__pycache__ in scripts/assetgen"
 
+group_end; fi
 echo "assetgen: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
