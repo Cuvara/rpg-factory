@@ -143,6 +143,33 @@ counters_rc=$?
 # would lose its cause. Keep them under the Factory state dir (lib/fstate.py persistent(): never $TMPDIR,
 # never a product repo) and print the path. A PASS keeps today's cleanup; --keep keeps the work copy itself.
 # A state dir that cannot be resolved or written is a warning: the exit code stays the check's verdict.
+#
+# Only the newest few evidence directories are kept (RPG_FACTORY_NETCODE_EVIDENCE_KEEP, default 10; a value that
+# is not a positive integer falls back to 10). Pruning touches only real directories directly inside the evidence
+# root that match this script's own name pattern <YYYYmmddTHHMMSS>-<pid>, never follows a symlink, never removes
+# the directory just saved, and never changes the exit status.
+prune_evidence() { # root current-dir-name
+  local root="$1" current="$2" limit="${RPG_FACTORY_NETCODE_EVIDENCE_KEEP:-10}" d n kept=1 removed=0
+  case "$limit" in ''|*[!0-9]*|0) limit=10 ;; esac
+  [ -d "$root" ] && [ ! -L "$root" ] || return 0
+  local names=()
+  for d in "$root"/*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    n="${d##*/}"
+    [[ "$n" =~ ^[0-9]{8}T[0-9]{6}-[0-9]+$ ]] && names+=("$n")
+  done
+  [ "${#names[@]}" -gt 0 ] || return 0
+  # newest first by the timestamp in the name, then the pid suffix; the new directory counts as one kept
+  while IFS= read -r n; do
+    [ "$n" = "$current" ] && continue
+    if [ "$kept" -lt "$limit" ]; then kept=$((kept + 1)); continue; fi
+    rm -rf "$root/$n" 2>/dev/null || true
+    [ -e "$root/$n" ] || removed=$((removed + 1))
+  done < <(printf '%s\n' "${names[@]}" | LC_ALL=C sort -r 2>/dev/null)
+  [ "$removed" -eq 0 ] || echo "pruned $removed old netcode-headless evidence directories (keeping the newest $limit)"
+  return 0
+}
+
 save_evidence() {
   $keep && return 0
   local state ev shown
@@ -158,6 +185,7 @@ save_evidence() {
     shown="$ev"
     if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then shown=$(cygpath -m "$ev" 2>/dev/null || echo "$ev"); fi
     echo "evidence: $shown"
+    prune_evidence "$state/evidence/netcode-headless" "${ev##*/}" || true
   else
     echo "WARNING: evidence not saved under $ev"
   fi
