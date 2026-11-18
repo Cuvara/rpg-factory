@@ -9,7 +9,8 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None.
+- **test-speed** (`docs/plans/test-speed.json`): scoped task QA (`--within`), affected workspace checks, per-check
+  timing, faster assetgen and pipeline suites, QA policy rewrite (owner request 2026-11-18).
 
 ## Open
 
