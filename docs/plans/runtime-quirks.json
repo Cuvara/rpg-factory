@@ -1,0 +1,127 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "runtime-quirks",
+  "title": "Runtime quirks: stuck start prompts, launch notes via the spec file, external path URIs",
+  "topic": "feat/delivery/runtime-quirks",
+  "goal": "Close backlog external-path-uri, the stuck start prompt and launch quoting parts of agent-runtime-quirks, and the registry-paths line of assetgen-run-followups. A session whose start prompt stays unsubmitted is found and nudged once by a pipeline verb instead of sitting idle; a run lead's extra notes reach a session through its spec file, never through the cmd.exe command line; external anchor origin and rights_note refuse file: URIs and environment-variable paths. The registry-paths failure in Orca terminals was fixed by 6b1ba64 (every recorded failure predates it, task QA in Orca terminals passes since), so it only moves to Covered.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "external-path-uri",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Backlog external-path-uri. scripts/assetgen/stylelock.py EXTERNAL_PATH (checked for external_source.origin and rights_note) still accepts file: URIs (file:///C:/..., file:/x, FILE://host/share) and environment-variable paths ($HOME/..., ${HOME}/..., %USERPROFILE%\\... and %USERPROFILE%/...). Refuse those forms, in any letter case, with the existing error message, through EXTERNAL_PATH or a second pattern checked beside it. Keep accepting plain prose, https:// and http:// URLs, relative names, a price like $5 and a percentage like 100%.",
+      "paths": [
+        "scripts/assetgen/stylelock.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/external-path-uri.md"
+      ],
+      "exclusions": [
+        "scripts/factory-pipeline.py",
+        "skills/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "promote-anchor --external (or the style validation it runs) refuses each of file:///C:/art/a.png, file:/art/a.png, FILE://host/share/a.png, $HOME/art/a.png, ${HOME}/art/a.png, %USERPROFILE%\\art\\a.png and %USERPROFILE%/art/a.png in origin and in rights_note, with the existing message",
+        "https://example.com/a.png, 'bought for $5' and '100% original work' are still accepted",
+        "every existing assetgen case passes"
+      ]
+    },
+    {
+      "id": "launch-note-file",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Launch notes travel through the spec file, never through the --prompt command line, where cmd.exe misreads parentheses and quotes (a hand-appended run lead note once failed a lead launch with unknown option '-FilePath'). In scripts/factory-pipeline.py: orca_prompt() writes its note into the spec file it already writes (a 'Run lead notes' section) and returns only the pointer 'Read your task spec at <path> and follow it.'; the planner's 'Request: ...' note goes the same way; the spec digest covers the notes. dispatch gains --note-file FILE (repeatable): the file's text is added to the spec verbatim as its own section (not whitespace-collapsed); a missing, unreadable or blank file fails with exit 2. --note and RPG_FACTORY_SESSION_NOTE keep working and reach the spec too. Every launch line dispatch prints (worker-start, orca agent launch for a lead) carries only the pointer.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/launch-note-file.md"
+      ],
+      "exclusions": [
+        "scripts/lib/orca_cmd.py",
+        "skills/",
+        "docs/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "a dispatch with --note and --note-file whose text contains ( ) \" ' & | and a newline prints launch commands whose prompt value is exactly the one-line pointer",
+        "the spec file the pointer names contains both notes, the --note-file text verbatim",
+        "two dispatches that differ only in a note write two different spec files",
+        "--note-file with a missing or blank file exits 2 with a message",
+        "every existing pipeline case passes"
+      ]
+    },
+    {
+      "id": "stuck-prompt-nudge",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Backlog agent-runtime-quirks, stuck start prompt: a session's start prompt sometimes stays unsubmitted in its terminal (a Claude verify session sat idle about 30 minutes until the run lead sent Enter). Add a verb `nudge plan.json [--task T] [--idle SECONDS] [--send]` (default idle 120). For each task with a live session, it lists Orca terminals whose worktreePath is the task's worktree (orca terminal list --json), reads each with orca terminal read --terminal H --screen --json, and classifies STUCK only when all hold: the screen still shows a spec pointer 'Read your task spec at <a spec file of this plan>', lastOutputAt is older than the idle time, and the task made no progress since that spec file was written (no new commit on the task branch, no new report, no new verdict). Without --send it prints one row per terminal (task, handle, idle seconds, STUCK or ok, reason) and the exact send command. With --send it runs `orca terminal send --terminal H --text <CR>` once per STUCK terminal and writes <task>__nudge.json (handle, time, spec path); a spec already nudged is never sent again and is reported as 'nudged, still stuck: relaunch the session'. The argv builders for terminal list, read and send live in scripts/lib/orca_cmd.py. Without Orca (orca missing or unreachable) it prints a note and exits 0. status shows a 'stuck?' note on a task whose last nudge record shows it still stuck. Nothing else is written.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/orca_cmd.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/stuck-prompt-nudge.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "docs/"
+      ],
+      "deps": [
+        "launch-note-file"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "with a fake orca on PATH: a terminal showing the pointer, idle past the threshold and with no task progress is STUCK; nudge --send sends one CR and writes the nudge record",
+        "a second nudge --send for the same spec sends nothing and reports nudged, still stuck",
+        "a terminal with recent output, a screen without the pointer, or a task with a commit after the spec was written is ok and gets nothing",
+        "with orca absent, nudge exits 0 with a note",
+        "every existing pipeline case passes"
+      ]
+    },
+    {
+      "id": "quirks-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Document the new verb and option and close the backlog items. skills/delivery/references/delivery.md: in the Orca waiting section and section 8 'Session lifecycle', the run lead runs `factory-pipeline.py nudge plan.json` when a dispatched session shows no progress a few minutes after launch (then --send), and passes extra notes with --note or --note-file, never appended to --prompt. docs/pipeline-cli.md documents nudge and --note-file. skills/factory-core/references/parallel-work.md gains two operating lessons with their reasons: a start prompt that stayed unsubmitted for about 30 minutes (use nudge), and a lead launch that failed with unknown option '-FilePath' because a note with quotes was appended to --prompt (use --note-file). docs/plans/backlog.md: move external-path-uri to Covered (plan runtime-quirks); in assetgen-run-followups move the 'registry paths exist in workspace' line to Covered with its evidence (fixed by 6b1ba64 'shell callers convert the registry workspace default', every recorded failure ran on a tree without it, task QA in Orca terminals passes since); reduce agent-runtime-quirks to the Codex-under-PowerShell bash-resolves-to-WSL item.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "docs/pipeline-cli.md",
+        "skills/factory-core/references/parallel-work.md",
+        "docs/plans/backlog.md",
+        "changelog.d/runtime-quirks-docs.md"
+      ],
+      "exclusions": [
+        "scripts/",
+        "tests/"
+      ],
+      "deps": [
+        "stuck-prompt-nudge"
+      ],
+      "checks": [
+        "tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "delivery.md and pipeline-cli.md describe nudge and --note-file as the code implements them (verb, flags, default idle, one send per spec, exit codes)",
+        "parallel-work.md has the two lessons, each with its reason",
+        "backlog.md Open no longer lists external-path-uri or the registry-paths line; agent-runtime-quirks names only the Codex WSL bash item",
+        "tests/parallel-policy.test.sh and tests/skills-lint.sh pass"
+      ]
+    }
+  ]
+}
