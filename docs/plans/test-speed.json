@@ -97,13 +97,16 @@
       "kind": "code",
       "grade": "standard",
       "grade_reason": "the verify spec every task follows; plus the second slowest suite",
-      "objective": "Owner request (2026-11-18): tests must be fast and precise. Builds on task runall-scope (merge its branch; never rebase). (1) scripts/factory-pipeline.py `tier_command` and the verify and QA spec text: task QA becomes `tests/run-all.sh --affected --base <review base> --within <the checks' suites> -j 1` (no longer a union with the whole closure); without check suites keep a safe form and say so; the stderr line `selected N of M suites` reports the scoped count and the count left to CI; integration QA prints `tests/run-all.sh --workspace-only --base <plan base>`; the module docstring and usage text follow; the `validate` warning 'checks contain test suites' is replaced by the rule that checks name the suites that test the changed behaviour (backlog workflow-slim-followups). docs/pipeline-cli.md documents the new command forms. (2) tests/pipeline.test.sh is the second slowest suite (about 2 min on Linux CI, about 35 min on this Windows host): measure its case groups on this host (one run, -j 1), report the ten slowest and their cost drivers, and make it faster without dropping or weakening any assertion (shared fixtures copied instead of rebuilt, fewer process starts, no fixed sleeps); tighten its case map so a change to scripts/factory-pipeline.py does not always select ALL when a narrower group is safe (only when it is). Report wall time before and after on this host. Cases in tests/pipeline.test.sh for the new tier command. Changelog fragment changelog.d/test-speed-pipeline.md (### Changed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "objective": "Owner request (2026-11-18): tests must be fast and precise. Builds on task runall-scope (merge its branch; never rebase). (1) scripts/factory-pipeline.py `tier_command` and the verify and QA spec text: task QA becomes `tests/run-all.sh --affected --base <review base> --within <the checks' suites> -j 1` (no longer a union with the whole closure); without check suites keep a safe form and say so; the stderr line `selected N of M suites` reports the scoped count and the count left to CI; integration QA prints `tests/run-all.sh --workspace-only --base <plan base>`; the module docstring and usage text follow; the `validate` warning 'checks contain test suites' is replaced by the rule that checks name the suites that test the changed behaviour (backlog workflow-slim-followups). docs/pipeline-cli.md documents the new command forms. (2) tests/pipeline.test.sh is the second slowest suite (about 2 min on Linux CI, about 35 min on this Windows host): measure its case groups on this host (one run, -j 1), report the ten slowest and their cost drivers, and make it faster without dropping or weakening any assertion (shared fixtures copied instead of rebuilt, fewer process starts, no fixed sleeps); tighten its case map so a change to scripts/factory-pipeline.py does not always select ALL when a narrower group is safe (only when it is). Report wall time before and after on this host. Cases in tests/pipeline.test.sh for the new tier command. Changelog fragment changelog.d/test-speed-pipeline.md (### Changed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. (3) Found by task qa-policy: scripts/README.md (around line 99) still says `--only-suites` is the task QA (unioned with --affected), and the registry `pipeline.qa_tiers` description (registry/core.json, built into registry.json with `python3 -B scripts/build-registry.py`) predates --within and --workspace-only --base; bring both in line with the new commands.",
       "paths": [
         "scripts/factory-pipeline.py",
         "scripts/lib/pipeline_route.py",
         "tests/pipeline.test.sh",
         "docs/pipeline-cli.md",
-        "changelog.d/test-speed-pipeline.md"
+        "changelog.d/test-speed-pipeline.md",
+        "scripts/README.md",
+        "registry/core.json",
+        "registry.json"
       ],
       "exclusions": [],
       "deps": [
@@ -117,7 +120,8 @@
         "task QA specs name `--affected --base <base> --within <check suites> -j 1`; integration QA names `--workspace-only --base <plan base>`",
         "the stderr selection line reports the scoped count and the suites left to CI",
         "pipeline.test.sh keeps every assertion; wall time before and after on this host is reported",
-        "the named suites pass"
+        "the named suites pass",
+        "scripts/README.md and the registry qa_tiers description name the new commands; registry.json is the build"
       ]
     }
   ]
