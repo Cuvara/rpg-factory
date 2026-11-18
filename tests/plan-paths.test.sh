@@ -24,6 +24,7 @@ import plan_paths
 import workspace
 from plan_paths import resolve_repo_path
 
+REAL_EXISTS = os.path.exists                 # captured before any patch: every non-marker path answers from the disk
 tmp = Path(sys.argv[2]).resolve()
 drive = tmp / 'drive-c'                      # stands for C:/ when the converter runs as on Windows
 plan = tmp / 'plans' / 'nested' / 'plan.json'
@@ -60,10 +61,14 @@ def windows(roots=INSTALL_ROOTS):
     markers = set()
     for root in roots:
         markers.add(root + ('/git-bash.exe' if root.endswith('/git') else '/usr/bin/bash.exe'))
-    real_exists = os.path.exists
 
     def exists(p):
-        return str(p) in markers or real_exists(p)
+        # a Git install marker is answered only from this call's markers: never from an outer patch (a nested
+        # windows(roots=()) must not inherit the outer roots) and never from the real filesystem
+        s = str(p).replace('\\', '/')
+        if s.endswith('/usr/bin/bash.exe') or s.endswith('/git-bash.exe'):
+            return s in markers
+        return REAL_EXISTS(p)
 
     with patch.object(plan_paths, '_is_nt', lambda: True), patch.object(workspace, 'os', NtOs()), \
             patch.object(os.path, 'exists', exists):
