@@ -27,8 +27,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   reviewer is of another model than its implementer. It warns (never errors) when one wave shares an exclusive
   resource (queue those runs), when an explicit `implementer` against the "Which model" table has no `reason`, when 3
   or more tasks all use one model, when a task's `checks` or acceptance require a full run ("full runs belong to
-  integration QA"), and when its `checks` contain test suites ("implementers run syntax checks only, verify runs
-  suites").
+  integration QA"), and when a task owns code or test paths (not only prose) but its `checks` name no test suite
+  ("checks name no test suite; name the suites that test the changed behaviour (task QA runs only them with
+  `--within`)"). A scoped `tests/run-all.sh --affected ... --within <suites>` check counts as naming them.
 - `subplan validate subplan.json` (format: `docs/schemas/pipeline-subplan.schema.json`) prints OK when every
   subtask path is repo-relative (no absolute or `..` path),
   inside the task's owned paths and outside its exclusions, overlapping subtasks are ordered by deps, there is no
@@ -121,17 +122,32 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   model, so the review goes to the other model.
 - `dispatch ... --phase review --sha <sha>` and `--phase qa --sha <sha>` start one of the two alone, for a lead that
   needs only one of them. `--phase qa` (like `--phase verify`) prints the tier command (never a full run) and the case
-  list for its base and suite selection (`ALL` for explicit suites). `--task integration:<repo>` targets the
+  list for its base and suite selection (`ALL` for a check suite the change does not reach), with the affected suites
+  outside the task checks named as left to CI. `--task integration:<repo>` targets the
   integration HEAD (a child of the integration checkout with `--placement child`); in a no-worktree repo `--task <id>`
   also runs per task, before the next task starts.
 - A stacked task's `--phase verify|review|qa` exits 2 (no prompt, record or launch) until its dependency's
   review PASS SHA is in `--sha`; the reason names the merge (`git merge <dependency branch or PASS SHA>, never
   rebase`). Its review and QA `--affected --base` is the newest dependency SHA in HEAD (once the recorded dependency
   SHA is on the `topic`, the later-wave base), so they see only the task's own delta.
+- Task QA tier command (`--phase verify|qa`, tier XS lead step): `tests/run-all.sh --affected --base <review base>
+  --within <the checks' suites> -j 1`. Only the suites the task checks name run, each with its affected cases
+  (`--case`; all cases when the change does not reach it); the other affected suites are left to CI and run-all names
+  them on one `left to CI:` line. A check is folded in only when it is one standalone suite or plain run-all command
+  and the suite is one `tests/run-all.sh --list-suites` prints; other checks stay extra commands. A task whose checks
+  name no suite keeps the safe form `tests/run-all.sh --affected --base <review base> -j 1` (the whole affected
+  closure; the spec says to name the suites in the task checks to scope it). Without a review base only the check
+  suites run (`tests/run-all.sh --only-suites <suites> -j 1`), else the command is `NONE`; never a full run.
+  Re-QA after a QA FAIL with `--failed-suites`: the same form with `--base <that FAIL's candidate>`, scoped to the
+  failed suites (`--phase verify`: only them; `--phase qa`: the check suites plus them). Integration QA (`--task integration:<repo> --phase qa`): `tests/run-all.sh --workspace-only --base
+  <plan base>` (the plan's comparison base: `repos.<key>.base_sha`, else `base`), only the workspace checks the
+  change reaches; without a known base `tests/run-all.sh --workspace-only`.
 - Pre-flight (advisory): `--phase verify|qa` prints on stderr `factory-pipeline: selected N of M suites
-  (tests/affected.py)` (N: the Affected cases suites, M: `tests/run-all.sh --list-suites`), or
+  (tests/affected.py; K affected suites left to CI)` (N: the suites the tier command runs, the check suites under
+  `--within`, else the whole affected closure; K: the affected suites outside the checks, the clause is omitted
+  without check suites; M: `tests/run-all.sh --list-suites`), or
   `factory-pipeline: selected suites: not computed (<reason>)`, and a warning to narrow the task paths or its checks
-  when N is above `--suite-warn N` (default 40; below 1 is a usage error, exit 2). The prompt and exit code do not
+  when N (the scoped count) is above `--suite-warn N` (default 40; below 1 is a usage error, exit 2). The prompt and exit code do not
   change. `tests/run-all.sh --affected` exits 2 when python3 cannot run instead of
   widening to every suite. run-all records each suite's wall seconds, exit status and cases in the state dir's
   `run-all/timings.json` (JSON Lines).
@@ -164,7 +180,7 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase veri
 - `--subtask <sid>` records a subtask's own review apart from the task review; the gate needs none (single verify).
 - `--implementer` declares the true implementer and is refused when it conflicts with the one the dispatch recorded.
 - `--failed-suites` goes with a QA FAIL. The next `dispatch --phase verify` (or `--phase qa`) on a new candidate prints
-  `--affected --base <that FAIL's candidate>` with only those suites in `--only-suites`, not the task's own check
+  `--affected --base <that FAIL's candidate>` with only those suites in `--within`, not the task's own check
   suites; a repo without `tests/run-all.sh` keeps its task check commands.
 - `--model` and `--effort` are optional and stored with the verdict.
 - A stacked task: a review or QA PASS (task, `--subtask`, or `--phase verify`) on a SHA without the dependency's
