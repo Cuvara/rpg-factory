@@ -65,8 +65,6 @@ config, or write the model into the session prompt as a hard rule, and re-check 
 
 Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md`):
 
-- `factory-pipeline.py status` lists another coordinator's worktree (`plugin-qa-lean-qa-lean`, plan plugin-qa-lean)
-  as a leftover child of `integration:plugin`; it must list only worktrees of its own plan.
 - Tier XS is accepted only for a one-task plan. A small prose follow-up found mid-run (final-pointers) had to become
   a full task with a task lead. Consider an XS task inside a multi-task plan, reviewed and gated like the one-task form.
 - The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines.
@@ -90,11 +88,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 
 Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
 
-- `claude plugin validate --strict` fails on YAML frontmatter in `skills/pin-bump/SKILL.md`,
-  `skills/unity-client-tech/SKILL.md` and `commands/assetgen.md` (it also fails at main, so it is not from this plan).
-  Fix the frontmatter; the two run-all checks then pass.
-- The registry `root_default` (a WSL drive spelling) is not converted by Windows Python (`scripts/lib/workspace.py`); with
-  `RPG_FACTORY_WORKSPACE` unset, 11 workspace checks fail on Windows. Convert it like `plan_paths.py` does.
 - LFS: the facts export says "LFS files stay pointers" (`tests/facts.test.sh:37,38,49`, the checks-lows changelog
   fragment), which is wrong when git-lfs is configured (`git archive` smudges, the suite is then not offline). No
   product repo has `filter=lfs` today.
@@ -102,7 +95,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   `docs/schemas/pipeline-status.schema.json` forbids extra fields (add them).
 - `docs/pipeline-cli.md` lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6;
   `scripts/README.md` line 22 still says the waiter wakes on three message types and leaves messages unacked.
-- `scripts/factory-pipeline.py:3167`: the `slot_holders` docstring omits `winpid`.
 - `tests/orca-wait.test.sh` INT case SKIPs under run-all (a background job ignores SIGINT at entry), so that suite
   gets no reuse record; an orphaned waiter is detected between checks, so it can lag one wait.
 - `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
@@ -117,8 +109,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 - `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
   checks-lows, after ci-coverage) then shows nine foreign files as scope findings (a false FAIL). Use the task's
   recorded base or the integration base it merged.
-- `status` still proposes `git merge --no-ff <task branch>` while the task QA is FAIL; the reviewed phase looks only at
-  the review. Look at the QA verdict too (same class as the READY_FOR_PR fix of `lead-report`).
 - The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
   `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
 - A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
@@ -136,10 +126,8 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
   `state` is still counted in the "settledness not checked" note.
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
 
-- Lows of `model_scope_widen` (plan owner-policy): `validate` reports a malformed entry twice (once in `validate()`,
-  once through `load_for_plan`); `"model_scope_widen": null` passes `validate` while the schema requires an array;
-  `status --json` prints the widening lines on stderr (`pipeline-status.schema.json` has no field for them);
-  `lead_prompt` loads the policy twice.
+- `status --json` prints the `model_scope_widen` lines on stderr (`pipeline-status.schema.json` has no field for
+  them).
 - The git guard's english-only check inspects only absolute path tokens: a relative `git -C ../clone` from an
   unrelated directory gets no advisory.
 - A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
@@ -157,17 +145,17 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
 - Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
   start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
 
-### flow-lows-followups
+### run-lows-followups
 
-From plan flow-lows (`docs/plans/flow-lows/report.md`):
+From plan run-lows (`docs/plans/run-lows/report.md`):
 
-- `scripts/lib/workspace.py` `native_abs` keeps the broad rewrite of a drive path with a `/mnt/<letter>/` segment for its other callers
-  (`context.py`, `run-checks.py`); only `plan_paths.py` is guarded. Move the Git-root check into `native_abs`.
-- The Git for Windows root check in `plan_paths.py` is a heuristic (last segment `Git`, or it holds `usr/bin/bash.exe`
-  or `git-bash.exe`): a user directory named `Git` with a `/mnt/<letter>/` child still reads as the MSYS rewrite.
-- `netcode-headless` evidence directories under the Factory state dir are never pruned.
-- `tests/orca-wait.test.sh` failed one case once under memory pressure inside `tests/parallel-policy.test.sh` and passed
-  two reruns; the nested output prints only its tail, so the case name was lost. Print the failing case names.
+- `tests/netcode-headless.test.sh` uses a 2 s fake-dotnet timeout that fails at random on a loaded Windows host;
+  raise it to about 8 s (below the fake sleep mode of 10 s).
+- The run-all slot takeover message goes to stdout, not stderr; the netcode evidence prune breaks pid ties
+  lexicographically.
+- `cleanup` still treats `<topic>-*` branches as the plan's own (status no longer does, `Lineage.owns`).
+- The no-duplicate ERROR assertion of the `model_scope_widen` case would not catch a re-appended "; "-joined
+  multi-problem error.
 
 ### path-audit-followups
 
@@ -176,10 +164,6 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 - `MACHINE_PATH` (`scripts/lib/plan_paths.py`) does not flag a `file:` URL with a home or Users path (same as the
   existing drive form); decide whether to reject `file:` URLs, and add an explicit allowed case for an inner path
   segment named home.
-- `factory-pipeline.py cleanup` lists each leftover directory twice, once with forward slashes and once with
-  backslashes; normalise the path before the duplicate check.
-- A test slot stays recorded for a process that was stopped by the low-memory kill (`status`: "not running", "the user
-  decides"); a holder whose PID is gone could be released by the next run.
 - Task QA under memory pressure: verify sessions lost their tier run five times in plans policy-followups and
   path-audit (Claude Code stops background shells of an idle session when memory is low). Write the lesson into
   `parallel-work.md`: on a loaded machine the tier command runs with `-j 1`, one task QA at a time, and a task lead
@@ -192,17 +176,18 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   the task lead should time out a dispatch that shows no turn start and re-dispatch it.
 - In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
   spelling worked (not reproduced).
-- `tests/run-all.sh` keeps no log of a run: a caller that keeps only the tail of the output loses the FAIL lines
-  (integration QA had to be rerun to see one failure). Write the FAIL blocks to a file under the state dir and print
-  its path in the summary.
-- Under heavy load the snapshot reports a product repo as "not a git work tree" (seen once in `tests/routing.test.sh`,
-  scenario "Redis servers:id -> wire-contract leads"; `git_out` in `scripts/lib/workspace.py` has a 5 s timeout). A
-  timeout should be reported as a timeout, not as a missing work tree, and the scenario should retry once.
+- The routing scenario "Redis servers:id -> wire-contract leads" (`tests/routing.test.sh`) should retry once
+  on a git timeout; the snapshot now reports a timeout as a timeout (plan run-lows).
 - testlab `test_lab.py` case `test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small` fails under load
   (sampler CPU 1.56 % against a 1.0 % bound); it measures the live host. Make the bound load-tolerant or skip on a
   busy machine.
 
 ## Covered
+
+- **run-lows** (flow-lows-followups; the root_default, slot_holders, status-on-QA-FAIL and frontmatter items of
+  plugin-flow-5-followups; the cleanup, dead slot, run-all log and git timeout items of path-audit-followups; the
+  status foreign worktree item of workflow-slim-followups; most `model_scope_widen` lows): shipped in plan run-lows
+  (`changelog.d/run-lows-paths.md`, `changelog.d/run-lows-evidence.md`, `changelog.d/run-lows-pipeline.md`).
 
 - **review-base-topic** and **run-all-orphan-after-reap**: shipped in plan assetgen-followups (task topic-start-base,
   `changelog.d/topic-start-base.md`: a task whose deps are all integrated starts from the topic and gets no stack

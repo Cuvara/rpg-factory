@@ -928,7 +928,9 @@ def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
     notes = []
-    if plan.get("model_scope_widen") is not None:
+    if "model_scope_widen" in plan and plan["model_scope_widen"] is None:
+        errors.append("model_scope_widen: must be an array")  # the schema requires an array: null is no 'absent'
+    elif "model_scope_widen" in plan:
         try:
             base_policy = model_policy.load(reg)
             widen_errors, notes = model_policy.widen_problems(base_policy, plan["model_scope_widen"])
@@ -1058,7 +1060,9 @@ def plan_models(plan, reg, errors):
     try:
         policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
-        errors.append(str(e))
+        # a malformed model_scope_widen entry is already an error of validate() (PolicyError joins those with "; ")
+        if str(e) not in errors and not all(part in errors for part in str(e).split("; ")):
+            errors.append(str(e))
         return None
     out = {"lead": None, "tasks": {}}
 
@@ -2120,6 +2124,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
                       f"{sdep}'s review PASS SHA must be in your HEAD; until then those dispatches exit 2). ")
     sync_out = (f" After each new candidate (a fix included), run `<pipeline> sync <plan> --task {task['id']} --send`: it "
                 "tells stacked dependents to merge it (no-op without them)." if info["worktrees"] else "")
+    widenings = valid_widenings(plan, reg)  # loads the policy once
     rules = [
         f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}{note_args}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
@@ -2149,8 +2154,8 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <report>`): branch "
         f"{spec['branch']}, HEAD SHA, your Orca Run id, subtasks with commits, review and QA verdicts (state, SHA, model), "
         "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings"
-        + (", the plan's model scope widenings (" + "; ".join(model_policy.widening_text(e) for e in valid_widenings(plan, reg)) + ")"
-           if valid_widenings(plan, reg) else "") + ".",
+        + (", the plan's model scope widenings (" + "; ".join(model_policy.widening_text(e) for e in widenings) + ")"
+           if widenings else "") + ".",
         f"7. {subagents}" if subagents else None,
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
@@ -4130,7 +4135,7 @@ def read_slots():
 
 
 def slot_holders(plan, reg):
-    """Test slots held by a run in one of the plan's checkouts: {slot, pid, checkout, started, alive} with alive True,
+    """Test slots held by a run in one of the plan's checkouts: {slot, pid, winpid, checkout, started, alive} with alive True,
     False or None (cannot say). On Windows the slot's shell PID is an MSYS PID: the liveness check uses its winpid and
     is None without one. Read-only, never stops anything."""
     mine = plan_checkouts(plan, reg)
@@ -4284,9 +4289,12 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
             beside = list(dict.fromkeys(os.path.dirname(p.rstrip("/\\")) for p in (parent, info["path"], command_repo) if p))
             for t in (t for t in plan["tasks"] if t.get("repo") == key):
                 name = task_branch(plan, info, t).replace("/", "-")
-                for d in dict.fromkeys(os.path.join(b, name) for b in beside):
-                    if norm_wt(d) in registered:
+                # one directory reached through two spellings (forward and back slashes) is listed once
+                seen = set()
+                for d in (os.path.join(b, name) for b in beside):
+                    if norm_wt(d) in registered or norm_wt(d) in seen:
                         continue
+                    seen.add(norm_wt(d))
                     if not orca_paths:
                         orca_paths.append(orca_worktree_paths() or set())
                     on_disk, record = os.path.exists(d), norm_wt(d) in orca_paths[0]
@@ -4444,6 +4452,17 @@ class Lineage:
     def __init__(self, own_branches=(), topic=None):
         self._map, self._own, self.topic = None, set(own_branches), topic
 
+    def owns(self, branch):
+        """Whether `branch` belongs to this plan: the topic itself, a task branch or `<task branch>-...`, each with an
+        optional Orca prefix (`codex/<branch>`). `<topic>-...` alone is not enough: a plan whose topic extends this
+        one (`<topic>-v2`) or a helper of another plan in the same repo is not this plan's."""
+        for own in self._own | ({self.topic} if self.topic else set()):
+            if branch == own or branch.endswith("/" + own):
+                return True
+            if own != self.topic and (branch.startswith(own + "-") or ("/" + own + "-") in branch):
+                return True
+        return False
+
     def parent(self, wt):
         if wt.get("branch") in self._own:  # a task worktree or the integration checkout is no child: no orca call
             return None
@@ -4478,22 +4497,16 @@ class Lineage:
         return out
 
 
-def plan_branch(branch, topic):
-    """Whether a branch belongs to the topic, including an Orca-prefixed plan branch."""
-    return bool(branch and topic and (branch == topic or branch.startswith(topic + "-")
-                                      or ("/" + topic + "-") in branch))
-
-
 def is_child(wt, parent_branch, parent_path=None, lineage=None):
     """An Orca child of the worktree on `parent_branch`: its branch (Orca may add a prefix) or directory name starts
     with `<parent branch>--` (dispatch names children `<task branch>--...`, child_branch()), or Orca's lineage names
-    the worktree at `parent_path` as its parent and the branch belongs to the plan topic."""
+    the worktree at `parent_path` as its parent and the branch is the plan's own (Lineage.owns)."""
     mark = parent_branch + "--"
     br = str(wt.get("branch") or "")
     base = os.path.basename(str(wt.get("path") or "").replace("\\", "/").rstrip("/"))
     if br.startswith(mark) or ("/" + mark) in br or base.startswith(mark.replace("/", "-")):
         return True
-    return bool(parent_path and lineage and plan_branch(br, lineage.topic)
+    return bool(parent_path and lineage and br and lineage.owns(br)
                 and lineage.parent(wt) == norm_wt(parent_path))
 
 
@@ -4849,6 +4862,12 @@ def status(plan, reg, orca_run=None):
                                 f"{row['branch']}, then review the new HEAD")
             # only the task lead commits: it resumes (task worktree, or the main checkout of a no-worktree repo) and
             # starts a fresh fix session, then review and QA on the new HEAD
+            row["next"] = f"{dispatch} --phase lead --runner orca"
+        elif row["phase"] == "reviewed" and (row["qa"] or {}).get("state") == "FAIL" and (row["qa"] or {}).get("sha") in (
+                row["review"]["sha"], row["sha"]):
+            # review PASS but the task QA failed on this candidate: merging it would integrate a failing commit
+            row["notes"].append(f"QA FAIL at {row['qa']['sha'][:10]} on the reviewed candidate: no merge; fix it on "
+                                f"{row['branch']} (fix session), then a fresh verify")
             row["next"] = f"{dispatch} --phase lead --runner orca"
         elif row["phase"] == "reviewed":
             home = worktree_for(info["path"], plan["topic"])[0]

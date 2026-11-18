@@ -3369,7 +3369,7 @@ def write(name, value):
 write("valid", [entry, other])
 write("covered", [{**entry, "model": "claude-opus-5-5"}])
 for name, value in {
-    "non-array": {}, "non-object": [42], "unknown-key": [{**entry, "extra": 1}],
+    "non-array": {}, "null": None, "non-object": [42], "unknown-key": [{**entry, "extra": 1}],
     "missing-key": [{k: v for k, v in entry.items() if k != "model"}],
     "unknown-agent": [{**entry, "agent": "unknown"}], "empty-efforts": [{**entry, "efforts": []}],
     "unknown-basis": [{**entry, "basis": "maybe"}], "empty-reason": [{**entry, "reason": ""}],
@@ -3387,9 +3387,15 @@ else fail=$((fail + 1)); echo "FAIL  plan widening: explicit dispatch (rc=$RC)";
 refute "plan widening: default profile does not use widening" '^model scope widened by plan ' dispatch "$WIDE" --task gw --phase lead --runner orca
 refute "plan widening: absent field dispatch prints no widening" '^model scope widened by plan ' dispatch "$LT" --task gw --phase lead --runner orca
 refute "plan widening: absent field prints no widening" '^[Mm]odel scope widen' validate "$LT"
-for bad in non-array non-object unknown-key missing-key unknown-agent empty-efforts unknown-basis empty-reason whitespace-reason; do
+for bad in non-array null non-object unknown-key missing-key unknown-agent empty-efforts unknown-basis empty-reason whitespace-reason; do
   expect "plan widening: $bad fails validation" 1 '^ERROR model_scope_widen' validate "$TMP/widen-$bad.json"
 done
+for bad in null unknown-key missing-key non-object; do
+  pp validate "$TMP/widen-$bad.json"
+  if [ "$(grep -c '^ERROR model_scope_widen' <<<"$OUT")" -ge 1 ] && [ -z "$(grep '^ERROR' <<<"$OUT" | sort | uniq -d)" ]; then pass=$((pass + 1)); echo "PASS  plan widening: $bad is reported once (no duplicate ERROR line)"
+  else fail=$((fail + 1)); echo "FAIL  plan widening: $bad is reported once (no duplicate ERROR line)"; sed 's/^/      /' <<<"$OUT" | head -10; fi
+done
+expect "plan widening: null is not an array" 1 '^ERROR model_scope_widen: must be an array' validate "$TMP/widen-null.json"
 expect "plan widening: already in scope is a note" 0 '^NOTE  model_scope_widen\[0\]: .*already in the model scope' validate "$TMP/widen-covered.json"
 for cmd in validate status; do
   if [ "$cmd" = validate ]; then label='Model scope widening:'; else label='model scope widening:'; fi
@@ -4034,6 +4040,21 @@ PATH="$fpath" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-left.json" 2>&
 if jq -e '.state == "LEFTOVER" and any(.leftovers[]; .kind == "directory" and (.path | test("feat-core-demo-gw$")) and (.commands | length) == 2 and (.commands[0] | test("worktree prune$")) and (.commands[1] | test("orca worktree rm")))' "$TMP/cleanup-left.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  cleanup --json carries the leftover directory with its commands"
 else fail=$((fail + 1)); echo "FAIL  cleanup --json leftovers"; head -c 1500 "$TMP/cleanup-left.json"; fi
+# one directory reached through two spellings (forward and back slashes, as git and Windows Python give them) is listed once
+if jq -e '([.leftovers[] | select(.kind == "directory" and (.path | test("feat-core-demo-gw$")))] | length) == 1
+          and ([.left[] | select(test("feat-core-demo-gw$"))] | length) == 1
+          and ([.commands[] | select(test("orca worktree rm .*feat-core-demo-gw"))] | length) == 1' "$TMP/cleanup-left.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup lists the leftover directory once in left, leftovers and commands"
+else fail=$((fail + 1)); echo "FAIL  cleanup lists a leftover directory twice"; head -c 1500 "$TMP/cleanup-left.json"; fi
+python3 - "$ROOT" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("pipeline", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# the dedupe key of cleanup(): slash spellings of one directory collapse to one
+assert m.norm_wt("C:/ws/x-gw") == m.norm_wt("C:\\ws\\x-gw") == m.norm_wt("C:\\ws\\x-gw\\")
+PY
+if [ $? = 0 ]; then pass=$((pass + 1)); echo "PASS  cleanup dedupe key: forward and back slash spellings are one directory"
+else fail=$((fail + 1)); echo "FAIL  cleanup dedupe key"; fi
 # the processes that may keep the leftover directory busy (read-only process listing, injected fixture): named with PID,
 # command and start time; the user decides
 jq -n --arg d "$LD" '[{pid:3101,ppid:1,name:"codex.exe",command:("C:/tools/codex.exe --cwd " + $d),started:"2026-11-10T08:00:00"},
@@ -4153,7 +4174,7 @@ unset FAKE_ORCA_REPOS
 # once per repo in integration_children with cleanup guidance, cleanup names them "child of integration:srv"
 opath "integration QA --placement child (orca on PATH): worker-start --worktree new-child at the SHA" 0 "^orca orchestration worker-start .*--worktree new-child --name feat/core/demo--qa-${SG:0:7} --base-branch $SG " dispatch "$G" --task integration:srv --phase qa --sha "$SG" --placement child --runner orca
 git -C "$S" worktree add -q "$TMP/feat-core-demo--qa" -b feat/core/demo--qa "$SG" 2>/dev/null
-git -C "$S" worktree add -q "$TMP/int-helper" -b feat/core/demo-int-helper "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/int-helper" -b feat/core/demo-gw-int-helper "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/foreign-sibling" -b feat/skills/vfx-graph "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/foreign-lineage" -b isolated-qa "$SG" 2>/dev/null
 export FAKE_ORCA_WT="$TMP/orca-wt.json"
@@ -4162,7 +4183,7 @@ jq -n --arg p "$(wtp "$S")" --arg h "$(wtp "$TMP/int-helper")" --arg f "$(wtp "$
 PATH="$fpath" python3 -B "$P" status --json "$G" > "$TMP/status-int.json" 2>/dev/null
 if jq -e '(.integration_children | length) == 2 and all(.integration_children[]; .repo == "srv" and .merged
      and (.note | test("leftover child worktree .*merged, then remove it at once: orca worktree rm --worktree")))
-   and ([.integration_children[].branch] | sort) == ["feat/core/demo--qa", "feat/core/demo-int-helper"]
+   and ([.integration_children[].branch] | sort) == ["feat/core/demo--qa", "feat/core/demo-gw-int-helper"]
    and all(.tasks[]; (.children | length) == 0)' "$TMP/status-int.json" >/dev/null && python3 - "$ROOT" "$TMP/status-int.json" <<'PY'
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
@@ -4175,6 +4196,16 @@ else fail=$((fail + 1)); echo "FAIL  status integration_children"; head -c 1500 
 if jq -e 'all(.integration_children[]; .branch != "feat/skills/vfx-graph" and .branch != "isolated-qa")' "$TMP/status-int.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  status excludes foreign sibling and foreign lineage child"
 else fail=$((fail + 1)); echo "FAIL  status includes foreign lineage"; fi
+# a worktree of another plan in the same repo (its topic extends this one: feat/core/demo-v2) whose Orca parent is this
+# integration checkout is no child of this plan: status lists only the worktrees of its own plan
+git -C "$S" worktree add -q "$TMP/foreign-plan" -b feat/core/demo-v2-x "$SG" 2>/dev/null
+jq -n --arg p "$(wtp "$S")" --arg h "$(wtp "$TMP/int-helper")" --arg f "$(wtp "$TMP/foreign-plan")" \
+  '{ok:true,result:{worktrees:[{id:"r::int",path:$p,parentWorktreeId:null},{id:"r::h",path:$h,parentWorktreeId:"r::int"},{id:"r::f",path:$f,parentWorktreeId:"r::int"}]}}' > "$FAKE_ORCA_WT"
+PATH="$fpath" python3 -B "$P" status --json "$G" > "$TMP/status-foreign-plan.json" 2>/dev/null
+if jq -e '([.integration_children[].branch] | sort) == ["feat/core/demo--qa", "feat/core/demo-gw-int-helper"]' "$TMP/status-foreign-plan.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  status does not list another plan's worktree (topic extending this one) as a child of the integration checkout"
+else fail=$((fail + 1)); echo "FAIL  status lists another plan's worktree as a child"; jq -c '.integration_children' "$TMP/status-foreign-plan.json"; fi
+git -C "$S" worktree remove --force "$TMP/foreign-plan"; git -C "$S" branch -q -D feat/core/demo-v2-x
 opath "status text names the integration child with its rm command" 0 "^  \[integration:srv\] child: leftover child worktree .*feat-core-demo--qa .*orca worktree rm" status "$G"
 opath "cleanup names the integration QA child" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*feat-core-demo--qa" cleanup "$G"
 opath "cleanup names the lineage helper of the integration checkout" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*int-helper" cleanup "$G"
@@ -4218,7 +4249,7 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot 
 # (codex/<task branch>--qa in a sibling directory) and a plan branch known only through Orca's lineage (any
 # directory); a slot in a checkout that is neither stays unnamed
 git -C "$S" worktree add -q "$TMP/slot-pfx-child" -b codex/feat/core/demo-gw--qa "$SG" 2>/dev/null
-git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b codex/feat/core/demo-slot-lineage "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b codex/feat/core/demo-gw-slot-lineage "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/slot-unrelated" -b slot-unrelated-br "$SG" 2>/dev/null
 mkdir -p "$SLOTS/5" "$SLOTS/6" "$SLOTS/7"
 for n in 5:slot-pfx-child:7001 6:slot-lineage-child:7002 7:slot-unrelated:7003; do
@@ -4241,7 +4272,7 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error oref "orca failing: line
 unset FAKE_ORCA_WT
 git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
 git -C "$S" worktree remove --force "$TMP/slot-unrelated"
-git -C "$S" branch -q -D codex/feat/core/demo-gw--qa codex/feat/core/demo-slot-lineage slot-unrelated-br
+git -C "$S" branch -q -D codex/feat/core/demo-gw--qa codex/feat/core/demo-gw-slot-lineage slot-unrelated-br
 rm -rf "$SLOTS"
 
 case_end settled-workers
@@ -4275,7 +4306,7 @@ inorca expect "--orca-unavailable with --runner orca is a usage error" 2 "--orca
 expect "--orca-unavailable without --runner is a usage error" 2 "goes with --runner agent only" planner --request "add a thing" --orca-unavailable x
 expect "--orca-unavailable with a blank reason is a usage error" 2 "--orca-unavailable needs a REASON" planner --request "add a thing" --runner agent --orca-unavailable "  "
 git -C "$S" worktree remove "$TMP/feat-core-demo--qa"; git -C "$S" worktree remove "$TMP/int-helper"; git -C "$S" worktree remove "$TMP/foreign-sibling"; git -C "$S" worktree remove "$TMP/foreign-lineage"
-git -C "$S" branch -q -D feat/core/demo--qa feat/core/demo-int-helper feat/skills/vfx-graph isolated-qa
+git -C "$S" branch -q -D feat/core/demo--qa feat/core/demo-gw-int-helper feat/skills/vfx-graph isolated-qa
 if python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.integration_children == []' >/dev/null
 then pass=$((pass + 1)); echo "PASS  integration children removed: status lists none"
 else fail=$((fail + 1)); echo "FAIL  integration_children after removal"; fi
@@ -4491,6 +4522,15 @@ expect "a reviewed dependency: the later-wave task lead stacks on its tip" 0 "wo
 expect "the stacked dispatch names the dependency and its SHA" 0 "task b stacks on a@${SA:0:10}" dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
+# review PASS but the task QA FAILED on the same candidate: no merge proposal, the lead fixes it, then a fresh verify
+sv --task a --phase qa --sha "$SA" --by claude --state FAIL
+st_phase "review PASS with QA FAIL on the candidate: reviewed, next is the task lead, never the merge" a reviewed "--task a --phase lead --runner orca"
+pp status --json "$ST"
+if jq -e '(.tasks[] | select(.id == "a")) as $a | ($a.next | test("merge") | not) and any($a.notes[]; test("QA FAIL at .* no merge; fix it .* fresh verify"))' <<<"$OUT" >/dev/null
+then pass=$((pass + 1)); echo "PASS  review PASS with QA FAIL: no merge in next, the QA failure is noted"
+else fail=$((fail + 1)); echo "FAIL  review PASS with QA FAIL still proposes the merge"; head -c 1500 <<<"$OUT"; fi
+rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__qa.json"
+st_phase "QA FAIL record removed: next merges the task branch again" a reviewed "merge --no-ff feat/core/st-a"
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
 st_note "no lead report yet: READY_FOR_PR: no, the first missing thing" a '^READY_FOR_PR: no \(no lead report\)$'
 refute "no lead report: no lead report line" "note: lead report:" status "$ST"

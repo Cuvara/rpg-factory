@@ -741,6 +741,43 @@ done
 out=$(cache_plan --last-result); rc=$?
 [ "$rc" = 0 ] && [ "$out" = "$printed" ] \
   && good '--last-result defaults to the current checkout and runs no check' || no 'default checkout printer' "$out"
+# The record path is the very last output line (after the summary), for a passing and a failing run alike, so a caller
+# that keeps only the tail of the output can find the FAIL blocks: the file exists under the state dir and holds them.
+for broken in 1 0; do
+  reset_cache
+  out=$(BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+  last=$(tail -n 1 <<<"${out//$'\r'/}")
+  rec=${last#run-all: result record }; rec=${rec%% (FAIL blocks: tests/run-all.sh --last-result)}
+  sum_n=$(grep -n '^run-all: [0-9]* checks, ' <<<"${out//$'\r'/}" | tail -n 1 | cut -d: -f1)
+  total_n=$(wc -l <<<"${out//$'\r'/}" | tr -d ' ')
+  held=$(python3 -B - "$rec" "$broken" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    r = json.load(f)
+broken = int(sys.argv[2])
+if broken:
+    [o] = r['failed_output']
+    assert o['name'].startswith('a [') and 'a broke here' in o['tail'].split('\n')
+else:
+    assert r['failed'] == [] and r['failed_output'] == []
+sys.stdout.buffer.write(b'held\n')
+PY
+  ); hrc=$?
+  [ "$rc" = "$broken" ] && [ "$last" != "$rec" ] && [ "$(grep -c '^run-all: result record ' <<<"${out//$'\r'/}")" = 1 ] \
+    && [ -n "$sum_n" ] && [ "$sum_n" -lt "$total_n" ] && [[ "$rec" == "$TMP/state/run-all/results/"* ]] && [ -f "$rec" ] \
+    && [ "$hrc" = 0 ] && [ "$held" = held ] && grep -qx "result: $rec" <<<"$(last_result)" \
+    && good "the last output line names the result record, after the summary, holding the FAIL blocks (exit $broken)" \
+    || no "record path line (run $rc, record check $hrc, summary line $sum_n of $total_n)" "$out"
+done
+# An interrupted run prints it too, once the record is written.
+reset_cache
+HOLD_MARK="$TMP/record-line-term" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/record-line-term.out" 2>&1 & rt=$!
+slot_wait_for "$TMP/record-line-term"
+kill -TERM "$rt"; wait "$rt"; rc=$?
+last=$(tail -n 1 "$TMP/record-line-term.out" | tr -d '\r'); rec=${last#run-all: result record }; rec=${rec%% (FAIL blocks: tests/run-all.sh --last-result)}
+[ "$rc" = 143 ] && [ "$last" != "$rec" ] && [ -f "$rec" ] && grep -qx 'exit: 143' <<<"$(last_result)" \
+  && good 'an interrupted run (TERM) prints its result record path as the last line' || no "record path line after TERM (rc $rc)" "$(cat "$TMP/record-line-term.out")"
+for ((i=0; i<300; i++)); do [ -z "$(ls -A "$SL")" ] && break; sleep 0.1; done
 # Inspection is read-only, including when no record exists or a caller supplies parallel-job flags.
 before=$(find "$TMP/state" -type f -exec sha256sum {} \; | sort)
 out=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/unknown-checkout" -j 2); rc=$?

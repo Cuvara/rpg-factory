@@ -281,6 +281,76 @@ while IFS= read -r line; do
   esac
 done <<< "$python_out"
 [ "$python_status" -eq 0 ] || no "Python checks exited $python_status"
+
+# A git timeout is not a missing work tree: a fake `git` first on PATH sleeps past a 1 s timeout (slow) or exits 1
+# (failing). The fake is a Python script: first on PATH on Linux CI; Windows CreateProcess finds only git.exe, so
+# there the test redirects the "git" argv[0] to the script through the interpreter instead.
+mkdir -p "$T/slowgit" "$T/failgit" "$T/gitrepo"
+for kind in slow fail; do
+  if [ "$kind" = slow ]; then body='import time; time.sleep(30)'; else body='import sys; sys.exit(1)'; fi
+  printf '#!/usr/bin/env python3\n%s\n' "$body" > "$T/${kind}git/git"
+  chmod +x "$T/${kind}git/git"
+done
+export RPGF_TEST_SLOWGIT="$T/slowgit" RPGF_TEST_FAILGIT="$T/failgit" RPGF_TEST_GITREPO="$T/gitrepo"
+git_out_text=$(python3 -B - <<'PY'
+import os
+import sys
+
+root = os.environ['RPGF_TEST_ROOT']
+sys.path.insert(0, os.path.join(root, 'scripts', 'lib'))
+import workspace
+import context
+
+def check(name, condition):
+    print(('PASS  ' if condition else 'FAIL  ') + name)
+
+repo = os.environ['RPGF_TEST_GITREPO']
+rep = {'default_branch': 'main', 'protected_branches': ['main']}
+args = {'base': None, 'paths': [], 'submodules': False}
+real_path = os.environ['PATH']
+real_timeout = context.GIT_TIMEOUT
+
+real_run = workspace.subprocess.run
+
+def use(kind):
+    fake_dir = os.environ['RPGF_TEST_' + kind.upper() + 'GIT']
+    if os.name == 'nt':
+        script = os.path.join(fake_dir, 'git')
+        def run(cmd, *a, **kw):
+            return real_run([sys.executable, script, *cmd[1:]] if cmd[0] == 'git' else cmd, *a, **kw)
+        workspace.subprocess.run = run
+    else:
+        os.environ['PATH'] = fake_dir + os.pathsep + real_path
+
+try:
+    use('slow')
+    check('git_result reports a timeout', workspace.git_result(repo, 'status', timeout=1) == (None, 'timeout'))
+    check('git_out keeps its empty-string contract on a timeout', workspace.git_out(repo, 'status', timeout=1) == '')
+    context.GIT_TIMEOUT = 1
+    check('context.git returns None on a timeout', context.git(repo, 'status') is None)
+    state = context.repo_state('fixture', repo, rep, args, {'repos': {}})
+    check('repo_state reports a timeout as a timeout', state.get('error') == 'git timed out after 1 s')
+    use('fail')
+    check('git_result reports a failure', workspace.git_result(repo, 'status', timeout=1) == (None, 'failed'))
+    check('git_out keeps its empty-string contract on a failure', workspace.git_out(repo, 'status', timeout=1) == '')
+    state = context.repo_state('fixture', repo, rep, args, {'repos': {}})
+    check('repo_state keeps "not a git work tree" for a failure', state.get('error') == 'not a git work tree')
+finally:
+    os.environ['PATH'] = real_path
+    workspace.subprocess.run = real_run
+    context.GIT_TIMEOUT = real_timeout
+PY
+)
+git_out_status=$?
+while IFS= read -r line; do
+  line=${line%$'\r'}
+  case "$line" in
+    'PASS  '*) ok "${line#PASS  }" ;;
+    'FAIL  '*) no "${line#FAIL  }" ;;
+    *) no "unexpected git timeout output: $line" ;;
+  esac
+done <<< "$git_out_text"
+[ "$git_out_status" -eq 0 ] || no "git timeout checks exited $git_out_status"
 for platform in MINGW MSYS CYGWIN LINUX; do
   case "$platform" in
     MINGW) shell=$(shell_default MINGW64_NT); python=${python_nt-} ;;
