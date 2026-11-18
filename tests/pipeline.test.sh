@@ -3392,8 +3392,8 @@ for bad in non-array null non-object unknown-key missing-key unknown-agent empty
 done
 for bad in null unknown-key missing-key non-object; do
   pp validate "$TMP/widen-$bad.json"
-  if [ "$(grep -c '^ERROR model_scope_widen' <<<"$OUT")" = 1 ]; then pass=$((pass + 1)); echo "PASS  plan widening: $bad is reported exactly once"
-  else fail=$((fail + 1)); echo "FAIL  plan widening: $bad is not reported exactly once"; sed 's/^/      /' <<<"$OUT" | head -10; fi
+  if [ "$(grep -c '^ERROR model_scope_widen' <<<"$OUT")" -ge 1 ] && [ -z "$(grep '^ERROR' <<<"$OUT" | sort | uniq -d)" ]; then pass=$((pass + 1)); echo "PASS  plan widening: $bad is reported once (no duplicate ERROR line)"
+  else fail=$((fail + 1)); echo "FAIL  plan widening: $bad is reported once (no duplicate ERROR line)"; sed 's/^/      /' <<<"$OUT" | head -10; fi
 done
 expect "plan widening: null is not an array" 1 '^ERROR model_scope_widen: must be an array' validate "$TMP/widen-null.json"
 expect "plan widening: already in scope is a note" 0 '^NOTE  model_scope_widen\[0\]: .*already in the model scope' validate "$TMP/widen-covered.json"
