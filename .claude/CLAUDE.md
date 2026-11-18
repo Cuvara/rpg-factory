@@ -26,14 +26,16 @@ Architecture and layout: `docs/architecture/overview.md`. Release procedure: `do
   evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`;
   `changelog.d/README.md`). Never edit `CHANGELOG.md` `[Unreleased]`: it stays empty (run-all checks it).
-- QA: while iterating and in task QA run the tier command (`tests/run-all.sh --affected --base <base> -j 2`, or
-  `--only-suites`); a task never runs the full suite. Implementers run no suites (syntax check only); one verify
-  session per task runs review, then the tier command once (`--case` in a slow suite, `tests/affected.py cases`).
-  CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
-  `--no-workspace --no-claude`) and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single
-  required check. Before a PR, integration QA runs `tests/run-all.sh --workspace-only` with 0 failed; CI
-  (`gh pr checks <pr> --watch`) must be green before merging, and while it runs start the next task. Full `--release` and `tests/dogfood.sh --installed` run only for releases.
-  Report the pass count. Tiers: `delivery.md` section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
+- QA: task QA runs only the task's check suites, limited to the cases the change reaches
+  (`tests/run-all.sh --affected --base <base> --within <check suites> -j 1`); a task never runs the full suite and
+  leaves every other suite to CI. A task's `checks` name the suites that test the changed behaviour. Implementers run
+  no suites (syntax check only); one verify session per task runs review, then that command once. CI is the breadth
+  gate: every affected suite per PR on Linux and Windows (`scripts/ci-plan.py`, one matrix job per suite,
+  `--no-workspace --no-claude`; every suite through `workflow_dispatch` with `full=true`); `ci-ok` is the single
+  required check and must be green (`gh pr checks <pr> --watch`) before merging; start the next task meanwhile.
+  Before a PR, integration QA runs `tests/run-all.sh --workspace-only --base <plan base>` with 0 failed. Full
+  `--release` and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers: `delivery.md`
+  section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
 - English only for everything written: code, comments, docs, changelog fragments, commit messages, PR and issue text,
   plan files (including the harness plan-mode file), briefs and specs for agents, messages between sessions, artifacts and
   memory files. Only the report to the owner (chat replies, status, questions, the final report) uses the registry
@@ -76,14 +78,15 @@ Each lesson names its reason. Delivery-flow lessons (Orca, Codex, sessions, load
 - **Quote shell examples in messages in single quotes, or put them in a file:** backticks inside a double-quoted argument (an `orca orchestration send --body`) are command substitution and the message loses the example.
 - **Never stop a process by pattern (`pkill -f <name>`):** a worker that did so to stop its own duplicate skills-lint run may have killed other sessions' runs; stop only the PID you started.
 - **The language policy needs an advisory, not only prose:** sessions wrote plans, briefs and inter-agent messages in the owner's language because the rule was English-only prose with no signal at write time, and a long session drifts to the language it is spoken to in. Text the owner never reads is English; `workspace.report_language` covers only the report to the owner. `file-guard.py` and the git guard now warn (rule `english-only`) on a write or command that carries non-English text; tests in `tests/file-guard.test.sh` and `tests/git-guard.test.sh`.
+- **Low memory: -j 1 and one task QA at a time:** verify sessions in plans policy-followups, path-audit, flow-lows and run-lows lost their tier run many times when Claude Code stopped background shells under low memory; a task lead reports NOT_RUN after one retry instead of looping (`parallel-work.md`).
 - **Learning loop:** a new lesson goes here or into its policy file (`parallel-work.md`, `docs/dogfood.md`, `git-safety.md`) with its reason and a test when possible. Private agent memory only points here: Codex, other machines and new sessions never see it.
 
 ## Commands
 
 ```bash
-tests/run-all.sh --affected --base <base> -j 2   # tier command: suites touched since <base> (not the PR gate)
+tests/run-all.sh --affected --base <base> --within <suites> -j 1   # task QA: the task's check suites, affected cases only
 tests/run-all.sh --only-suites a,b               # only the named suites (--list-suites prints names)
-tests/run-all.sh --workspace-only                # what CI cannot run; integration QA before a PR
+tests/run-all.sh --workspace-only --base <base>  # integration QA: workspace checks the change reaches
 tests/run-all.sh --release                       # full release gate (releases only, under the lock)
 tests/git-guard.test.sh                          # also: skills-lint.sh, routing.test.sh, pipeline.test.sh, new-skill.test.sh
 python3 -B scripts/build-registry.py [--check]   # registry.json from registry/
