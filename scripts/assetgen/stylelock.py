@@ -59,6 +59,9 @@ HEX = re.compile(r"\A#[0-9a-fA-F]{6}\Z")
 SHA = re.compile(r"\A[0-9a-f]{64}\Z")
 DATE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 EXTERNAL_PATH = re.compile(r"(?<![\w/.:])(?:/(?:[^\s/\\]+/[^\s/\\]+|[^\s/\\]+\.[\w-]+)|~[/\\]|[a-zA-Z]:[/\\]|\\\\|\.\.[/\\])")
+# file: URIs and environment-variable paths ($HOME/x, ${HOME}/x, %USERPROFILE%\x): a local path in disguise.
+# A price like $5 (a $ then a digit) and a percentage like 100% are not variables.
+EXTERNAL_URI_OR_ENV = re.compile(r"(?<![\w])file:[/\\]|\$\{?[A-Za-z_]|%[A-Za-z_][A-Za-z0-9_]*%[/\\]", re.I)
 EXTERNAL_CREDENTIAL = re.compile(r"(?<![\w-])(?:api[_-]?key|access_token|auth_token|token|secret|client_secret|password|passwd|authorization)(?![\w-])\s*[\"']?\s*[:=]\s*\S|\bBearer\s+\S|\bsk-[A-Za-z0-9_-]{12,}", re.I)
 ASPECT = re.compile(r"\A[1-9]\d*:[1-9]\d*\Z")
 ID = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
@@ -423,7 +426,7 @@ def external_source_errors(src, key="external_source"):
         value = src.get(field)
         if not isinstance(value, str) or not value.strip():
             errs.append("%s.%s must be non-empty text" % (key, field))
-        elif EXTERNAL_PATH.search(value) or EXTERNAL_CREDENTIAL.search(value):
+        elif EXTERNAL_PATH.search(value) or EXTERNAL_URI_OR_ENV.search(value) or EXTERNAL_CREDENTIAL.search(value):
             errs.append("%s.%s must not contain an absolute path or credential" % (key, field))
     if not isinstance(src.get("sha256"), str) or not SHA.match(src["sha256"]):
         errs.append("%s.sha256 must be a sha256 hex digest" % key)
