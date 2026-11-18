@@ -95,51 +95,56 @@
 #   groups is built only when a selected group needs it. ASSETGEN_TEST_TIMES=1 prints the wall time of each group
 #   ("-- group NAME 1.234s"); ASSETGEN_TEST_PLAN=1 prints the groups that would run and exits.
 #   --update-golden rewrites the golden workflows (render-golden group).
+# Speed (a process start costs 0.5-1.5 s on a Windows host, so the suite counts processes, not work): every AG call is
+# served by one interpreter for the whole run (tests/fixtures/assetgen/agserver.py; AG_DIRECT is the plain process and
+# the fallback), the render-golden and ui-workflow loops run in one interpreter each (tests/fixtures/assetgen/loops.py
+# with the stdlib converter ui2api.py; the suite reports every result line with ok/no), jq runs with -b on Windows (no tr
+# process behind it), and the lint rows are read without a pipeline (lint_res). Every assertion text and count is kept.
 # The case-map lines below name, per group, the inputs it reads (affected.py case_map: every file the suite selects
 # that a changed file reaches must match a pattern, else every group runs). Measured: every scripts/assetgen/*.py module
 # reaches assetgen.py (the CLI each group runs), approval.py, the quality plugin, the command wrapper and the
 # graph-style and style self-tests, so an engine change has no honest narrower map: it selects every group, and ALL is
 # the fallback for any file not listed. Data, fixtures and the plugin side are narrower; a file is listed under every
 # group that might read it, never fewer.
-# case-map: list-show scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: resolve scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: render-golden scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/cases/*
-# case-map: ui-workflow scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/*
-# case-map: ui-layout scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/ui-layout.json
-# case-map: filename-prefix scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: lint scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/object_info.json tests/fixtures/assetgen/object_info-packs.json
-# case-map: graph-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/graph-style/* tests/fixtures/assetgen/graphstyle_selftest.py
+# case-map: list-show scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: resolve scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: render-golden scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/loops.py tests/fixtures/assetgen/ui2api.py
+# case-map: ui-workflow scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/loops.py tests/fixtures/assetgen/ui2api.py
+# case-map: ui-layout scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/ui-layout.json tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/ui2api.py
+# case-map: filename-prefix scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: lint scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/object_info.json tests/fixtures/assetgen/object_info-packs.json tests/fixtures/assetgen/agserver.py
+# case-map: graph-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/graph-style/* tests/fixtures/assetgen/graphstyle_selftest.py tests/fixtures/assetgen/agserver.py
 # case-map: fixture-pngs scripts/assetgen/*.py
-# case-map: png-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: review-cmd scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/factory-cmd.py
-# case-map: embed scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: e2e3 scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
-# case-map: sheet-sizes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: sheet-failures scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: sheet-repeat scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: sheet-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: sheet-discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: pixel-grid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: output-filter scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/comfy-job-state.json
-# case-map: fit scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: finalize-core scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: budget scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: publish scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: manifest scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json docs/artifact.schema.json
-# case-map: gen-run-plugin scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
-# case-map: local-hybrid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/local/*
-# case-map: engine-notes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/*
-# case-map: style-lock scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json
-# case-map: style-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/graph-style/*
-# case-map: anchor-target scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/local/*
-# case-map: profile-routing scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/*
-# case-map: style-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
-# case-map: gen-run-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
-# case-map: style-init scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
-# case-map: style-derive scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
-# case-map: style-bump scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json
-# case-map: style-report scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
+# case-map: png-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: review-cmd scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/factory-cmd.py tests/fixtures/assetgen/agserver.py
+# case-map: embed scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: e2e3 scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-sizes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-failures scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-repeat scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: pixel-grid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: output-filter scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/comfy-job-state.json tests/fixtures/assetgen/agserver.py
+# case-map: fit scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: finalize-core scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: budget scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: publish scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: manifest scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: gen-run-plugin scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: local-hybrid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: engine-notes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: style-lock scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: style-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/graph-style/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/ui2api.py
+# case-map: anchor-target scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: profile-routing scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: style-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: gen-run-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: style-init scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* tests/fixtures/assetgen/agserver.py
+# case-map: style-derive scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* tests/fixtures/assetgen/agserver.py
+# case-map: style-bump scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: style-report scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* tests/fixtures/assetgen/agserver.py
 # case-map: selftests scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/consistency_selftest.py tests/fixtures/assetgen/imaging_selftest.py tests/fixtures/assetgen/style_selftest.py tests/fixtures/assetgen/pixelgrid_selftest.py tests/fixtures/assetgen/slicer_selftest.py
 # case-map: hygiene scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
 set -uo pipefail
@@ -243,6 +248,9 @@ group_end() {
   fi
 }
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+# every jq call of the suite: on Windows the compat wrapper pipes jq through `tr -d '\r'`, a second process per call; `jq -b`
+# writes the LF output directly
+[ -z "${RPGF_WINDOWS:-}" ] || jq() { command jq -b "$@"; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state" CLAUDE_PLUGIN_ROOT="$ROOT"
@@ -252,7 +260,58 @@ unset ASSETGEN_NO_PIL
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      /'; return 0; }
-AG() { python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+# AG ARGS...: assetgen.py. Every call is served by ONE interpreter for the whole run (tests/fixtures/assetgen/agserver.py:
+# argv, working directory, the environment variables listed in AG_ENV, stdout, stderr and the exit code carry over), because a
+# process start costs 0.5-1.5 s on a Windows host and the suite makes hundreds of calls. AG_DIRECT is the plain process; AG
+# falls back to it when the server did not start, died or a call outlived the wait.
+AG_DIRECT() { python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+AG_SRV=; AG_PWD=; AG_CWD=; AG_DIR=
+AG_ENV=(ASSETGEN_NO_PIL ASSETGEN_MODEL_HASHES RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT RPG_FACTORY_COMFY_JOBS_DIR RPG_FACTORY_STATE_DIR TMPDIR CLAUDE_PLUGIN_ROOT)
+ag_wait() { # ag_wait FILE SECONDS: wait for FILE; a read timeout on a fifo nobody writes is the sleep (no process is started)
+  local t=$SECONDS
+  until [ -e "$1" ]; do
+    if [ -n "${AG_SLEEP:-}" ]; then read -r -t 0.005 -u "$AG_SLEEP" ag_unused; fi
+    [ $((SECONDS - t)) -lt "$2" ] || return 1
+  done
+}
+ag_start() {
+  AG_DIR="$(mktemp_win)" || { AG_DIR=; return 0; }
+  mkdir -p "$AG_DIR/c" "$AG_DIR/go" || return 0
+  if mkfifo "$AG_DIR/sleep" 2>/dev/null; then exec {AG_SLEEP}<>"$AG_DIR/sleep"; fi
+  python3 -B "$ROOT/tests/fixtures/assetgen/agserver.py" "$ROOT/scripts/assetgen" "$AG_DIR" </dev/null >/dev/null &
+  AG_PID=$!
+  if ag_wait "$AG_DIR/ready" 120; then AG_SRV=1; else AG_SRV=; kill "$AG_PID" 2>/dev/null; fi
+}
+ag_stop() { # ask the server to stop and remove its directory: called by the exit trap
+  local dir=$AG_DIR
+  AG_SRV=; AG_DIR=
+  [ -z "$dir" ] || { : > "$dir/quit" 2>/dev/null; rm -rf "$dir"; }
+}
+AG() {
+  [ -n "$AG_SRV" ] || { AG_DIRECT "$@"; return; }
+  local rc o e name f="$AG_DIR/c/$BASHPID.${EPOCHREALTIME/./}"
+  if [ "$PWD" != "$AG_PWD" ]; then # the server needs the directory in the form Python resolves (C:/x on Windows)
+    AG_PWD=$PWD; AG_CWD=$PWD
+    if [ -n "${RPGF_WINDOWS:-}" ]; then
+      if [[ $PWD =~ ^/([a-zA-Z])(/.*)?$ ]]; then AG_CWD="${BASH_REMATCH[1]^}:${BASH_REMATCH[2]:-/}"; else AG_CWD=$(pwd -W); fi
+    fi
+  fi
+  { printf '%s\0' "$AG_CWD" "${#AG_ENV[@]}"
+    for name in "${AG_ENV[@]}"; do
+      if [ -n "${!name+x}" ]; then printf 'S%s=%s\0' "$name" "${!name}"; else printf 'U%s\0' "$name"; fi
+    done
+    printf '%s\0' "$@"; } > "$f.req"
+  : > "$AG_DIR/go/${f##*/}"
+  ag_wait "$f.rc" 3600 || { AG_DIRECT "$@"; return; }
+  read -r rc < "$f.rc"
+  if [ -s "$f.out" ]; then IFS= read -r -d '' o < "$f.out"; printf '%s' "$o"; fi
+  if [ -s "$f.err" ]; then IFS= read -r -d '' e < "$f.err"; printf '%s' "$e" >&2; fi
+  return "$rc"
+}
+for selected in $SELECTED; do
+  [[ " selftests hygiene " == *" $selected "* ]] || { ag_start; break; }
+done
+trap 'ag_stop; rm -rf "$TMP"' EXIT
 # bound RUN PHASE STATE BY [FINDINGS-JSON]: a verdict carrying the binding review-cmd hands the reviewer (stdout)
 bound() { AG review-cmd --phase "$2" --run "$1" --json | jq -c --arg s "$3" --arg b "$4" --argjson f "${5:-[]}" '.binding + {state: $s, by: $b, findings: $f}'; }
 GOLD="$ROOT/tests/fixtures/assetgen/golden"
@@ -502,45 +561,8 @@ case_variants() {
   } | LC_ALL=C sort -u; return 0
 }
 # stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
-# input order, then each linked socket; the result must equal workflow.json
-cat > "$TMP/ui2api.py" <<'EOF'
-import json, sys
-known = json.load(open(sys.argv[1], encoding="utf-8"))["nodes"]
-ui = json.load(open(sys.argv[2], encoding="utf-8"))
-api = json.load(open(sys.argv[3], encoding="utf-8"))
-WIDGETS = ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO")
-by_id = {n["id"]: n for n in ui["nodes"]}
-links = {l[0]: l for l in ui["links"]}
-assert len(links) == len(ui["links"]) and ui["last_link_id"] == max(links, default=0) and ui["last_node_id"] == max(by_id)
-assert sorted(n["order"] for n in ui["nodes"]) == list(range(len(ui["nodes"])))
-graph = {}
-for node in ui["nodes"]:
-    spec = known[node["type"]]
-    assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
-    if spec.get("ui_only"):
-        continue
-    values, inputs = iter(node["widgets_values"]), {}
-    for name, decl in spec["inputs"].items():
-        if decl["type"] in WIDGETS:
-            try:
-                inputs[name] = next(values)
-            except StopIteration:
-                if decl.get("required"):
-                    raise ValueError("missing widget %s.%s" % (node["type"], name))
-    for i, socket in enumerate(node.get("inputs", [])):
-        if socket.get("link") is None:
-            continue
-        link = links[socket["link"]]
-        assert link[3] == node["id"] and link[4] == i, link
-        src = by_id[link[1]]
-        assert src["outputs"][link[2]]["type"] == link[5] and link[0] in src["outputs"][link[2]]["links"], link
-        inputs[socket["name"]] = [str(link[1]), link[2]]
-    graph[str(node["id"])] = {"class_type": node["type"], "inputs": inputs, "_meta": {"title": node["title"]}}
-for nid in api:
-    api[nid].setdefault("_meta", {"title": api[nid]["class_type"]})
-assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent=1, sort_keys=True)
-print("ok")
-EOF
+# input order, then each linked socket; the result must equal workflow.json (tests/fixtures/assetgen/ui2api.py)
+UI2API="$ROOT/tests/fixtures/assetgen/ui2api.py"
 KN="$ROOT/scripts/assetgen/data/known-nodes.json"
 FX="$TMP/png"; LOCALFX="$ROOT/tests/fixtures/assetgen/local"
 st() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/q.json"; }
@@ -551,6 +573,25 @@ finrun() {
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+# tpl_ui_init: TPL_UI[<core template id>] is PASS when the template has ui groups, WARN when it is a legacy one (no groups),
+# read with one jq call over every core template (the graph-style lint rows follow it)
+declare -A TPL_UI
+tpl_ui_init() {
+  [ -z "${TPL_UI_READY:-}" ] || return 0
+  local files=() states=() t i=0
+  for t in $CORE_TEMPLATES; do files+=("$CORE/workflows/$t.json"); done
+  mapfile -t states < <(jq -r '(.ui.groups // []) | if length > 0 then "PASS" else "WARN" end' "${files[@]:-/dev/null}")
+  for t in $CORE_TEMPLATES; do TPL_UI[$t]=${states[$i]:-WARN}; i=$((i + 1)); done
+  TPL_UI_READY=1
+}
+# report_loop RESULTS-FILE: ok/no for each line of a tests/fixtures/assetgen/loops.py result file (OK<TAB>label, or
+# NO<TAB>label<TAB>file holding the failure detail)
+report_loop() {
+  local kind label detail
+  while IFS=$'\t' read -r kind label detail; do
+    if [ "$kind" = OK ]; then ok "$label"; else no "$label" "$(<"$detail")"; fi
+  done < "$1"
+}
 
 if group_begin list-show; then
 echo "-- list / show"
@@ -654,36 +695,13 @@ echo "-- render: every purpose against its golden workflow"
 mkdir -p "$GOLD"
 # cases files (optional): tests/fixtures/assetgen/cases/<purpose>.json and cases/<purpose>--<template>.json, see its README.md
 # a variant is declared once: either in cases/<purpose>.json variants or as cases/<purpose>--<template>.json
-for p in $CORE_PURPOSES; do
-  for t in $(case_variants "$p"); do
-    if [ -f "$CASES/$p--$t.json" ] && [ -f "$CASES/$p.json" ] && jq -e --arg t "$t" '(.variants // {}) | has($t)' "$CASES/$p.json" >/dev/null; then
-      no "cases: variant $p--$t is declared twice (cases/$p.json variants and cases/$p--$t.json)"
-    fi
-  done
-done
-for v in "$CASES"/*--*.json; do
-  [ -f "$v" ] || continue; b=$(basename "$v" .json)
-  [ -f "$CORE/purposes/${b%%--*}.json" ] && [ -f "$CORE/workflows/${b#*--}.json" ] \
-    || no "cases: $b.json names no core purpose and core template (cases/<purpose>--<template>.json)"
-done
-# golden_render RUN-NAME PURPOSE GOLDEN-NAME [TEMPLATE]: render the run and compare it with golden/<GOLDEN-NAME>.json
-golden_render() {
-  local run="$1" p="$2" g="$3" t="${4:-}" out rc wf args=() targs=()
-  [ -n "$t" ] && targs=(--template "$t")
-  mkrun "$run" "$p" --style stylized-painterly "${targs[@]}" || { no "resolve $g"; return 0; }
-  mapfile -t args < <(case_params "$p" "$t")
-  out=$(AG render --run "$RUNS/$run" "${args[@]}" 2>&1); rc=$?
-  wf="$RUNS/$run/workflow.json"
-  if $update_golden && [ $rc -eq 0 ]; then cp "$wf" "$GOLD/$g.json"; fi
-  if [ $rc -eq 0 ] && [ -f "$GOLD/$g.json" ] && [ "$(jq -S . "$wf")" = "$(jq -S . "$GOLD/$g.json")" ] && ! grep -q '{{' "$wf"; then
-    ok "render $g = golden (no placeholder left)"
-  else no "render $g rc=$rc" "$out
-$(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$g.json" 2>/dev/null))"; fi
-}
-for p in $CORE_PURPOSES; do
-  golden_render "golden-$p-001" "$p" "$p"
-  for t in $(case_variants "$p"); do golden_render "golden-$p--$t-001" "$p" "$p--$t" "$t"; done
-done
+# One interpreter (tests/fixtures/assetgen/loops.py golden) checks the cases files, then resolves and renders every core
+# purpose and variant (mkrun + render with the cases params, the files the later groups read) and compares each workflow.json
+# with golden/<name>.json (keys sorted) and for a left-over {{ placeholder; every result line is reported here.
+if $update_golden; then golden_update=1; else golden_update=0; fi
+if python3 -B "$ROOT/tests/fixtures/assetgen/loops.py" golden "$ROOT" "$RUNS" "$GOLD" "$golden_update" "$TMP/golden-results" 2>"$TMP/err"; then
+  report_loop "$TMP/golden-results"
+else no "golden loop driver failed" "$(cat "$TMP/err")"; fi
 # Dedicated legacy renders keep node-shape checks independent of purpose defaults.
 mkrun legacy-shape-icon-001 icon --style stylized-painterly --template image-generate
 AG render --run "$RUNS/legacy-shape-icon-001" >/dev/null
@@ -728,15 +746,15 @@ for pw in "legacy-shape-icon-001 1 3" "legacy-shape-edit-001 2 4"; do
 done
 # an API template links NineRouterImage.user_prompt; a local-only template (no NineRouterImage) links a CLIP encoder's
 # text; either way no input outside the prompt node inlines {{prompt}} (graphstyle checks the full fan-out)
-for t in $CORE_TEMPLATES; do
-  jq -e '([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
+prompt_files=(); for t in $CORE_TEMPLATES; do prompt_files+=("$ROOT/templates/assetgen/workflows/$t.json"); done
+while IFS=$'\t' read -r t good kind; do # one jq call over every core template: id, verdict, what the prompt is linked into
+  [ "$good" = true ] && ok "core template $t: no inline prompt, $kind is a link" || no "template $t user_prompt"
+done < <(jq -r '(try (([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
     | (if $n > 0 then [.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]
        else any(.workflow[] | select(.class_type | test("^CLIPTextEncode")) | .inputs | (.text, .text_g, .text_l); type == "array") end)
-    and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)' \
-    "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
-    && ok "core template $t: no inline prompt, $(jq -r 'if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end' "$ROOT/templates/assetgen/workflows/$t.json") is a link" \
-    || no "template $t user_prompt"
-done
+    and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)) catch false) as $good
+  | [(input_filename | split("/") | last | rtrimstr(".json")), ($good == true),
+     (try (if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end) catch "")] | @tsv' "${prompt_files[@]:-/dev/null}")
 python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -792,20 +810,11 @@ grep -qx ok "$TMP/o" && ok "image review requirements hash covers the prompt nod
 group_end; fi
 if group_begin ui-workflow; then
 echo "-- workflow.ui.json: the same graph for the ComfyUI frontend"
-for p in $CORE_PURPOSES; do
-  # re-render with the cases params only: earlier tests re-rendered some runs with other params
-  d="$RUNS/golden-$p-001"; mapfile -t args < <(case_params "$p"); AG render --run "$d" "${args[@]}" >/dev/null
-  out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
-  [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
-    && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
-  for t in $(case_variants "$p"); do
-    d="$RUNS/golden-$p--$t-001"; mapfile -t args < <(case_params "$p" "$t")
-    AG render --run "$d" "${args[@]}" >/dev/null 2>&1
-    out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
-    [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p--$t-001|0.4" ] \
-      && ok "workflow.ui.json $p--$t: converts back to workflow.json; run id in extra" || no "ui workflow $p--$t" "$out"
-  done
-done
+# One interpreter (tests/fixtures/assetgen/loops.py ui) re-renders each run with the cases params only (earlier tests
+# re-rendered some runs with other params) and converts every workflow.ui.json back with the stdlib UI -> API converter.
+if python3 -B "$ROOT/tests/fixtures/assetgen/loops.py" ui "$ROOT" "$RUNS" "$TMP/ui-results" 2>"$TMP/err"; then
+  report_loop "$TMP/ui-results"
+else no "ui workflow loop driver failed" "$(cat "$TMP/err")"; fi
 u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
 [ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
   && [ "$(jq -c '[.nodes[] | select(.type == "NineRouterImage") | .inputs[] | {name, link: (.link != null), widget: (.widget.name // null)}]' "$u")" = \
@@ -815,7 +824,7 @@ u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
 [ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/legacy-shape-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
   && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/legacy-shape-icon-001/workflow.ui.json")"
 [ -f "$TMP/wf.ui.json" ] && [ "$(jq -r '.extra.assetgen.run_id' "$TMP/wf.ui.json")" = null ] \
-  && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
+  && [ "$(python3 -B "$UI2API" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
 
 group_end; fi
@@ -990,7 +999,7 @@ for left, right in zip(groups, groups[1:]):
 print("ok")
 EOF
 layout_rc=$?
-out=$(python3 -B "$TMP/ui2api.py" "$KN" "$ud/workflow.ui.json" "$ud/workflow.json" 2>&1)
+out=$(python3 -B "$UI2API" "$KN" "$ud/workflow.ui.json" "$ud/workflow.json" 2>&1)
 [ $rc -eq 0 ] && [ $layout_rc -eq 0 ] && [ "$out" = ok ] \
   && ok "ui block: group bounds, notes, colors, row order and API round trip" \
   || no "ui block render rc=$rc layout rc=$layout_rc" "$(cat "$TMP/err" "$TMP/ui-layout-check"); $out"
@@ -1048,9 +1057,15 @@ tmpl undeclared '' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\
 tmpl unsupported-model ', "model": {"type": "string", "default": "cx/gpt-image-2.5"}' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"{{model}}\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
 scheme=https
 tmpl endpoint ", \"base_url\": {\"type\": \"string\", \"default\": \"$scheme://router.example.invalid/v1\"}" "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
-lint_of() { AG lint "$LA/assetgen/templates/$1.json" --authoring "$LA" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))'; }
+# lint_res ID: the first lint row of template ID as "STATE reason; reason" in $lint_got (no command substitution around the
+# lint call and no pipeline: a process less per call than lint_of)
+lint_res() {
+  AG lint "$LA/assetgen/templates/$1.json" --authoring "$LA" --json > "$TMP/lint-of.json" 2>&1
+  lint_got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' "$TMP/lint-of.json")
+}
+lint_of() { lint_res "$1"; printf '%s\n' "$lint_got"; }
 expect_lint() { # expect_lint ID STATE TEXT LABEL
-  local got; got=$(lint_of "$1")
+  local got; lint_res "$1"; got=$lint_got
   case "$got" in "$2 "*"$3"*) ok "lint $4" ;; *) no "lint $4" "$got" ;; esac
 }
 
@@ -1214,7 +1229,7 @@ cat > "$LOCAL" <<'EOF'
   "16": {"class_type": "SaveImage", "inputs": {"images": ["15", 0], "filename_prefix": "assetgen/local"}}}}
 EOF
 lv() { local id=$1; shift; jq "$@" "$LOCAL" > "$LA/assetgen/templates/$id.json"; }  # lv ID JQ-ARGS: a variant of local-full
-expect_clean() { local got; got=$(lint_of "$1"); [ "$got" = "PASS " ] && ok "lint $2" || no "lint $2" "$got"; }  # PASS, no reason
+expect_clean() { local got; lint_res "$1"; got=$lint_got; [ "$got" = "PASS " ] && ok "lint $2" || no "lint $2" "$got"; }  # PASS, no reason
 jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LOCAL" >/dev/null && expect_clean local-full "local template: a local SDXL chain with all four pack nodes and a complete requires block PASSES, no reasons" \
   || no "local template fixture description must start with UNTESTED on RTX 5060:"
 hw_profiles=$(jq -r '[.profiles[].id] | join(", ")' "$HW")
@@ -1387,8 +1402,8 @@ mal mal-fit-swap '{"extends": "icon", "qa": {"size": {"allow_swap": true}}}'
 mal mal-fit-crop '{"extends": "icon", "qa": {"size": {"fit": "crop"}}}'
 mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
-  local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
-  local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
+  local rc; AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json > "$TMP/mal-out.json" 2>"$TMP/err"; rc=$?
+  local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' "$TMP/mal-out.json" 2>/dev/null)
   case "$rc/$got" in "1/FAIL "*"$2"*) grep -q Traceback "$TMP/err" && no "lint $3: traceback" "$(cat "$TMP/err")" || ok "lint $3" ;;
     *) no "lint $3 rc=$rc" "$got
 $(cat "$TMP/err")" ;; esac
@@ -1434,10 +1449,10 @@ expect_lint link-true FAIL "IMAGE input must be a link" "link output index true 
 # Full lint PASS count: every core data file plus the two game-layer files that pass (purposes/icon.json,
 # templates/image-generate.json). Each template also gets one assetgen-graph-style row: PASS for a template with ui
 # groups, WARN for a legacy one (no ui groups); the game image-generate extension has its core template's ui block.
-has_groups() { jq -e '(.ui.groups // []) | length > 0' "$1" >/dev/null 2>&1; }
+tpl_ui_init
 gs_pass=0; gs_warn=0
-for f in $(for t in $CORE_TEMPLATES; do echo "$CORE/workflows/$t.json"; done) "$CORE/workflows/image-generate.json"; do
-  if has_groups "$f"; then gs_pass=$((gs_pass + 1)); else gs_warn=$((gs_warn + 1)); fi
+for t in $CORE_TEMPLATES image-generate; do
+  if [ "${TPL_UI[$t]}" = PASS ]; then gs_pass=$((gs_pass + 1)); else gs_warn=$((gs_warn + 1)); fi
 done
 AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "$((n_core + 2 + gs_pass)) PASS, $((3 + gs_warn)) WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no usable structured style fields (palette.colors, tone, canvas, outline.edge_darkness): .*no style-\* QA row can grade" "$TMP/o" \
@@ -1475,8 +1490,11 @@ for u in "missing path|$TMP/gs-no-such.json" "non-JSON file|$TMP/gs-notjson.json
 done
 AG graph-lint --json > "$TMP/gl.json" 2>"$TMP/err"; rc=$?
 gst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/gl.json"; }
-gs_rows=$(for t in $CORE_TEMPLATES; do printf '%s=%s ' "$t" "$(gst "core:templates/assetgen/workflows/$t.json")"; done)
-gs_want=$(for t in $CORE_TEMPLATES; do if has_groups "$CORE/workflows/$t.json"; then printf '%s=PASS ' "$t"; else printf '%s=WARN ' "$t"; fi; done)
+tpl_ui_init
+# "<template>=<state[,state]> " per core template, from one jq call over gl.json
+gs_rows=$(jq -j --arg ids "${CORE_TEMPLATES//$'\n'/ }" '. as $d | ($ids | split(" ") | map(select(. != ""))[]) as $t
+  | "\($t)=\([$d.results[] | select(.path == "core:templates/assetgen/workflows/\($t).json") | .state] | join(",")) "' "$TMP/gl.json")
+gs_want=; for t in $CORE_TEMPLATES; do gs_want+="$t=${TPL_UI[$t]} "; done
 [ $rc -eq 0 ] && [ "$gs_rows" = "$gs_want" ] && [ "$(gst core:templates/assetgen/workflows/image-generate.json)/$(gst core:templates/assetgen/workflows/image-edit.json)" = WARN/WARN ] \
   && jq -e '.summary.FAIL == 0 and ([.results[] | select(.path | test("workflows/image-(generate|edit)\\.json$")) | .reasons[0] | startswith("legacy template without a ui block")] | length == 2 and all)' "$TMP/gl.json" >/dev/null \
   && ok "graph-lint without a path: one row per core template; legacy image-generate and image-edit WARN (never FAIL), exit 0" \
@@ -1487,9 +1505,9 @@ gl_rows() { jq -c '[.results[] | {path, state, reasons}]' "$1"; }
 AG graph-lint --profile api-only --json > "$TMP/gl-api.json" 2>"$TMP/err"; rc=$?
 # a core template declaring a local requires.profile (a hybrid or local template) FAILS under api-only with a profile:
 # reason naming api-only; every other core template keeps its row
-local_tpls=$(for t in $CORE_TEMPLATES; do
-  jq -e '(.requires.profile // "api-only") != "api-only"' "$CORE/workflows/$t.json" >/dev/null 2>&1 && echo "core:templates/assetgen/workflows/$t.json"; done)
-local_json=$(printf '%s\n' "$local_tpls" | jq -R . | jq -sc 'map(select(. != ""))')
+tpl_files=(); for t in $CORE_TEMPLATES; do tpl_files+=("$CORE/workflows/$t.json"); done
+local_tpls=$(jq -r 'if (.requires.profile // "api-only") != "api-only" then "core:templates/assetgen/workflows/" + (input_filename | sub(".*/"; "")) else empty end' "${tpl_files[@]:-/dev/null}")
+local_json=$(jq -nc --arg l "$local_tpls" '$l | split("\n") | map(select(. != ""))')
 gl_api_rows() { jq -c --argjson l "$local_json" '[.results[] | select(.path as $p | $l | index($p) | not) | {path, state, reasons}]' "$1"; }
 want_rc=0; [ -n "$local_tpls" ] && want_rc=1
 [ $rc -eq $want_rc ] && [ "$(gl_api_rows "$TMP/gl-api.json")" = "$(gl_api_rows "$TMP/gl.json")" ] \
@@ -4489,7 +4507,7 @@ same=true; for a in b-strong a-canon c-supp; do
   cmp -s "$d/references/anchor-$a.png" "$SG/styles/rpg-base/anchors/$a.png" || same=false; done
 $same && [ "$(ls "$d/references" | wc -l | tr -d ' ')" = 3 ] && ok "render --run copies each selected anchor to references/anchor-<id>.png" \
   || no "anchor copies" "$(ls -la "$d/references" 2>&1)"
-out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+out=$(python3 -B "$UI2API" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
 [ "$out" = ok ] && [ "$(jq -r '[.nodes[] | select(.type == "ImageBatch")] | length' "$d/workflow.ui.json")" = 2 ] \
   && ok "workflow.ui.json with anchors: ImageBatch nodes, converts back to workflow.json" || no "ui with anchors" "$out"
 AG lint "$d/workflow.json" > "$TMP/o" 2>&1 && grep -q "1 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflow with anchors lints clean (ImageBatch is a known node)" || no "lint anchors" "$(cat "$TMP/o")"
@@ -4516,7 +4534,7 @@ dg="$SR/sl-gs-001"
 slrun sl-gs-001 icon --template graph-clean && AG render --run "$dg" --param reference_image=ref.png > "$TMP/o" 2>&1; rc=$?
 AG graph-lint --run "$dg" > "$TMP/o2" 2>&1; rc2=$?
 AG render --spec "$dg/spec.json" --prompt-file "$dg/prompt.md" --param reference_image=ref.png --out "$TMP/sl-gs.json" >/dev/null 2>&1
-out=$(python3 -B "$TMP/ui2api.py" "$KN" "$dg/workflow.ui.json" "$dg/workflow.json" 2>&1)
+out=$(python3 -B "$UI2API" "$KN" "$dg/workflow.ui.json" "$dg/workflow.json" 2>&1)
 refs=$(python3 -B - "$dg/workflow.ui.json" "$dg/workflow.json" "$ROOT/tests/fixtures/assetgen/graph-style/clean.json" <<'EOF'
 import json, sys
 ui, wf, tmpl = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:4])
