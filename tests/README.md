@@ -85,6 +85,10 @@ a non-integer exits 2) caps the targeted runs, the slots are `locks/run-all-slot
 the wait line is `run-all: waiting for a test slot (<n> in use: <holders>)`, `--no-wait` exits 3 and a dead holder is
 taken over (`run-all: taking over stale test slot <n> (<pid>)`).
 
+An admitted run, also an interrupted one, ends its output with `run-all: result record <path> (FAIL blocks:
+tests/run-all.sh --last-result)` once the record under the state dir `run-all/results/` is written, so a caller that
+keeps only the tail of the output finds the FAIL blocks there.
+
 ## Case selection
 
 `pipeline.test.sh`, `parallel-policy.test.sh` and `git-guard.test.sh` take `--case NAMES` and `--list-cases`;

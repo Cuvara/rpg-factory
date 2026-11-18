@@ -98,6 +98,44 @@ chk "failing run with an unusable state dir keeps exit 1" 1 "$(RPG_FACTORY_STATE
 grep -q "WARNING: evidence not saved" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  no warning for an unusable state dir"; cat "$TMP/out.txt"; }
 rm -f "$STATE"
 
+# ---- old evidence directories are pruned to the newest few (default 10) after a FAIL saves a new one: only real
+# directories directly inside the evidence root that match <YYYYmmddTHHMMSS>-<pid> are removed, the new one is always
+# kept, anything else is left alone, and pruning never changes the verdict.
+seed_old_ev() { # 12 old evidence dirs 20200101T0000NN-1 (NN = 01..12) + entries that do not match the pattern
+  rm -rf "$STATE"; mkdir -p "$EVROOT"
+  local i; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do mkdir -p "$EVROOT/20200101T0000$i-1"; echo old > "$EVROOT/20200101T0000$i-1/dotnet.log"; done
+  : > "$EVROOT/unrelated-file"; mkdir -p "$EVROOT/unrelated-dir"; echo x > "$EVROOT/unrelated-dir/keep.txt"
+  mkdir -p "$EVROOT/20200101T000000-x"                              # near miss: the pid part is not numeric
+  : > "$EVROOT/20200101T000001-9"                                   # matches the name but is a file, not a directory
+}
+seed_old_ev
+chk "failing run with old evidence -> 1" 1 "$(RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+ev=$(sed -n 's/^evidence: //p' "$TMP/out.txt" | tr -d '\r'); evname=$(basename "$ev")
+chk "default prune keeps the newest 10 evidence dirs including the new one" 10 "$(find "$EVROOT" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*' | wc -l | tr -d ' ')"
+[ -d "$EVROOT/$evname" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune removed the evidence dir it just saved"; }
+gone=""; for i in 01 02 03; do [ -e "$EVROOT/20200101T0000$i-1" ] && gone="$gone $i"; done
+chk "default prune removes the oldest three" "" "$gone"
+kept=""; for i in 04 05 06 07 08 09 10 11 12; do [ -d "$EVROOT/20200101T0000$i-1" ] || kept="$kept $i"; done
+chk "default prune keeps the newer old dirs" "" "$kept"
+[ -f "$EVROOT/unrelated-file" ] && [ -f "$EVROOT/unrelated-dir/keep.txt" ] && [ -d "$EVROOT/20200101T000000-x" ] && [ -f "$EVROOT/20200101T000001-9" ] \
+  && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune touched an entry that does not match the evidence name pattern"; }
+grep -q "pruned 3 old netcode-headless evidence directories" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune count not printed"; cat "$TMP/out.txt"; }
+# a lower limit through the env knob; an invalid value falls back to 10
+seed_old_ev
+chk "failing run with RPG_FACTORY_NETCODE_EVIDENCE_KEEP=3 -> 1" 1 "$(RPG_FACTORY_NETCODE_EVIDENCE_KEEP=3 RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+chk "KEEP=3 keeps the new dir and the two newest old ones" 3 "$(find "$EVROOT" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*' | wc -l | tr -d ' ')"
+[ -d "$EVROOT/20200101T000012-1" ] && [ -d "$EVROOT/20200101T000011-1" ] && [ ! -e "$EVROOT/20200101T000010-1" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  KEEP=3 kept the wrong dirs"; }
+seed_old_ev
+chk "failing run with an invalid KEEP -> 1" 1 "$(RPG_FACTORY_NETCODE_EVIDENCE_KEEP=abc RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+chk "an invalid KEEP falls back to 10" 10 "$(find "$EVROOT" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*' | wc -l | tr -d ' ')"
+# a pattern-named symlink is never followed or removed (skipped when the platform cannot make symlinks)
+seed_old_ev; OUTSIDE="$TMP/outside-target"; mkdir -p "$OUTSIDE"; echo precious > "$OUTSIDE/keep.txt"
+if ln -s "$OUTSIDE" "$EVROOT/20190101T000000-1" 2>/dev/null && [ -L "$EVROOT/20190101T000000-1" ]; then
+  RPG_FACTORY_NETCODE_EVIDENCE_KEEP=2 RPG_FACTORY_STATE_DIR="$STATE" run_fake fail >/dev/null
+  [ -L "$EVROOT/20190101T000000-1" ] && [ -f "$OUTSIDE/keep.txt" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune followed or removed a symlink"; }
+fi
+rm -rf "$STATE"
+
 # Candidate identity must follow a linked worktree's distinct commit for both selectors.
 LINKED="$TMP/linked-netcode"; git -C "$NC" worktree add -qb linked-candidate "$LINKED"
 mkdir -p "$LINKED/Runtime" "$LINKED/Tests"

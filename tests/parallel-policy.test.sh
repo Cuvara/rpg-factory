@@ -77,10 +77,39 @@ no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head 
 
 if has_case orca-wait; then
 # Keep the waiter standalone while including it in run-all and CI through this suite.
+# nested_failure_report <rc> <output>: what a failed nested suite prints. Every 'FAIL  <name>' line comes first (a
+# failing case early in a long run is otherwise lost to the tail), then the tail; a non-zero exit without any FAIL line
+# says so. Not passed through `no`, whose detail is cut to 15 lines.
+nested_failure_report() {
+  local fails
+  fails=$(grep -E '^FAIL  ' <<<"$2")
+  if [ -n "$fails" ]; then printf 'failing cases:\n%s\n' "$fails"
+  else printf 'exit code %s but no FAIL line in the nested output\n' "$1"; fi
+  printf 'tail:\n%s\n' "$(tail -n 15 <<<"$2")"
+}
 wait_out=$(bash "$ROOT/tests/orca-wait.test.sh" 2>&1); wait_rc=$?
 if [ "$wait_rc" -eq 0 ]; then
   ok "$(tail -n 1 <<<"$wait_out")"
-else no "orca-wait suite (rc=$wait_rc)" "$(tail -n 15 <<<"$wait_out")"; fi
+else no "orca-wait suite (rc=$wait_rc)"; nested_failure_report "$wait_rc" "$wait_out" | sed 's/^/      /'; fi
+# The report names a failing case that is not in the last 15 lines of a stub nested suite, and says so when the
+# nested suite fails without a FAIL line.
+STUB="$TMP/nested-stub.sh"
+{ echo '#!/usr/bin/env bash'
+  echo 'for i in 1 2 3; do echo "PASS  early case $i"; done'
+  echo 'echo "FAIL  stub-failing-case"; echo "      detail of the stub failure"'
+  echo 'for i in $(seq 1 30); do echo "PASS  late case $i"; done'
+  echo 'echo "stub: 34 checks, 33 passed, 1 failed"; exit 1'; } > "$STUB"
+stub_out=$(bash "$STUB" 2>&1); stub_rc=$?
+stub_report=$(nested_failure_report "$stub_rc" "$stub_out")
+if [ "$stub_rc" -ne 0 ] && grep -qx 'FAIL  stub-failing-case' <<<"$stub_report" && grep -qx 'failing cases:' <<<"$stub_report" \
+  && grep -qx 'stub: 34 checks, 33 passed, 1 failed' <<<"$stub_report" && ! grep -qF 'PASS  early case' <<<"$stub_report"; then
+  ok "nested suite failure report names the failing case outside the last 15 lines"
+else no "nested suite failure report lost the failing case (stub rc=$stub_rc)" "$stub_report"; fi
+nofail_report=$(nested_failure_report 3 "$(printf 'PASS  a\nsome crash text\n')")
+if grep -qF 'exit code 3 but no FAIL line' <<<"$nofail_report" && grep -qF 'some crash text' <<<"$nofail_report" \
+  && ! grep -qF 'failing cases:' <<<"$nofail_report"; then
+  ok "nested suite failure without a FAIL line says so and keeps the tail"
+else no "nested suite failure without a FAIL line is not reported" "$nofail_report"; fi
 
 fi
 if has_case lint-mutations; then
