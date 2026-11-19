@@ -9,10 +9,22 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- **test-speed** (`docs/plans/test-speed.json`): scoped task QA (`--within`), affected workspace checks, per-check
-  timing, faster assetgen and pipeline suites, QA policy rewrite (owner request 2026-11-18).
+None.
 
 ## Open
+
+### test-speed-followups
+
+From plan test-speed (`docs/plans/test-speed/report.md`):
+
+- `factory-pipeline.py` costs 2.5-4 s per start on Windows (imports, many git subprocesses in `status` and `gate`);
+  it dominates `tests/pipeline.test.sh`. Lazy imports and fewer git calls per verb.
+- `tests/affected.py` reach is per file: most `scripts/assetgen/*` changes and any `scripts/factory-pipeline.py`
+  change select every case group. A per-function or per-module reach for the case maps.
+- Re-QA in `--phase qa` unions the task check suites with the failed suites; use `--within` the failed suites.
+- `scripts/README.md` lists `tests/assetgen.test.sh` without `--case`.
+- Full `tests/assetgen.test.sh` wall times before and after were never measured (every full run was killed for low
+  memory); measure once on a quiet machine.
 
 ### core-style-v2
 
@@ -69,9 +81,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 - Tier XS is accepted only for a one-task plan. A small prose follow-up found mid-run (final-pointers) had to become
   a full task with a task lead. Consider an XS task inside a multi-task plan, reviewed and gated like the one-task form.
 - The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines.
-- `validate` warns "checks contain test suites" for every task whose `checks` name suites (single-verify rule of
-  plan plugin-qa-lean), while `docs/plans/backlog.md` and `docs/plans/README.md` still tell plans to name suites in
-  `checks`. Align the plan convention with the verify rule.
 - `factory-pipeline.py` usage text: `verdict` lists no `verify` phase and still says a subtask needs its own review;
   factory-core `SKILL.md` step 11 is still titled "Review + QA".
 - The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
@@ -165,10 +174,6 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 - `MACHINE_PATH` (`scripts/lib/plan_paths.py`) does not flag a `file:` URL with a home or Users path (same as the
   existing drive form); decide whether to reject `file:` URLs, and add an explicit allowed case for an inner path
   segment named home.
-- Task QA under memory pressure: verify sessions lost their tier run five times in plans policy-followups and
-  path-audit (Claude Code stops background shells of an idle session when memory is low). Write the lesson into
-  `parallel-work.md`: on a loaded machine the tier command runs with `-j 1`, one task QA at a time, and a task lead
-  reports NOT_RUN after one retry instead of looping.
 - A new script under `scripts/checks/` met two repo conventions only in CI (the UTF-8 stdio block of
   `tests/compat.test.sh`, the workspace reader guard of `tests/workspace-default.test.sh`). Name both in
   `scripts/README.md` next to the checks list, or give `scripts/checks/` a template.
@@ -184,6 +189,10 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   busy machine.
 
 ## Covered
+
+- **test-speed** (owner request 2026-11-18; the checks-contain-suites item of workflow-slim-followups, the
+  low-memory lesson of path-audit-followups): shipped in plan test-speed (`changelog.d/test-speed-runall.md`,
+  `changelog.d/test-speed-policy.md`, `changelog.d/test-speed-pipeline.md`, `changelog.d/test-speed-assetgen.md`).
 
 - **run-lows** (flow-lows-followups; the root_default, slot_holders, status-on-QA-FAIL and frontmatter items of
   plugin-flow-5-followups; the cleanup, dead slot, run-all log and git timeout items of path-audit-followups; the
