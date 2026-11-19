@@ -54,8 +54,16 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
           [--grade light|standard|heavy] [--model ID] [--effort LEVEL]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
-        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
-        planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
+        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec or misread
+        parentheses and quotes. The one-line prompt carries only the pointer ('Read your task spec at <path> and
+        follow it.'): the planner's request (the spec's own "Request:" line) and every dispatch note ("Session note"
+        lines and sections) live in the spec, which the file name's digest covers (two dispatches differing only in a
+        note write two spec files).
+  dispatch ... [--note TEXT]... [--note-file FILE]...
+        --note TEXT (whitespace collapsed) and RPG_FACTORY_SESSION_NOTE become "Session note:" lines of the spec;
+        --note-file FILE (repeatable) adds the file's text verbatim as its own "Session note file <path>:" section
+        (nothing collapsed, so parentheses, quotes, & | and newlines survive). A missing, unreadable or blank file
+        exits 2 before anything is written or printed. A lead forwards both to every session it dispatches.
   dispatch ... [--grade light|standard|heavy] [--model ID] [--effort LEVEL]   (every phase, and planner)
         every session runs with the model and effort of its role in the model policy: planner, lead, implement (the
         subtask's grade, else the task's), review (heavy work: heavy, else review) and qa. Orca commands (worker-start,
@@ -1760,14 +1768,17 @@ AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions o
 
 def orca_prompt(a, prompt, plan=None, note=None):
     """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state.
-    `note` is appended after the pointer with every whitespace run collapsed to one space."""
+    `note` goes into the spec file as a 'Run lead notes:' section (text unchanged), before the digest is computed, so
+    the file name covers it; the command line carries only the pointer (cmd.exe misreads parentheses and quotes)."""
     root = os.path.join(fstate.persistent(), "pipeline", PLANNER_DIR) if plan is None else verdict_dir(plan)
     task = fstate.session_key(getattr(a, "task", None) or "planner")
     phase = getattr(a, "phase", None) or "plan"
+    if note:
+        prompt = prompt + ("" if prompt.endswith("\n") else "\n") + "Run lead notes:\n" + note + "\n"
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     path = os.path.abspath(os.path.join(root, "specs", f"{task}-{phase}-{digest}.md"))
     fstate.write_text(path, prompt)
-    return f"Read your task spec at {path} and follow it." + (f" {' '.join(note.split())}" if note else "")
+    return f"Read your task spec at {path} and follow it."
 
 
 def resolve_runner(a):
@@ -1889,7 +1900,7 @@ def cmd_planner(a, reg):
               "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
               + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
-    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
+    emit(a, reg, agent, prompt, place, "pipeline planner", role="planner")
     return 0
 
 
@@ -2035,6 +2046,33 @@ def session_notes(a):
     return notes
 
 
+def session_note_files(a):
+    """Read the --note-file files: [(abs_path, text)] in argument order, deduplicated by absolute path. A missing,
+    unreadable or blank file exits 2 before anything is written or printed. The text is kept verbatim. Read once per
+    dispatch: the result is cached on `a` (cmd_dispatch validates first)."""
+    cached = getattr(a, "_note_files", None)
+    if cached is not None:
+        return cached
+    files, seen = [], set()
+    for raw in getattr(a, "note_file", None) or []:
+        path = os.path.abspath(raw)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            die(f"--note-file {raw}: not found")
+        except (OSError, UnicodeDecodeError) as e:
+            die(f"--note-file {raw}: unreadable: {e}")
+        if not text.strip():
+            die(f"--note-file {raw}: is blank")
+        files.append((path, text))
+    a._note_files = files
+    return files
+
+
 def python_alias_line(platform=None, which=None, exe=None, probe=None):
     """Describe the Windows Store python3 alias on PATH or in WindowsApps."""
     platform = sys.platform if platform is None else platform
@@ -2067,6 +2105,8 @@ def language_line(reg):
 def spec_session_lines(a, reg=None):
     """Return the lines to append to a dispatch spec."""
     lines = [language_line(reg)] + [f"Session note: {note}" for note in session_notes(a)]
+    for path, text in session_note_files(a):  # verbatim, not whitespace-collapsed; one trailing newline dropped
+        lines.append(f"Session note file {path}:\n" + (text[:-1] if text.endswith("\n") else text))
     alias = python_alias_line()
     return lines + ([alias] if alias else [])
 
@@ -2092,13 +2132,15 @@ def base_health_hint(info, spec):
     return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None,
+                note_files=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
     # one token --note=<value>: a note starting with "-" would be read as an option after a bare --note
     note_args = "".join(f" {orca_cmd.quote([f'--note={note}'])}" for note in (notes or []))
+    note_args += "".join(f" {orca_cmd.quote([f'--note-file={path}'])}" for path in (note_files or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
@@ -2160,7 +2202,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
          "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
-        "9. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch." if notes else None,
+        "9. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch." if (notes or note_files) else None,
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
@@ -2383,6 +2425,7 @@ SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/deliver
 
 def cmd_dispatch(a, reg):
     session_notes(a)  # reject empty --note even when no spec is written
+    session_note_files(a)  # reject a missing, unreadable or blank --note-file before anything is written or printed
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -2534,7 +2577,8 @@ def cmd_dispatch(a, reg):
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
-                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
+                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a),
+                             note_files=[p for p, _ in session_note_files(a)])
         prompt = with_session_lines(a, prompt, reg)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
@@ -5228,6 +5272,7 @@ def main():
             d.add_argument("--subtask")
             d.add_argument("--suite-warn", type=suite_warn_arg, default=SUITE_WARN, metavar="N")
             d.add_argument("--note", action="append", default=[], metavar="TEXT")
+            d.add_argument("--note-file", action="append", default=[], metavar="FILE")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
