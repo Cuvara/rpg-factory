@@ -102,7 +102,8 @@
 # process behind it), and the lint rows are read without a pipeline (lint_res). Every assertion text and count is kept.
 # The case-map lines below name, per group, the inputs it reads (affected.py case_map: every file the suite selects
 # that a changed file reaches must match a pattern, else every group runs). Measured with tests/affected.py cases: only
-# tests/fixtures/assetgen/loops.py, templates/assetgen/gen-run.md and docs/schemas/kinds/gen-run.schema.json narrow today.
+# tests/fixtures/assetgen/loops.py, tests/fixtures/assetgen/ui2api.py (render-golden, style-cli, ui-layout, ui-workflow),
+# templates/assetgen/gen-run.md and docs/schemas/kinds/gen-run.schema.json narrow today.
 # Every scripts/assetgen/*.py module reaches assetgen.py (the CLI each group runs), approval.py, the quality plugin, the
 # command wrapper and the graph-style and style self-tests; the data JSON, scripts/checks/domains/assetgen.py, the quality
 # plugin and the golden, cases, local and graph-style fixture trees reach the engine or agserver.py, so they select all
@@ -195,6 +196,7 @@ if [ "$list_cases" = 1 ]; then printf '%s\n' $ALL_GROUPS; exit 0; fi
 case_deps() {
   case "$1" in
     ui-workflow) echo render-golden ;;
+    filename-prefix) echo resolve ;;
     lint) echo render-golden ;;
     graph-style) echo render-golden ;;
     png-qa) echo lint fixture-pngs ;;

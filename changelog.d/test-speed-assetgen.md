@@ -13,7 +13,7 @@
   `--list-cases`; a group that reads another group's state names it in `case_deps` and the prerequisite runs first,
   once. `ASSETGEN_TEST_TIMES=1` prints the wall time of each group and `ASSETGEN_TEST_PLAN=1` the groups a selection
   would run. `# case-map:` header lines list the inputs of each group (`tests/affected.py` case map). Measured with
-  `tests/affected.py cases`: only `loops.py`, `templates/assetgen/gen-run.md` and `docs/schemas/kinds/gen-run.schema.json`
-  narrow the selection today; the engine modules, the data JSON, the quality plugin and the fixture trees reach the engine
+  `tests/affected.py cases`: only `loops.py`, `ui2api.py` (render-golden, style-cli, ui-layout and ui-workflow),
+  `templates/assetgen/gen-run.md` and `docs/schemas/kinds/gen-run.schema.json` narrow the selection today; the engine modules, the data JSON, the quality plugin and the fixture trees reach the engine
   or `agserver.py` and still select all or nearly all groups (a finer reach graph belongs to `tests/affected.py`). The
   server also stops when the suite process is gone and a call it had already taken fails visibly instead of running twice.
