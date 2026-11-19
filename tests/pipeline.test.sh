@@ -210,6 +210,26 @@ fi
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
+# Process starts dominate this suite and python3 -B compiles the 7000-line factory-pipeline.py on every start (the
+# main script is never cached): run it through a launcher that loads its bytecode from a cache under $TMP (never the
+# repository; set in the process only, children see no such variable), with the same argv[0], __file__, sys.path[0] and
+# __main__ namespace. Any other python3 call is untouched.
+cat > "$TMP/fp-launch.py" <<'LAUNCH'
+import importlib.machinery, os, sys
+p = sys.argv[1]
+sys.pycache_prefix = os.environ.pop('PIPELINE_TEST_PYC')
+code = importlib.machinery.SourceFileLoader('__main__', p).get_code('__main__')
+sys.argv = [p] + sys.argv[2:]
+sys.path[0] = os.path.dirname(p)
+g = sys.modules['__main__'].__dict__
+g['__file__'] = p
+exec(code, g)
+LAUNCH
+PIPELINE_MAIN="$P"
+python3() {
+  if [ "${1:-}" = -B ] && [ "${2:-}" = "$PIPELINE_MAIN" ] && [ "$P" = "$PIPELINE_MAIN" ]; then shift 2; PIPELINE_TEST_PYC="$TMP/pycache" command python3 "$TMP/fp-launch.py" "$PIPELINE_MAIN" "$@"
+  else command python3 "$@"; fi
+}
 # a caller's session note must not leak into any dispatch (the session-note cases set it on purpose)
 unset RPG_FACTORY_SESSION_NOTE
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
@@ -223,7 +243,7 @@ pass=0; fail=0
 # Capture once: consecutive assertions on one command (same arguments, directory, PATH and env prefix, no other
 # top-level command in between) share one run of factory-pipeline.py. The DEBUG trap (top level only: functions and
 # subshells do not inherit it) drops the capture before every other command - git, a verdict, a file edit, a plan.
-# verdict, agents and a dispatch without --runner print always run (they write state). PIPELINE_TEST_REUSE=0 runs every assertion's command;
+# verdict and agents always run (they write state; a dispatch only writes a content-named spec, so it is reused). PIPELINE_TEST_REUSE=0 runs every assertion's command;
 # PIPELINE_TEST_REUSE=check also re-runs each reused command and fails the case when its output or exit code differs.
 REUSE="${PIPELINE_TEST_REUSE:-1}"; MEMO_KEY=; MEMO_ENV=(); MEMO_OUT=; MEMO_RC=0; MEMO_SPEC=; MEMO_SRC=; reused=0
 memo_trap() {
@@ -231,7 +251,7 @@ memo_trap() {
   while [[ $c =~ ^([A-Za-z_][A-Za-z_0-9]*)=(\"[^\"]*\"|\'[^\']*\'|[^ ]*)\ +(.*)$ ]]; do
     names+=("${BASH_REMATCH[1]}"); c="${BASH_REMATCH[3]}"
   done
-  case "${c%% *}" in expect|refute|expect_spec|refute_spec|opath|oref|inorca|st_phase|agree|for) MEMO_ENV=("${names[@]}") ;; *) MEMO_KEY= ;; esac
+  case "${c%% *}" in expect|refute|expect_spec|refute_spec|opath|oref|inorca|st_phase|agree|pp|pp_spec|for) MEMO_ENV=("${names[@]}") ;; *) MEMO_KEY= ;; esac
 }
 [ "$REUSE" = 0 ] || trap memo_trap DEBUG
 # pp <args...>: OUT and RC of `factory-pipeline.py <args>` (stdout and stderr), reused per the capture-once rule
@@ -239,7 +259,7 @@ pp() {
   local IFS=$'\x1f' key n env=
   for n in "${MEMO_ENV[@]}"; do env+="$n=${!n-}$IFS"; done
   key="$PWD$IFS$PATH$IFS${ORCA_WORKTREE_ID-}$IFS$env$IFS$*"
-  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]      && { [[ "$IFS$*$IFS" != *"${IFS}dispatch$IFS"* ]] || [[ "$IFS$*$IFS" == *"${IFS}--runner${IFS}print$IFS"* ]]; }; then
+  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]; then
     OUT="$MEMO_OUT"; RC="$MEMO_RC"; reused=$((reused + 1))
     if [ "$REUSE" = check ]; then
       local fresh rc; fresh=$(python3 -B "$P" "$@" 2>&1); rc=$?
@@ -511,6 +531,10 @@ if case == 'model-composition':
 if case == 'validation':
     assert any('without reason' in w for w in m.validate(plan, reg)['warnings'])
     plan['tasks'][0]['reason'] = 'expertise'
+    # the code task names no suite in its checks: that rule is the only warning left (task QA runs the suites the checks name)
+    assert [w for w in m.validate(plan, reg)['warnings'] if 'without reason' in w] == []
+    assert len([w for w in m.validate(plan, reg)['warnings'] if 'checks name no test suite' in w]) == 1
+    plan['tasks'][0]['checks'] = ['tests/routing.test.sh']
     assert not m.validate(plan, reg)['warnings']
     sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
            {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': 'gpt'}]}
@@ -1792,15 +1816,34 @@ warnings = m.validate(plan, reg)['warnings']
 assert len([w for w in warnings if 'full runs belong to integration QA' in w]) == 2, warnings
 safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed',
                                                                       'tests/run-all.sh --only-suites tests/x.sh 0 failed'])
-# a suite or test command in checks warns (implementers run syntax checks only); the scoped run-all tier command does not
-assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['bash tests/pipeline.test.sh'])))
-assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['dotnet test Game.Tests.csproj'])))
-assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && bash tests/pipeline.test.sh'])))
-assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --only-suites tests/x.sh -j 2']))
-assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --only-suites=tests/x.sh,tests/y.sh -j 2']))
-assert any('implementers run syntax checks only' in w for w in
-           m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected --only-suites tests/x.sh && bash tests/y.sh'])))
+# the old 'checks contain test suites' warning is gone: the suites and test commands the checks name are what task QA
+# runs (--within), so they never warn; a scoped run-all tier command does not warn either
+OLD_SUITE_WARN = 'implementers run syntax checks only'
+assert not any(OLD_SUITE_WARN in w or 'checks contain test suites' in w for w in warnings), warnings
+assert not any('checks name no test suite' in w for w in warnings), warnings
+for named in (['bash tests/pipeline.test.sh'], ['dotnet test Game.Tests.csproj'],
+              ['tests/run-all.sh --affected && bash tests/pipeline.test.sh']):
+    assert not m.task_qa_warnings(dict(safe, checks=named)), named
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --only-suites tests/x.sh -j 1']))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --only-suites=tests/x.sh,tests/y.sh -j 1']))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --base main --within tests/x.sh -j 1']))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --within=tests/x.sh,tests/y.sh']))
+assert not m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected --only-suites tests/x.sh && bash tests/y.sh']))
 assert not m.task_qa_warnings(dict(safe, acceptance=['a']))
+# the rule that replaces it: checks name the suites that test the changed behaviour (task QA runs only them, --within).
+# A task that owns code and whose checks name no suite warns, once; prose-only and path-less tasks never do
+NAMES_RULE = ('task a: checks name no test suite; name the suites that test the changed behaviour '
+              '(task QA runs only them with --within)')
+for unnamed in (['python3 -B scripts/build-registry.py --check'], [], ['echo done']):
+    assert m.task_qa_warnings(dict(safe, checks=unnamed)) == [NAMES_RULE], unnamed
+    assert m.validate(dict(plan, tasks=[dict(task, checks=unnamed)]), reg)['warnings'].count(NAMES_RULE) == 1, unnamed
+    assert not any(OLD_SUITE_WARN in w or 'checks contain test suites' in w
+                   for w in m.validate(dict(plan, tasks=[dict(task, checks=unnamed)]), reg)['warnings']), unnamed
+    assert not m.task_qa_warnings(dict(safe, paths=['docs/a.md', 'changelog.d/x.md', 'skills/foo/'], checks=unnamed)), unnamed
+    assert not m.task_qa_warnings(dict(safe, paths=[], checks=unnamed)), unnamed
+assert NAMES_RULE not in m.validate(plan, reg)['warnings']
+# a full run still warns on its own
+assert any('full run in checks' in w for w in m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4'])))
 # a run-all re-verify drops the run-all commands and suites (failed suites plus --affected replace them), keeps any other command
 retry_task = dict(task, checks=['tests/run-all.sh --affected --only-suites tests/x.sh', 'env -u TMPDIR bash tests/x.sh --case a',
                                 'python3 -B scripts/build-registry.py --check'])
@@ -1826,21 +1869,55 @@ assert m.runall_suites(str(repo)) is None
 m.find_bash = real_find_bash
 # registry pipeline.qa_tiers picks the tier command; a missing key falls back to task: affected, integration: ci+workspace
 assert reg['pipeline']['qa_tiers']['task'] == 'affected' and reg['pipeline']['qa_tiers']['integration'] == 'ci+workspace'
-assert m.tier_command('affected', 'main', []) == 'tests/run-all.sh --affected --base main -j 2'
+# the safe form (a base, no check suites): the whole affected closure, one job; with check suites the scoped form
+assert m.tier_command('affected', 'main', []) == 'tests/run-all.sh --affected --base main -j 1'
+assert m.tier_command('affected', 'main', ['tests/x.sh', 'tests/y.sh']) == \
+    'tests/run-all.sh --affected --base main --within tests/x.sh,tests/y.sh -j 1'
 lone = [dict(task, checks=['bash tests/pipeline.test.sh'])]
 assert m.tier_command('full', 'main', ['tests/x.sh']) == 'tests/run-all.sh --reuse -j 4'
-# task QA never gets a full run: without a base only the check suites, with no suites the lead must give a base
+# task QA never gets a full run: without a base only the check suites, with no suites the lead must give a base;
+# with a base and check suites it is --within for either level, with a base and none the safe form
 for level in ('affected', 'full'):
-    assert m.tier_command(level, '', ['tests/x.sh'], task=True) == 'tests/run-all.sh --only-suites tests/x.sh -j 2'
+    assert m.tier_command(level, '', ['tests/x.sh'], task=True) == 'tests/run-all.sh --only-suites tests/x.sh -j 1'
+    assert m.tier_command(level, 'main', ['tests/x.sh'], task=True) == \
+        'tests/run-all.sh --affected --base main --within tests/x.sh -j 1'
+    assert m.tier_command(level, 'main', [], task=True) == 'tests/run-all.sh --affected --base main -j 1'
     assert m.tier_command(level, None, [], task=True).startswith('NONE: the review base is missing')
+    assert '--within <check suites> -j 1' in m.tier_command(level, None, [], task=True)
     assert '--reuse' not in m.tier_command(level, None, [], task=True)
-assert 'QA tier command:\ntests/run-all.sh --only-suites tests/pipeline.test.sh -j 2' in m.qa_body('x', lone, runall=listed)
-assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
-    m.qa_body('x', lone, base='main', runall=listed)
-assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
-    m.qa_body('x', lone, base='main', runall=listed, tiers={'task': 'full'})
-assert 'QA tier command:\ntests/run-all.sh --workspace-only' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
+    assert '--reuse' not in m.tier_command(level, 'main', ['tests/x.sh'], task=True)
+# integration QA (ci+workspace): only the workspace checks the change reaches, against the plan's base when known
+assert m.tier_command('ci+workspace', None, [], plan_base='main') == 'tests/run-all.sh --workspace-only --base main'
+assert m.tier_command('ci+workspace', None, []) == 'tests/run-all.sh --workspace-only'
+assert m.tier_command('ci+workspace', None, [], plan_base='feat/x y') == "tests/run-all.sh --workspace-only --base 'feat/x y'"
+assert 'QA tier command:\ntests/run-all.sh --only-suites tests/pipeline.test.sh -j 1\n' in m.qa_body('x', lone, runall=listed) + '\n'
+assert 'QA tier command:\ntests/run-all.sh --affected --base main --within tests/pipeline.test.sh -j 1\n' in \
+    m.qa_body('x', lone, base='main', runall=listed) + '\n'
+assert 'QA tier command:\ntests/run-all.sh --affected --base main --within tests/pipeline.test.sh -j 1\n' in \
+    m.qa_body('x', lone, base='main', runall=listed, tiers={'task': 'full'}) + '\n'
+assert '--only-suites' not in m.qa_body('x', lone, base='main', runall=listed)
+SCOPED_POLICY = ('The command runs only the suites the task checks name (--within), each with its affected cases; the '
+                 'other affected suites are left to CI.')
+SAFE_POLICY = ('No check suites: the whole affected closure runs; name the suites that test the changed behaviour in '
+               'the task checks to scope it (--within).')
+scoped_body = m.qa_body('x', lone, base='main', runall=listed)
+assert SCOPED_POLICY in scoped_body and SAFE_POLICY not in scoped_body, scoped_body
+# no check suites: the safe form and its explanation, never --within or --only-suites
+unnamed_body = m.qa_body('x', [dict(task, checks=['python3 -B scripts/build-registry.py --check'])], base='main', runall=listed)
+assert 'QA tier command:\ntests/run-all.sh --affected --base main -j 1\n' in unnamed_body + '\n', unnamed_body
+assert SAFE_POLICY in unnamed_body and SCOPED_POLICY not in unnamed_body, unnamed_body
+assert '--within tests' not in unnamed_body and '--only-suites' not in unnamed_body, unnamed_body
+# no base: only the check suites, and neither policy sentence (nothing is scoped by a base)
+assert SCOPED_POLICY not in m.qa_body('x', lone, runall=listed) and SAFE_POLICY not in m.qa_body('x', lone, runall=listed)
+# the integration QA names --workspace-only --base <plan base>; without a known plan base --workspace-only alone
+assert 'QA tier command:\ntests/run-all.sh --workspace-only\n' in \
+    m.qa_body('x', lone, integration=True, runall=listed, tiers={}) + '\n'
+assert 'QA tier command:\ntests/run-all.sh --workspace-only --base main\n' in \
+    m.qa_body('x', lone, integration=True, runall=listed, tiers={}, plan_base='main') + '\n'
+assert '--workspace-only --base <plan base>' in m.qa_body('x', lone, integration=True, runall=listed, tiers={}, plan_base='main')
 assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
+assert 'tests/run-all.sh --workspace-only --base' not in m.qa_body('x', lone, integration=True, runall=listed,
+                                                                   tiers={'integration': 'full'}, plan_base='main')
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'})
 assert 'CI runs the affected suites and ci-ok must be green before merging' in m.qa_body('x', lone, integration=True, runall=listed)
 assert ('Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be green '
@@ -1889,6 +1966,22 @@ for check in ('tests/run-all.sh --only-suites tests/x.sh', 'tests/run-all.sh --o
 assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --no-wait --reuse --no-reuse -j2 --jobs 2 --no-workspace '
                                           '--no-claude --base main --only-suites tests/routing.test.sh'])],
                       listed) == (['tests/routing.test.sh'], [], False)
+# --within names suites like --only-suites (the scoped task QA form): the check folds into the tier command and is no
+# full run; a malformed one (no list, a flag as the list, run-all itself, a name run-all does not list) is DO NOT RUN
+for check in ('tests/run-all.sh --affected --base main --within tests/routing.test.sh -j 1',
+              'tests/run-all.sh --affected --within=tests/routing.test.sh', 'bash tests/run-all.sh --affected --within tests/routing.test.sh',
+              'env -u TMPDIR tests/run-all.sh --affected --base plugin-flow-2 --within tests/routing.test.sh -j 1'):
+    assert m.pr.qa_checks([dict(task, checks=[check])], listed) == (['tests/routing.test.sh'], [], False), check
+    assert not m.pr.full_run(check), check
+for check in ('tests/run-all.sh --within', 'tests/run-all.sh --within=', 'tests/run-all.sh --within=,',
+              'tests/run-all.sh --affected --within --base', 'tests/run-all.sh --affected --within tests/run-all.sh',
+              'tests/run-all.sh --affected --within tests/x', 'tests/run-all.sh --withinXYZ tests/routing.test.sh',
+              'tests/run-all.sh --affected --within tests/routing.test.sh && true'):
+    for known in (listed, None):
+        got = m.pr.qa_checks([dict(task, checks=[check])], known)
+        assert got == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), (check, known, got)
+for check in ('tests/run-all.sh --within', 'tests/run-all.sh --within=', 'tests/run-all.sh --withinXYZ tests/routing.test.sh'):
+    assert m.pr.full_run(check), check
 # a repo without tests/run-all.sh keeps the previous body: the task checks and the run-checks.py fast tier
 old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
             'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
@@ -2080,22 +2173,28 @@ stand_in_affected = ('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
                      'print("tests/routing.test.sh\\tselection")\n')
 affected.write_text(stand_in_affected, encoding='utf-8')
 case_out = dispatch('qa', first)
-assert ('Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh ALL\n'
-        'tests/routing-properties.test.py ALL\ntests/routing.test.sh --case selection') in case_out, case_out
+# --within: only the two check suites run, each with its affected cases (the affected suite the task checks do not name
+# is left to CI: listed on its own line, not run)
+assert ('Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh --case dispatch,qa-tiers\n'
+        'tests/routing-properties.test.py ALL\n'
+        'Left to CI (1 affected suites outside the task checks): tests/routing.test.sh') in case_out, case_out
+assert 'tests/routing.test.sh --case selection' not in case_out and 'tests/pipeline.test.sh ALL' not in case_out, case_out
 assert 'tier command already passes these cases' in case_out, case_out
-# the three Affected cases suites of the three run-all lists: 3 of 3; no warning at the default (40) nor at
-# --suite-warn 3 (warns only above it), the warning line at --suite-warn 1 and 2; the prompt is the same every time
-SELECTED_3 = 'factory-pipeline: selected 3 of 3 suites (tests/affected.py)\n'
+# the three suites of the stand-in run-all list, the two check suites selected: 2 of 3 and 1 affected suite left to CI;
+# no warning at the default (40) nor at --suite-warn 2 (warns only above it), the warning line at --suite-warn 1; the
+# prompt is the same every time
+SELECTED_2 = 'factory-pipeline: selected 2 of 3 suites (tests/affected.py; 1 affected suites left to CI)\n'
 for phase in ('verify', 'qa'):
     quiet = dispatch_p(phase, first)
-    assert SELECTED_3 in quiet.stderr and SUITE_WARN not in quiet.stderr and 'not computed' not in quiet.stderr, (phase, quiet.stderr)
+    assert SELECTED_2 in quiet.stderr and SUITE_WARN not in quiet.stderr and 'not computed' not in quiet.stderr, (phase, quiet.stderr)
     assert 'Affected cases (tests/affected.py cases):\n' in quiet.stdout and 'factory-pipeline: selected' not in quiet.stdout, (phase, quiet.stdout)
-    assert quiet.stderr.count(SELECTED_3) == 1, (phase, quiet.stderr)
-    at = dispatch_p(phase, first, '--suite-warn', '3')
-    assert SELECTED_3 in at.stderr and SUITE_WARN not in at.stderr, (phase, at.stderr)
-    for threshold in ('1', '2'):
+    assert quiet.stderr.count(SELECTED_2) == 1, (phase, quiet.stderr)
+    assert 'selected 3 of 3' not in quiet.stderr, (phase, quiet.stderr)
+    at = dispatch_p(phase, first, '--suite-warn', '2')
+    assert SELECTED_2 in at.stderr and SUITE_WARN not in at.stderr, (phase, at.stderr)
+    for threshold in ('1',):
         loud = dispatch_p(phase, first, '--suite-warn', threshold)
-        want = (SELECTED_3 + SUITE_WARN + f'3 of 3 suites selected (threshold {threshold}): narrow the task paths or '
+        want = (SELECTED_2 + SUITE_WARN + f'2 of 3 suites selected (threshold {threshold}): narrow the task paths or '
                 'its checks before QA\n')
         assert want in loud.stderr and loud.stderr.count(SUITE_WARN) == 1, (phase, threshold, loud.stderr)
         assert loud.stdout == quiet.stdout == at.stdout, (phase, threshold)
@@ -2113,9 +2212,11 @@ assert 'Affected cases: not computed (git diff failed)' in bad_out and 'tier com
 bad_p = dispatch_p('qa', 'bad-sha', '--suite-warn', '1')
 assert 'factory-pipeline: selected suites: not computed (git diff failed)\n' in bad_p.stderr and SUITE_WARN not in bad_p.stderr, bad_p.stderr
 affected.unlink()
-command = ('tests/run-all.sh --affected --base main --only-suites '
-           'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
+command = ('tests/run-all.sh --affected --base main --within '
+           'tests/pipeline.test.sh,tests/routing-properties.test.py -j 1')
 assert out.count(command) == 1, out
+assert 'QA tier command:\n' + command + '\n' in out and '--only-suites' not in out.split('QA tier command:')[1].split('\n')[1], out
+assert SCOPED_POLICY in out and SAFE_POLICY not in out, out
 assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' not in out
 # the full run-all check is marked DO NOT RUN, in its place among the extras, never folded or runnable
 extras = ('Extra commands:\n[a] ' + m.pr.DO_NOT_RUN + 'tests/run-all.sh -j 4\n'
@@ -2127,6 +2228,14 @@ assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exi
 assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)
 out = dispatch('qa', first, 'integration:fixture')
 assert 'tests/run-all.sh --workspace-only' in out and 'gh pr checks' not in out and 'tests/run-all.sh --reuse -j 4' not in out and extras in out, out
+# the integration QA spec names the workspace checks against the plan's base (the repo base branch here)
+assert 'QA tier command:\ntests/run-all.sh --workspace-only --base main\n' in out, out
+assert '--workspace-only --base <plan base>' in out and 'QA tier command:\ntests/run-all.sh --workspace-only\n' not in out, out
+# a pinned plan base (base_sha) wins over the branch name
+plan['repos']['fixture']['base_sha'] = base; save()
+pinned = dispatch('qa', first, 'integration:fixture')
+assert 'QA tier command:\ntests/run-all.sh --workspace-only --base ' + base + '\n' in pinned, pinned
+del plan['repos']['fixture']['base_sha']; save()
 # a product repo without tests/run-all.sh: task and integration QA keep its checks and the run-checks.py fast tier
 srv_repo = work / 'srv'; srv_repo.mkdir()
 def sgit(*args):
@@ -2168,7 +2277,8 @@ assert 'git diff ' + srv_fix1 + '...' + srv_fix2 in out and 'fix delta since pre
 assert 'Checks:\n- [s] dotnet test x' in out, out
 lean = m.qa_body(first,[dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
                  runall={'tests/pipeline.test.sh'})
-assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
+assert 'Extra commands' not in lean and '--within tests/pipeline.test.sh -j 1' in lean, lean
+assert '--only-suites' not in lean and '-j 2' not in lean, lean
 # --failed-suites refusals: a PASS, a review verdict, a name neither run-all lists nor a (tests|testlab|scripts)/ suite
 cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'PASS',
          '--failed-suites', 'tests/routing.test.sh')
@@ -2201,12 +2311,16 @@ affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_
                     'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
 verify_again = dispatch('verify', second)
 assert 'git diff ' + first + '...' + second in verify_again
-assert '--base ' + first + ' --only-suites tests/routing.test.sh' in verify_again
+assert '--base ' + first + ' --within tests/routing.test.sh -j 1' in verify_again, verify_again
+assert '--only-suites' not in verify_again.split('QA tier command:')[1].split('\n')[1], verify_again
 assert 'tests/orca-wait.test.sh' in verify_again and 'tests/pipeline.test.sh' not in verify_again.split('QA tier command:')[1]
 out = dispatch('qa', second)
-assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
-        'tests/routing.test.sh -j 2') in out, out
-assert 'tests/routing.test.sh ALL' in out and 'not computed' not in out, out
+assert ('--base ' + first + ' --within tests/pipeline.test.sh,tests/routing-properties.test.py,'
+        'tests/routing.test.sh -j 1') in out, out
+# re-QA after --failed-suites: the failed suite is one of the --within suites, with its affected cases; nothing is
+# left to CI (the affected suite is among the named ones)
+assert 'tests/routing.test.sh --case selection' in out and 'tests/routing.test.sh ALL' not in out and 'not computed' not in out, out
+assert 'Left to CI' not in out, out
 affected.unlink()
 # a failed suite run-all does not run (exit 2 under --only-suites) is an extra command instead
 assert 'orca-wait' not in out.split('QA tier command:\n')[1].split('\n')[0], out
@@ -2527,6 +2641,21 @@ X=$(plan unknown "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\
 expect "unknown repo is an error" 1 "neither a registry repo nor in plan.repos" validate "$X"
 TOOL=$(plan tool "{$HEAD,\"repos\":{\"tool\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"tool\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "unregistered repo with ProjectVersion.txt is a no-worktree repo" 0 "No worktree .*: tool" validate "$TOOL"
+# checks name the suites that test the changed behaviour (task QA runs only them, --within): a task that owns code and
+# whose checks name no suite warns; the old "checks contain test suites" warning is gone
+NS_RULE="^WARN  task a: checks name no test suite; name the suites that test the changed behaviour .task QA runs only them with --within.$"
+X=$(plan nosuite "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"],\"checks\":[\"python3 -B scripts/x.py\"]}]}")
+expect "validate: code paths whose checks name no suite warn with the checks-name-suites rule" 0 "$NS_RULE" validate "$X"
+refute "validate: the checks-name-suites rule is no error" "^ERROR|INVALID" validate "$X"
+X=$(plan nochecks "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]}]}")
+expect "validate: code paths with no checks warn with the checks-name-suites rule" 0 "$NS_RULE" validate "$X"
+X=$(plan suites "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"],\"checks\":[\"bash tests/x.test.sh\",\"python3 -B scripts/x.py\"]}]}")
+refute "validate: a check that names a suite satisfies the rule" "checks name no test suite" validate "$X"
+refute "validate: a suite in the checks no longer warns that implementers run syntax checks only" "checks contain test suites|implementers run syntax checks only" validate "$X"
+X=$(plan scoped "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"],\"checks\":[\"tests/run-all.sh --affected --base main --within tests/x.test.sh -j 1\"]}]}")
+refute "validate: a scoped run-all with --within names the suites and warns nothing" "checks name no test suite|full run in checks|checks contain test suites" validate "$X"
+X=$(plan prose "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"docs/a.md\",\"changelog.d/x.md\"],\"acceptance\":[\"a\"],\"checks\":[\"python3 -B scripts/x.py\"]}]}")
+refute "validate: a prose-only task never needs a suite in its checks" "checks name no test suite" validate "$X"
 # known_failing: [{check, reason}], checks that already fail at the task base
 KFT='"tasks":[{"id":"a","repo":"server","objective":"o","paths":["backend/gateway/"],"acceptance":["a"]}]'
 X=$(plan kf-ok "{$HEAD,\"known_failing\":[{\"check\":\"tests/foo.test.sh\",\"reason\":\"fails on base\"}],$KFT}")
@@ -2951,6 +3080,29 @@ mkdir -p "$T/tests"; echo 'exit 0' > "$T/tests/run-all.sh"
 TASK_QA='Task QA: never a full tests/run-all\.sh run; CI runs the affected suites per change and ci-ok must be green before merging'
 expect_spec "run-all repo verify spec: the task QA CI clause" "$TASK_QA" dispatch "$PLUGIN" --task t --phase verify --sha abc1234 --runner orca
 expect_spec "run-all repo task QA spec: the task QA CI clause" "$TASK_QA" dispatch "$PLUGIN" --task t --phase qa --sha abc1234 --runner orca
+# no check suites (and no suite list): the safe form, one job, and the spec says to name the suites in the task checks
+SAFE_FORM="^tests/run-all\.sh --affected --base [^ ]+ -j 1$"
+SAFE_WHY="No check suites: the whole affected closure runs; name the suites that test the changed behaviour in the task checks to scope it [(]--within[)]\."
+expect_spec "task QA spec without check suites: the safe form --affected --base <base> -j 1" "$SAFE_FORM" dispatch "$PLUGIN" --task t --phase qa --sha abc1234 --runner orca
+expect_spec "task QA spec without check suites: says to name the suites to scope it" "$SAFE_WHY" dispatch "$PLUGIN" --task t --phase qa --sha abc1234 --runner orca
+expect_spec "verify spec without check suites: the safe form and its explanation" "$SAFE_FORM" dispatch "$PLUGIN" --task t --phase verify --sha abc1234 --runner orca
+refute_spec "task QA spec without check suites: no --within, no --only-suites, no -j 2" "--within tests|--only-suites| -j 2$" dispatch "$PLUGIN" --task t --phase qa --sha abc1234 --runner orca
+# check suites the checkout's run-all lists: --affected --base <review base> --within <the suites> -j 1, scoped to them
+cat > "$T/tests/run-all.sh" <<'RUNALL'
+case "$1" in --list-suites) echo tests/x.test.sh; echo tests/y.test.sh; exit 0 ;; esac
+exit 0
+RUNALL
+SCOPED=$(plan plugin-scoped "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"],\"checks\":[\"bash tests/y.test.sh\",\"tests/run-all.sh --affected --only-suites tests/x.test.sh\"]}]}")
+SCOPED_FORM="^tests/run-all\.sh --affected --base [^ ]+ --within tests/x\.test\.sh,tests/y\.test\.sh -j 1$"
+SCOPED_WHY="The command runs only the suites the task checks name [(]--within[)], each with its affected cases; the other affected suites are left to CI\."
+expect_spec "task QA spec with check suites: --affected --base <base> --within <check suites> -j 1" "$SCOPED_FORM" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
+expect_spec "task QA spec with check suites: says the other affected suites are left to CI" "$SCOPED_WHY" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
+expect_spec "verify spec with check suites: the same scoped command" "$SCOPED_FORM" dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+refute_spec "task QA spec with check suites: no safe-form explanation, no --only-suites, no -j 2" "No check suites|--only-suites| -j 2$" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
+expect "task QA with check suites: the plain print prompt names the same command" 0 "tests/run-all\.sh --affected --base [^ ]+ --within tests/x\.test\.sh,tests/y\.test\.sh -j 1" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner print
+# the integration QA names the workspace checks the change reaches, against the plan's base (the repo base branch)
+expect_spec "integration QA spec: --workspace-only --base <plan base>" "^tests/run-all\.sh --workspace-only --base develop$" dispatch "$SCOPED" --task integration:plugin --phase qa --sha abc1234 --runner orca
+refute_spec "integration QA spec: never a bare --workspace-only or a task-scoped form" "^tests/run-all\.sh --workspace-only$|--within" dispatch "$SCOPED" --task integration:plugin --phase qa --sha abc1234 --runner orca
 rm "$T/tests/run-all.sh"; rmdir "$T/tests"
 # the run lead's RPG_FACTORY_WORKSPACE reaches the implement, verify and QA specs (a worker may not inherit it);
 # unset or empty, no such line
@@ -3472,8 +3624,8 @@ expect "a subplan of another task is a usage error" 2 "splits task gw, not c1" d
 # child in a no-worktree repo: usage error, nothing on stdout
 for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "--task c1 --phase lead" "--task integration:client --phase qa --sha abc1234"; do
   # shellcheck disable=SC2086
-  out=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>/dev/null); rc=$?
-  err=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>&1 >/dev/null)
+  out=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>"$TMP/dd.err"); rc=$?
+  err=$(<"$TMP/dd.err")
   if [ "$rc" = 2 ] && [ -z "$out" ] && grep -q "takes no worktree" <<<"$err"; then pass=$((pass + 1)); echo "PASS  child in the Unity project ($args): usage error, nothing printed"
   else fail=$((fail + 1)); echo "FAIL  child in the Unity project ($args) (rc=$rc)"; head -5 <<<"$out$err"; fi
 done
@@ -3482,8 +3634,8 @@ expect "new task worktree without an integration checkout: git no-track" 0 "^git
 expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 # topic checked out nowhere: the Orca parent falls back to the main checkout, loudly (stderr only; stdout is unchanged)
-out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
-err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>"$TMP/dd.err")
+err=$(<"$TMP/dd.err")
 if grep -q "^factory-pipeline: Orca parent: no checkout has the topic branch feat/core/demo checked out, .*falls back to the main checkout .*rpg-mmo-server; set plan.topic to your own integration branch" <<<"$err" \
    && ! grep -q "Orca parent:" <<<"$out" && grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
   pass=$((pass + 1)); echo "PASS  topic not checked out: stderr hint names the main-checkout fallback, stdout has none and the parent is the main checkout"
@@ -3510,8 +3662,8 @@ expect "new task worktree beside integration checkout" 0 "^git -C .* worktree ad
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
-out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
-err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>"$TMP/dd.err")
+err=$(<"$TMP/dd.err")
 if ! grep -q "Orca parent:" <<<"$err" && grep -Eq -- "--parent-worktree '?path:[^' ]*demo-int'? " <<<"$out" && ! grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
   pass=$((pass + 1)); echo "PASS  topic checked out: no Orca parent hint and the parent is the integration checkout"
 else fail=$((fail + 1)); echo "FAIL  topic checked out: Orca parent hint"; head -5 <<<"$err"; fi
