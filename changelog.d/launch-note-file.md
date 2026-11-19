@@ -7,6 +7,6 @@
 ### Changed
 
 - **Pipeline.** Launch notes travel through the spec file, never the `--prompt` command line: the Orca prompt is only
-  `Read your task spec at <path> and follow it.`, and the planner's request and any run lead note go into the spec
-  (`Run lead notes:`), covered by the spec file name's digest. cmd.exe misreads parentheses and quotes on the command
+  `Read your task spec at <path> and follow it.`, and the planner's request and every session note live only in the
+  spec, covered by the spec file name's digest. cmd.exe misreads parentheses and quotes on the command
   line, which once failed a lead launch with `unknown option '-FilePath'`.
