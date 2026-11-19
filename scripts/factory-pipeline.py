@@ -56,8 +56,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
         and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec or misread
         parentheses and quotes. The one-line prompt carries only the pointer ('Read your task spec at <path> and
-        follow it.'): the planner's request ("Run lead notes:" section) and every dispatch note live in the spec, which
-        the file name's digest covers (two dispatches differing only in a note write two spec files).
+        follow it.'): the planner's request (the spec's own "Request:" line) and every dispatch note ("Session note"
+        lines and sections) live in the spec, which the file name's digest covers (two dispatches differing only in a
+        note write two spec files).
   dispatch ... [--note TEXT]... [--note-file FILE]...
         --note TEXT (whitespace collapsed) and RPG_FACTORY_SESSION_NOTE become "Session note:" lines of the spec;
         --note-file FILE (repeatable) adds the file's text verbatim as its own "Session note file <path>:" section
@@ -1919,7 +1920,7 @@ def cmd_planner(a, reg):
               "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
               + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
-    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
+    emit(a, reg, agent, prompt, place, "pipeline planner", role="planner")
     return 0
 
 
@@ -2067,7 +2068,11 @@ def session_notes(a):
 
 def session_note_files(a):
     """Read the --note-file files: [(abs_path, text)] in argument order, deduplicated by absolute path. A missing,
-    unreadable or blank file exits 2 before anything is written or printed. The text is kept verbatim."""
+    unreadable or blank file exits 2 before anything is written or printed. The text is kept verbatim. Read once per
+    dispatch: the result is cached on `a` (cmd_dispatch validates first)."""
+    cached = getattr(a, "_note_files", None)
+    if cached is not None:
+        return cached
     files, seen = [], set()
     for raw in getattr(a, "note_file", None) or []:
         path = os.path.abspath(raw)
@@ -2084,6 +2089,7 @@ def session_note_files(a):
         if not text.strip():
             die(f"--note-file {raw}: is blank")
         files.append((path, text))
+    a._note_files = files
     return files
 
 

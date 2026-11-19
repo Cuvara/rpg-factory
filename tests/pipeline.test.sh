@@ -2973,7 +2973,9 @@ for phase in 'review --sha abc1234' 'qa --sha abc1234'; do
 done
 RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note=one '--note=two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
 RPG_FACTORY_SESSION_NOTE='env note' expect_spec "lead spec: dispatch forwards environment note" "<dispatch>.* --note=one '--note=env note'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one
-RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+printf 'rule nine\n' > "$TMP/nf-rule9.txt"
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule with only --note-file" '^9\. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note-file "$TMP/nf-rule9.txt"
 RPG_FACTORY_SESSION_NOTE= expect "dispatch: empty session note is rejected" 2 - dispatch "$TOOL" --task t --phase implement --runner orca --note ''
 # note_forward <name> <lead's RPG_FACTORY_SESSION_NOTE> <note>... -- <lead dispatch args...>: the lead spec's <dispatch>
 # definition, its <pipeline> and <plan> placeholders replaced from the same line, runs as an implement dispatch with an
@@ -3032,7 +3034,7 @@ note = 'run ( ) " \' & | note\nwith  a second line'
 nfile = pathlib.Path(tmp) / "nf-tricky.txt"
 def dispatch(phase, notes, text):
     nfile.write_bytes(text.encode("utf-8"))  # bytes: no newline translation on Windows
-    args = ["dispatch", plan, "--task", "t", *phase, "--runner", "orca"]
+    args = ["dispatch", plan, "--task", "t", "--phase", *phase, "--runner", "orca"]
     for n in notes:
         args += ["--note", n]
     args += ["--note-file", str(nfile)]
@@ -3182,11 +3184,11 @@ fresh.write_text(json.dumps(value), encoding="utf-8")
 check(["dispatch", str(fresh), "--task", "gw", "--phase", "lead"])  # no task branch/worktree yet
 check(["dispatch", str(fresh), "--task", "integration:server", "--phase", "qa", "--sha", "abc1234"])
 # the planner's one line is only the pointer (the request no longer rides on the command line); the spec keeps the
-# request verbatim under 'Run lead notes:'
+# request verbatim as its own 'Request:' line and equals the print prompt (check() asserts that), with no notes section
 request = "add a thing\n  with a\tsecond requirement\n"
 spec = check(["planner", "--request", request], "_planner")
 text = spec.read_text(encoding="utf-8")
-assert f"Request: {request}" in text and "Run lead notes:\n" in text, text
+assert f"Request: {request}" in text and "Run lead notes:" not in text, text
 # A second prompt must never alter a spec an already-launched session has yet to read.
 assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full in saved.items())
 PY
