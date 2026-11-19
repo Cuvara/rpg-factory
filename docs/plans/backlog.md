@@ -39,9 +39,9 @@ unsubmitted start prompt of the same report is covered by `factory-pipeline.py n
 
 ### external-path-dollar
 
-The external-path-uri review left a low note: the `$NAME` branch of `stylelock.EXTERNAL_PATH` also refuses a dollar sign
-followed by a letter with no path separator after it, so prose such as "priced in $USD" in an `origin` or
-`rights_note` is refused. Narrow the branch to a `$NAME` followed by a path separator (or `${NAME}`), with a test.
+The external-path-uri review left a low note: the `$NAME` branch of `stylelock.EXTERNAL_URI_OR_ENV`
+(`scripts/assetgen/stylelock.py`) also refuses a dollar sign followed by a letter with no path separator after it, so
+prose such as "priced in $USD" in an `origin` or `rights_note` is refused. Narrow the branch to a `$NAME` followed by a path separator (or `${NAME}`), with a test.
 
 ### generic-explorer-name
 
