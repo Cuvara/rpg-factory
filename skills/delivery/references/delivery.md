@@ -159,6 +159,8 @@ A dependent task with exactly one in-flight dependency starts from that dependen
     spec file (`dispatch` does this).
   - After a start or launch with `--agent codex`, read its terminal (`orca orchestration worker-read`) until it shows
     the prompt being worked on; `input_accepted` alone is no proof.
+  - A dispatched session with no progress a few minutes after launch may have an unsubmitted start prompt: run
+    `factory-pipeline.py nudge plan.json`, then `--send` (`docs/pipeline-cli.md`, "nudge").
 - **Codex, else Claude.** A Codex session that cannot start or never picks up its prompt is marked down
   (`agents --down codex`, "Which model") and its role redispatched on Claude; the report names it.
 - Never use `orca orchestration gate-create` for routine work.
@@ -249,7 +251,9 @@ A task is done when integrated with its review and QA recorded; the run, when th
 - **Few sessions:** memory pressure kills background shells and test runs. A lead keeps only its state (plan or
   subplan, branch, SHAs, verdicts).
 - **The run lead polls, never trusts messages alone:** on each wake and timer it reads `factory-pipeline.py status <plan>`
-  (per task: last lead report, READY_FOR_PR).
+  (per task: last lead report, READY_FOR_PR). A dispatched session with no progress a few minutes after launch gets
+  `factory-pipeline.py nudge plan.json` (then `--send`). Extra notes for a session go through `dispatch --note` or
+  `--note-file`, never appended to `--prompt`.
 - **Handoff.** After a wave, or when its context grows long, the run lead ends its session with the wave settled; the
   next resumes from `factory-pipeline.py status plan.json`.
 
