@@ -1041,6 +1041,18 @@ for checkout in "$LANG_CLONE" "$LANG_WT"; do
   lang yes "$checkout" "orca orchestration send --body \"$vi_msg\""
 done
 lang yes "$OUT" "git -C $LANG_CLONE commit -m \"$vi_msg\""
+# A relative -C is resolved against the hook's cwd: from an unrelated directory it still reaches a plugin checkout, a
+# linked worktree or a workspace repo; into an unrelated directory, or with English text, there is no opinion.
+lang yes "$OUT" "git -C ../language-clone commit -m \"$vi_msg\""
+lang yes "$OUT" "git -C ../language-worktree commit -m \"$vi_msg\""
+lang yes "$OUT" "git -C ../ws/rpg-mmo-server commit -m \"$vi_msg\""
+lang yes "$OUT" "git -C .. -C language-clone commit -m \"$vi_msg\""            # chained -C: each is relative to the previous
+lang yes "$OUT" "echo ok && git -C ../language-clone commit -m \"$vi_msg\""    # inside a command list
+lang yes "$OUT" "git -C ../language-clone commit -m \"$vi_msg\"" PowerShell
+lang no  "$OUT" "git -C ../language-other commit -m \"$vi_msg\""               # a plugin-named repo that is not rpg-factory
+lang no  "$OUT" "git -C ../no-such-dir commit -m \"$vi_msg\""
+lang no  "$OUT" "git -C ../language-clone commit -m 'fix login'"               # English text with a relative -C
+lang no  "$LANG_OTHER" "git -C ../outside commit -m \"$vi_msg\""
 lang no "$LANG_OTHER" "git commit -m \"$vi_msg\""
 lang no "$LANG_OTHER" "$vi_msg" Agent prompt
 lang yes "$FEATURE" "git commit -m \"$vi_msg\""

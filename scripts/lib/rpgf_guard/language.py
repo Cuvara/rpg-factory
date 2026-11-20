@@ -109,14 +109,37 @@ def in_scope(cwd, registry, command=""):
                                  for path in (native_path(os.path.expanduser(t)) for t in re.findall(r"((?:\b[A-Za-z]:[/\\]|/)[^\s'\"]+)", command)))
 
 
+def git_dir_in_scope(argvs, cwd, registry):
+    """True when a `git -C <dir>` of the expanded commands lies in scope. A relative `-C` is resolved against the
+    hook's cwd (git's own rule), so `git -C ../clone commit ...` from an unrelated directory is still seen. Pure
+    path arithmetic plus the marker reads in_scope already does: no subprocess, no repository scan; any error is
+    "not in scope" (no opinion)."""
+    base = os.path.abspath(cwd or os.getcwd())
+    for argv in argvs:
+        try:
+            parsed = parse_git(argv)
+            if not parsed or not parsed[0]:
+                continue
+            path = os.path.normpath(os.path.join(base, os.path.expanduser(parsed[0])))
+            if (find_workspace(path, registry) or within(path, PLUGIN_ROOT) or plugin_checkout(path)
+                    or outside_workspace(path, registry, {})):
+                return True
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return False
+
+
 def language_hits(payload, registry):
     """Bash and PowerShell commands: git commit, gh pr/issue, orca send/launch text that is not English."""
     command = (payload.get("tool_input") or {}).get("command") or ""
-    if command.isascii() or not in_scope(payload.get("cwd"), registry, command):
+    if command.isascii():
         return []
     shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    argvs = list(expand(command, shell=shell))
+    if not in_scope(payload.get("cwd"), registry, command) and not git_dir_in_scope(argvs, payload.get("cwd"), registry):
+        return []
     hits, flagged = [], set()
-    for argv in expand(command, shell=shell):
+    for argv in argvs:
         for label, text in targets(argv):
             hit = finding(label, text) if label not in flagged else None  # one finding per kind of text
             if hit:
