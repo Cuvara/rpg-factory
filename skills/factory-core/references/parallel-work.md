@@ -101,3 +101,13 @@ lessons of this repo behind it, each with its reason.
   integration branch (or checks the topic out) before dispatching. Reason: in plan ci-matrix a task worktree landed
   under the main checkout instead of the run lead's worktree. Dispatch prints a stderr hint; `tests/pipeline.test.sh`
   covers it.
+- **A start prompt can stay unsubmitted in its Orca terminal, and `input_accepted` is no proof:** a verify session's
+  prompt once sat unsubmitted for about 30 minutes until the run lead pressed Enter, and on 2026-11-18 two more sessions
+  of plan runtime-quirks had theirs unsubmitted (the external-path-uri verify worker, `turn_start_unobserved`, and the
+  launch-note-file fix1 worker, idle about 17 hours). When a dispatched session shows no progress a few minutes after
+  launch, run `factory-pipeline.py nudge <plan>` and, when it lists STUCK, `--send` (one Enter per spec; the answer
+  `nudged, still stuck` means relaunch the session). `tests/pipeline.test.sh` covers the verb.
+- **Notes never go on the `--prompt` line:** a lead launch failed with `unknown option '-FilePath'` because a run lead
+  note containing quotes was appended to `--prompt`, and cmd.exe misread the quotes and parentheses. Pass extra notes
+  with `dispatch --note` or, for text with quotes, parentheses or newlines, `--note-file`; the prompt carries only the
+  spec pointer. `tests/pipeline.test.sh` covers pointer-only launch lines and `--note-file`.
