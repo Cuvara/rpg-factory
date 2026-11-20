@@ -67,6 +67,18 @@ runs the suite.
 script loads or runs by name): a library module or a helper selects only the suites of the scripts that reach it, and
 anything unsure runs. A miss there is caught by integration QA, whose suite reuse uses the conservative rule above.
 
+`--within L` (comma-separated suite or check names; requires `--affected --base <b>`) is task QA: only the suites of L
+run, each limited to the cases the change reaches (all cases when unsure; a named suite the change does not reach
+still runs). Suites the change reaches outside L print `left to CI: N suites (...)` and are not run: CI is the breadth
+gate (every affected suite on Linux and Windows per PR, `ci-ok` green before merging). `tests/run-all.sh --affected
+--base <review base> --within <check suites> -j 1` is the task QA command. `--only-suites` still unions with
+`--affected` and remains for hand runs.
+
+`--workspace-only --base <b>` runs only the workspace checks whose declared inputs in `tests/affected.py` the change
+since `<b>` reaches (unsure or a global input runs the check); without `--base` it runs all of them, and `--release`
+always runs everything. The result record (`rpg-factory.run-all-result/1`) holds each check's duration and the summary
+prints the five slowest checks.
+
 `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the checks that run a script
 outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan, package ready, Netcode headless)
 are selected like suites by that script path, else they count as not affected; `--only-suites` may name such a script

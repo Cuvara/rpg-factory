@@ -225,6 +225,12 @@ run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
+# per-check durations: checks of known length, a failure and a runp skip (no tests/ path, so --list-suites never names them)
+dskip_post() { _skp "dskip" "why"; }
+if [ "${WITH_DUR:-0}" != 0 ]; then
+  run d0 bash -c 'true'; run d3 bash -c 'sleep 3'; run d2 bash -c 'sleep 2'
+  run dfail bash -c 'echo broke; exit 1'; runp dskip dskip_post bash -c 'true'
+fi
 $release && run1 safety bash tests/installed-safety.sh   # release-only, like run-all.sh's installed-safety line
 fi
 # workspace-list-begin
@@ -241,6 +247,8 @@ if [ "${WITH_WS:-0}" != 0 ]; then
   block blk_run
   run ws env RPG_FACTORY_WORKSPACE=/ws bash tests/ws.sh
 fi
+# the `claude plugin validate` lines: gated by the pseudo key only for --workspace-only --base (no tests/ path: not listed)
+if [ "${WITH_CLAUDE:-0}" != 0 ]; then ws_gate claude-plugin-validate && run1 cv bash -c 'printf "cv\n" >> "$RUN_LOG"'; fi
 # workspace-list-end
 [ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
 [ -z "${CFG_CHANGE:-}" ] || git config rpgtest.during "$CFG_CHANGE"
@@ -249,6 +257,7 @@ runall_finish
 if [ -n "${CHECK_CFG:-}" ]; then
   if gitcfg_verify >/dev/null; then echo 'cfg unchanged'; else echo 'cfg changed'; rm -f "$GITCFG_COPY"; fi
 fi
+[ "${SLOWEST:-0}" = 0 ] || runall_slowest
 runall_summary
 echo "counts $pass $fail $skip"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
@@ -974,6 +983,124 @@ out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --inline-only --no-reuse --no-wait); r
 [ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (1 in use:' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--inline-only takes a test slot (busy slot: exit 3 with --no-wait) and no full-run lock' || no '--inline-only test slot' "$out"
 rm -rf "$SL/1"
+# --within (task QA's scoped selection, with --affected --base): only the named suites and gated scripts run. A named suite
+# the change reaches gets only its affected cases (as --affected passes them), one the change does not reach still runs
+# with every case, what the change selects outside the list is left to CI (counted as not affected, named in one line
+# before the checks). Same lines and counts at -j 1 and -j 3; affected.py is asked once.
+for j in 1 3; do
+  reset_cache; : > "$TMP/case-args"; : > "$TMP/aff-calls"
+  out=$(AFF_CALLS="$TMP/aff-calls" CASE_LOG="$TMP/case-args" SELECT=tests/b.sh CASE_SELECT=alpha cache_plan --no-reuse -j "$j" --affected --base main --within tests/b.sh,tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' '); calls=$(tr '\n' ' ' < "$TMP/aff-calls")
+  first=$(grep -nE '^(PASS|SKIP|FAIL)' <<<"$out" | head -1 | cut -d: -f1); left=$(grep -nx 'left to CI: 0 suites' <<<"$out" | cut -d: -f1)
+  [ "$rc" = 0 ] && [ "$log" = 'a b ' ] && [ "$(cat "$TMP/case-args")" = '--case alpha' ] && grep -q '^PASS  b (cases alpha)' <<<"$out" \
+    && [ "$calls" = 'cases ' ] && grep -qx 'counts 2 0 0' <<<"$out" && [ -n "$left" ] && [ "$left" -lt "$first" ] \
+    && good "--within: the reached named suite gets only its affected cases, the unreached named suite runs, one cases call, left-to-CI line first (-j $j)" \
+    || no "--within cases (-j $j): rc $rc log '$log' calls '$calls' cases '$(cat "$TMP/case-args")'" "$out"
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" SELECT=tests/a.sh CASE_SELECT=alpha cache_plan --no-reuse -j "$j" --affected --base main --within tests/b.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'b ' ] && [ "$(wc -l < "$TMP/case-args" | tr -d ' ')" = 1 ] && [ -z "$(cat "$TMP/case-args")" ] && ! grep -q '(cases ' <<<"$out" \
+    && grep -qx 'left to CI: 1 suites (tests/a.sh)' <<<"$out" && grep -qx 'counts 1 0 1' <<<"$out" \
+    && good "--within: a named suite the change does not reach still runs, with every case; the selected one outside the list is left to CI (-j $j)" \
+    || no "--within unreached (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(WITH_NEVER=1 SELECT=tests/b.sh,tests/a.sh,tests/never.sh cache_plan --no-reuse -j "$j" --affected --base main --within tests/b.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'b ' ] && grep -qx 'left to CI: 2 suites (tests/a.sh, tests/never.sh)' <<<"$out" && grep -qx 'counts 1 0 2' <<<"$out" \
+    && grep -q '(2 not affected by the change)' <<<"$out" \
+    && good "--within: every selected suite outside the list is named and counted as not affected, none runs (-j $j)" \
+    || no "--within left to CI (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(NO_BASE=1 cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'affected mode: no base, running only --within tests/a.sh' <<<"$out" \
+    && grep -q '^left to CI: no base' <<<"$out" && grep -qx 'counts 1 0 1' <<<"$out" \
+    && good "--within without a base runs only the named suites and says so (-j $j)" || no "--within no base (-j $j): rc $rc log '$log'" "$out"
+  # a gated script named in the list runs (block and inline), a live-lane suite the list does not name does not
+  reset_cache
+  out=$(WITH_LIVE=1 SELECT=tests/live.sh cache_plan --no-reuse -j "$j" --affected --base main --within=scripts/checks/x.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'block inline ' ] && grep -qx 'left to CI: 1 suites (tests/live.sh)' <<<"$out" && grep -qx 'counts 3 0 3' <<<"$out" \
+    && good "--within=L runs a named gated script, leaves a selected live-lane suite to CI (-j $j)" || no "--within gated (-j $j): rc $rc log '$log'" "$out"
+done
+within_misuse() { # message args...
+  local want=$1; shift
+  reset_cache
+  out=$(cache_plan "$@" 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q "^run-all: .*$want" <<<"$out" && [ ! -s "$RUN_LOG" ] && ! grep -q '^PASS ' <<<"$out" \
+    && [ ! -d "$TMP/state/locks/run-all-full" ] && [ -z "$(ls -A "$SL" 2>/dev/null)" ] \
+    && good "--within misuse exits 2: $*" || no "--within misuse (rc=$rc): $*" "$out"
+}
+for a in '--only-suites tests/a.sh' '--only-suites=tests/a.sh' '--only-cases alpha' '--inline-only' '--release' '--workspace-only' '--list-suites'; do
+  # shellcheck disable=SC2086   # the option and its value are two words, or one with =
+  within_misuse '--within conflicts with ' --within tests/a.sh --affected $a
+  # shellcheck disable=SC2086
+  within_misuse '--within conflicts with ' $a --affected --within tests/a.sh
+done
+within_misuse '--within requires --affected' --within tests/a.sh
+within_misuse '--within requires --affected' --base main --within tests/a.sh
+within_misuse '--within needs a list' --affected --within=
+within_misuse '--within needs a list' --affected --within
+within_misuse "unknown suite 'tests/unknown.sh'" --affected --base main --within tests/a.sh,tests/unknown.sh
+within_misuse "unknown suite 'tests/orphan.sh'" --affected --base main --within tests/orphan.sh
+within_misuse "release-only suite 'tests/installed-safety.sh' runs only with --release" --affected --base main --within tests/installed-safety.sh
+out=$(cache_plan --help); rc=$?
+[ "$rc" = 0 ] && grep -q -- '--within L' <<<"$out" && grep -q -- '--workspace-only \[--base REF\]' <<<"$out" && grep -q 'slowest' <<<"$out" \
+  && good 'the usage text documents --within, --workspace-only --base and the slowest-checks lines' || no 'usage text for the new flags' "$out"
+# --workspace-only --base: only the workspace checks the change reaches run (each gated like a suite; the `claude plugin
+# validate` lines by the key claude-plugin-validate), the rest counts as not affected; no test slot. Without --base, or when
+# no base is found, every workspace check runs.
+ws_case() { # name want-log want-counts args... (the stand-in selection comes from the caller's SELECT / NO_BASE)
+  local name=$1 wlog=$2 wcounts=$3 j; shift 3
+  for j in 1 3; do
+    reset_cache
+    out=$(WITH_LIVE=1 WITH_WS=1 WITH_CLAUDE=1 cache_plan --no-reuse -j "$j" "$@"); rc=$?
+    log=$(sort "$RUN_LOG" | tr '\n' ' ')
+    [ "$rc" = 0 ] && [ "$log" = "$wlog" ] && grep -qx "counts $wcounts" <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
+      && [ -z "$(ls -A "$SL" 2>/dev/null)" ] && good "workspace-only --base: $name (-j $j)" || no "workspace-only --base: $name (-j $j): rc $rc log '$log'" "$out"
+  done
+}
+SELECT=none ws_case 'a change reaching no workspace input (docs only) runs none of the checks' '' '1 0 6' --workspace-only --base main
+SELECT=tests/live.sh,tests/ws.sh ws_case 'only the reached checks run (routing-like inputs)' 'live ws ' '3 0 4' --workspace-only --base main
+SELECT=claude-plugin-validate ws_case 'the claude validator runs on its own key' 'cv ' '2 0 5' --workspace-only --base main
+SELECT=tests/live.sh,tests/blockrun.sh,tests/ws.sh,scripts/checks/x.sh,claude-plugin-validate ws_case 'a change reaching everything runs everything' 'block blockrun cv inline live ws ' '7 0 0' --workspace-only --base main
+SELECT=none ws_case 'without --base every workspace check runs' 'block blockrun cv inline live ws ' '7 0 0' --workspace-only
+SELECT=none NO_BASE=1 ws_case 'no base found: every workspace check runs' 'block blockrun cv inline live ws ' '7 0 0' --workspace-only --base main
+reset_cache
+out=$(WITH_LIVE=1 WITH_WS=1 WITH_CLAUDE=1 SELECT=none cache_plan --no-reuse --workspace-only --release --base main 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q 'conflicts with --no-workspace and --release' <<<"$out" && [ ! -s "$RUN_LOG" ] \
+  && good '--workspace-only --base still conflicts with --release' || no '--workspace-only --base --release' "$out"
+# a scoped workspace run takes no test slot: it runs with the only slot held by another run
+reset_cache; mkdir -p "$SL/1"; printf '%s\n' "$$" > "$SL/1/pid"; printf 'another checkout\n' > "$SL/1/checkout"
+out=$(RPG_FACTORY_TEST_SLOTS=1 WITH_LIVE=1 SELECT=tests/live.sh cache_plan --no-reuse --no-wait --workspace-only --base main); rc=$?
+[ "$rc" = 0 ] && [ "$(sort "$RUN_LOG" | tr '\n' ' ')" = 'live ' ] && ! grep -q 'waiting for a test slot' <<<"$out" \
+  && good '--workspace-only --base takes no test slot (the only slot is held by another run)' || no '--workspace-only --base admission' "$out"
+rm -rf "$SL/1"
+# per-check durations: the result record lists one {name, seconds, status} per check in run order (-j 1 and -j 3 alike;
+# a block is one entry, the lines inside it are not), and the summary tail names the slowest checks, longest first
+for j in 1 3; do
+  reset_cache
+  out=$(WITH_DUR=1 WITH_LIVE=1 SLOWEST=1 cache_plan --no-reuse -j "$j"); rc=$?
+  rec=$(ls -t "$TMP/state/run-all/results"/*/*.json 2>/dev/null | head -1)
+  checked=$(python3 -B - "$rec" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1], encoding='utf-8'))
+d = r['durations']
+assert all(sorted(x) == ['name', 'seconds', 'status'] and type(x['seconds']) is int and x['seconds'] >= 0 for x in d), d
+names = [x['name'] for x in d]
+assert names == ['a', 'b', 'd0', 'd3', 'd2', 'dfail', 'dskip', 'live', 'block gated_block'], names
+by = {x['name']: x for x in d}
+assert [x['status'] for x in d] == ['pass'] * 5 + ['fail', 'skip', 'pass', 'pass'], d
+assert by['d3']['seconds'] >= 3 and by['d2']['seconds'] >= 2, by   # sleeps are lower bounds; a loaded host only adds
+print('durations valid')
+PY
+  ); crc=$?
+  tail_lines=$(grep -A5 '^slowest checks:$' <<<"$out" | tail -n +2 | sed -E -n 's/^  ([0-9]+)s  .*/\1/p')   # the five seconds, as printed
+  [ "$rc" = 1 ] && [ "$crc" = 0 ] && [ "$checked" = 'durations valid' ] \
+    && [ "$(wc -l <<<"$tail_lines" | tr -d ' ')" = 5 ] && [ "$tail_lines" = "$(sort -nr <<<"$tail_lines")" ] \
+    && good "result record holds per-check durations in run order, the summary names the slowest first (-j $j)" \
+    || no "durations (-j $j): rc $rc record check $crc '$checked'" "$out"
+done
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh

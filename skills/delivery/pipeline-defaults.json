@@ -83,7 +83,7 @@
     "qa_tiers": {
       "task": "affected",
       "integration": "ci+workspace",
-      "description": "Task QA runs affected and explicit check suites once; integration runs tests/run-all.sh --workspace-only locally; CI runs the affected suites per change and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
+      "description": "Task QA runs tests/run-all.sh --affected --base <review base> --within <check suites> -j 1 once (only the named check suites the change selects; the rest is left to CI); integration runs tests/run-all.sh --workspace-only --base <plan base> locally (only the workspace checks the change reaches); CI runs the affected suites per change and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
     },
     "available_agents": [
       "claude",

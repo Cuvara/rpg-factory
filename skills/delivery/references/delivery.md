@@ -362,25 +362,27 @@ run-checks fast tier). Re-verify flags: `docs/pipeline-cli.md`, "verdict".
 | When | Runs | Who | Typical time |
 |---|---|---|---|
 | Implementer | no test suites; only a syntax check of the files it edited (`bash -n`, `python -m py_compile`, a JSON parse) | the implementation session | seconds |
-| Verify, once per candidate | the diff review first (a blocking finding is a FAIL and no test runs); then `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once. Other checks are extra commands; never a full run | one fresh verify session (section 6) | 2-5 min for a narrow change; a global input of `tests/affected.py` selects every suite (about an hour) |
-| Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>`; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
+| Verify, once per candidate | the diff review first (a blocking finding is a FAIL and no test runs); then `tests/run-all.sh --affected --base <review base> --within <check suites> -j 1`: only the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists), each limited to the cases the change reaches (all its cases when unsure); a named suite the change does not reach still runs; the other suites the change reaches are printed as left to CI and not run. Other checks are extra commands; never a full run | one fresh verify session (section 6) | minutes: only the named suites, only the cases the change reaches |
+| Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>` with the same `--within` scope; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task tier command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a task lead's own QA verdict counts for tier S only | as verify |
 | Tier XS (step 1) | the task tier command, after the cross-model review PASS; no QA session | the run lead: `verdict --phase qa --state PASS --by <lead model> --note 'tier XS: lead ran task suites'` | as verify |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (what CI cannot run: the live-workspace suites and checks; suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | CI runs the affected suites in the background while the next task starts |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only --base <plan base>` (what CI cannot run: only the live-workspace suites and checks the change reaches; all of them without a base and in `--release`; suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | CI runs the affected suites in the background while the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` | the release session | release only |
 
-- **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide slots and,
+- **Test-run slots.** A targeted run (`--affected`, `--within` or `--only-suites`) takes one of a few machine-wide slots and,
   when all are busy, waits instead of slowing every suite; a full run keeps its own lock (section 4). The slot
   belongs to the run, not the session: stop a QA worker's test run before abandoning it.
 - **Pre-flight and cases.** Read the suite count `dispatch --phase verify|qa` prints; a slow suite with cases runs
   only the cases the change touches (the list it prints). Frozen suite copies go under a temp dir, never into its folder.
-- **CI is the merge gate.** CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
-  `--no-workspace --no-claude`) and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single
-  required check. No full local run before a PR; fix a red check before merging.
+- **CI is the merge gate and the breadth gate.** CI runs every affected suite on Linux and Windows per PR
+  (`scripts/ci-plan.py`, one matrix job per suite, `--no-workspace --no-claude`) and every suite through
+  `workflow_dispatch` with `full=true`; `ci-ok` is the single required check and must be green before merging. The
+  suites outside a task's checks are left to it. No full local run before a PR; fix a red check before merging.
 - **Tier S.** `dispatch` marks a task tier S when the plan or task says so or every owned path is prose
   (`docs/pipeline-cli.md`, "dispatch"). The gate accepts a lead's own QA verdict only for the tier its note starts
   with (`tier S`, `tier XS`), a fresh QA session's PASS for every tier ("Token rule").
-- **Plans.** A task's `checks` name its own suites or the affected-suites command and run in the verify session;
+- **Plans.** A task's `checks` name the suites that test the changed behaviour (the precise set; the plan author
+  picks them) and run in the verify session, which may add a suite it finds missing and says so in its report;
   no check or acceptance criterion requires a full run. `validate` warns on a full run or a check that makes an
   implementer run a suite (`docs/pipeline-cli.md`, "validate").
 - The run-all lock, suite reuse and selection rules of this plugin repo's runner are in `tests/README.md`.

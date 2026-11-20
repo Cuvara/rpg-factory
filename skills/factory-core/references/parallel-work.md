@@ -47,9 +47,23 @@ exclusive resources, QA tiers and model policy. `plan.json` `repos.<key>` names 
 ## Tier commands of this plugin repo (delivery.md section 10, "QA tiers")
 
 The QA tiers table of delivery.md carries this repo's commands (registry `pipeline.qa_tiers`); the single-verify rule
-(`policy:single-verify`) is there too. The rules behind them are in `tests/README.md`: the run-all lock (one full run per machine; CI runs the affected suites per change, `ci-ok` must be
-green before merging and `tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
-slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for a release.
+(`policy:single-verify`) is there too. The runner rules behind them are in `tests/README.md`: the run-all lock, suite
+reuse, `--affected` and `--within` selection, test-run slots and case selection. The shape for this repo:
+
+- **Task QA is scoped:** `tests/run-all.sh --affected --base <review base> --within <check suites> -j 1` runs only the
+  task's check suites, each limited to the cases the change reaches (all cases when unsure; a named suite the change
+  does not reach still runs). A suite the change reaches outside the list prints `left to CI: N suites (...)` and is
+  not run. A plan's task `checks` name the suites that test the changed behaviour; the plan author picks them and the
+  verify session may add one it finds missing and says so.
+- **CI is the breadth gate:** it runs every affected suite on Linux and Windows per PR, and `ci-ok` must be green
+  before merging (`gh pr checks <pr> --watch`).
+- **Integration QA is scoped too:** `tests/run-all.sh --workspace-only --base <plan base>` runs only the workspace
+  checks whose declared inputs in `tests/affected.py` the change reaches (unsure or a global input runs the check;
+  without `--base` all of them). `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run everything and
+  only for a release.
+- **On a loaded machine run task QA with `-j 1`, one task QA at a time; a task lead reports NOT_RUN after one retry
+  instead of looping.** Reason: plans policy-followups, path-audit, flow-lows and run-lows - verify sessions lost their
+  tier run many times when Claude Code stopped background shells under low memory.
 
 - **Before rerunning a tier command whose terminal or wrapping command is gone, look for its run first:** check the slot
   directories (`<persistent state dir>/locks/run-all-slots/<n>`: `checkout`, `pid`, `winpid`, `args`) for a live run of

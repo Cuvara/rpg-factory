@@ -133,17 +133,23 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         of --sha; the reason names the merge (git merge <dependency branch>, never rebase). The reviewer is the implementer's pair (another
         model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
         no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
-        run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
+        run: `tests/run-all.sh --affected --base <review base> --within <the checks' suites> -j 1`: only the suites
+        the task checks name run, each with its affected cases; the other affected suites are left to CI. Without
+        check suites the safe form `tests/run-all.sh --affected --base <review base> -j 1` runs the whole affected
+        closure and the spec says to name the suites in the task checks to scope it; without a base only the check
+        suites run (`--only-suites`), else NONE. A check
         is folded into it only when it is one standalone suite or run-all command and its suite is one
         `tests/run-all.sh --list-suites` prints in the task checkout (no such flag: none is; a release-only suite
         never is); other checks, compound commands included, are extra commands, each suite once. Re-QA after a QA
         FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
         task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
         run the command after the review PASS.
-        verify and qa print on stderr `selected N of M suites (tests/affected.py)` (N: the Affected cases suites,
-        M: `--list-suites`; `selected suites: not computed (<reason>)` when there is no selection) and, when N >
-        --suite-warn N (default 40), a warning to narrow the task paths or its checks. Advisory: the prompt and the
-        exit code are unchanged; --suite-warn below 1 is a usage error (exit 2).
+        verify and qa print on stderr `selected N of M suites (tests/affected.py; K affected suites left to CI)` (N:
+        the suites the tier command runs, the check suites under --within, else the whole affected closure; M:
+        `--list-suites`; K: the affected suites outside the checks, omitted without check suites; `selected suites:
+        not computed (<reason>)` when there is no selection) and, when N > --suite-warn N (default 40), a warning to
+        narrow the task paths or its checks. Advisory: the prompt and the exit code are unchanged; --suite-warn
+        below 1 is a usage error (exit 2).
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
@@ -156,7 +162,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
-        `tests/run-all.sh --workspace-only`; after the PR opens, CI runs the affected suites and ci-ok must be
+        `tests/run-all.sh --workspace-only --base <plan base>` (the workspace checks the change reaches; without a
+        known base `--workspace-only`); after the PR opens, CI runs the affected suites and ci-ok must be
         green before merging (every suite through workflow_dispatch with full=true).
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
@@ -891,12 +898,15 @@ def serialize(waves, tasks, reg, plan):
 
 def task_qa_warnings(task):
     """pr.qa_warnings without the verify tier command: a scoped run-all check is what the verify session runs, not a
-    suite an implementer would run; a suite named next to it still warns."""
+    suite an implementer would run; a suite named next to it still warns. Whether the checks name a test suite is
+    read from every check, the scoped run-all ones included (they are what names the suites task QA runs)."""
     def tier_only(c):
         rest = re.sub(r"(?:\./)?tests/run-all\.sh", "", c)
-        rest = re.sub(r"--only-suites(?:=|\s+)\S+", "", rest)  # the suites a scoped run-all names are its scope
+        # the suites a scoped run-all names are its scope
+        rest = re.sub(r"--(?:only-suites|within)(?:=|\s+)\S+", "", rest)
         return pr.mentions_runall(c) and not pr.full_run(c) and not pr.SUITE_CHECK.search(rest)
-    return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]))
+    return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]),
+                          names_suite=pr.names_test_suite(task.get("checks", [])))
 
 
 def xs_implementer(pipe):
@@ -2262,7 +2272,10 @@ QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when 
 
 def affected_case_lines(path, base, sha, suites, explicit):
     """Report the checkout's own case selection; failure is advisory, never a dispatch failure.
-    Returns (text, counts): counts is (N selected suites, M suites run-all lists), None when not computed."""
+    Returns (text, counts): counts is (N selected suites, M suites run-all lists, K affected suites left to CI), None
+    when not computed. With explicit (the check suites the tier command passes to --within) only those suites run, each
+    with its affected cases (ALL when the change does not reach it): N is their count and K the affected suites outside
+    them; without explicit N is the whole affected closure and K is 0."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
         return "Affected cases: not computed (tests/affected.py missing)", None
@@ -2284,11 +2297,16 @@ def affected_case_lines(path, base, sha, suites, explicit):
         for line in r.stdout.splitlines():
             suite, cases = line.split("\t", 1)
             selected[suite] = cases
-        # run-all selects explicit suites even when unaffected, and never passes --case to them.
-        selected.update({suite: "ALL" for suite in explicit})
+        left = []
+        if explicit:  # --within: only the named suites run; a named suite the change does not reach runs all its cases
+            left = sorted(set(selected) - set(explicit))
+            selected = {suite: selected.get(suite, "ALL") for suite in explicit}
         lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
                  for suite, cases in sorted(selected.items())]
-        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines), (len(selected), len(suites))
+        text = "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+        if left:
+            text += f"\nLeft to CI ({len(left)} affected suites outside the task checks): " + ", ".join(left)
+        return text, (len(selected), len(suites), len(left))
     except (OSError, subprocess.SubprocessError, ValueError):
         return "Affected cases: not computed (tests/affected.py cases failed)", None
 
@@ -2309,35 +2327,43 @@ def suite_warn_arg(value):
 
 def selection_preflight(cases, counts, threshold):
     """Verify/QA dispatch: how wide the case selection is, on stderr, before it costs an hour. Advisory only: the
-    prompt and the exit code do not change."""
+    prompt and the exit code do not change. N is what the tier command runs (the check suites under --within, else the
+    whole affected closure), compared with the threshold; K the affected suites it leaves to CI."""
     if counts is None:
         reason = cases.split("not computed (", 1)[1].rstrip(")") if "not computed (" in cases else "unknown"
         print(f"factory-pipeline: selected suites: not computed ({reason})", file=sys.stderr)
         return
-    n, m = counts
-    print(f"factory-pipeline: selected {n} of {m} suites (tests/affected.py)", file=sys.stderr)
+    n, m, k = counts
+    scope = f"; {k} affected suites left to CI" if k else ""
+    print(f"factory-pipeline: selected {n} of {m} suites (tests/affected.py{scope})", file=sys.stderr)
     if n > threshold:
         print(f"factory-pipeline: warning: {n} of {m} suites selected (threshold {threshold}): narrow the task paths "
               "or its checks before QA", file=sys.stderr)
 
 
-def tier_command(level, base, suites, task=False):
+def tier_command(level, base, suites, task=False, plan_base=None):
     """The run-all command of a registry pipeline.qa_tiers level.
-    Task QA never gets a full run, whatever the level: without a base it runs only the check suites."""
-    only = " --only-suites " + shlex.quote(','.join(suites)) if suites else ""
+    Task QA never gets a full run, whatever the level. With a base and check suites it is the scoped form: only the
+    check suites run (--within), each with its affected cases, and the other affected suites are left to CI. With a
+    base and no check suites it keeps the whole affected closure (the safe form; the spec says why). Without a base it
+    runs only the check suites, else NONE. Integration QA (ci+workspace) with the plan's base runs only the workspace
+    checks the change reaches (plan_base: the plan's base branch)."""
     if task or level == "affected":
+        if base and suites:
+            return ("tests/run-all.sh --affected --base " + shlex.quote(base)
+                    + " --within " + shlex.quote(','.join(suites)) + " -j 1")
         if base:
-            return "tests/run-all.sh --affected --base " + shlex.quote(base) + only + " -j 2"
-        return ("tests/run-all.sh" + only + " -j 2" if suites else
+            return "tests/run-all.sh --affected --base " + shlex.quote(base) + " -j 1"
+        return ("tests/run-all.sh --only-suites " + shlex.quote(','.join(suites)) + " -j 1" if suites else
                 "NONE: the review base is missing; the task lead must give one "
-                "(tests/run-all.sh --affected --base <base> -j 2). Never a full run.")
+                "(tests/run-all.sh --affected --base <base> --within <check suites> -j 1). Never a full run.")
     if level == "ci+workspace":
-        return "tests/run-all.sh --workspace-only"
+        return "tests/run-all.sh --workspace-only" + (" --base " + shlex.quote(plan_base) if plan_base else "")
     return "tests/run-all.sh --reuse -j 4"
 
 
 def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None,
-            tiers=None, subagents=None):
+            tiers=None, subagents=None, plan_base=None):
     head = ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
             + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, ")
     tail = ("regressions, edge and failure cases. A Unity test run waits for the `unity-test` resource; never a second "
@@ -2351,15 +2377,20 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
     key = "integration" if integration else "task"
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
-                           task=not integration)
-    policy = ("Integration QA: run the workspace checks before the PR; after the PR opens, CI runs the affected suites "
-              "and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
+                           task=not integration, plan_base=plan_base if integration else None)
+    policy = ("Integration QA: run the workspace checks the change reaches (--workspace-only --base <plan base>) before "
+              "the PR; after the PR opens, CI runs the affected suites and ci-ok must be green before merging (every "
+              "suite through workflow_dispatch with full=true)."
               if integration and ((tiers or {}).get(key) or QA_TIERS[key]) == "ci+workspace" else
               "Integration QA: one full run per batch under the run-all lock; reuse a PASS record of the same clean tree."
               if integration else
               "Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be "
               "green before merging. "
-              "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
+              + ("The command runs only the suites the task checks name (--within), each with its affected cases; the "
+                 "other affected suites are left to CI. " if base and suites else
+                 "No check suites: the whole affected closure runs; name the suites that test the changed behaviour "
+                 "in the task checks to scope it (--within). " if base else "")
+              + "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
     if small:
         policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
                    "and record verdict --phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'.")
@@ -2510,7 +2541,8 @@ def cmd_dispatch(a, reg):
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
                   + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
-                            tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
+                            tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent),
+                            plan_base=info["base_sha"] or info["base"])
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         prompt = with_session_lines(a, with_test_env(prompt), reg)
