@@ -207,9 +207,9 @@ sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))
 from plan_paths import machine_path_hit
 
 flagged = [
-    'file:///C:/Users/alice/repo/x.md', 'file:///c:/Users/alice', 'file:///home/alice/repo', 'file:///Users/alice/repo',
-    'file://localhost/home/alice', 'file:/home/alice/repo', 'see (file:///home/alice/x) here', 'FILE:///HOME/alice/x',
-    'file:///C:/work/repo', '/home/alice/repo', '/Users/alice/repo',
+    'file:///C:/Users/user/repo/x.md', 'file:///c:/Users/user', 'file:///home/user/repo', 'file:///Users/user/repo',
+    'file://localhost/home/user', 'file:/home/user/repo', 'see (file:///home/user/x) here', 'FILE:///HOME/user/x',
+    'file:///C:/work/repo', '/home/user/repo', '/Users/user/repo',
 ]
 allowed = [
     'docs/home/readme.md', 'src/Users/list.md', 'https://example.com/home/x', 'http://example.com/Users/x',
