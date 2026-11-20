@@ -1,0 +1,106 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "test-flakes",
+  "title": "Precise tests under load: remove load-sensitive flakes, run-all and doctor lows, guard and path lows",
+  "topic": "test-flakes",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "load-flakes",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "test timing changes; a too-loose bound hides a real regression, a too-tight one keeps the flake",
+      "objective": "Owner request (2026-11-18): tests must be fast and precise. Several cases fail at random when this Windows host is loaded (backlog topics run-lows-followups, path-audit-followups, plugin-flow-5-followups in docs/plans/backlog.md). Fix each so it is deterministic under load without weakening what it checks; first check whether main already fixed it. (1) tests/netcode-headless.test.sh: the fake dotnet uses a 2 s timeout (NETCODE_HEADLESS_TIMEOUT) and fails cases at random under load ('dotnet test timed out after 2 s'); raise it to about 8 s, staying below the fake sleep mode (10 s) so the timeout case still times out. (2) tests/orca-wait.test.sh case 'a young guard with no owner is not reclaimed' (around line 343-357) failed under load ('young guard reclaimed (status 4)'): find the timing assumption (guard age against a wall-clock bound) and make the case independent of scheduling delay (e.g. set the guard's age explicitly instead of relying on elapsed time). Also its INT case SKIPs under run-all because a background job ignores SIGINT at entry: make it run (e.g. start the waiter with `set -m` or a trap reset) or document why it cannot. (3) tests/routing.test.sh scenario 'Redis servers:id -> wire-contract leads': under heavy load the snapshot reported a product repo as 'not a git work tree' (a git timeout, now reported as a timeout since plan run-lows); retry that scenario once when the failure is a git timeout, never on another failure. (4) testlab/tests/test_lab.py `test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small` measures the live host (sampler CPU 1.56 % against a 1.0 % bound under load): make the bound load-tolerant (measure the sampler's own CPU time relative to wall time, or skip with a stated reason when the host is busy), keeping the read-only assertion. Changelog fragment changelog.d/test-flakes-load.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/netcode-headless.test.sh",
+        "tests/orca-wait.test.sh",
+        "tests/routing.test.sh",
+        "testlab/tests/test_lab.py",
+        "changelog.d/test-flakes-load.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/netcode-headless.test.sh",
+        "tests/orca-wait.test.sh",
+        "tests/routing.test.sh",
+        "testlab/tests/test_lab.py"
+      ],
+      "acceptance": [
+        "the four cases no longer depend on scheduling delay or host load, and each still fails on the fault it guards",
+        "the orca-wait INT case runs under run-all or the reason it cannot is documented in the suite",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "runall-doctor",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "small independent fixes in run-all output, the netcode prune order, doctor checks and script docs",
+      "objective": "Lows of backlog topics run-lows-followups, plugin-flow-5-followups, path-audit-followups and test-speed-followups (docs/plans/backlog.md). First check whether main already fixed each. (1) tests/run-all.sh: the test slot takeover message goes to stdout with run-all's progress; send it to stderr. Case in tests/run-all-parallel.test.sh. (2) scripts/checks/netcode-headless.sh evidence prune breaks ties between directories of the same second lexicographically on the pid part; order by the full timestamp then numerically by pid. Case in tests/netcode-headless.test.sh is owned by task load-flakes: put this case in tests/run-all-parallel.test.sh only if it fits, else test the ordering helper through a small direct call documented in the changelog (do not edit tests/netcode-headless.test.sh). (3) `doctor` (scripts/factory-cmd.py) on Windows names two machine-setup faults that made task QA report NOT_RUN: `python3` in Git Bash resolving to the Microsoft Store stub (WindowsApps), and `jq` absent; each with a fix hint (the PATH shim). Add cases where the doctor tests live (find them; keep them host-independent with fake PATH entries). (4) scripts/README.md: list tests/assetgen.test.sh with its `--case` groups (`--list-cases`), and next to the scripts/checks list name the two conventions a new check must meet (the UTF-8 stdio block that tests/compat.test.sh checks, the workspace reader guard that tests/workspace-default.test.sh checks). Changelog fragment changelog.d/test-flakes-runall-doctor.md (### Fixed / ### Added). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "scripts/checks/netcode-headless.sh",
+        "scripts/factory-cmd.py",
+        "tests/devtools.test.sh",
+        "tests/commands.test.sh",
+        "scripts/README.md",
+        "changelog.d/test-flakes-runall-doctor.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/commands.test.sh",
+        "tests/devtools.test.sh"
+      ],
+      "acceptance": [
+        "the slot takeover message is on stderr",
+        "netcode evidence prune orders same-second directories by numeric pid",
+        "doctor names the python3 Store stub and a missing jq with a fix hint",
+        "scripts/README.md lists the assetgen case groups and the two scripts/checks conventions",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "guard-path-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "guard and machine-path detection; a false negative lets a breach through, a false positive nags every session",
+      "objective": "Lows of backlog topics path-audit-followups, policy-followups-leftovers and plugin-flow-5-followups (docs/plans/backlog.md). First check whether main already fixed each. (1) scripts/lib/plan_paths.py `MACHINE_PATH` does not flag a `file:` URL with a home or Users path (`file:///C:/Users/<name>/...`, `file:///home/<name>/...`); flag it like the drive form, and add an explicit allowed case for an inner path segment named `home` (e.g. `docs/home/readme.md`). Cases in tests/plan-paths.test.sh and, if the portable-paths check reads it, tests/portable-paths.test.sh. (2) The git guard's english-only check (scripts/lib/gitguard.py, scripts/lib/rpgf_guard/language.py) inspects only absolute path tokens: a relative `git -C ../clone commit -m '<non-English text>'` from an unrelated directory gets no advisory. Resolve relative `-C` paths against the hook's cwd before the check; cases in tests/git-guard.test.sh. Hooks stay fast and never crash (.claude/CLAUDE.md rules): no repository scan, guard errors mean no opinion. (3) tests/facts.test.sh and its fixture text say LFS files 'stay pointers' in the HEAD export, which is wrong when git-lfs is configured (`git archive` then smudges and the export is not offline); reword the note and the assertion to say what happens in each case, without making the suite depend on git-lfs. Changelog fragment changelog.d/test-flakes-guard-paths.md (### Fixed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/lib/plan_paths.py",
+        "tests/plan-paths.test.sh",
+        "tests/portable-paths.test.sh",
+        "scripts/lib/gitguard.py",
+        "scripts/lib/rpgf_guard/language.py",
+        "tests/git-guard.test.sh",
+        "tests/facts.test.sh",
+        "changelog.d/test-flakes-guard-paths.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/plan-paths.test.sh",
+        "tests/portable-paths.test.sh",
+        "tests/git-guard.test.sh"
+      ],
+      "acceptance": [
+        "MACHINE_PATH flags file: URLs with a home or Users path and allows an inner segment named home",
+        "a relative git -C commit with non-English text gets the english-only advisory",
+        "the facts LFS note is true with and without git-lfs",
+        "the named suites pass"
+      ]
+    }
+  ]
+}

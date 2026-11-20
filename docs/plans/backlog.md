@@ -9,7 +9,8 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None.
+- **test-flakes** (`docs/plans/test-flakes.json`): load-sensitive test flakes, run-all and doctor lows, guard and path
+  lows.
 
 ## Open
 
