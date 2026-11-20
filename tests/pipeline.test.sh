@@ -17,7 +17,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate plan-edit subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
+CASES='validate plan-edit subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight nudge cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -94,7 +94,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain plan-edit status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
+UNITS='chain plan-edit status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs runall-preflight nudge cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -3125,7 +3125,9 @@ for phase in 'review --sha abc1234' 'qa --sha abc1234'; do
 done
 RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note=one '--note=two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
 RPG_FACTORY_SESSION_NOTE='env note' expect_spec "lead spec: dispatch forwards environment note" "<dispatch>.* --note=one '--note=env note'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one
-RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+printf 'rule nine\n' > "$TMP/nf-rule9.txt"
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule with only --note-file" '^9\. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note-file "$TMP/nf-rule9.txt"
 RPG_FACTORY_SESSION_NOTE= expect "dispatch: empty session note is rejected" 2 - dispatch "$TOOL" --task t --phase implement --runner orca --note ''
 # note_forward <name> <lead's RPG_FACTORY_SESSION_NOTE> <note>... -- <lead dispatch args...>: the lead spec's <dispatch>
 # definition, its <pipeline> and <plan> placeholders replaced from the same line, runs as an implement dispatch with an
@@ -3158,6 +3160,76 @@ note_forward() {
 }
 note_forward "lead -> implement: notes starting with - and --" '' -x --foo -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note=-x --note=--foo
 note_forward "lead -> implement: an environment note starting with -" -e -e -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
+# --note-file FILE (repeatable): the file's text reaches the spec verbatim under 'Session note file <abs path>:'; a missing
+# or blank file exits 2. The lead spec forwards it as --note-file=<abs path>.
+printf 'forward me\nsecond line\n' > "$TMP/nf-fwd.txt"
+printf ' \n\t\n\n' > "$TMP/nf-blank.txt"
+expect "dispatch: a missing --note-file exits 2 and names the option" 2 '--note-file' dispatch "$TOOL" --task t --phase implement --runner orca --note-file "$TMP/nf-missing.txt"
+expect "dispatch: a blank --note-file exits 2 and names the option" 2 '--note-file' dispatch "$TOOL" --task t --phase implement --runner orca --note-file "$TMP/nf-blank.txt"
+expect "dispatch: a missing --note-file on a lead dispatch exits 2" 2 '--note-file' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note-file "$TMP/nf-missing.txt"
+for phase in 'implement' 'verify --sha abc1234' 'lead --report-to run:x'; do
+  expect_spec "$phase spec: the note file header names the file" '^Session note file .*nf-fwd\.txt:$' dispatch "$TOOL" --task t --phase $phase --runner orca --note-file "$TMP/nf-fwd.txt"
+  expect_spec "$phase spec: the note file text follows its header" '^forward me$' dispatch "$TOOL" --task t --phase $phase --runner orca --note-file "$TMP/nf-fwd.txt"
+  refute_spec "$phase spec: no note file section without --note-file" 'Session note file' dispatch "$TOOL" --task t --phase $phase --runner orca
+done
+expect_spec "lead spec: dispatch forwards --note-file" '<dispatch>.*--note-file=.*nf-fwd\.txt' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note-file "$TMP/nf-fwd.txt"
+refute_spec "lead spec: no --note-file forwarded without one" '--note-file=' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
+note_forward "lead -> implement: a forwarded --note-file dispatch runs" '' one -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note-file "$TMP/nf-fwd.txt"
+# Launch notes never travel on the command line (cmd.exe misreads parentheses and quotes): every launch line carries
+# only the one-line pointer, whatever the notes contain; the spec holds them, the --note-file text unchanged.
+if python3 -B - "$P" "$TOOL" "$TMP" <<'PY'
+import os, pathlib, shlex, subprocess, sys
+p, plan, tmp = sys.argv[1:]
+env = {k: v for k, v in os.environ.items() if k != "RPG_FACTORY_SESSION_NOTE"}
+body = 'file ( ) " \' & | text\n  indented   line with  gaps (x)\n\nlast line\n'
+note = 'run ( ) " \' & | note\nwith  a second line'
+nfile = pathlib.Path(tmp) / "nf-tricky.txt"
+def dispatch(phase, notes, text):
+    nfile.write_bytes(text.encode("utf-8"))  # bytes: no newline translation on Windows
+    args = ["dispatch", plan, "--task", "t", "--phase", *phase, "--runner", "orca"]
+    for n in notes:
+        args += ["--note", n]
+    args += ["--note-file", str(nfile)]
+    r = subprocess.run([sys.executable, "-B", p, *args], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, (args, r.stderr)
+    return r.stdout
+def pointers(out):
+    found = []
+    for line in out.splitlines():
+        if "Read your task spec at" not in line:
+            continue
+        argv = shlex.split(line)
+        flag = "--prompt" if "--prompt" in argv else "--spec"
+        found.append(argv[argv.index(flag) + 1])
+    assert found, out
+    return found
+def spec_of(prompt):
+    prefix, suffix = "Read your task spec at ", " and follow it."
+    assert prompt.startswith(prefix) and prompt.endswith(suffix) and "\n" not in prompt, repr(prompt)
+    path = pathlib.Path(prompt[len(prefix):-len(suffix)])
+    assert path.is_absolute(), path
+    return path.read_text(encoding="utf-8")
+collapsed = " ".join(note.split())
+paths = []
+for phase in (["lead", "--report-to", "run:x"], ["implement"]):
+    out = dispatch(phase, [note], body)
+    assert "run (" not in out and "last line" not in out and "second line" not in out, out  # no note text on any line
+    for prompt in pointers(out):
+        spec = spec_of(prompt)
+        assert f"Session note: {collapsed}" in spec, spec
+        header = f"Session note file {os.path.abspath(nfile)}:\n"
+        assert header + body[:-1] in spec, spec  # verbatim: gaps, indentation and the blank line are kept
+        paths.append(prompt)
+# two dispatches that differ only in a note, or only in the note file's text, name two different spec files
+a = pointers(dispatch(["implement"], [note], body))
+b = pointers(dispatch(["implement"], [note + " more"], body))
+c = pointers(dispatch(["implement"], [note], body + "one more line\n"))
+assert len({a[-1], b[-1], c[-1]}) == 3, (a, b, c)
+assert "last line" in spec_of(a[-1]) and "one more line" not in spec_of(a[-1])  # the first spec is not overwritten
+assert "one more line" in spec_of(c[-1])
+PY
+then pass=$((pass + 1)); echo "PASS  launch notes stay off the command line; the spec holds --note and --note-file verbatim"
+else fail=$((fail + 1)); echo "FAIL  launch notes stay off the command line; the spec holds --note and --note-file verbatim"; fi
 if python3 -B - "$ROOT" "$TMP" <<'PY'
 import importlib.util, pathlib, shlex, sys, tempfile
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
@@ -3263,10 +3335,12 @@ value["tasks"] = [value["tasks"][0]]
 fresh.write_text(json.dumps(value), encoding="utf-8")
 check(["dispatch", str(fresh), "--task", "gw", "--phase", "lead"])  # no task branch/worktree yet
 check(["dispatch", str(fresh), "--task", "integration:server", "--phase", "qa", "--sha", "abc1234"])
-# the planner's one line also names the request, whitespace runs collapsed; the spec keeps it verbatim
+# the planner's one line is only the pointer (the request no longer rides on the command line); the spec keeps the
+# request verbatim as its own 'Request:' line and equals the print prompt (check() asserts that), with no notes section
 request = "add a thing\n  with a\tsecond requirement\n"
-spec = check(["planner", "--request", request], "_planner", " Request: add a thing with a second requirement")
-assert f"Request: {request}" in spec.read_text(encoding="utf-8")
+spec = check(["planner", "--request", request], "_planner")
+text = spec.read_text(encoding="utf-8")
+assert f"Request: {request}" in text and "Run lead notes:" not in text, text
 # A second prompt must never alter a spec an already-launched session has yet to read.
 assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full in saved.items())
 PY
@@ -4601,6 +4675,243 @@ refute "tier <plan> never reaches factory-context.sh" "factory-context: unknown 
 expect "tier <plan> with trailing flags is the same usage error" 2 "tier takes no positional argument" tier --json "$PL" --repo plugin --paths scripts/a.py
 
 case_end tier-plugin
+fi
+
+if has_case nudge; then
+case_start
+echo "-- nudge (a start prompt that stayed unsubmitted in its Orca terminal)"
+# a fake `orca` first on PATH: `status --json` is reachable unless FAKE_ORCA_REACHABLE=false, `terminal list` prints the
+# $FAKE_ORCA_TERMS file whatever worktree is asked for (the verb must filter by worktreePath itself), `terminal read`
+# prints $FAKE_ORCA_SCREENS/<handle>.json (exit 1 when there is none), `terminal send` succeeds unless FAKE_ORCA_SEND=fail;
+# every call is logged to $FAKE_ORCA_LOG with a carriage return argument shown as <CR>. On Windows the fake is a .cmd shim
+# (cmd.exe drops a bare CR argument, and the verb refuses to send through a batch shim), so the send assertions below
+# depend on $RPGF_WINDOWS.
+NB="$TMP/nudgebin"; mkdir -p "$NB" "$TMP/nd-screens"
+cat > "$NB/fake_orca.py" <<'PY'
+import json, os, sys
+a = sys.argv[1:]
+with open(os.environ["FAKE_ORCA_LOG"], "a", encoding="utf-8", newline="\n") as fh:
+    fh.write(" ".join(x.replace("\r", "<CR>") for x in a) + "\n")
+if a[:2] == ["status", "--json"]:
+    reachable = os.environ.get("FAKE_ORCA_REACHABLE", "true") == "true"
+    print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
+if a[:2] == ["terminal", "list"]:
+    print(open(os.environ["FAKE_ORCA_TERMS"], encoding="utf-8").read()); sys.exit(0)
+if a[:2] == ["terminal", "read"]:
+    path = os.path.join(os.environ["FAKE_ORCA_SCREENS"], a[a.index("--terminal") + 1] + ".json")
+    if not os.path.exists(path):
+        print("error: terminal not found", file=sys.stderr); sys.exit(1)
+    print(open(path, encoding="utf-8").read()); sys.exit(0)
+if a[:2] == ["terminal", "send"]:
+    if os.environ.get("FAKE_ORCA_SEND") == "fail":
+        print("error: send failed", file=sys.stderr); sys.exit(1)
+    print(json.dumps({"ok": True, "result": {"send": {"handle": a[a.index("--terminal") + 1], "accepted": True}}})); sys.exit(0)
+print("error: unexpected call", file=sys.stderr); sys.exit(1)
+PY
+NPY=$(python3 -c 'import sys; print(sys.executable)')
+if [ -n "$RPGF_WINDOWS" ]; then printf '@"%s" "%%~dp0fake_orca.py" %%*\r\n' "$NPY" > "$NB/orca.cmd"
+else printf '#!/bin/sh\nexec "%s" "$(dirname "$0")/fake_orca.py" "$@"\n' "$NPY" > "$NB/orca"; chmod +x "$NB/orca"; fi
+export FAKE_ORCA_LOG="$TMP/nudge-orca.log" FAKE_ORCA_TERMS="$TMP/nd-terms.json" FAKE_ORCA_SCREENS="$TMP/nd-screens"
+unset FAKE_ORCA_REACHABLE FAKE_ORCA_SEND
+npath="$(path_entry "$NB"):$PATH"
+noorca=""; IFS=: read -ra parts <<<"$PATH"
+for d in "${parts[@]}"; do [ -e "$d/orca" ] || [ -e "$d/orca.exe" ] || [ -e "$d/orca.cmd" ] || noorca="$noorca${noorca:+:}$d"; done
+# one plan, five tasks with a real task worktree each: gw (the main scenario), wr (wrapped pointers), cm, rp and vd (a
+# commit, a lead report or a verdict after the spec was written)
+for t in gw wr cm rp vd; do git -C "$S" worktree add -q "$TMP/nd-$t" -b "feat/core/nd-$t" develop 2>/dev/null; done
+nwt() { git -C "$1" rev-parse --show-toplevel; }
+WGW=$(nwt "$TMP/nd-gw"); WWR=$(nwt "$TMP/nd-wr"); WCM=$(nwt "$TMP/nd-cm"); WRP=$(nwt "$TMP/nd-rp"); WVD=$(nwt "$TMP/nd-vd")
+ND=$(plan nd "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"nd\",\"title\":\"Nudge\",\"topic\":\"feat/core/nd\",
+ \"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"}},\"tasks\":[
+ {\"id\":\"gw\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-gw/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"wr\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-wr/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"cm\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-cm/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"rp\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-rp/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"vd\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-vd/\"],\"acceptance\":[\"a\"]}]}")
+NREC="$RPG_FACTORY_STATE_DIR/pipeline/nd"; NSP="$NREC/specs"; mkdir -p "$NSP"
+T0=$(date +%s)
+# mkspec <name>: a spec file of this plan whose mtime is T0 (the moment the session was started)
+mkspec() { local f="$NSP/nd-$1-implement-0123456789abcdef.md"; printf 'spec %s\n' "$1" > "$f"; touch -d "@$T0" "$f"; echo "$f"; }
+SA=$(mkspec stuck); SW=$(mkspec wrap); SM=$(mkspec mid); SC=$(mkspec commit); SR=$(mkspec report); SV=$(mkspec verdict)
+printf 'not a spec of this plan\n' > "$TMP/nd-foreign.md"
+# screen <handle> <line>...: the visible screen (result.terminal.tail) of a terminal
+screen() { local h="$1" t; shift; t=$(jq -nc '$ARGS.positional' --args "$@")
+  jq -nc --arg h "$h" --argjson t "$t" '{ok:true,result:{terminal:{handle:$h,status:"running",tail:$t}}}' > "$TMP/nd-screens/$h.json"; }
+for h in term_stuck term_recent term_nolast term_other; do screen "$h" "Claude Code" "" "> Read your task spec at $SA and follow it."; done
+screen term_nopointer "Working on the task..." "> "
+screen term_foreign "> Read your task spec at $TMP/nd-foreign.md and follow it."
+# the real Orca wrap: the line breaks after "at", the path continues on an indented next line
+screen term_wrap "  Read your task spec at" "  $SW and follow it."
+# a path that itself wraps in the middle
+screen term_mid "Read your task spec at ${SM:0:$((${#SM} - 8))}" "${SM: -8} and follow it."
+screen term_commit "> Read your task spec at $SC and follow it."
+screen term_report "> Read your task spec at $SR and follow it."
+screen term_verdict "> Read your task spec at $SV and follow it."
+# trow <handle> <worktree> <seconds since the last output|->: one `terminal list` row (lastOutputAt in epoch ms)
+trow() { local ts=null; [ "$3" = - ] || ts=$(( ($(date +%s) - $3) * 1000 ))
+  jq -nc --arg h "$1" --arg w "$2" --argjson t "$ts" '{handle:$h,worktreePath:$w,title:$h,status:"running"} + (if $t == null then {} else {lastOutputAt:$t} end)'; }
+{ trow term_stuck "$WGW" 600; trow term_recent "$WGW" 5; trow term_nopointer "$WGW" 600; trow term_nolast "$WGW" -
+  trow term_noread "$WGW" 600; trow term_foreign "$WGW" 600; trow term_other "$TMP/elsewhere" 600
+  trow term_wrap "$WWR" 600; trow term_mid "$WWR" 600; trow term_commit "$WCM" 600; trow term_report "$WRP" 600
+  trow term_verdict "$WVD" 600; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.json"
+# nrun <args...>: the verb with the fake orca first on PATH (NPATH overrides it), its output and exit code in NOUT/NRC and a
+# fresh call log; each nrun runs the verb (no capture-once reuse: a --send changes what the next run sees)
+nrun() { : > "$FAKE_ORCA_LOG"; PATH="${NPATH:-$npath}" pp nudge "$@"; NOUT="$OUT"; NRC="$RC"; }
+# nok / nno <name> <ere>: NOUT has / lacks a line matching the pattern; nrc <name> <rc>; nchk <name> <command...>
+nok() { if has_ere "$NOUT" "$2"; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1 (pattern '$2')"; sed 's/^/      /' <<<"$NOUT" | head -30; fi; }
+nno() { if has_ere "$NOUT" "$2"; then fail=$((fail + 1)); echo "FAIL  $1 (found '$2')"; sed 's/^/      /' <<<"$NOUT" | head -30
+  else pass=$((pass + 1)); echo "PASS  $1"; fi; }
+nrc() { if [ "$NRC" = "$2" ]; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1 (rc=$NRC, want $2)"; sed 's/^/      /' <<<"$NOUT" | head -30; fi; }
+nchk() { local n="$1"; shift; if "$@"; then pass=$((pass + 1)); echo "PASS  $n"
+  else fail=$((fail + 1)); echo "FAIL  $n"; sed 's/^/      /' <<<"$NOUT" | head -20; sed 's/^/      log: /' "$FAKE_ORCA_LOG" | head -10; fi; }
+nsends() { [ "$(grep -c '^terminal send ' "$FAKE_ORCA_LOG")" = "$1" ]; }
+nsent_to() { grep -Eq "^terminal send --terminal $1 --text( <CR>)? --json$" "$FAKE_ORCA_LOG"; }
+nonly_reads() { [ -s "$FAKE_ORCA_LOG" ] && ! grep -qvE '^(status --json|terminal list --worktree path:[^ ]+ --limit 100 --json|terminal read --terminal [a-z_]+ --screen --json)$' "$FAKE_ORCA_LOG"; }
+nrec() { jq -e "$1" "$NREC/${2:-gw}__nudge.json" >/dev/null; }
+norecord() { [ ! -e "$NREC/${1:-gw}__nudge.json" ]; }
+nrecords() { [ "$(ls "$NREC" | grep -c '__nudge\.json$')" = "$1" ]; }
+SENDCMD="^  send: orca terminal send --terminal term_stuck --text [$]'[\\\\]r'$"
+
+# 1. without --send: one row per terminal, the exact send command, nothing sent and nothing written
+nrun "$ND" --task gw
+nrc "nudge without --send exits 0" 0
+nok "a terminal that still shows the start prompt, is idle and made no progress is STUCK" "^gw  term_stuck  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-stuck-implement-0123456789abcdef\.md\)$"
+nok "the exact send command is printed" "$SENDCMD"
+nok "recent output is ok and gets nothing" "^gw  term_recent  idle [0-9]+s  ok  recent output \([0-9]+s < 120s\)$"
+nok "a screen without the start-prompt pointer is ok" "^gw  term_nopointer  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "a pointer to a file outside this plan's specs is no pointer" "^gw  term_foreign  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "a row without lastOutputAt is ok (no opinion)" "^gw  term_nolast  idle \?s  ok  no lastOutputAt \(no opinion\)$"
+nok "an unreadable screen is ok (no opinion)" "^gw  term_noread  idle [0-9]+s  ok  screen unreadable \(no opinion\)$"
+nno "a terminal of another worktree is not listed" "term_other"
+nno "other tasks' terminals are not listed under --task gw" "term_(wrap|mid|commit|report|verdict)"
+nchk "without --send nothing is sent and only read-only orca calls run" nsends 0
+nchk "the calls are status, terminal list for the task worktree and terminal read" nonly_reads
+nchk "without --send nothing is written" norecord gw
+nrun "$ND" --task gw --idle 600000
+nok "--idle raises the threshold: output 600 s old is recent" "^gw  term_stuck  idle [0-9]+s  ok  recent output \([0-9]+s < 600000s\)$"
+nno "and nothing is STUCK" "STUCK"
+nrun "$ND" --task gw --idle 1
+nok "--idle 1: output 5 s old is STUCK" "^gw  term_recent  idle [0-9]+s  STUCK  start prompt not submitted"
+nrun "$ND" --task zz
+nrc "an unknown task is a usage error" 2
+nok "and is named" "unknown task zz"
+nrun "$ND" --task integration:srv
+nrc "an integration task is a usage error" 2
+nrun "$ND" --idle abc
+nrc "a non-numeric --idle is a usage error" 2
+
+# 2. --send: one carriage return per stuck terminal, recorded; a failed send is exit 1 and is not recorded
+if [ -z "$RPGF_WINDOWS" ]; then
+  FAKE_ORCA_SEND=fail nrun "$ND" --task gw --send
+  nrc "a failed send exits 1" 1
+  nok "and names the terminal" "^  send FAILED \(term_stuck\): "
+  nchk "the send was tried once" nsends 1
+  nchk "a failed send writes no record" norecord gw
+  nrun "$ND" --task gw --send
+  nrc "--send exits 0" 0
+  nok "--send says it sent the carriage return" "^  sent CR to term_stuck$"
+  nchk "exactly one send, to the stuck terminal" nsends 1
+  nchk "a terminal send --terminal <handle> --text line is logged" nsent_to term_stuck
+  nrec_ok() { nrec '.plan == "nd" and .task == "gw" and (.nudges | length) == 1 and .nudges[0].handle == "term_stuck"
+    and (.nudges[0].spec | endswith("nd-stuck-implement-0123456789abcdef.md")) and .nudges[0].still_stuck == false
+    and (.nudges[0].at | test("^[0-9]{4}-")) and (.nudges[0].checked_at | test("^[0-9]{4}-"))'; }
+  nchk "the nudge record holds handle, time and spec path" nrec_ok
+else
+  # cmd.exe drops a bare CR argument: the verb refuses to send through the .cmd shim, exits 1 and records nothing
+  nrun "$ND" --task gw --send
+  nrc "Windows: --send through a batch shim exits 1" 1
+  nok "Windows: the batch shim is named with the hand command" "^  send FAILED \(term_stuck\): orca resolves to a batch shim, which drops the CR argument: run the send command above by hand$"
+  nok "Windows: the send command is still printed" "$SENDCMD"
+  nchk "Windows: no terminal send is run" nsends 0
+  nchk "Windows: nothing is recorded" norecord gw
+  # the record `nudge --send` writes on Linux, written by hand (contract shape) so the later cases run here too
+  jq -n --arg s "$SA" '{plan:"nd",task:"gw",nudges:[{spec:$s,handle:"term_stuck",at:"2026-01-01T00:00:00Z",checked_at:"2026-01-01T00:00:00Z",still_stuck:false}]}' > "$NREC/gw__nudge.json"
+fi
+
+# 3. the same spec is never nudged again
+nrun "$ND" --task gw --send
+nrc "a second --send exits 0" 0
+nok "the same spec is reported as nudged, still stuck" "^gw  term_stuck  idle [0-9]+s  STUCK  nudged, still stuck: relaunch the session \(nudged at [0-9TZ:-]+\)$"
+nchk "a second --send sends nothing" nsends 0
+nno "and prints no send command" "^  send: orca terminal send"
+nno "and no sent line" "sent CR"
+nrec_still() { nrec '(.nudges | length) == 1 and .nudges[0].still_stuck == true and (.nudges[0].checked_at | test("^[0-9]{4}-"))'; }
+nchk "the record entry is marked still stuck, one entry per spec" nrec_still
+cp "$NREC/gw__nudge.json" "$TMP/nd-record.bak"
+nrun "$ND" --task gw
+nok "without --send the repeated spec is reported too" "STUCK  nudged, still stuck: relaunch the session"
+nchk "and sends nothing" nsends 0
+nchk "and leaves the record as it was" cmp -s "$NREC/gw__nudge.json" "$TMP/nd-record.bak"
+
+# 4. status shows a stuck? note until the task makes progress
+nstatus() { PATH="$npath" python3 -B "$P" status --json "$ND" > "$TMP/nd-status.json" 2>/dev/null; }
+nnote() { jq -e '.tasks[] | select(.id == "gw") | any(.notes[]; test("^stuck\\?: session term_stuck still shows its start prompt after a nudge at [0-9TZ:-]+: relaunch the session$"))' "$TMP/nd-status.json" >/dev/null; }
+nnonote() { jq -e '.tasks | length > 0' "$TMP/nd-status.json" >/dev/null && ! jq -e '.tasks[] | select(.id == "gw") | any(.notes[]; startswith("stuck?"))' "$TMP/nd-status.json" >/dev/null; }
+nstatus; NOUT=$(head -c 1500 "$TMP/nd-status.json")
+nchk "status shows the stuck? note after a nudge that did not help" nnote
+PATH="$npath" expect "status prints the note too" 0 "note: stuck\?: session term_stuck still shows its start prompt after a nudge at [0-9TZ:-]+: relaunch the session" status "$ND"
+printf '{garbage' > "$NREC/gw__nudge.json"
+PATH="$npath" refute "a garbled record is no opinion: no traceback" "Traceback" status "$ND"
+nstatus; NOUT=$(head -c 1500 "$TMP/nd-status.json")
+nchk "a garbled record shows no stuck? note and status still answers" nnonote
+cp "$TMP/nd-record.bak" "$NREC/gw__nudge.json"
+python3 -B "$P" report "$ND" --task gw --sha "$(git -C "$S" rev-parse develop)" --body "gw done" >/dev/null
+touch -d "@$(( $(date +%s) + 120 ))" "$NREC/gw__lead-report.json"
+nstatus; NOUT=$(head -c 1500 "$TMP/nd-status.json")
+nchk "progress after the nudge (a newer lead report) removes the stuck? note" nnonote
+
+# 5. task progress since the spec was written: ok, nothing sent, never nudged
+nrun "$ND" --task cm
+nok "cm: before any progress the terminal is STUCK" "^cm  term_commit  idle [0-9]+s  STUCK  start prompt not submitted"
+GIT_COMMITTER_DATE="$((T0 + 100)) +0000" gi "$TMP/nd-cm" commit -q --allow-empty -m "feat: cm"
+nrun "$ND" --task cm --send
+nrc "a commit after the spec was written: exit 0" 0
+nok "a commit after the spec was written is progress: ok" "^cm  term_commit  idle [0-9]+s  ok  progress since the spec was written: commit$"
+nchk "and nothing is sent" nsends 0
+nchk "and nothing is recorded" norecord cm
+nrun "$ND" --task rp
+nok "rp: before any progress the terminal is STUCK" "^rp  term_report  idle [0-9]+s  STUCK"
+printf '{}\n' > "$NREC/rp__lead-report.json"; touch -d "@$((T0 + 100))" "$NREC/rp__lead-report.json"
+nrun "$ND" --task rp --send
+nok "a lead report after the spec was written is progress: ok" "^rp  term_report  idle [0-9]+s  ok  progress since the spec was written: report$"
+nchk "a report: nothing is sent" nsends 0
+nrun "$ND" --task vd
+nok "vd: before any progress the terminal is STUCK" "^vd  term_verdict  idle [0-9]+s  STUCK"
+printf '{}\n' > "$NREC/vd__review.json"; touch -d "@$((T0 + 100))" "$NREC/vd__review.json"
+nrun "$ND" --task vd --send
+nok "a verdict after the spec was written is progress: ok" "^vd  term_verdict  idle [0-9]+s  ok  progress since the spec was written: verdict$"
+nchk "a verdict: nothing is sent" nsends 0
+nchk "only gw has a nudge record" nrecords 1
+
+# 6. a wrapped pointer is still recognised (the real Orca shape: a line ending in "at", the path indented on the next line)
+nrun "$ND" --task wr
+nok "a pointer wrapped after 'at' (indented continuation) is recognised" "^wr  term_wrap  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-wrap-implement-0123456789abcdef\.md\)$"
+nok "a path wrapped in the middle is recognised" "^wr  term_mid  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-mid-implement-0123456789abcdef\.md\)$"
+nchk "the wrapped screens send nothing without --send" nsends 0
+# dispatch writes the implementer and reviewer model records together with the spec: they are not task progress
+printf '{}\n' > "$NREC/wr__reviewer__0123456789ab.model.json"; printf '{}\n' > "$NREC/wr@sub__implementer.model.json"
+touch -d "@$((T0 + 100))" "$NREC/wr__reviewer__0123456789ab.model.json" "$NREC/wr@sub__implementer.model.json"
+nrun "$ND" --task wr
+nok "model records newer than the spec are no progress: the terminal is still STUCK" "^wr  term_wrap  idle [0-9]+s  STUCK  start prompt not submitted"
+nno "and no progress is reported for the model records" "progress since the spec was written"
+rm -f "$NREC/wr__reviewer__0123456789ab.model.json" "$NREC/wr@sub__implementer.model.json"
+
+# 7. no Orca: a note and exit 0, nothing sent or written
+NPATH="$noorca" nrun "$ND" --send
+nrc "orca missing: exit 0" 0
+nok "orca missing: a note" "^nudge: Orca is not available \(orca is not on PATH\): nothing to check$"
+nchk "orca missing: no new record" nrecords 1
+FAKE_ORCA_REACHABLE=false nrun "$ND" --send
+nrc "orca unreachable: exit 0" 0
+nok "orca unreachable: a note" "^nudge: Orca is not available \(the Orca runtime is not reachable\): nothing to check$"
+nchk "orca unreachable: only the status probe ran" test "$(tr -d '\r' < "$FAKE_ORCA_LOG")" = "status --json"
+nchk "orca unreachable: no new record" nrecords 1
+
+for t in gw wr cm rp vd; do git -C "$S" worktree remove --force "$TMP/nd-$t" 2>/dev/null; git -C "$S" branch -q -D "feat/core/nd-$t" 2>/dev/null; done
+unset FAKE_ORCA_LOG FAKE_ORCA_TERMS FAKE_ORCA_SCREENS
+case_end nudge
 fi
 
 if has_case status; then

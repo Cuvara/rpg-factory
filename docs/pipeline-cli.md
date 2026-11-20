@@ -71,6 +71,12 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   `<dispatch>` carries them on to its sessions. On win32, when `python3` resolves into WindowsApps or the Store alias
   `%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe` exists (also behind a `python3` shim first on PATH), the spec
   also explains how to use the dispatch interpreter or a `python3` shim instead of the Microsoft Store alias.
+- `--note-file FILE` is repeatable and adds the file's text to every spec kind verbatim, as its own
+  `Session note file <path>:` section. Nothing is collapsed, so parentheses, quotes, `&`, `|` and newlines survive.
+  Files are deduplicated by absolute path. A missing, unreadable or blank file exits 2 before anything is written or
+  printed. The lead spec forwards each one to the sessions it dispatches as `--note-file=<path>`. The Orca prompt is
+  only the spec pointer `Read your task spec at <path> and follow it.`, so notes never go on `--prompt` (a note with
+  quotes appended to `--prompt` once broke a lead launch with `unknown option '-FilePath'`).
 - `dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca` prints the task-lead
   handoff. A new task worktree: `git worktree add --no-track -b <branch> <path> <base>` (beside the checkout that has
   the plan `topic` checked out, else beside the repo checkout), the `orca worktree set` lineage line of delivery.md
@@ -204,6 +210,30 @@ factory-pipeline.py sync plan.json --task <id> [--send]
   `git merge <dependency branch>` (never a rebase), resolving conflicts only inside its owned paths.
 - Exit 0, 1 when a send failed, 2 usage (`--task integration:<repo>` included).
 
+## nudge
+
+```
+factory-pipeline.py nudge plan.json [--task <id>] [--idle SECONDS] [--send]
+```
+
+- Finds a start prompt that stayed unsubmitted in a task session's terminal (an Orca session whose prompt was typed
+  but never submitted idles for hours). Per task with a task worktree it lists that worktree's Orca terminals
+  (`orca terminal list`) and reads each screen (`orca terminal read`). Both are read-only.
+- A terminal is `STUCK` only when all three hold: its screen still shows the spec pointer of a spec file of this plan
+  (`Read your task spec at <path>`, a wrapped pointer is joined), its last output is older than `--idle` (default 120
+  seconds), and the task made no progress since the spec file was written. Progress is a new commit on the task
+  branch, a new lead report, or a new review or QA verdict file; model records do not count.
+- One row per terminal: task, handle, idle seconds, `ok` or `STUCK`, the reason, and for a `STUCK` one the exact send
+  command.
+- `--send` sends one carriage return per `STUCK` terminal (`orca terminal send --terminal <handle> --text ...`) and
+  records `<task>__nudge.json` (handle, time, spec path). Without `--send` nothing is written.
+- One send per spec: a spec that was already nudged prints `nudged, still stuck: relaunch the session` and is never
+  sent again.
+- An `orca` that resolves to a `.cmd` or `.bat` shim is not sent to (the CR argument is dropped) and counts as a
+  failed send; the row prints the command to run by hand.
+- Orca missing or unreachable prints a note and exits 0. Exit 1 when a send failed, 2 on usage (an `integration:`
+  task, a negative `--idle`, an unknown task).
+
 ## Fallback reviews
 
 - `verdict` stamps `SAME_MODEL (fallback: <model> unavailable)` only when that SHA's verify or review dispatch was a
@@ -287,7 +317,8 @@ The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca 
 `orca orchestration worker-start`, `orca orchestration check`, `orca orchestration reply`, `orca orchestration send`,
 `orca orchestration worker-show`, `orca orchestration worker-read`, `orca orchestration worker-list`,
 `orca orchestration worker-release`, `orca agent launch`, `orca worktree list`, `orca worktree create`,
-`orca worktree rm`. `scripts/orca-wait.sh` allows one waiter per Run through a lock file in the state dir.
+`orca worktree rm`, `orca terminal list`, `orca terminal read`, `orca terminal send` (the last three: `nudge`).
+`scripts/orca-wait.sh` allows one waiter per Run through a lock file in the state dir.
 
 ## agents
 
@@ -316,6 +347,8 @@ quota, idle terminal, a 401), then dispatch the role again.
   each leftover child ("child of <task>") with its merge state. A lineage-only child must have a branch belonging
   to the plan topic or start with `<topic>-` (also after an Orca prefix); foreign and detached worktrees are
   excluded. Named child branches still match the `<parent branch>--` rule.
+- `stuck?: session <handle> still shows its start prompt after a nudge at <time>: relaunch the session` on a task row:
+  the latest `nudge` record still shows the unsubmitted prompt and the task made no progress since (`nudge`).
 - Worker listing requests `--full` and retries without it when Orca reports that flag as unknown, keeping the concise
   form for later pages. Concise rows use `terminalState` for release and `state` for settledness; the Run line names
   missing fields and the checks they prevent. Other Orca failures remain NOT_AVAILABLE.
