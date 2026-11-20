@@ -80,7 +80,7 @@ jsonok "doctor --json: install, registry, workspace, repos, tools, hooks, dev_to
    and .registry.ok and .repos.server.present and (.repos.authoring.present | not) and .hooks.PreToolUse and (.dev_tools | type) == "array"' \
   "$(cd "$WS" && python3 -B "$CMD" doctor --json 2>/dev/null)"
 # -- doctor: machine-setup faults that make task QA report NOT_RUN (python3 Store stub, jq absent); host-independent
-FAKE_STUB='C:\Users\fake\AppData\Local\Microsoft\WindowsApps\python3.exe'
+FAKE_STUB='C:\Users\x\AppData\Local\Microsoft\WindowsApps\python3.exe'
 out=$(cd "$WS" && RPG_FACTORY_PYTHON3="$FAKE_STUB" python3 -B "$CMD" doctor 2>&1 | tr -d '\r')
 grep -q '^- setup fault python3-store-stub: .*Microsoft Store stub .*WindowsApps.*task QA reports NOT_RUN. Fix: .*`python3` PATH shim first on PATH.*app execution alias' <<<"$out" \
   && ok "doctor: names the python3 Store stub with the PATH shim fix hint" || no "doctor python3 stub: $(grep -i 'setup fault' <<<"$out" | head -c 300)"
