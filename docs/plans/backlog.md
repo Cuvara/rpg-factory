@@ -24,7 +24,7 @@ From plan test-flakes (`docs/plans/test-flakes/report.md`):
   `lib/workspace.py` and `lib/fstate.py`.
 - The netcode prune case in `tests/run-all-parallel.test.sh` is not mapped to `scripts/checks/netcode-headless.sh` in
   `tests/affected.py`.
-- `file://<host>/home/...` is not flagged by `MACHINE_PATH`; `cd x && git -C ../y` resolves against the hook cwd.
+- A `file:` URL with a host part before the home directory is not flagged by `MACHINE_PATH`; `cd x && git -C ../y` resolves against the hook cwd.
 - The test_lab idle-host CPU assertion branch has not run on this host (busy during QA).
 
 ### test-speed-followups

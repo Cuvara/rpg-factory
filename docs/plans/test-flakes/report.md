@@ -55,5 +55,5 @@ The run lead's plan file held a `file:` URL example with a Users path (a gate bl
   `lib/workspace.py` and `lib/fstate.py`.
 - The netcode prune case lives in `tests/run-all-parallel.test.sh`, which `tests/affected.py` does not map to
   `scripts/checks/netcode-headless.sh`.
-- `file://<host>/home/...` is not flagged; `cd x && git -C ../y` resolves against the hook cwd, not the cd target.
+- A `file:` URL with a host part before the home directory is not flagged; `cd x && git -C ../y` resolves against the hook cwd, not the cd target.
 - Cost: NOT_AVAILABLE.
