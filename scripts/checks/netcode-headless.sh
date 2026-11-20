@@ -159,13 +159,14 @@ prune_evidence() { # root current-dir-name
     [[ "$n" =~ ^[0-9]{8}T[0-9]{6}-[0-9]+$ ]] && names+=("$n")
   done
   [ "${#names[@]}" -gt 0 ] || return 0
-  # newest first by the timestamp in the name, then the pid suffix; the new directory counts as one kept
+  # newest first by the full timestamp in the name, then numerically by pid (pid 10 is newer than pid 9 of the same
+  # second); the new directory counts as one kept
   while IFS= read -r n; do
     [ "$n" = "$current" ] && continue
     if [ "$kept" -lt "$limit" ]; then kept=$((kept + 1)); continue; fi
     rm -rf "$root/$n" 2>/dev/null || true
     [ -e "$root/$n" ] || removed=$((removed + 1))
-  done < <(printf '%s\n' "${names[@]}" | LC_ALL=C sort -r 2>/dev/null)
+  done < <(printf '%s\n' "${names[@]}" | LC_ALL=C sort -t- -k1,1r -k2,2nr 2>/dev/null)
   [ "$removed" -eq 0 ] || echo "pruned $removed old netcode-headless evidence directories (keeping the newest $limit)"
   return 0
 }

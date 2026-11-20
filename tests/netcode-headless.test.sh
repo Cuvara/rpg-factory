@@ -46,6 +46,8 @@ chk "no server anywhere -> NOT-RUN(blocked)" "2 blocked" "$rc $(grep -o 'blocked
 
 # ---- the dotnet test status decides together with the TRX counters (a failed or timed-out run can
 # leave a zero-failure TRX behind). A fake `dotnet` first on PATH writes a TRX, then exits/sleeps.
+# Fake-run timeout: generous so a loaded host never trips it on the passing cases; it must stay below the fake sleep mode (20 s) so the timeout case still times out.
+FAKE_TIMEOUT=8
 FAKE="$TMP/fakebin"; mkdir -p "$FAKE"
 cat > "$FAKE/dotnet" <<'SH'
 #!/usr/bin/env bash
@@ -54,7 +56,7 @@ executed=3; [ "${FAKE_DOTNET_MODE:-ok}" = empty ] && executed=0
 failed=0; [ "${FAKE_DOTNET_MODE:-ok}" = counters ] && failed=1
 printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Completed"><Counters total="3" executed="%s" passed="%s" failed="%s" error="0" timeout="0" aborted="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$((executed - failed))" "$failed" > results/results.trx
 echo "fake dotnet log mode=${FAKE_DOTNET_MODE:-ok}"
-case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 10 ;; esac
+case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 20 ;; esac
 exit 0
 SH
 chmod +x "$FAKE/dotnet"
@@ -62,7 +64,7 @@ NC="$TMP/nc-nosgl"; mkdir -p "$NC/Runtime" "$NC/Tests" "$NC/Tests~/Headless"; : 
 echo '{"name":"com.cuvara.netcode"}' > "$NC/package.json"
 git -C "$NC" init -q; git -C "$NC" add package.json Runtime Tests 'Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj'
 git -C "$NC" -c user.email=t@t -c user.name=t commit -qm fixture
-run_fake() { FAKE_DOTNET_MODE="$1" NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" \
+run_fake() { FAKE_DOTNET_MODE="$1" NETCODE_HEADLESS_TIMEOUT="$FAKE_TIMEOUT" TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" \
   bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$NC" >"$TMP/out.txt" 2>&1; echo $?; }
 chk "dotnet test passes and the TRX has executed tests -> 0" 0 "$(run_fake ok)"
 chk "dotnet test exits 1 with a zero-failure TRX -> 1" 1 "$(run_fake fail)"
@@ -143,11 +145,11 @@ echo linked > "$LINKED/Runtime/candidate-marker"
 git -C "$LINKED" add Runtime/candidate-marker
 git -C "$LINKED" -c user.email=t@t -c user.name=t commit -qm candidate
 LINKED_SHA=$(git -C "$LINKED" rev-parse HEAD)
-linked_explicit() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$LINKED" >"$TMP/linked-explicit.log" 2>&1; }
+linked_explicit() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT="$FAKE_TIMEOUT" TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$LINKED" >"$TMP/linked-explicit.log" 2>&1; }
 chk "explicit linked Netcode candidate passes -> 0" 0 "$(linked_explicit; echo $?)"
 grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-explicit.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode source SHA"; }
 grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-explicit.log" && { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode used main fixture SHA"; } || pass=$((pass + 1))
-linked_env() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" RPG_FACTORY_REPO_KEY=netcode RPG_FACTORY_REPO_DIR="$LINKED" bash "$ROOT/scripts/checks/netcode-headless.sh" >"$TMP/linked-env.log" 2>&1; }
+linked_env() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT="$FAKE_TIMEOUT" TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" RPG_FACTORY_REPO_KEY=netcode RPG_FACTORY_REPO_DIR="$LINKED" bash "$ROOT/scripts/checks/netcode-headless.sh" >"$TMP/linked-env.log" 2>&1; }
 chk "environment linked Netcode candidate passes -> 0" 0 "$(linked_env; echo $?)"
 grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-env.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  environment linked Netcode source SHA"; }
 grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-env.log" && { fail=$((fail + 1)); echo "FAIL  environment linked Netcode used main fixture SHA"; } || pass=$((pass + 1))

@@ -8,6 +8,7 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+PLUGIN_SRC="$ROOT"   # ROOT is re-pointed at fixtures below
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 good() { pass=$((pass + 1)); echo "PASS  $1"; }
@@ -680,18 +681,28 @@ out=$(RPG_FACTORY_TEST_SLOTS=bad cache_plan --affected --no-reuse 2>&1); rc=$?
   && good 'invalid slot cap exits 2 before checks' || no 'invalid slot cap' "$out"
 mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"
 printf 'old arguments\n' > "$SL/1/args"; printf '/old/result.json\n' > "$SL/1/record"
-out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
-[ "$rc" = 0 ] && grep -q 'taking over stale test slot 1 (99999999)' <<<"$out" && [ ! -d "$SL/1" ] \
-  && good 'dead targeted slot is reclaimed under guard and released' || no 'stale test slot' "$out"
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait 2>"$TMP/slot-takeover.err"); rc=$?
+[ "$rc" = 0 ] && ! grep -q 'taking over stale test slot' <<<"$out" && grep -q 'taking over stale test slot 1 (99999999)' "$TMP/slot-takeover.err" && [ ! -d "$SL/1" ] \
+  && good 'dead targeted slot is reclaimed under guard and released; the takeover message is on stderr, not stdout' || no 'stale test slot' "$out $(cat "$TMP/slot-takeover.err")"
 mkdir -p "$SL/1/reclaim"; printf '99999999\n' > "$SL/1/pid"; printf '99999998\n' > "$SL/1/reclaim/pid"
 out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
 [ "$rc" = 0 ] && grep -q 'removing stale reclaim guard of test slot 1' <<<"$out" && [ ! -d "$SL/1" ] \
   && good 'dead reclaim guard cannot wedge targeted slots' || no 'stale slot reclaim guard' "$out"
 mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"; printf '4242\n' > "$SL/1/winpid"
-out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait 2>&1); rc=$?
 [ "$rc" = 3 ] && ! grep -q 'taking over stale test slot' <<<"$out" && [ -d "$SL/1" ] \
   && good 'live Windows PID prevents targeted slot takeover across runtimes' || no 'live slot winpid' "$out"
 rm -rf "$SL/1"
+# netcode-headless.sh prune_evidence orders same-second evidence directories by numeric pid: pid 10 is newer than pid 9.
+# Only the function is run (extracted from the check), against a temp evidence root.
+EV="$TMP/evidence-prune"; mkdir -p "$EV"
+for n in 20260101T000000-9 20260101T000000-10 20260101T000000-100 20260101T000001-1 20251231T235959-99999; do mkdir -p "$EV/$n"; done
+sed -n '/^prune_evidence() {/,/^}/p' "$PLUGIN_SRC/scripts/checks/netcode-headless.sh" > "$TMP/prune-evidence.sh"
+out=$(RPG_FACTORY_NETCODE_EVIDENCE_KEEP=3 bash -c '. "$1"; prune_evidence "$2" 20260101T000001-1' _ "$TMP/prune-evidence.sh" "$EV" 2>&1); rc=$?
+left=$(ls "$EV" | LC_ALL=C sort | tr '\n' ' ')
+[ "$rc" = 0 ] && [ "$left" = '20260101T000000-10 20260101T000000-100 20260101T000001-1 ' ] \
+  && grep -q 'pruned 2 old' <<<"$out" \
+  && good 'netcode evidence prune keeps the newest by full timestamp, then numeric pid (pid 100 and 10 over 9)' || no "evidence prune order (rc=$rc left='$left')" "$out"
 out=$(BREAK_SUITE=1 cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
 [ "$rc" = 1 ] && [ -z "$(ls -A "$SL")" ] && good 'targeted slot released after a failing suite' || no 'slot release on failure' "$out"
 # Signals must release the acquired slot too. Start bash directly to capture the sourced-runner process PID.

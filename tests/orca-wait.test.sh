@@ -4,8 +4,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP=$(mktemp_win) || exit 1
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" FAKE_DIR="$TMP"
-waiter=
+waiter= toucher=
 cleanup() {
+  if [ -n "$toucher" ]; then kill "$toucher" 2>/dev/null || :; wait "$toucher" 2>/dev/null || :; fi
   if [ -n "$waiter" ]; then kill "$waiter" 2>/dev/null || :; wait "$waiter" 2>/dev/null || :; fi
   rm -rf "$TMP"
 }
@@ -249,16 +250,24 @@ FAKE_MODE=script bash "$ROOT/scripts/orca-wait.sh" --run mixed --timeout-ms 25 -
 status=$?
 [ "$status" -eq 0 ] && grep -q mix-7 "$TMP/hb.out" && ! grep -q -- '--ack' "$TMP/argv" && ok "mixed batch with deliveryId left unacknowledged" || no "mixed batch acked"
 
-# A shell started as a background job (run-all starts suites that way) has SIGINT ignored at entry: bash can neither trap
-# nor reset it, so kill -INT does nothing. Probe that first; the case is skipped there and every wait below is bounded.
-sigint_alive=$(bash -c 'kill -INT $$; echo alive' 2>/dev/null)
+# A shell started as a background job (run-all starts suites that way) has SIGINT ignored at entry, and so does everything
+# it starts: bash can neither trap nor reset an ignored signal, so kill -INT does nothing. A perl launcher resets SIGINT
+# to its default and execs the command (exec keeps the pid, so kill -INT reaches the waiter). Probe plain bash first, then
+# through the launcher; the case is skipped only when neither restores SIGINT, and every wait below is bounded.
+sigint_probe() { "$@" bash -c 'kill -INT $$; echo alive' 2>/dev/null; }
+sigint_launch=()
+sigint_alive=$(sigint_probe)
+if [ "$sigint_alive" = alive ] && command -v perl >/dev/null 2>&1; then
+  sigint_launch=(perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die "exec failed: $!"')
+  sigint_alive=$(sigint_probe "${sigint_launch[@]}")
+fi
 if [ "$sigint_alive" = alive ]; then
-  echo "SKIP  INT exits 130 and releases the lock (SIGINT is ignored at entry: this suite runs as a background job)"
+  echo "SKIP  INT exits 130 and releases the lock (SIGINT is ignored at entry: this suite runs as a background job and no perl launcher could reset it)"
 else
   rm -f "$TMP/ready" "$TMP/release"
   export FAKE_MODE=hold
   set -m
-  bash "$ROOT/scripts/orca-wait.sh" --run interrupted > "$TMP/int.out" 2> "$TMP/int.err" &
+  ${sigint_launch[@]+"${sigint_launch[@]}"} bash "$ROOT/scripts/orca-wait.sh" --run interrupted > "$TMP/int.out" 2> "$TMP/int.err" &
   waiter=$!
   set +m
   for ((i=0; i<200; i++)); do [ ! -f "$TMP/ready" ] || break; sleep 0.05; done
@@ -346,10 +355,18 @@ young_guard="$TMP/state/orca-wait/guard-young.lock.acquire"
 mkdir "$live_guard" "$young_guard"
 echo "$live" > "$live_guard/owner"
 age_path "$live_guard"
+# The waiter ages a guard by mtime against the wall clock (60 s) and its retry loop forks per attempt, so a loaded host can
+# stretch the run past the bound. Keep the young guard young at every check: touch it to "now" every 0.5 s while the waiters
+# run, so the case never depends on how long they take. Reclaiming a young guard still fails it (age ignored or bound 0).
+python3 -B -c 'import os, sys, time
+while True:
+    os.utime(sys.argv[1], None)
+    time.sleep(0.5)' "$young_guard" & toucher=$!
 bash "$ROOT/scripts/orca-wait.sh" --run guard-live > "$TMP/guard-live.out" 2>&1 & first=$!
 bash "$ROOT/scripts/orca-wait.sh" --run guard-young > "$TMP/guard-young.out" 2>&1 & second=$!
 wait "$first"; live_status=$?
 wait "$second"; young_status=$?
+kill "$toucher" 2>/dev/null; wait "$toucher" 2>/dev/null; toucher=
 if [ "$live_status" -eq 3 ] && grep -q 'acquisition busy' "$TMP/guard-live.out" && grep -q "owner pid $live" "$TMP/guard-live.out" \
   && [ "$(cat "$live_guard/owner")" = "$live" ]; then
   ok "an old guard with a live owner is never reclaimed"

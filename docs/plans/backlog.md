@@ -13,6 +13,20 @@ None.
 
 ## Open
 
+### test-flakes-followups
+
+From plan test-flakes (`docs/plans/test-flakes/report.md`):
+
+- Task verify does not run the portable-paths enforce line (the tier command's inline checks lack it), so new test
+  fixtures with placeholder user paths are caught only after the merge. Add it to the task QA inline checks.
+- `doctor` text prints the older python3 hook-speed advice next to the new setup-fault line (near-duplicate).
+- `scripts/README.md` says `root_default` reads are allowed in `scripts/lib/`; the guard allows only
+  `lib/workspace.py` and `lib/fstate.py`.
+- The netcode prune case in `tests/run-all-parallel.test.sh` is not mapped to `scripts/checks/netcode-headless.sh` in
+  `tests/affected.py`.
+- A `file:` URL with a host part before the home directory is not flagged by `MACHINE_PATH`; `cd x && git -C ../y` resolves against the hook cwd.
+- The test_lab idle-host CPU assertion branch has not run on this host (busy during QA).
+
 ### test-speed-followups
 
 From plan test-speed (`docs/plans/test-speed/report.md`):
@@ -22,7 +36,6 @@ From plan test-speed (`docs/plans/test-speed/report.md`):
 - `tests/affected.py` reach is per file: most `scripts/assetgen/*` changes and any `scripts/factory-pipeline.py`
   change select every case group. A per-function or per-module reach for the case maps.
 - Re-QA in `--phase qa` unions the task check suites with the failed suites; use `--within` the failed suites.
-- `scripts/README.md` lists `tests/assetgen.test.sh` without `--case`.
 - Full `tests/assetgen.test.sh` wall times before and after were never measured (every full run was killed for low
   memory); measure once on a quiet machine.
 
@@ -98,22 +111,15 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 
 Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
 
-- LFS: the facts export says "LFS files stay pointers" (`tests/facts.test.sh:37,38,49`, the checks-lows changelog
-  fragment), which is wrong when git-lfs is configured (`git archive` smudges, the suite is then not offline). No
-  product repo has `filter=lfs` today.
 - The task-lead report and READY_FOR_PR are in `status` notes, not structured fields:
   `docs/schemas/pipeline-status.schema.json` forbids extra fields (add them).
 - `docs/pipeline-cli.md` lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6;
   `scripts/README.md` line 22 still says the waiter wakes on three message types and leaves messages unacked.
-- `tests/orca-wait.test.sh` INT case SKIPs under run-all (a background job ignores SIGINT at entry), so that suite
-  gets no reuse record; an orphaned waiter is detected between checks, so it can lag one wait.
 - `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
   the plan task's owned paths); `--list-suites` hides `tests/plan-paths.test.sh` until it is wired.
 - Lesson: a `status` message sent to a dispatch that has already finished creates an Orca follow-up worker (two
   appeared in this run). Send lead messages only to the run (`--to run:<id>`) of a live task lead, and put context in
   the start prompt.
-- Machine setup on Windows: `python3` in Git Bash is the Microsoft Store stub and `jq` was absent, which made task QA
-  report NOT_RUN or fail with `jq: command not found` until a PATH shim was used. Make `doctor` name both.
 - The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
   `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
 - `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
@@ -138,8 +144,6 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
 
 - `status --json` prints the `model_scope_widen` lines on stderr (`pipeline-status.schema.json` has no field for
   them).
-- The git guard's english-only check inspects only absolute path tokens: a relative `git -C ../clone` from an
-  unrelated directory gets no advisory.
 - A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
   session must stop its own run before it reports.
 
@@ -159,10 +163,6 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
 
 From plan run-lows (`docs/plans/run-lows/report.md`):
 
-- `tests/netcode-headless.test.sh` uses a 2 s fake-dotnet timeout that fails at random on a loaded Windows host;
-  raise it to about 8 s (below the fake sleep mode of 10 s).
-- The run-all slot takeover message goes to stdout, not stderr; the netcode evidence prune breaks pid ties
-  lexicographically.
 - `cleanup` still treats `<topic>-*` branches as the plan's own (status no longer does, `Lineage.owns`).
 - The no-duplicate ERROR assertion of the `model_scope_widen` case would not catch a re-appended "; "-joined
   multi-problem error.
@@ -171,24 +171,18 @@ From plan run-lows (`docs/plans/run-lows/report.md`):
 
 Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 
-- `MACHINE_PATH` (`scripts/lib/plan_paths.py`) does not flag a `file:` URL with a home or Users path (same as the
-  existing drive form); decide whether to reject `file:` URLs, and add an explicit allowed case for an inner path
-  segment named home.
-- A new script under `scripts/checks/` met two repo conventions only in CI (the UTF-8 stdio block of
-  `tests/compat.test.sh`, the workspace reader guard of `tests/workspace-default.test.sh`). Name both in
-  `scripts/README.md` next to the checks list, or give `scripts/checks/` a template.
 - An Orca Codex worker can start with an empty prompt and idle with no escalation (task citation-drift: about 4.5
   hours), and a Claude implementer ended its turn without sending `worker_done`. Same class as agent-runtime-quirks:
   the task lead should time out a dispatch that shows no turn start and re-dispatch it.
 - In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
   spelling worked (not reproduced).
-- The routing scenario "Redis servers:id -> wire-contract leads" (`tests/routing.test.sh`) should retry once
-  on a git timeout; the snapshot now reports a timeout as a timeout (plan run-lows).
-- testlab `test_lab.py` case `test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small` fails under load
-  (sampler CPU 1.56 % against a 1.0 % bound); it measures the live host. Make the bound load-tolerant or skip on a
-  busy machine.
 
 ## Covered
+
+- **test-flakes** (load-sensitive flakes of netcode-headless, routing, test_lab and orca-wait; the orca-wait INT
+  skip; slot message, netcode prune order, doctor setup faults, scripts README conventions; MACHINE_PATH file: URLs,
+  relative git -C english-only scope, the facts LFS note): shipped in plan test-flakes (`changelog.d/test-flakes-load.md`,
+  `changelog.d/test-flakes-runall-doctor.md`, `changelog.d/test-flakes-guard-paths.md`).
 
 - **test-speed** (owner request 2026-11-18; the checks-contain-suites item of workflow-slim-followups, the
   low-memory lesson of path-audit-followups): shipped in plan test-speed (`changelog.d/test-speed-runall.md`,
