@@ -58,7 +58,17 @@ assert() {
   # history() supplies only previously successful output; still run every assertion
   # (and golden recording) on a hit. Task scenarios never use the persistent cache.
   if [ -n "${history_cached_out:-}" ]; then out="$history_cached_out"
-  else out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1); fi
+  else
+    out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+    # A git timeout under host load is a flake of the host, not of the routing: when the predicate fails
+    # AND the snapshot reports exactly that repo error ("git timed out after <N> s", scripts/lib/context.py),
+    # run the snapshot once more and judge the second output. Any other failure is never retried.
+    if ! jq -e ".repos[0] | $pred" <<<"$out" >/dev/null 2>&1 \
+       && jq -e '.repos[0].error // "" | startswith("git timed out after")' <<<"$out" >/dev/null 2>&1; then
+      echo "RETRY $name (git timed out)"
+      out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+    fi
+  fi
   assert_out="$out"
   # ROUTING_GOLDEN_OUT=<file>: also record the routing contract of this scenario (tests/routing-golden.test.sh)
   if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
