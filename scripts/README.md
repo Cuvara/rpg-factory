@@ -34,6 +34,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `registry-ownership.py` - cross-domain ownership and handoff invariants. `tests/handoff-e2e.test.sh`
 - `portable-paths.py` - report tracked machine-specific paths; `--enforce` fails on findings. `tests/portable-paths.test.sh`
 - `english-only.py` - English-only content policy (`--enforce`). `tests/english-only.test.sh`, `tests/skills-lint.sh`
+- `workspace-readers.sh` - workspace reader guard: jq readers of the registry default workspace map the path on the same line, Python readers use the shared helper (`ROOT` argument, exit 1 on a violation). `tests/workspace-default.test.sh`; run-all runs it as a repo-wide guard line
 - `skill-citations.py` - skill `path:line` citations against the integration branches. `tests/skill-citations.test.sh`
 - `netcode-headless.sh` - Netcode headless tests without writing into the repo. `tests/netcode-headless.test.sh`
 - `wire-parity.sh` - wire-generated and protocol-version contract evidence. `tests/checks-candidate.test.sh`
