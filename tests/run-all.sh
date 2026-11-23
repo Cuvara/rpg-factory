@@ -35,9 +35,10 @@
 #                   run (they count as not affected, CI runs them) and one line before the checks names them:
 #                   'left to CI: N suites (a, b)' ('left to CI: no base ...' without a base: only L runs). The inline checks
 #                   (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest and wording greps, resolver and
-#                   fixture checks) keep the --affected rule. The repo-wide enforcement lines (English-only and Portable-paths,
-#                   scripts/checks/english-only.py and portable-paths.py: seconds each, reached by every change) run too
-#                   whenever the change reaches them, so a breach fails task QA; without a base they do not run (only L does).
+#                   fixture checks) keep the --affected rule. The repo-wide enforcement lines (English-only, Portable-paths and
+#                   Workspace readers, scripts/checks/english-only.py, portable-paths.py and workspace-readers.sh: seconds each,
+#                   reached by every change that touches what they scan) run too whenever the change reaches them, so a breach
+#                   fails task QA; without a base they do not run (only L does).
 #                   A targeted run (no full-run lock or record, takes a test slot).
 #                   Conflicts (exit 2) with --only-suites, --only-cases, --inline-only, --release, --workspace-only,
 #                   --list-suites; exit 2 without --affected.
@@ -593,9 +594,11 @@ if unknown:
 PY
 }
 # WITHIN_GUARDS: the repo-wide enforcement scripts a --within run also runs whenever the change reaches them. Each takes
-# seconds and has EXTRA ['*'] in tests/affected.py, so any change reaches them; a scoped task QA that skipped them let
-# placeholder user paths and non-English text through to the merged tree (plan test-flakes). Exactly these two, never a suite.
-WITHIN_GUARDS=",scripts/checks/english-only.py,scripts/checks/portable-paths.py,"
+# seconds and has EXTRA entries in tests/affected.py (['*'] for the first two; scripts/* and tests/* for the readers guard),
+# so a change that reaches what they scan selects them; a scoped task QA that skipped them let placeholder user paths and
+# non-English text through to the merged tree (plan test-flakes) and a README text break the workspace reader rules (plan
+# pipeline-speed). Exactly these three, never a suite.
+WITHIN_GUARDS=",scripts/checks/english-only.py,scripts/checks/portable-paths.py,scripts/checks/workspace-readers.sh,"
 suite_selected() { # <suite or gated script> [syntax]: a syntax line is an inline check, never limited by --within
   local target=$1
   $release && return 0
@@ -1364,6 +1367,7 @@ run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
 run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
 run "Portable-paths fixture cases" env -u TMPDIR tests/portable-paths.test.sh
 run "Portable-paths enforcement" python3 -B scripts/checks/portable-paths.py --enforce
+run "Workspace readers guard (jq readers map paths, Python readers use the helper)" bash scripts/checks/workspace-readers.sh .
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "hook cost (no git guard on Read, bytecode in the state dir, gitlinks cache, python3 alias)" env -u TMPDIR tests/hook-perf.test.sh

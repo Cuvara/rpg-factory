@@ -108,9 +108,9 @@ if [ "$got" = 'tests/affected.test.sh' ]; then
 else fail=$((fail + 1)); echo "FAIL  selector change selects only selector suite: got [$got]"; fi
 printf '%s\n' tests/affected.test.sh > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
-if [ "$got" = $'scripts/checks/english-only.py\nscripts/checks/portable-paths.py\ntests/affected.test.sh' ]; then
-  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English and portable-paths checks"
-else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English and portable-paths checks: got [$got]"; fi
+if [ "$got" = $'scripts/checks/english-only.py\nscripts/checks/portable-paths.py\nscripts/checks/workspace-readers.sh\ntests/affected.test.sh' ]; then
+  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English, portable-paths and workspace-readers checks"
+else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English, portable-paths and workspace-readers checks: got [$got]"; fi
 # the portable-paths enforce line is global: a docs-only change selects it, and a change to the check selects its suite
 printf '%s\n' docs/releasing.md > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
@@ -119,6 +119,11 @@ if grep -qx scripts/checks/portable-paths.py <<<"$got"; then
 else fail=$((fail + 1)); echo "FAIL  a docs-only change selects the portable-paths enforce line: got [$(tr '\n' ' ' <<<"$got")]"; fi
 sel 0 "a change to the portable-paths check selects its suite" tests/portable-paths.test.sh scripts/checks/portable-paths.py
 sel 1 "an unrelated script skips the portable-paths suite" tests/portable-paths.test.sh scripts/changelog.py
+# the workspace readers guard scans scripts/ and tests/ only (EXTRA scripts/*, tests/*): a change under either selects its
+# run line, a docs-only change does not
+sel 0 "a scripts/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh scripts/changelog.py
+sel 0 "a tests/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh tests/portable-paths.test.sh
+sel 1 "a docs-only change does not select the workspace readers guard" scripts/checks/workspace-readers.sh docs/x.md
 # the netcode evidence prune case (tests/run-all-parallel.test.sh) sources prune_evidence from the check script by a
 # computed path: the EXTRA mapping selects the suite, not an incidental literal mention
 sel 0 "a netcode-headless.sh change selects the run-all-parallel suite (prune case, EXTRA)" tests/run-all-parallel.test.sh scripts/checks/netcode-headless.sh
@@ -148,14 +153,14 @@ cands=("${suites[@]}" tests/delivery-generic.test.sh)
 printf '%s\n' scripts/factory-pipeline.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
 want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh tests/commands.test.sh \
-  tests/skills-lint.sh scripts/checks/english-only.py scripts/checks/portable-paths.py | sort)
+  tests/skills-lint.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(codex-plugin|compat|parallel-policy)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  factory-pipeline.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  factory-pipeline.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
 printf '%s\n' scripts/lib/pipeline_route.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
 want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py \
-  scripts/checks/portable-paths.py | sort)
+  scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi

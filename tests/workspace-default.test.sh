@@ -144,35 +144,27 @@ case "$violations" in *scripts/offender.sh*) ok 'literal guard detects an offend
 violations=$(workspace_literal_violations "$ROOT")
 [ -z "$violations" ] && ok 'workspace literal guard is clean' || no "workspace literal guard: $violations"
 
+# The reader guard is scripts/checks/workspace-readers.sh (run-all runs it as a repo-wide guard line):
 # jq readers must map on the same line; Python readers must use the shared helper.
-reader_violations() {
-  local root=$1 file line text
-  while IFS=: read -r file line text; do
-    case "$file" in tests/fixtures/*) [ "$file" = tests/fixtures/check-registry-p4.sh ] || continue ;; esac
-    case "$text" in *rpgf_platform_path*) continue ;; esac
-    printf '%s:%s:%s\n' "$file" "$line" "$text"
-  done < <(cd "$root" && grep -rInE 'jq.*\.workspace\.root_default' scripts tests 2>/dev/null || true)
-  while IFS=: read -r file line text; do
-    case "$file" in scripts/lib/workspace.py|scripts/lib/fstate.py) continue ;; esac
-    printf '%s:%s:%s\n' "$file" "$line" "$text"
-  done < <(cd "$root" && grep -rIn --include='*.py' 'root_default' scripts 2>/dev/null || true)
-  while IFS=: read -r file line text; do
-    case "$file" in scripts/lib/*) continue ;; esac
-    printf '%s:%s:%s\n' "$file" "$line" "$text"
-  done < <(cd "$root" && grep -rInE --include='*.py' 'default_workspace\(\)' scripts 2>/dev/null || true)
-}
+READERS="$ROOT/scripts/checks/workspace-readers.sh"
 # Negative self-test: a raw reader is reported, a converted one is not.
-mkdir -p "$T/rguard/scripts" "$T/rguard/tests"
+mkdir -p "$T/rguard/scripts" "$T/rguard/tests" "$T/rclean/scripts" "$T/rclean/tests"
 # The fixture text is assembled with %s so this source line does not itself match the reader guard regex.
 printf 'root=$(jq -r .workspace.%s registry.json)\n' 'root_default' > "$T/rguard/scripts/raw.sh"
 printf '%s\n' 'root=$(rpgf_platform_path "$(jq -r .workspace.root_default registry.json)")' > "$T/rguard/scripts/ok.sh"
 printf '%s\n' "root = registry['workspace']['root_default']" > "$T/rguard/scripts/raw.py"
-violations=$(reader_violations "$T/rguard")
+printf '%s\n' 'root=$(rpgf_platform_path "$(jq -r .workspace.root_default registry.json)")' > "$T/rclean/scripts/ok.sh"
+violations=$(bash "$READERS" "$T/rguard"); rc=$?
 case "$violations" in *scripts/raw.sh*) ok 'reader guard detects a raw jq reader' ;; *) no 'reader guard missed a raw jq reader' ;; esac
 case "$violations" in *scripts/ok.sh*) no 'reader guard flags a converted jq reader' ;; *) ok 'reader guard accepts a converted jq reader' ;; esac
 case "$violations" in *scripts/raw.py*) ok 'reader guard detects a raw Python reader' ;; *) no 'reader guard missed a raw Python reader' ;; esac
-violations=$(reader_violations "$ROOT")
-[ -z "$violations" ] && ok 'workspace reader guard is clean' || no "workspace reader guard: $violations"
+[ "$rc" -eq 1 ] && ok 'reader guard exits 1 on a violation' || no "reader guard exit code on a violation: $rc"
+violations=$(bash "$READERS" "$T/rclean"); rc=$?
+[ "$rc" -eq 0 ] && [ -z "$violations" ] && ok 'reader guard exits 0 on a clean tree' || no "reader guard on a clean tree: rc=$rc $violations"
+bash "$READERS" "$T/does-not-exist" >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && ok 'reader guard exits 2 on a missing root' || no "reader guard exit code on a missing root: $rc"
+violations=$(bash "$READERS" "$ROOT"); rc=$?
+[ "$rc" -eq 0 ] && [ -z "$violations" ] && ok 'workspace reader guard is clean' || no "workspace reader guard: rc=$rc $violations"
 
 # On Git Bash ROOT is in drive form, safe from MSYS path conversion.
 export RPGF_TEST_ROOT="$ROOT"
