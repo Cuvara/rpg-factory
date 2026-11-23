@@ -72,16 +72,18 @@
       "kind": "code",
       "grade": "light",
       "grade_reason": "one output cleanup in doctor with its case",
-      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md): `doctor` (scripts/factory-cmd.py) text prints the older python3 hook-speed advice line next to the new setup-fault line for the Git Bash python3 Store stub (near-duplicate). Print one line per fault: when the setup fault names the stub, drop or merge the older advice so the fix hint appears once; keep the `--json` fields stable (or say what changed). Case in tests/commands.test.sh with the fake stub. Changelog fragment changelog.d/qa-guards-doctor.md (### Fixed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md): `doctor` (scripts/factory-cmd.py) text prints the older python3 hook-speed advice line next to the new setup-fault line for the Git Bash python3 Store stub (near-duplicate). Print one line per fault: when the setup fault names the stub, drop or merge the older advice so the fix hint appears once; keep the `--json` fields stable (or say what changed). Case in tests/commands.test.sh with the fake stub. Changelog fragment changelog.d/qa-guards-doctor.md (### Fixed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. PR CI found tests/hook-perf.test.sh 'doctor text names the alias' (line ~121) still expecting the separate '- python3: ... Windows Store alias ... 70 ms slower' line: update that case to the single line doctor now prints, keeping the 70 ms cost in the text so the hook-speed fact is not lost.",
       "paths": [
         "scripts/factory-cmd.py",
         "tests/commands.test.sh",
-        "changelog.d/qa-guards-doctor.md"
+        "changelog.d/qa-guards-doctor.md",
+        "tests/hook-perf.test.sh"
       ],
       "exclusions": [],
       "deps": [],
       "checks": [
-        "tests/commands.test.sh"
+        "tests/commands.test.sh",
+        "tests/hook-perf.test.sh"
       ],
       "acceptance": [
         "doctor prints the python3 stub fault and its fix hint once",
