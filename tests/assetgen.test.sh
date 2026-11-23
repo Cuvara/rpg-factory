@@ -4279,6 +4279,60 @@ rm -f "$MH_CACHE"; out=$(mh_ag --desktop-dir "$dk" --no-extra-model-paths --kind
 [ "$rc" -eq 0 ] && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && [ -z "$(mh_row "$MH_CACHE" checkpoints default-only.safetensors)" ] \
   && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
   && ok 'model-hashes --no-extra-model-paths skips the Desktop instance file too' || no 'model-hashes desktop --no-extra-model-paths' "rc=$rc $out"
+
+# file order follows ComfyUI's main.py: <comfy root>/extra_model_paths.yaml first, then the files of its command line.
+# A non-default folder is searched after the models folder in declaration order, so the first file's folder wins a duplicate row.
+mo="$TMP/mh-ord"; moc="$mo/ComfyUI"
+mkdir -p "$moc/models/controlnet" "$mo/root_cn" "$mo/exp1_cn" "$mo/exp2_cn"
+printf 'ord root' > "$mo/root_cn/dup.safetensors"; printf 'ord exp1' > "$mo/exp1_cn/dup.safetensors"; printf 'ord exp2' > "$mo/exp2_cn/dup.safetensors"
+printf "root_models:\n    controlnet: '%s'\n" "$(mh_native "$mo/root_cn")" > "$moc/extra_model_paths.yaml"
+printf "exp1_models:\n    controlnet: '%s'\n" "$(mh_native "$mo/exp1_cn")" > "$mo/exp1.yaml"
+printf "exp2_models:\n    controlnet: '%s'\n" "$(mh_native "$mo/exp2_cn")" > "$mo/exp2.yaml"
+MH_CACHE="$TMP/mh-ord-cache.json"; rm -f "$MH_CACHE"
+out=$(mh_ag --comfy-dir "$moc" --extra-model-paths "$mo/exp1.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | map(.path | split("/") | last) | join(",")' <<<"$out")" = 'extra_model_paths.yaml,exp1.yaml' ] \
+  && [ "$(jq -r '.rows[] | select(.name == "dup.safetensors") | .sha256' <<<"$out")" = "$(mh_sha "$mo/root_cn/dup.safetensors")" ] \
+  && [ "$(jq -r '.warnings | map(select(test("dup.safetensors in .*/exp1_cn is shadowed by an earlier folder"))) | length' <<<"$out")" -eq 1 ] \
+  && ok 'model-hashes reads the auto-discovered <comfy root>/extra_model_paths.yaml before an explicit --extra-model-paths file (ComfyUI main.py order): the root file folder wins a duplicate row' || no 'model-hashes root file before explicit' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --comfy-dir "$moc" --no-extra-model-paths --extra-model-paths "$mo/exp2.yaml" --extra-model-paths "$mo/exp1.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | map(.path | split("/") | last) | join(",")' <<<"$out")" = 'exp2.yaml,exp1.yaml' ] \
+  && [ "$(jq -r '.rows[] | select(.name == "dup.safetensors") | .sha256' <<<"$out")" = "$(mh_sha "$mo/exp2_cn/dup.safetensors")" ] \
+  && ok 'model-hashes reads several explicit --extra-model-paths files in the order given (the first listed wins a duplicate row)' || no 'model-hashes explicit file order' "rc=$rc $out"
+# Comfy Desktop: its instance file is auto-discovered, so it is read before the explicit files; with both is_default the later
+# file is searched first (ComfyUI inserts at index 0), so the explicit file's copy of cn.safetensors wins over the Desktop one
+dke="$dk/exp_default"; mkdir -p "$dke"; printf 'dk explicit cn' > "$dke/cn.safetensors"
+printf "exp_defaults:\n    is_default: true\n    controlnet: '%s'\n" "$(mh_native "$dke")" > "$dk/exp-default.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --desktop-dir "$dk" --extra-model-paths "$dk/exp-default.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | map(.path | split("/") | last) | join(",")' <<<"$out")" = 'dk-1.yaml,exp-default.yaml' ] \
+  && [ "$(jq -r '.rows[] | select(.name == "cn.safetensors") | .sha256' <<<"$out")" = "$(mh_sha "$dke/cn.safetensors")" ] \
+  && ok 'model-hashes reads the Comfy Desktop instance file after the root file and before the explicit files' || no 'model-hashes desktop file before explicit' "rc=$rc $out"
+
+# is_default follows Python truthiness of the yaml value (ComfyUI: yaml.safe_load): a default folder is searched before the models
+# folder, so its copy of the row wins; a non-default one is searched after it, so the models folder copy wins
+md="$TMP/mh-def"; mdm="$md/ComfyUI/models"; mkdir -p "$mdm/controlnet"
+mh_true=("'false'" '"no"' "'0'" '"off"' 'yes' 'Yes' 'on' 'ON' 'true' 'True' 'TRUE' '1' '0.5' '0x1' '0o0' 'tRue' 'nope' 'y' '.nan' '|-')
+mh_false=('false' 'False' 'no' 'No' 'off' 'OFF' '0' '-0' '0.0' '00' '0x0' '0b0' 'null' 'Null' '~' "''" '""' '')
+mdn=$(mh_native "$md"); : > "$md/defaults.yaml"
+i=0
+for v in "${mh_true[@]}" "${mh_false[@]}"; do
+  mkdir -p "$md/x$i"; printf 'extra %s' "$i" > "$md/x$i/v$i.safetensors"; printf 'models %s' "$i" > "$mdm/controlnet/v$i.safetensors"
+  if [ "$v" = '|-' ]; then
+    printf "s%s:\n    controlnet: '%s/x%s'\n    is_default: |-\n        false\n" "$i" "$mdn" "$i" >> "$md/defaults.yaml"
+  else
+    printf "s%s:\n    controlnet: '%s/x%s'\n    is_default: %s\n" "$i" "$mdn" "$i" "$v" >> "$md/defaults.yaml"
+  fi
+  i=$((i + 1))
+done
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$mdm" --no-extra-model-paths --extra-model-paths "$md/defaults.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+bad=""; i=0
+for v in "${mh_true[@]}" "${mh_false[@]}"; do
+  got=$(jq -r --arg n "v$i.safetensors" '.rows[] | select(.name == $n) | .sha256' <<<"$out")
+  if [ "$i" -lt "${#mh_true[@]}" ]; then want=$(mh_sha "$md/x$i/v$i.safetensors"); else want=$(mh_sha "$mdm/controlnet/v$i.safetensors"); fi
+  [ "$got" = "$want" ] || bad="$bad [$v: $([ "$i" -lt "${#mh_true[@]}" ] && echo default-expected || echo models-expected)]"
+  i=$((i + 1))
+done
+[ "$rc" -eq 0 ] && [ -z "$bad" ] && [ "$(jq -r '.rows | length' <<<"$out")" -eq "$i" ] \
+  && ok 'model-hashes is_default is Python truthiness of the yaml value: a quoted '"'false'"' or "no", plain yes/on/true/1, a plain word and a block scalar are defaults; plain false/no/off/0/0.0/0x0/null/~ and an empty quoted string are not' || no 'model-hashes is_default values' "rc=$rc bad:$bad"
 MH_CACHE=
 
 # the reader: the local manifest of a run, read through the default cache path, records the written sha256 as verified
