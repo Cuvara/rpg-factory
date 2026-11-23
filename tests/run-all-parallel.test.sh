@@ -182,9 +182,11 @@ SUITE
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
-# stand-ins for the two repo-wide enforcement scripts a --within run also runs (WITHIN_GUARDS); PP_BREACH=1 plants a breach
+# stand-ins for the three repo-wide enforcement scripts a --within run also runs (WITHIN_GUARDS); PP_BREACH=1 plants a
+# portable-paths breach, RG_BREACH=1 a raw jq reader breach in the workspace readers guard
 printf '#!/usr/bin/env bash\nprintf "english\\n" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/english-only.py"
 printf '#!/usr/bin/env bash\nprintf "portable\\n" >> "$RUN_LOG"\n[ "${PP_BREACH:-0}" = 0 ] || { echo "planted portable-paths breach"; exit 1; }\n' > "$TMP/repo/scripts/checks/portable-paths.py"
+printf '#!/usr/bin/env bash\nprintf "readers\\n" >> "$RUN_LOG"\n[ "${RG_BREACH:-0}" = 0 ] || { echo "planted raw jq reader breach"; exit 1; }\n' > "$TMP/repo/scripts/checks/workspace-readers.sh"
 # partial: passes with a SKIP line (a tool missing), like orca-commands without orca
 printf '#!/usr/bin/env bash
 printf "partial\n" >> "$RUN_LOG"
@@ -229,9 +231,10 @@ run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
-if [ "${WITH_GUARDS:-0}" != 0 ]; then   # the two enforcement lines, like run-all.sh's
+if [ "${WITH_GUARDS:-0}" != 0 ]; then   # the three enforcement lines, like run-all.sh's
   run "English-only enforcement (report available)" bash scripts/checks/english-only.py --enforce
   run "Portable-paths enforcement" bash scripts/checks/portable-paths.py --enforce
+  run "Workspace readers guard (jq readers map paths, Python readers use the helper)" bash scripts/checks/workspace-readers.sh .
 fi
 # per-check durations: checks of known length, a failure and a runp skip (no tests/ path, so --list-suites never names them)
 dskip_post() { _skp "dskip" "why"; }
@@ -349,17 +352,17 @@ done
 # --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
 : > "$RUN_LOG"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
-[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
   && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites --release); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '
-' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
+' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
 out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
 miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
-    scripts/checks/netcode-headless.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
+    scripts/checks/netcode-headless.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
   grep -qx "$s" <<<"$real" || miss+=" $s"; done
 for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
 rel=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites --release)
@@ -1042,30 +1045,39 @@ for j in 1 3; do
     && good "--within=L runs a named gated script, leaves a selected live-lane suite to CI (-j $j)" || no "--within gated (-j $j): rc $rc log '$log'" "$out"
   # the repo-wide enforcement lines (WITHIN_GUARDS) also run under --within when the change reaches them, they are not
   # reported as left to CI, and a breach fails the run; unreached, or without a base, they do not run
-  guards=scripts/checks/english-only.py,scripts/checks/portable-paths.py
+  guards=scripts/checks/english-only.py,scripts/checks/portable-paths.py,scripts/checks/workspace-readers.sh
   reset_cache
   out=$(WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
   log=$(sort "$RUN_LOG" | tr '\n' ' ')
-  [ "$rc" = 0 ] && [ "$log" = 'a english portable ' ] && grep -qx 'left to CI: 0 suites' <<<"$out" && grep -qx 'counts 3 0 1' <<<"$out" \
+  [ "$rc" = 0 ] && [ "$log" = 'a english portable readers ' ] && grep -qx 'left to CI: 0 suites' <<<"$out" && grep -qx 'counts 4 0 1' <<<"$out" \
     && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -q '^PASS  Portable-paths enforcement' <<<"$out" \
-    && good "--within of an unrelated suite also runs both enforcement lines the change reaches, not listed as left to CI (-j $j)" \
+    && grep -q '^PASS  Workspace readers guard' <<<"$out" \
+    && good "--within of an unrelated suite also runs all three enforcement lines the change reaches, not listed as left to CI (-j $j)" \
     || no "--within guards run (-j $j): rc $rc log '$log'" "$out"
   reset_cache
   out=$(PP_BREACH=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
   log=$(sort "$RUN_LOG" | tr '\n' ' ')
-  [ "$rc" != 0 ] && [ "$log" = 'a english portable ' ] && grep -q '^FAIL  Portable-paths enforcement' <<<"$out" \
-    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -qx 'counts 2 1 1' <<<"$out" \
+  [ "$rc" != 0 ] && [ "$log" = 'a english portable readers ' ] && grep -q '^FAIL  Portable-paths enforcement' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -qx 'counts 3 1 1' <<<"$out" \
     && good "--within fails (FAIL line, rc != 0) on a planted portable-paths breach (-j $j)" \
     || no "--within guards breach (-j $j): rc $rc log '$log'" "$out"
   reset_cache
+  out=$(RG_BREACH=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" != 0 ] && [ "$log" = 'a english portable readers ' ] && grep -q '^FAIL  Workspace readers guard' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -q '^PASS  Portable-paths enforcement' <<<"$out" \
+    && grep -qx 'counts 3 1 1' <<<"$out" \
+    && good "--within fails (FAIL line, rc != 0) on a planted raw jq reader breach in the workspace readers guard (-j $j)" \
+    || no "--within readers breach (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
   out=$(WITH_GUARDS=1 SELECT=tests/b.sh cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
   log=$(sort "$RUN_LOG" | tr '\n' ' ')
-  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 3' <<<"$out" \
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 4' <<<"$out" \
     && good "--within: an enforcement line the change does not reach does not run (-j $j)" || no "--within guards unreached (-j $j): rc $rc log '$log'" "$out"
   reset_cache
   out=$(NO_BASE=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
   log=$(sort "$RUN_LOG" | tr '\n' ' ')
-  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 3' <<<"$out" \
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 4' <<<"$out" \
     && good "--within without a base runs no enforcement line, only the named suites (-j $j)" || no "--within guards no base (-j $j): rc $rc log '$log'" "$out"
 done
 within_misuse() { # message args...
