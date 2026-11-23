@@ -120,5 +120,9 @@ file's own static references (scope-aware). It falls back to the whole file (eve
 when unsure: a change outside one function or class (imports, constants, decorators, top-level code), an added,
 deleted or renamed function, a parse failure, a helper the import-time code or `main()` reaches, a changed helper no
 named entry reaches, or an unnamed changed helper in a module that looks names up dynamically (`globals()`,
-`sys.modules`, ...). Map rules: every group that runs the file names it (`::*` or every entry it runs, prerequisites
+`sys.modules`, ...). A group whose plain glob matches the file without a `PATH::` override reaches the whole file, so
+every change to the file selects it, narrowed or not. A file that imports or runs the changed one (a caller the import
+closure reaches) gets no symbol reasoning: on a narrowed change it adds only the groups that list it and have no pattern
+for the changed file; on a whole-file fallback every reached file is matched file-level. Map rules: every group that
+runs the file names it (`::*` or every entry it runs, those it reaches through callers included, prerequisites
 excepted); when unsure, keep the plain pattern or `PATH::*`. The full rules are in the `tests/affected.py` docstring.

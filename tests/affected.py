@@ -36,9 +36,13 @@ Case maps (`# case-map: <group> <pattern>...` header lines of a suite) and symbo
     that can look its names up dynamically (globals(), locals(), vars(), eval, exec, __import__,
     importlib.import_module, sys.modules: a dict of callables or getattr dispatch must be named), or a NAME the file
     does not define. Groups that reach the whole file (PATH::* or a plain pattern) are always selected;
-  - file-level reach of a file is every group with any pattern for it (PATH::NAME included), none -> ALL; a file the
-    import closure reaches that is not itself changed is always matched file-level (no cross-module symbol
-    reasoning). select, select-many and hashes never use symbols.
+  - file-level reach of a file is every group with any pattern for it (PATH::NAME included), none -> ALL. A file the
+    import closure reaches that is not itself changed (an importer or caller of the changed file) gets no symbol
+    reasoning of its own: when the changed file falls back to file-level, every reached file is matched file-level;
+    when the changed file narrows to symbols, a reached file adds only the groups that match it file-level and have
+    no pattern at all for the changed file (a group that names the changed file, plain glob or PATH::, is decided by
+    the changed file's symbol reach, so it must name the entries it reaches through callers), and a reached file
+    left with no group adds nothing. select, select-many and hashes never use symbols.
 
 A suite runs when one of these holds (anything unsure runs):
   - a global input changed (GLOBAL: registry, hooks, manifests) - every suite runs;
@@ -1141,13 +1145,19 @@ def affected_cases(files, suite, mb=None):
             return "ALL"
         # a shared module reaches every file that imports it: each reached file the suite selects must be mapped
         # (the suite itself is reached through its own named scripts and says nothing about a case)
-        # (a reached file that is not the changed one itself is matched file-level: no cross-module symbol reasoning)
+        symbols = symbol_groups(path, mapping, mb) if mb and path.endswith(".py") else None
         for hit_path in sorted(p for p in reached if p != suite and selects(p, suite)):
-            matched = None
-            if mb and hit_path == path and path.endswith(".py"):
-                matched = symbol_groups(path, mapping, mb)
-            if matched is None:
+            if symbols is None:
                 matched = file_groups(hit_path, mapping)
+            elif hit_path == path:
+                matched = symbols
+            else:
+                # the changed file narrowed to symbols: a caller or importer of it (no cross-module symbol reasoning)
+                # adds only the groups that run the caller and have no pattern for the changed file; a group that
+                # names the changed file is decided by its symbol reach (it names the entries it reaches via callers)
+                matched = {g for g in file_groups(hit_path, mapping) if group_reach(path, mapping[g]) is None}
+                if not matched and symbols:
+                    continue
             if not matched:
                 return "ALL"
             selected.update(matched)

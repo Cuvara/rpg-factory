@@ -123,8 +123,13 @@
 # reference closure reaches the other groups that call it). main(), fail(), emit(), resolve_run() and module-level
 # code are shared by every verb and stay unnamed, so a change there selects every group that matches the file.
 # A group without a `::` line (list-show, style-report, gen-run-style, fixture-pngs, style-lock, selftests) runs only
-# main() or no assetgen.py code: it keeps the file pattern and is selected only by a file-level change. hygiene reads
-# the files and names `assetgen.py::*`. A new verb or a new helper reached by a group needs its names here.
+# main() or no assetgen.py code, but it keeps the plain glob scripts/assetgen/*.py, which matches assetgen.py: the
+# engine treats a plain match without a `::` override as the whole file, so these groups are selected by EVERY
+# assetgen.py change, symbol-narrowed ones included, not only by a file-level change. hygiene reads the files and
+# names `assetgen.py::*`. A file that imports or runs assetgen.py (agserver.py, loops.py, approval.py,
+# scripts/factory-cmd.py) adds, on a symbol-narrowed change, only the groups that list it and have no pattern for
+# assetgen.py; every group here lists assetgen.py, so callers add nothing and each group names the assetgen.py entries
+# it reaches through them. A new verb or a new helper reached by a group needs its names here.
 # case-map: list-show scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
 # case-map: resolve scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
 # case-map: render-golden scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/loops.py tests/fixtures/assetgen/ui2api.py

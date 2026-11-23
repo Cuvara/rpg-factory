@@ -531,6 +531,13 @@ if __name__ == "__main__":
 files = {
     "scripts/tool.py": TOOL, "scripts/dyn.py": DYN, "scripts/other.py": "def run():\n    return 1\n",
     "scripts/lib/helper_lib.py": "VALUE = 1\n",
+    # an importer of tool.py (a caller the import closure reaches); the caller suites name it, so it is no unsure leaf
+    "scripts/caller.py": "import tool\n\n\ndef go():\n    return tool.cmd_a(None)\n",
+    "tests/caller-all.test.sh": "# case-map: ga scripts/tool.py::cmd_a scripts/caller.py\n"
+                                "# case-map: gb scripts/tool.py::cmd_b scripts/caller.py\n"
+                                "python scripts/tool.py scripts/caller.py\n",
+    "tests/caller.test.sh": "# case-map: ga scripts/tool.py::cmd_a scripts/caller.py\n# case-map: gb scripts/tool.py::cmd_b\n"
+                            "# case-map: gc scripts/caller.py\npython scripts/tool.py scripts/caller.py\n",
     "tests/sym.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
                          "# case-map: gc scripts/tool.py::cmd_c\npython scripts/tool.py\n",
     "tests/star.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
@@ -619,6 +626,12 @@ check("symbol reach: a dynamic module still narrows a change to a named entry", 
 edit("scripts/lib/helper_lib.py", "VALUE = 2\n")
 check("symbol reach: an unchanged file reached through the import closure matches file-level (its :: patterns too)",
       cases("tests/sym.test.sh") == FILE_LEVEL)
+check("symbol reach: a caller of the changed file that every group naming the file lists does not widen the reach",
+      cases("tests/caller-all.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb")
+check("symbol reach: a group that lists only the caller (no pattern for the changed file) is still selected",
+      cases("tests/caller.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb,gc")
+check("symbol reach: a file-level change matches the caller file-level too (every group that runs it)",
+      cases("tests/caller.test.sh", TOOL.replace("LIMIT = 3", "LIMIT = 4")) == "ga,gb,gc")
 reset()
 check("symbol reach: a glob in a PATH:: pattern makes the map invalid (ALL)",
       m.case_map("tests/badglob.test.sh") is None and m.affected_cases(["scripts/tool.py"], "tests/badglob.test.sh") == "ALL")
