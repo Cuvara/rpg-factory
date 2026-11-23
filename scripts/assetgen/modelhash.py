@@ -36,8 +36,9 @@ the YAML subset ComfyUI and Comfy Desktop write (named sections; indented key: v
 quoted scalars; | |- |+ block scalars; # comments; no flow collections, nesting, anchors or tabs). Folders resolve as
 ComfyUI's load_extra_path_config does: base_path (expanduser, expandvars, relative to the file's directory), then per hashed
 kind each non-empty line of the value joined to base_path, or, without one, relative to the file's directory; base_path and
-is_default are not kinds. Per kind the folders are walked in order: the extra folders of is_default sections, the models
-folder as before, then the other extra folders; a folder named twice is walked once and a missing one is skipped. ComfyUI
+is_default are not kinds. Per kind the folders are walked in order: the extra folders of is_default sections in REVERSE
+declaration order (ComfyUI inserts each is_default folder at index 0, so the last declared wins), the models folder as
+before, then the other extra folders in declaration order; a folder named twice is walked once and a missing one is skipped. ComfyUI
 loads the first match, so a row name found in a later folder is skipped with a warning (annotators keep the base name rule
 across all folders). A malformed or unreadable file is a warning (the file is ignored, the exit code is not raised), never a
 crash. Reuse by size and mtime_ns, the cache schema and the row fields are unchanged.
@@ -368,9 +369,11 @@ def load_extra(paths, kinds, warnings):
 
 def kind_files(models_dir, kind, warnings, extra=()):
     """[(path, row name)] of one kind. annotators are named by base name (see the module docstring). extra is the
-    [(folder, is_default)] of the extra model path files for this kind: is_default folders come before the models folder,
-    the others after it, and a folder given twice is walked once."""
-    before = [f for f, d in extra if d]
+    [(folder, is_default)] of the extra model path files for this kind in declaration order: is_default folders come
+    before the models folder in REVERSE declaration order (ComfyUI's add_model_folder_path inserts each is_default folder
+    at index 0, so the last declared is searched first), the others after it in declaration order, and a folder given
+    twice is walked once."""
+    before = [f for f, d in extra if d][::-1]
     after = [f for f, d in extra if not d]
     if kind != "annotators":
         found, taken, walked = [], {}, set()

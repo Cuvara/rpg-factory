@@ -4170,7 +4170,7 @@ rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --
 [ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] \
   && ok 'model-hashes --no-extra-model-paths still reads an explicit --extra-model-paths file' || no 'model-hashes --no-extra with an explicit file' "rc=$rc $out"
 rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --extra-model-paths "$xyaml" --extra-model-paths "$xcomfy/../ComfyUI/extra_model_paths.yaml" 2>&1); rc=$?
-[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] && ! grep -q 'shadowed by an earlier folder' <<<"${out//shared.safetensors in*/}" \
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] && ! { grep -v 'shared.safetensors in' <<<"$out" | grep -q 'shadowed by an earlier folder'; } \
   && ok 'model-hashes reads a file given twice (explicit and auto-discovered, or repeated) once' || no 'model-hashes extra file dedupe' "rc=$rc $out"
 
 # an explicit file of its own (not next to the install): its folders are added
@@ -4252,6 +4252,29 @@ out=$(mh_ag --desktop-dir "$dk" --kind checkpoints 2>&1)
   && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" != "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
   && grep -q "assetgen: warning: checkpoints: same.safetensors in .*/inst/ComfyUI/models/checkpoints is shadowed by an earlier folder, skipped" <<<"$out" \
   && ok 'model-hashes is_default: the extra folder comes before the models folder (its row wins, the models-folder copy is the shadowed one)' || no 'model-hashes is_default order' "$out"
+# ComfyUI inserts every is_default folder at index 0, so the default folders are searched in REVERSE declaration order:
+# a |- block 'a/ then b/' searches b first, and a later default section comes before an earlier one
+dko="$dk/ord"; mkdir -p "$dko/a" "$dko/b" "$dko/c"
+printf 'ord from a' > "$dko/a/pair.safetensors"; printf 'ord from b' > "$dko/b/pair.safetensors"; printf 'ord from c' > "$dko/c/pair.safetensors"
+cat > "$dk/ord.yaml" <<EOF
+first_defaults:
+    base_path: '$(mh_native "$dko")'
+    is_default: true
+    controlnet: |-
+        a/
+        b/
+second_defaults:
+    base_path: '$(mh_native "$dko")'
+    is_default: true
+    controlnet: c/
+EOF
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$dkinst/ComfyUI/models" --no-extra-model-paths --extra-model-paths "$dk/ord.yaml" --kind controlnet 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(mh_row "$MH_CACHE" controlnet pair.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dko/c/pair.safetensors")" ] \
+  && grep -q "controlnet: pair.safetensors in .*/ord/b is shadowed by an earlier folder, skipped" <<<"$out" \
+  && grep -q "controlnet: pair.safetensors in .*/ord/a is shadowed by an earlier folder, skipped" <<<"$out" \
+  && [ "$(grep -n 'pair.safetensors in .*/ord/b ' <<<"$out" | cut -d: -f1)" -lt "$(grep -n 'pair.safetensors in .*/ord/a ' <<<"$out" | cut -d: -f1)" ] \
+  && ! { grep -v 'pair.safetensors in' <<<"$out" | grep -q 'shadowed by an earlier folder'; } \
+  && ok 'model-hashes is_default folders follow ComfyUI insert-at-front order: the last declared default folder wins, then b before a' || no 'model-hashes is_default reverse order' "rc=$rc $out"
 rm -f "$MH_CACHE"; out=$(mh_ag --desktop-dir "$dk" --no-extra-model-paths --kind checkpoints 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && [ -z "$(mh_row "$MH_CACHE" checkpoints default-only.safetensors)" ] \
   && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
