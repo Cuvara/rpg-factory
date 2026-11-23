@@ -84,6 +84,10 @@ FAKE_STUB='C:\Users\x\AppData\Local\Microsoft\WindowsApps\python3.exe'
 out=$(cd "$WS" && RPG_FACTORY_PYTHON3="$FAKE_STUB" python3 -B "$CMD" doctor 2>&1 | tr -d '\r')
 grep -q '^- setup fault python3-store-stub: .*Microsoft Store stub .*WindowsApps.*task QA reports NOT_RUN. Fix: .*`python3` PATH shim first on PATH.*app execution alias' <<<"$out" \
   && ok "doctor: names the python3 Store stub with the PATH shim fix hint" || no "doctor python3 stub: $(grep -i 'setup fault' <<<"$out" | head -c 300)"
+[ "$(grep -c 'WindowsApps' <<<"$out")" -eq 1 ] && ! grep -q '^- python3:' <<<"$out" && [ "$(grep '^- setup fault python3-store-stub:' <<<"$out" | grep -o 'PATH shim' | wc -l)" -eq 1 ] \
+  && grep -q '^- setup fault python3-store-stub: .*Fix: .*The stub also makes every hook call start about 70 ms slower' <<<"$out" \
+  && ok "doctor: the python3 Store stub fault and its fix hint print once (no second python3 advice line)" \
+  || no "doctor python3 stub printed twice: $(grep -iE 'WindowsApps|^- python3:|PATH shim' <<<"$out" | head -c 400)"
 out=$(cd "$WS" && RPG_FACTORY_PYTHON3="$FAKE_STUB" python3 -B "$CMD" doctor --json 2>/dev/null)
 jsonok "doctor --json: tools.setup_faults carries the python3 Store stub with detail and fix" \
   '.tools.setup_faults | any(.[]; .id == "python3-store-stub" and (.detail | test("NOT_RUN")) and (.fix | test("PATH shim")))' "$out"

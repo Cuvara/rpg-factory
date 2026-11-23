@@ -35,7 +35,10 @@
 #                   run (they count as not affected, CI runs them) and one line before the checks names them:
 #                   'left to CI: N suites (a, b)' ('left to CI: no base ...' without a base: only L runs). The inline checks
 #                   (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest and wording greps, resolver and
-#                   fixture checks) keep the --affected rule. A targeted run (no full-run lock or record, takes a test slot).
+#                   fixture checks) keep the --affected rule. The repo-wide enforcement lines (English-only and Portable-paths,
+#                   scripts/checks/english-only.py and portable-paths.py: seconds each, reached by every change) run too
+#                   whenever the change reaches them, so a breach fails task QA; without a base they do not run (only L does).
+#                   A targeted run (no full-run lock or record, takes a test slot).
 #                   Conflicts (exit 2) with --only-suites, --only-cases, --inline-only, --release, --workspace-only,
 #                   --list-suites; exit 2 without --affected.
 #   --inline-only   run only the inline checks (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest
@@ -589,13 +592,17 @@ if unknown:
     sys.exit(2)
 PY
 }
+# WITHIN_GUARDS: the repo-wide enforcement scripts a --within run also runs whenever the change reaches them. Each takes
+# seconds and has EXTRA ['*'] in tests/affected.py, so any change reaches them; a scoped task QA that skipped them let
+# placeholder user paths and non-English text through to the merged tree (plan test-flakes). Exactly these two, never a suite.
+WITHIN_GUARDS=",scripts/checks/english-only.py,scripts/checks/portable-paths.py,"
 suite_selected() { # <suite or gated script> [syntax]: a syntax line is an inline check, never limited by --within
   local target=$1
   $release && return 0
   case ",$only_suites," in *",$target,"*) return 0 ;; esac
-  if $within_given && [ "${2:-}" != syntax ]; then   # --within: exactly the named ones run; what the change selects besides is left to CI
+  if $within_given && [ "${2:-}" != syntax ]; then   # --within: exactly the named ones run, plus the WITHIN_GUARDS the change reaches
     case ",$within," in *",$target,"*) return 0 ;; esac
-    return 1
+    case "$WITHIN_GUARDS" in *",$target,"*) ;; *) return 1 ;; esac   # a guard falls through to the affected selection below
   fi
   $inline_only && return 1   # an empty changed list: nothing is affected, affected.py is never asked
   if [ -n "$AFF" ]; then
@@ -614,6 +621,7 @@ within_report() {
   while IFS= read -r s; do
     s=${s%$'\r'}; [ -n "$s" ] || continue
     case ",$within," in *",$s,"*) continue ;; esac
+    case "$WITHIN_GUARDS" in *",$s,"*) continue ;; esac   # the guards run under --within: not left to CI
     case "$AFF_PICKED" in *$'\n'"$s"$'\n'*) left+="${left:+, }$s"; n=$((n + 1)) ;; esac
   done <<<"$listed"
   echo "left to CI: $n suites${left:+ ($left)}"

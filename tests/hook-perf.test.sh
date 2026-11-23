@@ -118,7 +118,8 @@ alias_path='C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
 out=$(RPG_FACTORY_PYTHON3="$alias_path" python3 -B "$ROOT/scripts/factory-cmd.py" doctor --json 2>/dev/null)
 jq -e '.tools.python3.windows_store_alias == true and (.tools.python3.advice | test("70 ms"))' <<<"$out" >/dev/null && ok "doctor --json names the alias" || no "doctor alias" "$(jq -c .tools.python3 <<<"$out" 2>&1 | head -c 300)"
 out=$(RPG_FACTORY_PYTHON3="$alias_path" python3 -B "$ROOT/scripts/factory-cmd.py" doctor 2>/dev/null)
-grep -q '^- python3: .*Windows Store alias.*70 ms slower' <<<"$out" && ok "doctor text names the alias" || no "doctor text"
+grep -q '^- setup fault python3-store-stub: .*Microsoft Store stub.*70 ms slower' <<<"$out" && ! grep -q '^- python3:' <<<"$out" \
+  && ok "doctor text names the alias and its hook cost once, in the setup fault line" || no "doctor text" "$(grep -E '^- (python3|setup fault)' <<<"$out" | head -c 400)"
 out=$(RPG_FACTORY_PYTHON3="/usr/bin/python3" python3 -B "$ROOT/scripts/factory-cmd.py" doctor --json 2>/dev/null)
 jq -e '.tools.python3.windows_store_alias == false and .tools.python3.advice == null' <<<"$out" >/dev/null && ok "doctor: a real python3 is no alias" || no "doctor false alias"
 

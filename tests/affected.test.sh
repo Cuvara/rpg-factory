@@ -119,6 +119,17 @@ if grep -qx scripts/checks/portable-paths.py <<<"$got"; then
 else fail=$((fail + 1)); echo "FAIL  a docs-only change selects the portable-paths enforce line: got [$(tr '\n' ' ' <<<"$got")]"; fi
 sel 0 "a change to the portable-paths check selects its suite" tests/portable-paths.test.sh scripts/checks/portable-paths.py
 sel 1 "an unrelated script skips the portable-paths suite" tests/portable-paths.test.sh scripts/changelog.py
+# the netcode evidence prune case (tests/run-all-parallel.test.sh) sources prune_evidence from the check script by a
+# computed path: the EXTRA mapping selects the suite, not an incidental literal mention
+sel 0 "a netcode-headless.sh change selects the run-all-parallel suite (prune case, EXTRA)" tests/run-all-parallel.test.sh scripts/checks/netcode-headless.sh
+if python3 -B - "$A" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+sys.exit(0 if "scripts/checks/netcode-headless.sh" in m.EXTRA.get("tests/run-all-parallel.test.sh", []) else 1)
+PY
+then pass=$((pass + 1)); echo "PASS  EXTRA maps netcode-headless.sh to the run-all-parallel suite explicitly"
+else fail=$((fail + 1)); echo "FAIL  EXTRA maps netcode-headless.sh to the run-all-parallel suite explicitly"; fi
 printf '%s\n' tests/parallel-policy.test.sh > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
 if [[ "$got" == *tests/parallel-policy.test.sh* ]] && [[ "$got" != *tests/git-guard.test.sh* ]]; then

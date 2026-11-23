@@ -17,13 +17,11 @@ None.
 
 From plan test-flakes (`docs/plans/test-flakes/report.md`):
 
-- Task verify does not run the portable-paths enforce line (the tier command's inline checks lack it), so new test
-  fixtures with placeholder user paths are caught only after the merge. Add it to the task QA inline checks.
-- `doctor` text prints the older python3 hook-speed advice next to the new setup-fault line (near-duplicate).
-- `scripts/README.md` says `root_default` reads are allowed in `scripts/lib/`; the guard allows only
-  `lib/workspace.py` and `lib/fstate.py`.
-- The netcode prune case in `tests/run-all-parallel.test.sh` is not mapped to `scripts/checks/netcode-headless.sh` in
-  `tests/affected.py`.
+- The workspace reader guard is inline in `tests/workspace-default.test.sh` (no case map), so `--within` task QA
+  cannot run it alone (plan qa-guards). Move it into a script or a case-mapped case and add it to `WITHIN_GUARDS`.
+- The `factory-pipeline.py` dispatch spec still lists the English-only and portable-paths enforcement scripts as
+  left to CI, although `--within` now runs them (plan qa-guards; the file was owned by plan runtime-quirks).
+- `assetgen.py model-hashes` does not read `extra_model_paths.yaml` (extra model folders).
 - A `file:` URL with a host part before the home directory is not flagged by `MACHINE_PATH`; `cd x && git -C ../y` resolves against the hook cwd.
 - The test_lab idle-host CPU assertion branch has not run on this host (busy during QA).
 
@@ -54,8 +52,6 @@ blocking). Plan assetgen-followups covered the rest (see Covered); what remains:
 
 - The local SDXL, IPAdapter and ControlNet paths of plan assetgen-hybrid have never run on the target hardware:
   the owner runs `docs/plans/assetgen-hybrid/e2e-local.md` on the RTX 5060.
-- The model-hash cache writer is missing: no command in this repo writes `<state>/comfy/model-hashes.json`, so
-  the manifest records local model sha256 as unverified (the assetgen check warns) until one exists.
 
 ### agent-runtime-quirks
 
@@ -176,6 +172,10 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   spelling worked (not reproduced).
 
 ## Covered
+
+- **qa-guards** (the scoped-QA enforcement gap, the netcode prune mapping and the doctor near-duplicate of
+  test-flakes-followups; the model-hash cache writer of assetgen-run-followups): shipped in plan qa-guards
+  (`changelog.d/qa-guards-within.md`, `changelog.d/qa-guards-model-hashes.md`, `changelog.d/qa-guards-doctor.md`).
 
 - **external-path-uri**, the start-prompt item of **agent-runtime-quirks** and the environment note of
   **assetgen-run-followups**: shipped in plan runtime-quirks (task external-path-uri,
