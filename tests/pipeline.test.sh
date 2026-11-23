@@ -2315,12 +2315,54 @@ assert '--base ' + first + ' --within tests/routing.test.sh -j 1' in verify_agai
 assert '--only-suites' not in verify_again.split('QA tier command:')[1].split('\n')[1], verify_again
 assert 'tests/orca-wait.test.sh' in verify_again and 'tests/pipeline.test.sh' not in verify_again.split('QA tier command:')[1]
 out = dispatch('qa', second)
-assert ('--base ' + first + ' --within tests/pipeline.test.sh,tests/routing-properties.test.py,'
-        'tests/routing.test.sh -j 1') in out, out
+# a re-QA runs --within only the failed suites (plus the task check suites the fix delta reaches), never all the task
+# check suites: here the fix delta reaches no task suite, so only the failed run-all suite is named
+def tier_line(text):
+    return text.split('QA tier command:' + chr(10))[1].split(chr(10))[0]
+def within_of(text):
+    line = tier_line(text)
+    assert line.startswith('tests/run-all.sh --affected --base ') and line.endswith(' -j 1'), line
+    return line.split(' --within ')[1].removesuffix(' -j 1').split(',')
+assert ('--base ' + first + ' --within tests/routing.test.sh -j 1') in out, out
+assert within_of(out) == ['tests/routing.test.sh'], out
+assert 'tests/pipeline.test.sh' not in tier_line(out) and 'tests/routing-properties.test.py' not in tier_line(out), out
 # re-QA after --failed-suites: the failed suite is one of the --within suites, with its affected cases; nothing is
 # left to CI (the affected suite is among the named ones)
 assert 'tests/routing.test.sh --case selection' in out and 'tests/routing.test.sh ALL' not in out and 'not computed' not in out, out
 assert 'Left to CI' not in out, out
+# the fix delta also reaches a task check suite: the re-QA names the failed suite and that task suite, not the third one
+affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["fix.py"]\n'
+                    'print("tests/pipeline.test.sh\tdispatch")\nprint("tests/routing.test.sh\tselection")\n', encoding='utf-8')
+reached = dispatch('qa', second)
+assert sorted(within_of(reached)) == ['tests/pipeline.test.sh', 'tests/routing.test.sh'], reached
+assert 'tests/routing-properties.test.py' not in tier_line(reached), reached
+assert 'tests/pipeline.test.sh --case dispatch' in reached and 'tests/routing.test.sh --case selection' in reached, reached
+retried = dispatch('verify', second)
+assert sorted(within_of(retried)) == ['tests/pipeline.test.sh', 'tests/routing.test.sh'], retried
+# the selection is not computed (tests/affected.py fails): the safe side, the re-QA keeps every task check suite
+affected.write_text('import sys\nsys.exit(1)\n', encoding='utf-8')
+for phase in ('qa', 'verify'):
+    unknown = dispatch(phase, second)
+    assert 'not computed' in unknown, (phase, unknown)
+    assert {'tests/pipeline.test.sh', 'tests/routing.test.sh'} <= set(within_of(unknown)), (phase, unknown)
+# the guard scripts `run-all --within` runs (WITHIN_GUARDS in the checkout's run-all.sh) are never "left to CI"
+guard_runall = work / 'task' / 'tests' / 'run-all.sh'
+guard_src = guard_runall.read_text(encoding='utf-8')
+guard_runall.write_text(guard_src + 'WITHIN_GUARDS=",scripts/checks/english-only.py,scripts/checks/portable-paths.py,"\n',
+                        encoding='utf-8', newline='\n')
+affected.write_text('import sys\nassert sys.argv[1] == "cases"\n'
+                    'print("scripts/checks/english-only.py\tALL")\nprint("scripts/checks/portable-paths.py\tALL")\n'
+                    'print("tests/routing.test.sh\tselection")\n', encoding='utf-8')
+for phase in ('qa', 'verify'):
+    guarded = dispatch(phase, first)
+    assert 'english-only.py' not in guarded and 'portable-paths.py' not in guarded, (phase, guarded)
+    assert 'Left to CI (1 affected suites outside the task checks): tests/routing.test.sh' in guarded, (phase, guarded)
+    assert 'selected 2 of 3 suites (tests/affected.py; 1 affected suites left to CI)\n' in dispatch_p(phase, first).stderr
+# an older run-all without WITHIN_GUARDS runs only the named suites: nothing is excused, the guards stay left to CI
+guard_runall.write_text(guard_src, encoding='utf-8', newline='\n')
+unguarded = dispatch('qa', first)
+assert ('Left to CI (3 affected suites outside the task checks): scripts/checks/english-only.py, '
+        'scripts/checks/portable-paths.py, tests/routing.test.sh') in unguarded, unguarded
 affected.unlink()
 # a failed suite run-all does not run (exit 2 under --only-suites) is an extra command instead
 assert 'orca-wait' not in out.split('QA tier command:\n')[1].split('\n')[0], out
@@ -3616,11 +3658,29 @@ refute "plan widening: absent field prints no widening" '^[Mm]odel scope widen' 
 for bad in non-array null non-object unknown-key missing-key unknown-agent empty-efforts unknown-basis empty-reason whitespace-reason; do
   expect "plan widening: $bad fails validation" 1 '^ERROR model_scope_widen' validate "$TMP/widen-$bad.json"
 done
+# count_text <text> <needle>: how often the literal needle occurs in the text (no process)
+count_text() { local rest="${1//"$2"/}"; echo $(( (${#1} - ${#rest}) / ${#2} )); }
+# Each problem text occurs exactly once in the whole output: a whole-line duplicate check would miss a multi-problem
+# error re-appended as one '; '-joined ERROR line (the PolicyError of load_for_plan), which repeats every problem.
 for bad in null unknown-key missing-key non-object; do
+  case "$bad" in
+    null) problems=('model_scope_widen: must be an array') ;;
+    unknown-key) problems=('model_scope_widen[0]: unknown key extra') ;;
+    missing-key) problems=('model_scope_widen[0]: missing key model' 'model_scope_widen[0]: model must be a non-empty string') ;;
+    non-object) problems=('model_scope_widen[0]: must be an object') ;;
+  esac
   pp validate "$TMP/widen-$bad.json"
-  if [ "$(grep -c '^ERROR model_scope_widen' <<<"$OUT")" -ge 1 ] && [ -z "$(grep '^ERROR' <<<"$OUT" | sort | uniq -d)" ]; then pass=$((pass + 1)); echo "PASS  plan widening: $bad is reported once (no duplicate ERROR line)"
-  else fail=$((fail + 1)); echo "FAIL  plan widening: $bad is reported once (no duplicate ERROR line)"; sed 's/^/      /' <<<"$OUT" | head -10; fi
+  once=1; for problem in "${problems[@]}"; do [ "$(count_text "$OUT" "$problem")" = 1 ] || once=0; done
+  if [ "$once" = 1 ] && [ "$(grep -c '^ERROR' <<<"$OUT")" = "${#problems[@]}" ] && has_ere "$OUT" "^INVALID \(${#problems[@]} error\(s\)\)$" && [ -z "$(grep '^ERROR' <<<"$OUT" | sort | uniq -d)" ]; then pass=$((pass + 1)); echo "PASS  plan widening: $bad is reported once (each problem text occurs once, no duplicate ERROR line)"
+  else fail=$((fail + 1)); echo "FAIL  plan widening: $bad is reported once (each problem text occurs once, no duplicate ERROR line)"; sed 's/^/      /' <<<"$OUT" | head -10; fi
 done
+# the check itself: a re-appended '; '-joined multi-problem error repeats the texts and is caught (no duplicate whole line)
+joined="ERROR model_scope_widen[0]: missing key model
+ERROR model_scope_widen[0]: model must be a non-empty string
+ERROR model_scope_widen[0]: missing key model; model_scope_widen[0]: model must be a non-empty string"
+if [ -z "$(grep '^ERROR' <<<"$joined" | sort | uniq -d)" ] && [ "$(count_text "$joined" 'model_scope_widen[0]: missing key model')" = 2 ]; then
+  pass=$((pass + 1)); echo "PASS  plan widening: the problem-text count catches a re-appended joined error that a duplicate-line check misses"
+else fail=$((fail + 1)); echo "FAIL  plan widening: the problem-text count does not catch a re-appended joined error"; fi
 expect "plan widening: null is not an array" 1 '^ERROR model_scope_widen: must be an array' validate "$TMP/widen-null.json"
 expect "plan widening: already in scope is a note" 0 '^NOTE  model_scope_widen\[0\]: .*already in the model scope' validate "$TMP/widen-covered.json"
 for cmd in validate status; do
@@ -3953,11 +4013,39 @@ expect "every run reminds to release worker sessions" 1 "orca orchestration work
 echo dirty > "$TMP/srv-gw/wip.txt"
 expect "a worktree with uncommitted work is kept and named" 1 "KEPT  srv: worktree .* has uncommitted changes" cleanup "$G"
 rm "$TMP/srv-gw/wip.txt"; git -C "$S" worktree remove "$TMP/srv-gw"; git -C "$S" branch -q -d feat/core/demo-gw
-gi "$S" branch feat/core/demo-x develop; gi "$S" checkout -q feat/core/demo-x; echo z > "$S/z.txt"; gi "$S" add z.txt; gi "$S" commit -qm z; gi "$S" checkout -q feat/core/demo
-expect "an unintegrated task branch is kept, not deleted" 1 "KEPT  srv: branch feat/core/demo-x is not in feat/core/demo" cleanup "$G"
-refute "an unintegrated task branch gets no branch -d" "branch -d feat/core/demo-x" cleanup "$G"
-gi "$S" branch -q -D feat/core/demo-x
+# an owned branch: `<task branch>-...` is the plan's (Lineage.owns), unlike a `<topic>-x` branch of another plan
+gi "$S" branch feat/core/demo-gw-x develop; gi "$S" checkout -q feat/core/demo-gw-x; echo z > "$S/z.txt"; gi "$S" add z.txt; gi "$S" commit -qm z; gi "$S" checkout -q feat/core/demo
+expect "an unintegrated task branch is kept, not deleted" 1 "KEPT  srv: branch feat/core/demo-gw-x is not in feat/core/demo" cleanup "$G"
+refute "an unintegrated task branch gets no branch -d" "branch -d feat/core/demo-gw-x" cleanup "$G"
+gi "$S" branch -q -D feat/core/demo-gw-x
 expect "after removal: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+# a <topic>-* branch the plan does not own (Lineage.owns false: another plan whose topic extends this one) is not this
+# plan's leftover, as in status: neither its worktree nor its (merged) branch is listed or offered for removal
+git -C "$S" worktree add -q "$TMP/srv-v2" -b feat/core/demo-v2 "$SG" 2>/dev/null
+gi "$S" branch feat/core/demo-v3 "$SG"
+expect "cleanup: a <topic>-v2 worktree and a <topic>-v3 branch of another plan are not leftovers" 0 "^Cleanup: CLEAN" cleanup "$G"
+refute "cleanup: a branch the plan does not own is never named" "demo-v[23]" cleanup "$G"
+python3 -B "$P" status --json "$G" > "$TMP/status-foreign.json" 2>&1
+if jq -e '[.. | strings | select(test("demo-v[23]"))] | length == 0' "$TMP/status-foreign.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  status does not name a branch the plan does not own either (the same ownership)"
+else fail=$((fail + 1)); echo "FAIL  status names a branch the plan does not own"; head -c 1500 "$TMP/status-foreign.json"; fi
+git -C "$S" worktree remove "$TMP/srv-v2"; git -C "$S" branch -q -D feat/core/demo-v2 feat/core/demo-v3
+# the integration checkout's own Orca child (`<topic>--qa-<sha7>`, dispatch --task integration:<repo> --phase qa) is the
+# plan's: a merged one with no worktree is listed and deleted with -d, a prunable record of one is reported; a
+# `<topic>-v2` branch beside it stays unnamed (Lineage.owns: `<topic>--...` yes, `<topic>-...` no)
+gi "$S" branch feat/core/demo--qa-abc1234 "$SG"
+gi "$S" branch feat/core/demo-v2 "$SG"
+expect "cleanup: a merged <topic>--qa-<sha7> branch without a worktree is a leftover" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+expect "cleanup: that branch is deleted with git branch -d" 1 "branch -d feat/core/demo--qa-abc1234" cleanup "$G"
+refute "cleanup: <topic>-v2 stays unnamed beside the QA child" "demo-v2" cleanup "$G"
+gi "$S" branch -q -D feat/core/demo--qa-abc1234
+git -C "$S" worktree add -q "$TMP/srv-qa" -b feat/core/demo--qa-abc1234 "$SG" 2>/dev/null
+rm -rf "$TMP/srv-qa"
+expect "cleanup: a prunable <topic>--qa-<sha7> worktree record is reported" 1 "KEPT  srv: LEFTOVER worktree record .*srv-qa .*feat/core/demo--qa-abc1234.* is prunable" cleanup "$G"
+expect "cleanup: the prunable QA record gets git worktree prune" 1 "^  git -C .* worktree prune$" cleanup "$G"
+refute "cleanup: <topic>-v2 stays unnamed beside the prunable QA record" "demo-v2" cleanup "$G"
+git -C "$S" worktree prune; gi "$S" branch -q -D feat/core/demo--qa-abc1234 feat/core/demo-v2
+expect "cleanup: after the QA child and <topic>-v2 are removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 # a leftover Orca child of the task worktree (branch and directory <task branch>--<subtask>): status and cleanup name it
 git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/feat-core-demo-gw--s2" -b feat/core/demo-gw--s2 feat/core/demo-gw 2>/dev/null
@@ -4980,6 +5068,27 @@ st_note "stale review with a lead report at HEAD: READY_FOR_PR: no names the sta
 rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
+# one process computes `git worktree list` once per repo, never again for each verb helper. git's own trace2 event log
+# counts the calls without a wrapper on PATH (a fake `git` script is no executable for a Windows process): a start event
+# of `git -C <repo> worktree list ...` per call, counted per repo path
+rm -f "$TMP/git-trace2.log"
+GIT_TRACE2_EVENT="$TMP/git-trace2.log" python3 -B "$P" status "$ST" > "$TMP/status-trace.out" 2>&1
+if python3 - "$TMP/git-trace2.log" <<'PY'
+import collections, json, os, sys
+calls = collections.Counter()
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        continue
+    argv = ev.get("argv") if ev.get("event") == "start" else None
+    if argv and "-C" in argv and argv[argv.index("-C") + 2:argv.index("-C") + 4] == ["worktree", "list"]:
+        calls[os.path.normcase(os.path.normpath(argv[argv.index("-C") + 1]))] += 1
+assert calls, "status ran no `git worktree list`: the trace is empty"
+assert all(n == 1 for n in calls.values()), dict(calls)
+PY
+then pass=$((pass + 1)); echo "PASS  status runs git worktree list once per repo"
+else fail=$((fail + 1)); echo "FAIL  status runs git worktree list more than once per repo"; head -c 600 "$TMP/status-trace.out"; fi
 # a reviewed (PASS), not integrated: its one in-flight dependency makes b stackable on a's tip, recorded by SHA
 expect "a reviewed dependency: the later-wave task lead stacks on its tip" 0 "worktree add --no-track -b feat/core/st-b .* $SA" dispatch "$ST" --task b --phase lead --runner orca
 expect "the stacked dispatch names the dependency and its SHA" 0 "task b stacks on a@${SA:0:10}" dispatch "$ST" --task b --phase lead --runner orca
@@ -5520,11 +5629,11 @@ git -C "$M" remote add origin "$O"; git -C "$M" push -qu origin main
 git -C "$M" worktree add -q -b feat/merged "$MW" main
 echo merged > "$MW/change"; gi "$MW" add change; gi "$MW" commit -qm change
 git -C "$M" branch feat/merged-task feat/merged
-git -C "$M" branch feat/merged-other main
-git -C "$M" worktree add -q "$TMP/other-wt" feat/merged-other
+git -C "$M" branch feat/merged-task-other main
+git -C "$M" worktree add -q "$TMP/other-wt" feat/merged-task-other
 echo other > "$TMP/other-wt/other"; gi "$TMP/other-wt" add other; gi "$TMP/other-wt" commit -qm other
 git -C "$M" worktree remove "$TMP/other-wt"
-git -C "$M" push -q origin feat/merged feat/merged-task feat/merged-other
+git -C "$M" push -q origin feat/merged feat/merged-task feat/merged-task-other
 MP=$(plan merged "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$M\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 refute "unmerged integration worktree stays" "worktree remove .*merged-topic" cleanup "$MP"
 git -C "$M" merge -q --ff-only feat/merged; git -C "$M" push -q origin main
@@ -5535,8 +5644,8 @@ expect "merged integration branch is removable" 1 "branch -d feat/merged$" clean
 expect "merged task branch is removable" 1 "branch -d feat/merged-task$" cleanup "$MP" --after-merge
 expect "merged remote branch is removable" 1 "push origin --delete feat/merged-task$" cleanup "$MP" --after-merge
 expect "merged remote integration branch is removable" 1 "push origin --delete feat/merged$" cleanup "$MP" --after-merge
-expect "unmerged remote branch is kept" 1 "remote branch feat/merged-other is not in main" cleanup "$MP" --after-merge
-refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-other$" cleanup "$MP" --after-merge
+expect "unmerged remote branch is kept" 1 "remote branch feat/merged-task-other is not in main" cleanup "$MP" --after-merge
+refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-task-other$" cleanup "$MP" --after-merge
 refute "primary checkout is never removed" "worktree remove .*merged-repo$" cleanup "$MP" --after-merge
 MWP=$(plan merged-wt "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged-wt\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$MW\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 expect "integration checkout removal runs from primary checkout" 1 "git -C .*merged-repo worktree remove .*merged-topic" cleanup "$MWP" --after-merge
@@ -5550,8 +5659,8 @@ git -C "$M" push -q origin --delete feat/merged
 expect "merged remote task remains removable without topic refs" 1 "push origin --delete feat/merged-task$" cleanup "$MP" --after-merge
 MISSING=$(plan missing "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"missing\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$MW\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 expect "missing integration checkout is LEFTOVER and names the main checkout remedy" 1 "KEPT  srv: repo path .*merged-topic is missing - point repos.srv.path at the main checkout" cleanup "$MISSING" --after-merge
-git -C "$M" push -q origin --delete feat/merged-task feat/merged-other
-git -C "$M" branch -D feat/merged-other >/dev/null
+git -C "$M" push -q origin --delete feat/merged-task feat/merged-task-other
+git -C "$M" branch -D feat/merged-task-other >/dev/null
 expect "cleanup is clean after removal" 0 "^Cleanup: CLEAN" cleanup "$MP" --after-merge
 expect "clean cleanup names the next plan" 0 "^Next: start the next plan from main$" cleanup "$MP" --after-merge
 
