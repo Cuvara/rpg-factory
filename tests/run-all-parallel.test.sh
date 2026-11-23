@@ -349,17 +349,17 @@ done
 # --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
 : > "$RUN_LOG"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
-[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
   && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites --release); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '
-' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
+' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
 out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
 miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
-    scripts/checks/netcode-headless.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
+    scripts/checks/netcode-headless.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
   grep -qx "$s" <<<"$real" || miss+=" $s"; done
 for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
 rel=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites --release)
