@@ -76,7 +76,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print]
           [--orca-unavailable REASON] [--agent ID]
         the run lead starts ONE task-lead session per task, always a registry pipeline.lead_agent (Claude) session
-        whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task worktree: created here
+        whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task
+        worktree: created here
         from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
         exists, it carries the earlier waves; status still compares against the base; stacked: when exactly one
         dependency in the same repo is candidate or reviewed and not yet merged into <topic>, and every other one is
@@ -84,7 +85,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         fingerprint; a dependency whose branch tip is already on <topic> counts as settled, so a task whose
         dependencies are all merged starts from <topic> and gets no stack record); its review
         and QA base is then the newest dependency SHA in HEAD, and status names the merge when the dependency moves;
-        tier XS and a no-worktree repo never stack), or resumed when that branch is already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
+        tier XS and a no-worktree repo never stack), or resumed when that branch is already checked out; in a no-worktree
+        repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
         own Orca Run, split into subtasks with disjoint paths (`subplan validate`), one fresh session per subtask in the
         same worktree, sub-sessions do not commit, the task lead commits per subtask, cross-model review and QA sessions
         there, release each session, report a `status` message (to Orca run RUN_ID: worker_done needs a dispatch,
@@ -367,10 +369,6 @@ GIT_MEMO_VERBS = (("rev-parse",), ("worktree", "list"))
 GIT_READ_VERBS = {"rev-parse", "rev-list", "diff", "merge-base", "status", "show", "diff-tree", "for-each-ref",
                   "remote", "ls-tree", "ls-files", "log", "cat-file", "hash-object"}
 _GIT_MEMO = {}
-
-
-def git_memo_clear():
-    _GIT_MEMO.clear()
 
 
 def git(repo, *args):
@@ -2914,7 +2912,12 @@ def re_qa_task(task, suites, path, base, sha):
     all the task check suites. selection is affected_selection's result, handed on to affected_case_lines."""
     selection = affected_selection(path, base, sha, suites)
     checks = retry_checks(task, suites)
-    if isinstance(suites, set) and selection[0] is not None:
+    if isinstance(suites, set):
+        if selection[0] is None:
+            # the selection was not computed (affected.py missing or failing, git diff failing): the safe side keeps
+            # every task check suite
+            checks.extend(c for c in task.get("checks", []) if pr.mentions_runall(c) or pr.SUITE_CHECK.search(c))
+            return dict(task, checks=checks), selection
         reached = [s for s in pr.qa_checks([task], suites)[0] if s in selection[0]]
         if reached:
             checks.append("tests/run-all.sh --only-suites " + ",".join(reached))
@@ -4372,7 +4375,8 @@ BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being 
 
 
 def cleanup(plan, reg, orca_run=None, after_merge=False):
-    """Worktrees and task branches the run left (the plan's own: Lineage.owns, as in status; never every <topic>-*), with the commands that remove them, and settled
+    """Worktrees and task branches the run left (the plan's own: Lineage.owns, as in status; never every <topic>-*),
+    with the commands that remove them, and settled
     Orca workers of the task leads' Runs that are not released. `stacked`: the stacked siblings (stack_groups) with
     their merge order, information only (no effect on state, left, commands or kept). A stacked dependent's worktree
     is a sibling task worktree, never "child of <dependency>": is_child and Lineage skip the plan's own task branches."""
@@ -4622,12 +4626,14 @@ class Lineage:
 
     def owns(self, branch):
         """Whether `branch` belongs to this plan: the topic itself, a task branch or `<task branch>-...`, each with an
-        optional Orca prefix (`codex/<branch>`). `<topic>-...` alone is not enough: a plan whose topic extends this
-        one (`<topic>-v2`) or a helper of another plan in the same repo is not this plan's."""
+        optional Orca prefix (`codex/<branch>`), and an Orca child `<own>--...` of the topic too (the integration
+        QA child `<topic>--qa-<sha7>`). `<topic>-...` alone is not enough: a plan whose topic extends this one
+        (`<topic>-v2`) or a helper of another plan in the same repo is not this plan's."""
         for own in self._own | ({self.topic} if self.topic else set()):
             if branch == own or branch.endswith("/" + own):
                 return True
-            if own != self.topic and (branch.startswith(own + "-") or ("/" + own + "-") in branch):
+            sep = own + "--" if own == self.topic else own + "-"  # the topic's own `-` extensions are other plans'
+            if branch.startswith(sep) or ("/" + sep) in branch:
                 return True
         return False
 

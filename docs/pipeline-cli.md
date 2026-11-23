@@ -148,8 +148,11 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   `--base <that FAIL's candidate>`, `--within` only the failed suites plus the task check suites the fix delta reaches
   (tests/affected.py: the delta since the failed candidate touches the suite or a path it tests); the other task check
   suites are not rerun, because their PASS stands on the failed candidate. The task's other check commands stay extra
-  commands. The repo-wide guard scripts `--within` also runs (`WITHIN_GUARDS` in tests/run-all.sh:
-  `scripts/checks/english-only.py`, `scripts/checks/portable-paths.py`) are never listed as left to CI. Integration QA (`--task integration:<repo> --phase qa`): `tests/run-all.sh --workspace-only --base
+  commands. When the affected selection cannot be computed (tests/affected.py missing or failing, `git diff`
+  failing) the re-QA keeps every task check suite, the safe side, plus the failed suites. The repo-wide guard scripts
+  `--within` also runs (`WITHIN_GUARDS` in tests/run-all.sh: `scripts/checks/english-only.py`,
+  `scripts/checks/portable-paths.py`) are never listed as left to CI.
+  Integration QA (`--task integration:<repo> --phase qa`): `tests/run-all.sh --workspace-only --base
   <plan base>` (the plan's comparison base: `repos.<key>.base_sha`, else `base`), only the workspace checks the
   change reaches; without a known base `tests/run-all.sh --workspace-only`.
 - Pre-flight (advisory): `--phase verify|qa` prints on stderr `factory-pipeline: selected N of M suites
@@ -365,7 +368,8 @@ quota, idle terminal, a 401), then dispatch the role again.
   merge order <dep branch>, then <dependent branch> into <topic> (dependency first, git merge --no-ff); git branch -d
   a branch only after its merge`.
 - `cleanup plan.json` lists what is left: the plan's worktrees and task branches (the same ownership as `status`: the
-  topic, a task branch or `<task branch>-...`, each with an optional Orca prefix; a `<topic>-...` branch of another
+  topic or `<topic>--...` (the integration QA child), a task branch or `<task branch>-...`, each with an optional
+  Orca prefix; a `<topic>-...` branch of another
   plan or a longer topic is not the plan's), leftover children, and settled Orca
   workers not released in each task lead's Run (task `orca_run` or `--orca-run <id>`, read-only `worker-list`; no
   orca is NOT_AVAILABLE), with the commands to remove them (`orca orchestration worker-release` closes only that

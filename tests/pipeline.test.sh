@@ -2339,6 +2339,12 @@ assert 'tests/routing-properties.test.py' not in tier_line(reached), reached
 assert 'tests/pipeline.test.sh --case dispatch' in reached and 'tests/routing.test.sh --case selection' in reached, reached
 retried = dispatch('verify', second)
 assert sorted(within_of(retried)) == ['tests/pipeline.test.sh', 'tests/routing.test.sh'], retried
+# the selection is not computed (tests/affected.py fails): the safe side, the re-QA keeps every task check suite
+affected.write_text('import sys\nsys.exit(1)\n', encoding='utf-8')
+for phase in ('qa', 'verify'):
+    unknown = dispatch(phase, second)
+    assert 'not computed' in unknown, (phase, unknown)
+    assert {'tests/pipeline.test.sh', 'tests/routing.test.sh'} <= set(within_of(unknown)), (phase, unknown)
 # the guard scripts `run-all --within` runs (WITHIN_GUARDS in the checkout's run-all.sh) are never "left to CI"
 guard_runall = work / 'task' / 'tests' / 'run-all.sh'
 guard_src = guard_runall.read_text(encoding='utf-8')
@@ -4023,6 +4029,22 @@ if jq -e '[.. | strings | select(test("demo-v[23]"))] | length == 0' "$TMP/statu
 then pass=$((pass + 1)); echo "PASS  status does not name a branch the plan does not own either (the same ownership)"
 else fail=$((fail + 1)); echo "FAIL  status names a branch the plan does not own"; head -c 1500 "$TMP/status-foreign.json"; fi
 git -C "$S" worktree remove "$TMP/srv-v2"; git -C "$S" branch -q -D feat/core/demo-v2 feat/core/demo-v3
+# the integration checkout's own Orca child (`<topic>--qa-<sha7>`, dispatch --task integration:<repo> --phase qa) is the
+# plan's: a merged one with no worktree is listed and deleted with -d, a prunable record of one is reported; a
+# `<topic>-v2` branch beside it stays unnamed (Lineage.owns: `<topic>--...` yes, `<topic>-...` no)
+gi "$S" branch feat/core/demo--qa-abc1234 "$SG"
+gi "$S" branch feat/core/demo-v2 "$SG"
+expect "cleanup: a merged <topic>--qa-<sha7> branch without a worktree is a leftover" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+expect "cleanup: that branch is deleted with git branch -d" 1 "branch -d feat/core/demo--qa-abc1234" cleanup "$G"
+refute "cleanup: <topic>-v2 stays unnamed beside the QA child" "demo-v2" cleanup "$G"
+gi "$S" branch -q -D feat/core/demo--qa-abc1234
+git -C "$S" worktree add -q "$TMP/srv-qa" -b feat/core/demo--qa-abc1234 "$SG" 2>/dev/null
+rm -rf "$TMP/srv-qa"
+expect "cleanup: a prunable <topic>--qa-<sha7> worktree record is reported" 1 "KEPT  srv: LEFTOVER worktree record .*srv-qa .*feat/core/demo--qa-abc1234.* is prunable" cleanup "$G"
+expect "cleanup: the prunable QA record gets git worktree prune" 1 "^  git -C .* worktree prune$" cleanup "$G"
+refute "cleanup: <topic>-v2 stays unnamed beside the prunable QA record" "demo-v2" cleanup "$G"
+git -C "$S" worktree prune; gi "$S" branch -q -D feat/core/demo--qa-abc1234 feat/core/demo-v2
+expect "cleanup: after the QA child and <topic>-v2 are removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 # a leftover Orca child of the task worktree (branch and directory <task branch>--<subtask>): status and cleanup name it
 git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
 git -C "$S" worktree add -q "$TMP/feat-core-demo-gw--s2" -b feat/core/demo-gw--s2 feat/core/demo-gw 2>/dev/null
