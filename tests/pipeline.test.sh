@@ -5720,6 +5720,42 @@ echo real >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: real change"; gmqa
 expect "gate-merge: a real later change to an owned path makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GP" --no-run-checks
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: a new review clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# a clean merge of the default branch into an owned file the topic also changed (a different region) keeps the review
+# current; a merge that needs a hand resolution in that file makes it STALE
+seq 1 20 | sed 's/^/line /' > "$GM/own/t.txt"; gi "$GM" commit -qam "feat: multi-line t"
+gi "$TMP/gm-main" merge -q --no-edit feat/gm
+sed -i '2s/.*/topic two/' "$GM/own/t.txt"; gi "$GM" commit -qam "feat: topic changes line 2"
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+sed -i '18s/.*/main eighteen/' "$TMP/gm-main/own/t.txt"; gi "$TMP/gm-main" commit -qam "fix: main changes line 18"
+gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm (clean, same file)"; gmqa
+expect "gate-merge: a clean merge touching another region of an owned file keeps the review current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no STALE after the clean merge in an owned file" "STALE" gate "$GP" --no-run-checks
+sed -i '5s/.*/topic five/' "$GM/own/t.txt"; gi "$GM" commit -qam "feat: topic changes line 5"
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+sed -i '5s/.*/main five/' "$TMP/gm-main/own/t.txt"; gi "$TMP/gm-main" commit -qam "fix: main changes line 5"
+gi "$GM" merge -q --no-ff --no-edit main >/dev/null 2>&1 || true
+git -C "$GM" show HEAD:own/t.txt | sed '5s/.*/hand resolved five/' > "$GM/own/t.txt"
+gi "$GM" add own/t.txt; gi "$GM" commit -qm "Merge main into feat/gm (hand resolution in own/t.txt)"; gmqa
+expect "gate-merge: a merge that needs a hand resolution in an owned file makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+expect "gate-merge: a new review after the hand resolution clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# a hand resolution in an owned file with a non-ASCII name (git prints a C-quoted header) makes the review STALE too
+CAFE=$(printf 'own/caf\303\251.txt')
+seq 1 10 | sed 's/^/cafe /' > "$GM/$CAFE"; gi "$GM" add "$CAFE"; gi "$GM" commit -qm "feat: non-ASCII owned file"
+gi "$TMP/gm-main" merge -q --no-edit feat/gm
+sed -i '3s/.*/topic cafe three/' "$GM/$CAFE"; gi "$GM" commit -qam "feat: topic changes cafe line 3"
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+sed -i '3s/.*/main cafe three/' "$TMP/gm-main/$CAFE"; gi "$TMP/gm-main" commit -qam "fix: main changes cafe line 3"
+gi "$GM" merge -q --no-ff --no-edit main >/dev/null 2>&1 || true
+git -C "$GM" show "HEAD:$CAFE" | sed '3s/.*/hand resolved cafe three/' > "$GM/$CAFE"
+gi "$GM" add "$CAFE"; gi "$GM" commit -qm "Merge main into feat/gm (hand resolution in non-ASCII file)"; gmqa
+expect "gate-merge: a hand resolution in a non-ASCII owned file makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/caf" gate "$GP" --no-run-checks
+# the non-ASCII file is removed from both branches because the stray-path check does not decode git's quoted names
+gi "$GM" rm -q "$CAFE"; gi "$GM" commit -qm "test: remove the non-ASCII owned file"
+gi "$TMP/gm-main" rm -q "$CAFE"; gi "$TMP/gm-main" commit -qm "test: remove the non-ASCII owned file"
+gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm (non-ASCII file removed)"
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+expect "gate-merge: a new review after the non-ASCII hand resolution clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 # the run lead's plan file and report.md are never stray; any other unowned file still is
 mkdir -p "$GM/docs/plans/gm"
 python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]="../.."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/docs/plans/gm.json"
