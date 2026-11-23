@@ -1,0 +1,42 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "test-followups",
+  "title": "Pipeline: raw git path names, and a merge-word assertion that ignores the checkout path",
+  "topic": "feat/delivery/test-followups",
+  "goal": "Close issue #143. (1) The gate's stray-path check and other path comparisons in scripts/factory-pipeline.py read git's C-quoted form of a non-ASCII path (\"own/caf\\303\\251.txt\") and compare it with the plain owned path, so a non-ASCII owned file is reported as stray; plan clean-merge-gate kept quoted names in its merge-resolution helper only to match, and removed its non-ASCII test fixture. (2) The tests/pipeline.test.sh assertion 'review PASS with QA FAIL still proposes the merge' refutes the word merge in next, which prints the factory-pipeline.py path, so it fails in any checkout whose path contains merge.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "raw-path-names",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "In scripts/factory-pipeline.py the git() helper runs every git command with `-c core.quotePath=false`, so path names from diff --name-only, diff-tree, rev-list --objects, ls-files and status are raw UTF-8 everywhere and compare equal to plan paths. The merge-resolution helper in _uncovered_changes (resolutions(), added by plan clean-merge-gate) parses `diff --cc <name>` headers in that raw form; a name git still quotes (a tab, newline, double quote or backslash) is unquoted with the existing C-unquote logic or, if none exists, kept fail-safe as every owned path. No other behaviour changes. In tests/pipeline.test.sh: (a) the gate-merge case gets back a non-ASCII owned file (for example own/café.txt): a clean change to it is not stray and keeps READY_FOR_PR, a hand resolution in it makes the review STALE naming the file; (b) the 'review PASS with QA FAIL: no merge in next' jq check (about line 4994) tests for 'merge --no-ff' instead of the bare word merge, so a checkout path containing merge no longer fails it.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/test-followups.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "docs/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "gate-merge: a non-ASCII owned file changed by its task is not reported as a change outside every task's owned paths, and the gate is READY_FOR_PR",
+        "gate-merge: a hand merge resolution in that non-ASCII owned file makes the review STALE and the blocker names the file in plain UTF-8",
+        "the 'review PASS with QA FAIL' check passes when the checkout path contains the word merge, and still fails if next proposes merge --no-ff",
+        "every existing pipeline case passes"
+      ]
+    }
+  ]
+}

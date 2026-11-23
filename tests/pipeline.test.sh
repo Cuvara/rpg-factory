@@ -5098,7 +5098,7 @@ st_phase "review PASS: next merges the task branch into the integration worktree
 sv --task a --phase qa --sha "$SA" --by claude --state FAIL
 st_phase "review PASS with QA FAIL on the candidate: reviewed, next is the task lead, never the merge" a reviewed "--task a --phase lead --runner orca"
 pp status --json "$ST"
-if jq -e '(.tasks[] | select(.id == "a")) as $a | ($a.next | test("merge") | not) and any($a.notes[]; test("QA FAIL at .* no merge; fix it .* fresh verify"))' <<<"$OUT" >/dev/null
+if jq -e '(.tasks[] | select(.id == "a")) as $a | ($a.next | test("merge --no-ff") | not) and any($a.notes[]; test("QA FAIL at .* no merge; fix it .* fresh verify"))' <<<"$OUT" >/dev/null
 then pass=$((pass + 1)); echo "PASS  review PASS with QA FAIL: no merge in next, the QA failure is noted"
 else fail=$((fail + 1)); echo "FAIL  review PASS with QA FAIL still proposes the merge"; head -c 1500 <<<"$OUT"; fi
 rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__qa.json"
@@ -5749,13 +5749,50 @@ sed -i '3s/.*/main cafe three/' "$TMP/gm-main/$CAFE"; gi "$TMP/gm-main" commit -
 gi "$GM" merge -q --no-ff --no-edit main >/dev/null 2>&1 || true
 git -C "$GM" show "HEAD:$CAFE" | sed '3s/.*/hand resolved cafe three/' > "$GM/$CAFE"
 gi "$GM" add "$CAFE"; gi "$GM" commit -qm "Merge main into feat/gm (hand resolution in non-ASCII file)"; gmqa
-expect "gate-merge: a hand resolution in a non-ASCII owned file makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/caf" gate "$GP" --no-run-checks
-# the non-ASCII file is removed from both branches because the stray-path check does not decode git's quoted names
-gi "$GM" rm -q "$CAFE"; gi "$GM" commit -qm "test: remove the non-ASCII owned file"
-gi "$TMP/gm-main" rm -q "$CAFE"; gi "$TMP/gm-main" commit -qm "test: remove the non-ASCII owned file"
-gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm (non-ASCII file removed)"
-gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+expect "gate-merge: a hand resolution in a non-ASCII owned file makes the review STALE, naming the file in plain UTF-8" 1 "BLOCKER t: review is STALE - owned paths changed after .*$CAFE" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: a new review after the non-ASCII hand resolution clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# a clean change to the non-ASCII owned file by its task is not stray (git reports its name raw, not C-quoted)
+sed -i '8s/.*/topic cafe eight/' "$GM/$CAFE"; gi "$GM" commit -qam "feat: topic changes cafe line 8"
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+expect "gate-merge: a clean change to a non-ASCII owned file keeps READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: a non-ASCII owned file is not stray" "changes outside every task's owned paths" gate "$GP" --no-run-checks
+# a name git still C-quotes (a TAB) under a directory-owned path: a hand resolution in it makes the review STALE (fail safe).
+# Built with git plumbing only (the name cannot be checked out on Windows); the topic branch is never checked out.
+NQ="$TMP/nq-repo"; git init -q -b main "$NQ"
+nqtree() {
+  local blob inner
+  blob=$(git -C "$NQ" hash-object -w --stdin)
+  inner=$(printf '100644 blob %s\ta\tb.txt\0' "$blob" | git -C "$NQ" mktree -z)
+  printf '040000 tree %s\town\0' "$inner" | git -C "$NQ" mktree -z
+}
+nqline2() { seq 1 10 | sed "s/^/line /; 2s/.*/$1/"; }
+NQ0=$(gi "$NQ" commit-tree "$(nqline2 'line 2' | nqtree)" -m base)
+NQT=$(gi "$NQ" commit-tree "$(nqline2 'topic two' | nqtree)" -p "$NQ0" -m "feat: topic changes line 2")
+NQM=$(gi "$NQ" commit-tree "$(nqline2 'main two' | nqtree)" -p "$NQ0" -m "fix: main changes line 2")
+NQX=$(gi "$NQ" commit-tree "$(nqline2 'hand resolved two' | nqtree)" -p "$NQT" -p "$NQM" -m "Merge main into feat/nq (hand resolution)")
+git -C "$NQ" update-ref refs/heads/main "$NQM"; git -C "$NQ" update-ref refs/heads/feat/nq "$NQX"
+NP=$(plan nq "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"nq\",\"title\":\"Nq\",\"topic\":\"feat/nq\",\"deliver\":\"pr\",\"repos\":{\"r\":{\"path\":\"$NQ\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/\"],\"acceptance\":[\"a\"]}]}")
+python3 -B "$P" verdict "$NP" --task t --phase review --sha "$NQT" --by codex --state PASS >/dev/null || echo "verdict failed: nq review"
+python3 -B "$P" verdict "$NP" --task integration:r --phase qa --sha "$NQX" --by codex --state PASS >/dev/null || echo "verdict failed: nq qa"
+expect "gate-merge: a hand resolution in an owned file whose name git still quotes makes the review STALE, naming it" 1 'BLOCKER t: review is STALE - owned paths changed after .*own/a.*b\.txt' gate "$NP" --no-run-checks
+# a name ending in U+00A0 (raw, last line of git diff --name-only): git() must not strip it, or it no longer matches the diff --cc header
+NB="$TMP/nb-repo"; git init -q -b main "$NB"
+nbtree() {
+  local blob inner
+  blob=$(git -C "$NB" hash-object -w --stdin)
+  inner=$(printf '100644 blob %s\tz\302\240\0' "$blob" | git -C "$NB" mktree -z)
+  printf '040000 tree %s\town\0' "$inner" | git -C "$NB" mktree -z
+}
+NB0=$(gi "$NB" commit-tree "$(nqline2 'line 2' | nbtree)" -m base)
+NBT=$(gi "$NB" commit-tree "$(nqline2 'topic two' | nbtree)" -p "$NB0" -m "feat: topic changes line 2")
+NBM=$(gi "$NB" commit-tree "$(nqline2 'main two' | nbtree)" -p "$NB0" -m "fix: main changes line 2")
+NBX=$(gi "$NB" commit-tree "$(nqline2 'hand resolved two' | nbtree)" -p "$NBT" -p "$NBM" -m "Merge main into feat/nb (hand resolution)")
+git -C "$NB" update-ref refs/heads/main "$NBM"; git -C "$NB" update-ref refs/heads/feat/nb "$NBX"
+NBP=$(plan nb "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"nb\",\"title\":\"Nb\",\"topic\":\"feat/nb\",\"deliver\":\"pr\",\"repos\":{\"r\":{\"path\":\"$NB\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/\"],\"acceptance\":[\"a\"]}]}")
+python3 -B "$P" verdict "$NBP" --task t --phase review --sha "$NBT" --by codex --state PASS >/dev/null || echo "verdict failed: nb review"
+python3 -B "$P" verdict "$NBP" --task integration:r --phase qa --sha "$NBX" --by codex --state PASS >/dev/null || echo "verdict failed: nb qa"
+expect "gate-merge: a hand resolution in an owned file whose name ends in U+00A0 makes the review STALE, naming it" 1 'BLOCKER t: review is STALE - owned paths changed after .*own/z' gate "$NBP" --no-run-checks
 # the run lead's plan file and report.md are never stray; any other unowned file still is
 mkdir -p "$GM/docs/plans/gm"
 python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]="../.."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/docs/plans/gm.json"
