@@ -4082,6 +4082,180 @@ out=$(mh_ag --models-dir "$mhmodels" --comfy-dir "$mhroot" 2>&1); rc=$?
 out=$(mh_ag --models-dir "$mhmodels" --kind checkpoints --json 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ "$(jq -r '[.schema, .kinds.checkpoints.hashed, (.rows | length), (.path | endswith("mh-desk-cache.json"))] | join(" ")' <<<"$out")" = 'rpg-factory.assetgen-model-hashes/1 1 1 true' ] \
   && ok 'model-hashes --json prints the result object (path, models_dir, kinds, rows)' || no 'model-hashes --json' "rc=$rc $out"
+
+# extra model folders (ComfyUI's extra_model_paths.yaml): small fake yaml files and fake model files under $TMP, no real
+# models; absolute folders inside a yaml use the native path form python prints (mh_native), so this runs on Linux too.
+echo "-- model-hashes: extra_model_paths.yaml folders, Desktop instance-model-paths, is_default order, flags, malformed file"
+mh_native() { python3 -B -c 'import os, sys; print(os.path.abspath(sys.argv[1]).replace(os.sep, "/"))' "$1" | tr -d '\r'; }
+xr="$mh/x"; xcomfy="$xr/ComfyUI"; xmodels="$xcomfy/models"; xshared="$xr/shared"; xabs="$xr/abs_ckpts"; xyaml="$xcomfy/extra_model_paths.yaml"
+mkdir -p "$xmodels/checkpoints" "$xmodels/loras" "$xshared/ckpts" "$xshared/loras_a" "$xshared/up_a" "$xshared/up_b/sub" "$xshared/vae" "$xabs"
+printf 'x main ckpt' > "$xmodels/checkpoints/main.safetensors"
+printf 'x main copy' > "$xmodels/checkpoints/shared.safetensors"
+printf 'x main lora' > "$xmodels/loras/main-lora.safetensors"
+printf 'x extra a' > "$xshared/ckpts/extra-a.safetensors"
+printf 'x shadowed copy' > "$xshared/ckpts/shared.safetensors"
+printf 'x extra lora' > "$xshared/loras_a/lora-extra.safetensors"
+printf 'x up one' > "$xshared/up_a/up1.pth"
+printf 'x up two' > "$xshared/up_b/sub/up2.pth"
+printf 'x vae' > "$xshared/vae/vae.safetensors"
+printf 'x abs ckpt' > "$xabs/abs-ckpt.safetensors"
+xabs_n=$(mh_native "$xabs")
+cat > "$xyaml" <<EOF
+# extra model folders next to the ComfyUI install
+shared_models:
+    base_path: ../shared   # relative to this file
+    checkpoints: "ckpts/"
+    'loras': 'loras_a/'
+    upscale_models: |-
+        up_a/
+        up_b/
+    vae: vae/
+    is_default: false
+absolute_models:
+    checkpoints: '$xabs_n'
+EOF
+xfiles=$(find "$xr" -type f | sort | tr -d '\r')
+MH_CACHE="$TMP/mh-x-cache.json"; rm -f "$MH_CACHE"
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 2 files, 2 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 2 files, 2 hashed, 0 reused' <<<"$out" && grep -qx 'controlnet: 0 files, 0 hashed, 0 reused' <<<"$out" \
+  && ok 'model-hashes reads <comfy root>/extra_model_paths.yaml: the folders of the hashed kinds (relative base_path, a quoted key, an absolute folder, a |- block of two folders) are hashed too' || no 'model-hashes extra folders' "rc=$rc $out"
+[ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xshared/ckpts/extra-a.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints abs-ckpt.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xabs/abs-ckpt.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" loras lora-extra.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xshared/loras_a/lora-extra.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" upscale_models up1.pth | cut -d' ' -f1)" = "$(mh_sha "$xshared/up_a/up1.pth")" ] \
+  && [ "$(mh_row "$MH_CACHE" upscale_models sub/up2.pth | cut -d' ' -f1)" = "$(mh_sha "$xshared/up_b/sub/up2.pth")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors)" = "$(mh_sha "$xshared/ckpts/extra-a.safetensors") $(mh_stat "$xshared/ckpts/extra-a.safetensors")" ] \
+  && ok 'model-hashes rows of the extra folders carry the hashlib sha256, size and mtime_ns; the name is the path below the folder with /' || no 'model-hashes extra rows' "$(cat "$MH_CACHE")"
+[ -z "$(jq -r '.models[] | select(.name == "vae.safetensors") | .name' "$MH_CACHE")" ] && [ "$(jq -r '[.models[] | .kind] | unique | join(",")' "$MH_CACHE")" = 'checkpoints,loras,upscale_models' ] \
+  && ok 'model-hashes ignores a kind asset-gen does not hash (vae) and base_path/is_default keys in the yaml' || no 'model-hashes unhashed kind' "$(cat "$MH_CACHE")"
+[ "$(mh_row "$MH_CACHE" checkpoints shared.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xmodels/checkpoints/shared.safetensors")" ] \
+  && grep -q "assetgen: warning: checkpoints: shared.safetensors in .*/shared/ckpts is shadowed by an earlier folder, skipped" <<<"$out" \
+  && ok 'model-hashes keeps the first folder for a name found twice (the models folder before a non-default extra folder) and warns about the shadowed copy' || no 'model-hashes shadow' "$out"
+grep -q "^extra model paths .*/ComfyUI/extra_model_paths.yaml: 5 folders$" <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] \
+  && [ "$(grep -n '^extra model paths ' <<<"$out" | cut -d: -f1)" -lt "$(grep -n '^wrote ' <<<"$out" | cut -d: -f1)" ] \
+  && ok 'model-hashes prints one "extra model paths <file>: N folders" line per file, before the wrote line' || no 'model-hashes extra text line' "$out"
+[ "$xfiles" = "$(find "$xr" -type f | sort | tr -d '\r')" ] && ok 'model-hashes with extra folders writes nothing next to the models or the yaml' || no 'model-hashes extra wrote files' "$(find "$xr" -type f | sort)"
+
+# reuse by size and mtime_ns also covers the extra folders
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 0 hashed, 4 reused' <<<"$out" && grep -qx 'loras: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && ok 'model-hashes second run reuses every row, extra folders included' || no 'model-hashes extra reuse' "rc=$rc $out"
+stale_sha=$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)
+mh_rewrite "$xshared/ckpts/extra-a.safetensors" 'X EXTRA B'   # same size, same mtime: reused without reading
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 0 hashed, 4 reused' <<<"$out" && [ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)" = "$stale_sha" ] \
+  && ok 'model-hashes reuses an extra-folder row whose size and mtime_ns are unchanged without reading the file' || no 'model-hashes extra reuse unchanged' "rc=$rc $out"
+mh_rewrite "$xshared/ckpts/extra-a.safetensors" 'X EXTRA B' 5000000000   # same size, other mtime
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 1 hashed, 3 reused' <<<"$out" && [ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xshared/ckpts/extra-a.safetensors")" ] \
+  && ok 'model-hashes rehashes an extra-folder file whose mtime changed and reuses the rest' || no 'model-hashes extra rehash' "rc=$rc $out"
+
+# --json: the additive extra_model_paths field lists the folders per kind of each file read
+out=$(mh_ag --models-dir "$xmodels" --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | length' <<<"$out")" -eq 1 ] && [ "$(jq -r '.extra_model_paths[0].path | endswith("/ComfyUI/extra_model_paths.yaml")' <<<"$out")" = true ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders | keys | join(",")' <<<"$out")" = 'checkpoints,loras,upscale_models' ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.checkpoints | length' <<<"$out")" -eq 2 ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.upscale_models | map(split("/") | last) | join(",")' <<<"$out")" = 'up_a,up_b' ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.checkpoints[1]' <<<"$out")" = "$xabs_n" ] \
+  && ok 'model-hashes --json adds extra_model_paths: path and the folders per kind in file order, with /' || no 'model-hashes --json extra' "rc=$rc $out"
+
+# --no-extra-model-paths turns auto-discovery off; an explicit file is still read and is read once
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 1 files, 1 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 0 files, 0 hashed, 0 reused' <<<"$out" && ! grep -q 'extra model paths' <<<"$out" && [ -z "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors)" ] \
+  && ok 'model-hashes --no-extra-model-paths hashes only the models folder and reads no extra file' || no 'model-hashes --no-extra-model-paths' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xyaml" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] \
+  && ok 'model-hashes --no-extra-model-paths still reads an explicit --extra-model-paths file' || no 'model-hashes --no-extra with an explicit file' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --extra-model-paths "$xyaml" --extra-model-paths "$xcomfy/../ComfyUI/extra_model_paths.yaml" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] && ! grep -q 'shadowed by an earlier folder' <<<"${out//shared.safetensors in*/}" \
+  && ok 'model-hashes reads a file given twice (explicit and auto-discovered, or repeated) once' || no 'model-hashes extra file dedupe' "rc=$rc $out"
+
+# an explicit file of its own (not next to the install): its folders are added
+xexp="$xr/explicit_ckpts"; mkdir -p "$xexp"; printf 'x explicit ckpt' > "$xexp/exp.safetensors"
+printf "other_models:\n    checkpoints: '%s'\n" "$(mh_native "$xexp")" > "$xr/explicit.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/explicit.yaml" --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 3 files, 3 hashed, 0 reused' <<<"$out" && [ "$(mh_row "$MH_CACHE" checkpoints exp.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xexp/exp.safetensors")" ] \
+  && [ -z "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors)" ] \
+  && ok 'model-hashes --extra-model-paths FILE adds the folders of that file (and only that file with --no-extra-model-paths)' || no 'model-hashes explicit extra file' "rc=$rc $out"
+
+# a missing explicit file is a usage error: exit 2, one line, nothing written
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --extra-model-paths "$xr/does-not-exist.yaml" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && grep -q -- '--extra-model-paths .*does-not-exist.yaml: no such file' <<<"$out" && [ ! -e "$MH_CACHE" ] \
+  && ok 'model-hashes with a missing explicit --extra-model-paths file exits 2 with a one-line message and writes nothing' || no 'model-hashes missing explicit extra file' "rc=$rc $out"
+
+# a malformed file is a warning, never a crash: the file is ignored, the exit code stays 0, the other rows are still written
+printf "broken_models:\n    checkpoints: 'never closed\n" > "$xr/bad-quote.yaml"
+printf "broken_models:\n    checkpoints: [a, b]\n" > "$xr/bad-flow.yaml"
+printf "broken_models:\n\tcheckpoints: a\n" > "$xr/bad-tab.yaml"
+printf '    checkpoints: orphan/\n' > "$xr/bad-outside.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/bad-quote.yaml" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q "^assetgen: warning: extra model paths .*/bad-quote.yaml: line 2: unterminated single quote; file ignored$" <<<"$out" \
+  && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && ! grep -q '^extra model paths ' <<<"$out" && grep -q '^wrote ' <<<"$out" && [ "$(jq -r '.models | length' "$MH_CACHE")" -eq 3 ] \
+  && ok 'model-hashes with a malformed extra file (unterminated quote) warns with the line number, ignores the file, exits 0 and still writes the other rows' || no 'model-hashes malformed extra file' "rc=$rc $out"
+for pair in 'bad-flow:line 2: flow collections are not supported' 'bad-tab:line 2: tab indentation is not supported' 'bad-outside:line 1: a key outside a section'; do
+  f=${pair%%:*}; reason=${pair#*:}; rm -f "$MH_CACHE"
+  out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/$f.yaml" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && grep -q "^assetgen: warning: extra model paths .*/$f.yaml: $reason; file ignored$" <<<"$out" && [ -f "$MH_CACHE" ] \
+    && ok "model-hashes malformed extra file $f: a warning (\"$reason\"), exit 0" || no "model-hashes malformed extra file $f" "rc=$rc $out"
+done
+# a malformed file does not stop a good one, and the warning is in the JSON too
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/bad-flow.yaml" --extra-model-paths "$xr/explicit.yaml" --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.warnings | map(select(test("bad-flow.yaml: line 2: flow collections are not supported; file ignored"))) | length' <<<"$out")" -eq 1 ] \
+  && [ "$(jq -r '.extra_model_paths | length' <<<"$out")" -eq 1 ] && [ -n "$(jq -r '.rows[] | select(.name == "exp.safetensors") | .name' <<<"$out")" ] \
+  && ok 'model-hashes keeps the folders of a good extra file next to a malformed one; the warning is in the --json warnings' || no 'model-hashes malformed plus good' "rc=$rc $out"
+# an auto-discovered malformed file is ignored the same way
+xbad="$mh/xbad/ComfyUI"; mkdir -p "$xbad/models/checkpoints"; printf 'x bad root' > "$xbad/models/checkpoints/only.safetensors"
+cp "$xr/bad-tab.yaml" "$xbad/extra_model_paths.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --comfy-dir "$xbad" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q "^assetgen: warning: extra model paths .*/ComfyUI/extra_model_paths.yaml: line 2: tab indentation is not supported; file ignored$" <<<"$out" \
+  && [ -n "$(mh_row "$MH_CACHE" checkpoints only.safetensors)" ] \
+  && ok 'model-hashes with a malformed <comfy root>/extra_model_paths.yaml warns and still hashes the models folder' || no 'model-hashes malformed auto file' "rc=$rc $out"
+
+# Comfy Desktop: <data dir>/instance-model-paths/<instance id>.yaml of the picked instance; is_default puts its folders first
+dk="$TMP/mh-dk"; dkinst="$dk/inst"; dkshared="$dk/shared"
+mkdir -p "$dkinst/ComfyUI/models/checkpoints" "$dkinst/ComfyUI/models/controlnet" "$dkshared/checkpoints" "$dkshared/controlnet" "$dkshared/t2i_adapter" "$dk/instance-model-paths"
+printf 'dk main same' > "$dkinst/ComfyUI/models/checkpoints/same.safetensors"
+printf 'dk main only' > "$dkinst/ComfyUI/models/checkpoints/main-only.safetensors"
+printf 'dk shared same' > "$dkshared/checkpoints/same.safetensors"
+printf 'dk shared only' > "$dkshared/checkpoints/default-only.safetensors"
+printf 'dk cn' > "$dkshared/controlnet/cn.safetensors"
+printf 'dk t2i' > "$dkshared/t2i_adapter/t2i.safetensors"
+python3 -B - "$dk" "$dkinst" <<'PYEOF'
+import json, sys
+json.dump([{"id": "dk-1", "name": "Desk", "sourceId": "standalone", "installPath": sys.argv[2], "lastLaunchedAt": 3}],
+          open(sys.argv[1] + "/installations.json", "w"))
+PYEOF
+cat > "$dk/instance-model-paths/dk-1.yaml" <<EOF
+# Generated by Comfy Desktop
+comfy.desktop_0:
+    base_path: '$(mh_native "$dkshared")'
+    is_default: true
+    'checkpoints': 'checkpoints/'
+    'controlnet': |-
+        controlnet/
+        t2i_adapter/
+EOF
+MH_CACHE="$TMP/mh-dk-cache.json"; rm -f "$MH_CACHE"
+out=$(mh_ag --desktop-dir "$dk" --kind checkpoints --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.kinds.checkpoints | "\(.files) \(.hashed)"' <<<"$out")" = '3 3' ] && [ "$(jq -r '.kinds.controlnet | "\(.files) \(.hashed)"' <<<"$out")" = '2 2' ] \
+  && [ "$(jq -r '.extra_model_paths | length' <<<"$out")" -eq 1 ] && [ "$(jq -r '.extra_model_paths[0].path | endswith("/instance-model-paths/dk-1.yaml")' <<<"$out")" = true ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.controlnet | map(split("/") | last) | join(",")' <<<"$out")" = 'controlnet,t2i_adapter' ] \
+  && ok 'model-hashes Desktop route reads instance-model-paths/<instance id>.yaml of the picked instance (|- block with two controlnet folders)' || no 'model-hashes desktop extra' "rc=$rc $out"
+[ "$(mh_row "$MH_CACHE" controlnet t2i.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkshared/t2i_adapter/t2i.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints default-only.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkshared/checkpoints/default-only.safetensors")" ] \
+  && ok 'model-hashes Desktop extra folders are hashed (rows of both controlnet folders and the extra checkpoints folder)' || no 'model-hashes desktop extra rows' "$(cat "$MH_CACHE")"
+out=$(mh_ag --desktop-dir "$dk" --kind checkpoints 2>&1)
+[ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkshared/checkpoints/same.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" != "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
+  && grep -q "assetgen: warning: checkpoints: same.safetensors in .*/inst/ComfyUI/models/checkpoints is shadowed by an earlier folder, skipped" <<<"$out" \
+  && ok 'model-hashes is_default: the extra folder comes before the models folder (its row wins, the models-folder copy is the shadowed one)' || no 'model-hashes is_default order' "$out"
+rm -f "$MH_CACHE"; out=$(mh_ag --desktop-dir "$dk" --no-extra-model-paths --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && [ -z "$(mh_row "$MH_CACHE" checkpoints default-only.safetensors)" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
+  && ok 'model-hashes --no-extra-model-paths skips the Desktop instance file too' || no 'model-hashes desktop --no-extra-model-paths' "rc=$rc $out"
 MH_CACHE=
 
 # the reader: the local manifest of a run, read through the default cache path, records the written sha256 as verified
