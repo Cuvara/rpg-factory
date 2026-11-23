@@ -234,7 +234,7 @@ def cmd_doctor(args):
     if py3["advice"] and not stub_fault:  # the stub fault below already carries the fix: one line per fault
         print(f"- python3: {py3['advice']}")
     for f in faults:
-        extra = ". The stub also slows every hook call." if f["id"] == "python3-store-stub" else ""
+        extra = ". The stub also makes every hook call start about 70 ms slower." if f["id"] == "python3-store-stub" else ""
         print(f"- setup fault {f['id']}: {f['detail']}. Fix: {f['fix']}{extra}")
     print("- hooks: " + "; ".join(f"{e} [{', '.join(m)}]" for e, m in hooks.items()))
     print("\n## Dev tools (registry dev_tools; names only are read from MCP/plugin config)")
