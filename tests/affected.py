@@ -41,8 +41,9 @@ Case maps (`# case-map: <group> <pattern>...` header lines of a suite) and symbo
     reasoning of its own: when the changed file falls back to file-level, every reached file is matched file-level;
     when the changed file narrows to symbols, a reached file adds only the groups that match it file-level and have
     no pattern at all for the changed file (a group that names the changed file, plain glob or PATH::, is decided by
-    the changed file's symbol reach, so it must name the entries it reaches through callers), and a reached file
-    left with no group adds nothing. select, select-many and hashes never use symbols.
+    the changed file's symbol reach, so it must name the entries it reaches through callers). A reached file that
+    no group of the map matches at all is unmapped: ALL, as on file-level reach; only a reached file whose every
+    matching group names the changed file adds nothing. select, select-many and hashes never use symbols.
 
 A suite runs when one of these holds (anything unsure runs):
   - a global input changed (GLOBAL: registry, hooks, manifests) - every suite runs;
@@ -1154,9 +1155,11 @@ def affected_cases(files, suite, mb=None):
             else:
                 # the changed file narrowed to symbols: a caller or importer of it (no cross-module symbol reasoning)
                 # adds only the groups that run the caller and have no pattern for the changed file; a group that
-                # names the changed file is decided by its symbol reach (it names the entries it reaches via callers)
-                matched = {g for g in file_groups(hit_path, mapping) if group_reach(path, mapping[g]) is None}
-                if not matched and symbols:
+                # names the changed file is decided by its symbol reach (it names the entries it reaches via callers).
+                # A caller no group matches at all is unmapped: ALL, as on file-level reach
+                callers = file_groups(hit_path, mapping)
+                matched = {g for g in callers if group_reach(path, mapping[g]) is None}
+                if callers and not matched:
                     continue
             if not matched:
                 return "ALL"

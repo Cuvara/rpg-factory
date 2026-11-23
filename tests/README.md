@@ -123,6 +123,7 @@ named entry reaches, or an unnamed changed helper in a module that looks names u
 `sys.modules`, ...). A group whose plain glob matches the file without a `PATH::` override reaches the whole file, so
 every change to the file selects it, narrowed or not. A file that imports or runs the changed one (a caller the import
 closure reaches) gets no symbol reasoning: on a narrowed change it adds only the groups that list it and have no pattern
-for the changed file; on a whole-file fallback every reached file is matched file-level. Map rules: every group that
+for the changed file (a caller that no group matches at all gives ALL; one whose every group names the changed file
+adds nothing); on a whole-file fallback every reached file is matched file-level. Map rules: every group that
 runs the file names it (`::*` or every entry it runs, those it reaches through callers included, prerequisites
 excepted); when unsure, keep the plain pattern or `PATH::*`. The full rules are in the `tests/affected.py` docstring.

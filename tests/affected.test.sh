@@ -195,8 +195,10 @@ out=$(python3 -B - "$A" <<'PY'
 import ast, importlib.util, sys
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
-check("a pipeline script runs every case of the pipeline suite", all(m.affected_cases([f], "tests/pipeline.test.sh") == "ALL"
-      for f in ("scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py")))
+pipeline_all = ",".join(sorted(m.case_map("tests/pipeline.test.sh")))
+check("a pipeline script runs every case of the pipeline suite without a base",
+      m.affected_cases(["scripts/factory-pipeline.py"], "tests/pipeline.test.sh") in ("ALL", pipeline_all)
+      and m.affected_cases(["scripts/lib/pipeline_route.py"], "tests/pipeline.test.sh") == "ALL")
 import inspect
 check("only selection is narrowed: the import closure still reaches the suites it did, and hashes ignore the table",
       any(m.selects(p, "tests/codex-plugin.test.sh") for p in m.closure("scripts/factory-pipeline.py"))
@@ -538,6 +540,9 @@ files = {
                                 "python scripts/tool.py scripts/caller.py\n",
     "tests/caller.test.sh": "# case-map: ga scripts/tool.py::cmd_a scripts/caller.py\n# case-map: gb scripts/tool.py::cmd_b\n"
                             "# case-map: gc scripts/caller.py\npython scripts/tool.py scripts/caller.py\n",
+    # runs the caller but no group maps it: a narrowed change to tool.py cannot tell which group runs the caller
+    "tests/unmapped-caller.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                                     "python scripts/tool.py scripts/caller.py\n",
     "tests/sym.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
                          "# case-map: gc scripts/tool.py::cmd_c\npython scripts/tool.py\n",
     "tests/star.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
@@ -630,6 +635,8 @@ check("symbol reach: a caller of the changed file that every group naming the fi
       cases("tests/caller-all.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb")
 check("symbol reach: a group that lists only the caller (no pattern for the changed file) is still selected",
       cases("tests/caller.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb,gc")
+check("symbol reach: a caller of the narrowed file that no group of the map matches gives ALL",
+      cases("tests/unmapped-caller.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "ALL")
 check("symbol reach: a file-level change matches the caller file-level too (every group that runs it)",
       cases("tests/caller.test.sh", TOOL.replace("LIMIT = 3", "LIMIT = 4")) == "ga,gb,gc")
 reset()
