@@ -125,6 +125,8 @@ EXTRA = {
     # the portable-paths enforce line is global too: any tracked file may hold a machine-specific user path
     "scripts/checks/portable-paths.py": ["*"],
     "tests/portable-paths.test.sh": ["scripts/checks/portable-paths.py"],
+    # the netcode evidence prune case sources prune_evidence from the script through a computed path
+    "tests/run-all-parallel.test.sh": ["scripts/checks/netcode-headless.sh"],
     "tests/routing.test.sh": SKILL_TEXT + ["scripts/factory_session.py"],
     "tests/routing-golden.test.sh": SKILL_TEXT,
     "tests/ui-skills.test.sh": ["skills/ui-*", "docs/architecture/*"],
