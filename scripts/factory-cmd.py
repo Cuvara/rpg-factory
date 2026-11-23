@@ -144,6 +144,31 @@ def workspace(reg):
     return default_workspace(registry=reg)
 
 
+def setup_faults(alias, jq_path):
+    """Machine-setup faults that make test suites and task QA report NOT_RUN: a list of {id, detail, fix}.
+    `alias` is hookspeed.python_alias() (the Windows Store `python3` stub, or None), `jq_path` the jq on PATH."""
+    faults = []
+    if alias:
+        import hookspeed
+        real = sys.executable if sys.executable and not hookspeed.is_store_alias(sys.executable) else None
+        target = f"the real interpreter ({real})" if real else "the real interpreter"
+        faults.append({
+            "id": "python3-store-stub",
+            "detail": f"`python3` in Git Bash resolves to the Microsoft Store stub {alias}: test suites and task QA run "
+                      f"`python3` from Git Bash and the stub may not run, so task QA reports NOT_RUN",
+            "fix": f"put a `python3` PATH shim first on PATH that execs {target} (a one-line sh script named python3 in "
+                   f"a directory before WindowsApps), or turn off the python3 app execution alias in Windows settings "
+                   f"(nothing was changed)"})
+    if not jq_path:
+        faults.append({
+            "id": "jq-missing",
+            "detail": "`jq` is not on PATH: checks and test suites need jq and fail with 'jq: command not found' or "
+                      "report NOT_RUN",
+            "fix": "install jq 1.7 or newer (for example `winget install jqlang.jq`, then reopen Git Bash), or put a "
+                   "`jq` PATH shim that execs an installed jq.exe first on PATH (nothing was changed)"})
+    return faults
+
+
 def cmd_doctor(args):
     as_json = args == ["--json"]
     if args and not as_json:
@@ -175,6 +200,7 @@ def cmd_doctor(args):
     import hookspeed
     alias = hookspeed.python_alias()  # detection only: doctor never changes PATH
     py3 = {"path": alias or shutil.which("python3"), "windows_store_alias": bool(alias), "advice": hookspeed.alias_advice()}
+    faults = setup_faults(alias, shutil.which("jq"))
     hooks = json.load(open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]
     hooks = {e: [h.get("matcher") or "*" for h in v] for e, v in hooks.items()}
     import devtools
@@ -193,7 +219,8 @@ def cmd_doctor(args):
         print(json.dumps({"schema": "rpg-factory.doctor/1", "install": install_state, "registry": registry_state,
                           "workspace": {"path": ws, "markers_ok": ok_ws, "scratch_state": fstate.scratch(),
                                         "persistent_state": fstate.persistent(), "tmpdir": os.environ.get("TMPDIR")},
-                          "repos": repos, "tools": {"required": ["git", "jq", "python3", "bash"], "missing": missing, "python3": py3},
+                          "repos": repos, "tools": {"required": ["git", "jq", "python3", "bash"], "missing": missing, "python3": py3,
+                                    "setup_faults": faults},
                           "hooks": hooks, "dev_tools": tools, "skill_gaps": gaps, "exit": rc}, indent=2))
         return rc
     print("\n## Workspace and state")
@@ -205,6 +232,8 @@ def cmd_doctor(args):
     print(f"- tools: {'all present' if not missing else 'MISSING ' + ', '.join(missing)}")
     if py3["advice"]:
         print(f"- python3: {py3['advice']}")
+    for f in faults:
+        print(f"- setup fault {f['id']}: {f['detail']}. Fix: {f['fix']}")
     print("- hooks: " + "; ".join(f"{e} [{', '.join(m)}]" for e, m in hooks.items()))
     print("\n## Dev tools (registry dev_tools; names only are read from MCP/plugin config)")
     for t in tools:

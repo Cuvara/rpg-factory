@@ -43,6 +43,22 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `pin-plan.py` - exact edits for moving one client pin. run-all
 - `package-ready.py` - release readiness of a `com.cuvara.*` package repo. run-all
 
+Two conventions every new script under `scripts/` (so every new check in `checks/`) must meet; a new check that skips one fails run-all:
+
+- **UTF-8 stdio block** (`tests/compat.test.sh`): a Python script with a `__main__` entry point reconfigures stdout and
+  stderr to UTF-8 first, because Windows pipes default to cp1252. The test greps each such file in `scripts/*.py`,
+  `scripts/checks/*.py` and `scripts/lib/context.py` for the literal `_stream.reconfigure(encoding="utf-8"`; copy the
+  block from `checks/english-only.py` (`for _stream in (sys.stdout, sys.stderr): if hasattr(_stream, "reconfigure"):
+  _stream.reconfigure(encoding="utf-8", errors="replace")`). Every `subprocess` call with `text=True` also names
+  `encoding="utf-8"`.
+- **Workspace reader guard** (`tests/workspace-default.test.sh`): never write the workspace default as a literal
+  (`/mnt/c/Workspaces/UnityIndie` is allowed only in `lib/workspace.sh`, `lib/workspace.py` and this README). Shell
+  reads the default through `rpgf_default_workspace` from `lib/workspace.sh`; a shell line that reads the registry's
+  workspace `root_default` key with jq must pass the value through `rpgf_platform_path` on that same line. In Python,
+  only `lib/workspace.py` and `lib/fstate.py` may name `root_default`, and a script outside `scripts/lib/` calls
+  `default_workspace` only with the registry it already loaded (`default_workspace(registry=reg)`), never with empty
+  parentheses.
+
 ## Maintenance (plugin repo only)
 
 - `build-registry.py` - builds `registry.json` from `registry/` fragments (`--check`, `--split`). `tests/registry-fragments.test.sh`
@@ -118,6 +134,12 @@ tests/run-all.sh --attach           # with a live run of the same checkout and a
 tests/run-all.sh -j 4               # up to 4 suites at once; same lines, order, count and exit code as -j 1 (default);
                                     # live-workspace checks one at a time, run1 suites alone; CI uses -j 4
 tests/run-all-parallel.test.sh      # run-all -j scheduler on stand-in suites (order, counts, cap, live lane, run1)
+tests/assetgen.test.sh [--case NAMES] [--list-cases]  # asset-gen engine; --case takes comma-separated group names (--list-cases prints them, read-only); a group's prerequisites run first
+                                    # groups: list-show resolve render-golden ui-workflow ui-layout filename-prefix lint graph-style
+                                    # fixture-pngs png-qa review-cmd embed e2e3 sheet-sizes sheet-failures sheet-repeat sheet-cli
+                                    # sheet-discard pixel-grid output-filter fit finalize-core discard budget publish manifest
+                                    # gen-run-plugin local-hybrid engine-notes style-lock style-cli anchor-target profile-routing
+                                    # style-qa gen-run-style style-init style-derive style-bump style-report selftests hygiene
 
 # single suites (each standalone; sets its own temp TMPDIR / RPG_FACTORY_STATE_DIR)
 tests/git-guard.test.sh

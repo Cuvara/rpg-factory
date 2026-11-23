@@ -946,7 +946,7 @@ test_slot() {
           if [ -n "$stale_ident" ] && ! lock_alive && mkdir "$LOCK/reclaim" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK/reclaim/pid"
             if lock_still_stale "$stale_pid" "$stale_ident"; then
-              echo "run-all: taking over stale test slot $i ($stale_pid)"
+              echo "run-all: taking over stale test slot $i ($stale_pid)" >&2
               rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid" "$LOCK/args" "$LOCK/record"
               rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
             else rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" 2>/dev/null || :; fi

@@ -197,5 +197,36 @@ if [ "$rc" -eq 0 ]; then
   while IFS= read -r label; do ok "plan_paths: $label"; done <<<"$out"
 else no "plan_paths windows spellings (rc=$rc)" "$out"; fi
 
+# MACHINE_PATH (plan_paths.machine_path_hit): a file: URL with a home or Users path is flagged like the drive form; an
+# inner path segment named home or Users, a plain http(s) URL with /home/ and a word ending in "file:" stay allowed.
+out=$(python3 -B - "$ROOT" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))
+from plan_paths import machine_path_hit
+
+flagged = [
+    'file:///C:/Users/user/repo/x.md', 'file:///c:/Users/user', 'file:///home/user/repo', 'file:///Users/user/repo',
+    'file://localhost/home/user', 'file:/home/user/repo', 'see (file:///home/user/x) here', 'FILE:///HOME/user/x',
+    'file:///C:/work/repo', '/home/user/repo', '/Users/user/repo',
+]
+allowed = [
+    'docs/home/readme.md', 'src/Users/list.md', 'https://example.com/home/x', 'http://example.com/Users/x',
+    'docs/home/', 'file:///docs/readme.md', 'profile:/home/x', 'file:relative/home/x',
+]
+for text in flagged:
+    assert machine_path_hit(text), 'not flagged: ' + text
+    print('MACHINE_PATH flags ' + text)
+for text in allowed:
+    hit = machine_path_hit(text)
+    assert hit is None, 'flagged %r: %r' % (text, hit)
+    print('MACHINE_PATH allows ' + text)
+PY
+); rc=$?
+if [ "$rc" -eq 0 ]; then
+  while IFS= read -r label; do ok "plan_paths: $label"; done <<<"$out"
+else no "plan_paths MACHINE_PATH cases (rc=$rc)" "$out"; fi
+
 echo "plan-paths: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
