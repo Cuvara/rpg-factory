@@ -4003,9 +4003,10 @@ before_files=$(find "$mhroot" -type f | sort | tr -d '\r')
 
 out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 1 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 2 files, 2 hashed, 0 reused' <<<"$out" \
-  && grep -qx 'controlnet: 0 files, 0 hashed, 0 reused' <<<"$out" && grep -qx 'annotators: 3 files, 3 hashed, 0 reused' <<<"$out" \
-  && ok 'model-hashes first write: one line per default kind, every file hashed' || no 'model-hashes first write' "rc=$rc $out"
-[ -f "$mhcache" ] && [ "$(jq -r .schema "$mhcache")" = rpg-factory.comfy-model-hashes/1 ] && [ "$(jq -r '.models | length' "$mhcache")" -eq 6 ] \
+  && grep -qx 'controlnet: 0 files, 0 hashed, 0 reused' <<<"$out" && grep -qx 'upscale_models: 0 files, 0 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'annotators: 2 files, 2 hashed, 0 reused' <<<"$out" \
+  && ok 'model-hashes first write: one line per default kind, every file hashed (the duplicated annotator base name is not counted)' || no 'model-hashes first write' "rc=$rc $out"
+[ -f "$mhcache" ] && [ "$(jq -r .schema "$mhcache")" = rpg-factory.comfy-model-hashes/1 ] && [ "$(jq -r '.models | length' "$mhcache")" -eq 5 ] \
   && ok 'model-hashes writes the cache under the state dir comfy/ (schema /1, rows for model extensions only)' || no 'model-hashes cache file' "$(cat "$mhcache" 2>/dev/null)"
 want="$(mh_sha "$mhmodels/checkpoints/sdxl.safetensors") $(mh_stat "$mhmodels/checkpoints/sdxl.safetensors")"
 [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" = "$want" ] && [ "$(mh_row "$mhcache" loras sub/nested.safetensors | cut -d' ' -f1)" = "$(mh_sha "$mhmodels/loras/sub/nested.safetensors")" ] \
@@ -4022,6 +4023,7 @@ stale_sha=$(jq -r '.models[] | select(.name == "sdxl.safetensors") | .sha256' "$
 mh_rewrite "$mhmodels/checkpoints/sdxl.safetensors" 'FAKE SDXL BYTES'   # same size, same mtime: the cache cannot tell
 out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 0 hashed, 1 reused' <<<"$out" && grep -qx 'loras: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 0 files, 0 hashed, 0 reused' <<<"$out" && grep -qx 'annotators: 2 files, 0 hashed, 2 reused' <<<"$out" \
   && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors | cut -d' ' -f1)" = "$stale_sha" ] \
   && ok 'model-hashes reuses a row whose size and mtime_ns are unchanged without reading the file (the stale sha256 is kept)' || no 'model-hashes reuse' "rc=$rc $out"
 mh_rewrite "$mhmodels/checkpoints/sdxl.safetensors" 'FAKE SDXL BYTES' 5000000000   # same size, other mtime
