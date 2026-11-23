@@ -4,7 +4,7 @@
   "title": "Gate: a clean merge is not a conflict resolution",
   "topic": "feat/delivery/clean-merge-gate",
   "goal": "The gate marked every task review of plan runtime-quirks STALE after the topic merged main, although no file needed a hand resolution. _uncovered_changes (scripts/factory-pipeline.py) finds a merge's own resolutions with `git diff-tree --cc --name-only`, which lists every file changed on both sides of the merge, also when git merged it cleanly and the combined diff has no hunk (merge 2674fe6 listed 7 files, only docs/plans/backlog.md had a combined hunk). A merge's own resolutions are the files with a combined hunk.",
-  "tier": "S",
+  "tier": "M",
   "deliver": "pr",
   "repos": {
     "plugin": {
