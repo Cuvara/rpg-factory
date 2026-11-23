@@ -5641,8 +5641,10 @@ gi "$GM" merge -q --no-ff --no-edit main >/dev/null 2>&1 || true
 git -C "$GM" show "HEAD:$CAFE" | sed '3s/.*/hand resolved cafe three/' > "$GM/$CAFE"
 gi "$GM" add "$CAFE"; gi "$GM" commit -qm "Merge main into feat/gm (hand resolution in non-ASCII file)"; gmqa
 expect "gate-merge: a hand resolution in a non-ASCII owned file makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/caf" gate "$GP" --no-run-checks
-# the non-ASCII file is removed because the stray-path check does not decode git's quoted names
+# the non-ASCII file is removed from both branches because the stray-path check does not decode git's quoted names
 gi "$GM" rm -q "$CAFE"; gi "$GM" commit -qm "test: remove the non-ASCII owned file"
+gi "$TMP/gm-main" rm -q "$CAFE"; gi "$TMP/gm-main" commit -qm "test: remove the non-ASCII owned file"
+gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm (non-ASCII file removed)"
 gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
 expect "gate-merge: a new review after the non-ASCII hand resolution clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
 # the run lead's plan file and report.md are never stray; any other unowned file still is
