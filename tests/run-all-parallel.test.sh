@@ -182,6 +182,9 @@ SUITE
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
+# stand-ins for the two repo-wide enforcement scripts a --within run also runs (WITHIN_GUARDS); PP_BREACH=1 plants a breach
+printf '#!/usr/bin/env bash\nprintf "english\\n" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/english-only.py"
+printf '#!/usr/bin/env bash\nprintf "portable\\n" >> "$RUN_LOG"\n[ "${PP_BREACH:-0}" = 0 ] || { echo "planted portable-paths breach"; exit 1; }\n' > "$TMP/repo/scripts/checks/portable-paths.py"
 # partial: passes with a SKIP line (a tool missing), like orca-commands without orca
 printf '#!/usr/bin/env bash
 printf "partial\n" >> "$RUN_LOG"
@@ -226,6 +229,10 @@ run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
+if [ "${WITH_GUARDS:-0}" != 0 ]; then   # the two enforcement lines, like run-all.sh's
+  run "English-only enforcement (report available)" bash scripts/checks/english-only.py --enforce
+  run "Portable-paths enforcement" bash scripts/checks/portable-paths.py --enforce
+fi
 # per-check durations: checks of known length, a failure and a runp skip (no tests/ path, so --list-suites never names them)
 dskip_post() { _skp "dskip" "why"; }
 if [ "${WITH_DUR:-0}" != 0 ]; then
@@ -1033,6 +1040,33 @@ for j in 1 3; do
   log=$(sort "$RUN_LOG" | tr '\n' ' ')
   [ "$rc" = 0 ] && [ "$log" = 'block inline ' ] && grep -qx 'left to CI: 1 suites (tests/live.sh)' <<<"$out" && grep -qx 'counts 3 0 3' <<<"$out" \
     && good "--within=L runs a named gated script, leaves a selected live-lane suite to CI (-j $j)" || no "--within gated (-j $j): rc $rc log '$log'" "$out"
+  # the repo-wide enforcement lines (WITHIN_GUARDS) also run under --within when the change reaches them, they are not
+  # reported as left to CI, and a breach fails the run; unreached, or without a base, they do not run
+  guards=scripts/checks/english-only.py,scripts/checks/portable-paths.py
+  reset_cache
+  out=$(WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a english portable ' ] && grep -qx 'left to CI: 0 suites' <<<"$out" && grep -qx 'counts 3 0 1' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -q '^PASS  Portable-paths enforcement' <<<"$out" \
+    && good "--within of an unrelated suite also runs both enforcement lines the change reaches, not listed as left to CI (-j $j)" \
+    || no "--within guards run (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(PP_BREACH=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" != 0 ] && [ "$log" = 'a english portable ' ] && grep -q '^FAIL  Portable-paths enforcement' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -qx 'counts 2 1 1' <<<"$out" \
+    && good "--within fails (FAIL line, rc != 0) on a planted portable-paths breach (-j $j)" \
+    || no "--within guards breach (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(WITH_GUARDS=1 SELECT=tests/b.sh cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 3' <<<"$out" \
+    && good "--within: an enforcement line the change does not reach does not run (-j $j)" || no "--within guards unreached (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(NO_BASE=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 3' <<<"$out" \
+    && good "--within without a base runs no enforcement line, only the named suites (-j $j)" || no "--within guards no base (-j $j): rc $rc log '$log'" "$out"
 done
 within_misuse() { # message args...
   local want=$1; shift
