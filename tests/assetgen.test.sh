@@ -3976,6 +3976,156 @@ grep -qx ok "$TMP/local-engine-record" && ok "manifest records annotator models 
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$AUTH" --registry "$ROOT/registry.json" > "$TMP/local-lint" 2>&1
 grep -q '^PASS AGEN-local-hybrid-001$' "$TMP/local-lint" && ok 'hybrid manifest passes artifact schema lint' || no 'hybrid artifact lint' "$(grep 'AGEN-local-hybrid-001' "$TMP/local-lint")"
 
+# model-hashes (scripts/assetgen/modelhash.py): the writer of the cache the local manifest reads. Small fake model files,
+# a temp state dir, no real models; the reader flow re-runs manifest on a copy of the annotator run with the cache written.
+echo "-- model-hashes: streamed sha256 cache under the Factory state dir, size/mtime reuse, Desktop resolution, reader"
+mh="$TMP/mh"; mhroot="$mh/ComfyUI"; mhmodels="$mhroot/models"; mhstate="$TMP/mh-state"; mhcache="$mhstate/comfy/model-hashes.json"
+mhaux="$mhroot/custom_nodes/comfyui_controlnet_aux/ckpts"
+mkdir -p "$mhmodels/checkpoints" "$mhmodels/loras/sub" "$mhmodels/controlnet" "$mhaux/LiheYoung/Depth-Anything/checkpoints" \
+  "$mhaux/yzd-v/DWPose" "$mhaux/other/DWPose"
+printf 'fake sdxl bytes' > "$mhmodels/checkpoints/sdxl.safetensors"
+printf 'fake style lora' > "$mhmodels/loras/style.safetensors"
+printf 'nested lora' > "$mhmodels/loras/sub/nested.safetensors"
+printf 'not a model' > "$mhmodels/loras/readme.txt"
+printf 'fake depth' > "$mhaux/LiheYoung/Depth-Anything/checkpoints/depth_anything_vitl14.pth"
+printf 'fake yolox' > "$mhaux/yzd-v/DWPose/yolox_l.onnx"
+printf 'fake dw one' > "$mhaux/yzd-v/DWPose/dw-ll_ucoco_384.onnx"
+printf 'fake dw two' > "$mhaux/other/DWPose/dw-ll_ucoco_384.onnx"
+MH_CACHE=
+mh_ag() { ASSETGEN_MODEL_HASHES="$MH_CACHE" RPG_FACTORY_STATE_DIR="$mhstate" AG model-hashes "$@"; }
+mh_sha() { python3 -B -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
+mh_row() { jq -r --arg k "$2" --arg n "$3" '[.models[] | select(.kind == $k and .name == $n) | "\(.sha256) \(.size) \(.mtime_ns)"] | join(",")' "$1"; }
+mh_stat() { python3 -B -c 'import os, sys; st = os.stat(sys.argv[1]); print(st.st_size, st.st_mtime_ns)' "$1"; }
+mh_rewrite() { # mh_rewrite FILE TEXT [mtime-shift-ns]: new bytes; the mtime restored (shift 0) or moved
+  python3 -B -c 'import os, sys; p = sys.argv[1]; st = os.stat(p); open(p, "wb").write(sys.argv[2].encode()); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + int(sys.argv[3])))' "$1" "$2" "${3:-0}"
+}
+before_files=$(find "$mhroot" -type f | sort | tr -d '\r')
+
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 1 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 2 files, 2 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'controlnet: 0 files, 0 hashed, 0 reused' <<<"$out" && grep -qx 'annotators: 3 files, 3 hashed, 0 reused' <<<"$out" \
+  && ok 'model-hashes first write: one line per default kind, every file hashed' || no 'model-hashes first write' "rc=$rc $out"
+[ -f "$mhcache" ] && [ "$(jq -r .schema "$mhcache")" = rpg-factory.comfy-model-hashes/1 ] && [ "$(jq -r '.models | length' "$mhcache")" -eq 6 ] \
+  && ok 'model-hashes writes the cache under the state dir comfy/ (schema /1, rows for model extensions only)' || no 'model-hashes cache file' "$(cat "$mhcache" 2>/dev/null)"
+want="$(mh_sha "$mhmodels/checkpoints/sdxl.safetensors") $(mh_stat "$mhmodels/checkpoints/sdxl.safetensors")"
+[ "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" = "$want" ] && [ "$(mh_row "$mhcache" loras sub/nested.safetensors | cut -d' ' -f1)" = "$(mh_sha "$mhmodels/loras/sub/nested.safetensors")" ] \
+  && ok 'model-hashes rows carry the hashlib sha256, size and mtime_ns; a subfolder name uses /' || no 'model-hashes row values' "$(cat "$mhcache")"
+[ "$(mh_row "$mhcache" annotators depth_anything_vitl14.pth | cut -d' ' -f1)" = "$(mh_sha "$mhaux/LiheYoung/Depth-Anything/checkpoints/depth_anything_vitl14.pth")" ] \
+  && [ -z "$(mh_row "$mhcache" annotators dw-ll_ucoco_384.onnx)" ] && grep -q 'dw-ll_ucoco_384.onnx occurs 2 times' <<<"$out" \
+  && ok 'model-hashes annotators: named by base name from the controlnet_aux ckpts folder, a duplicated base name skipped with a warning' || no 'model-hashes annotators' "$out"
+[ "$(jq -r .models_dir "$mhcache" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$mhmodels" | tr 'A-Z' 'a-z')" ] \
+  && ok 'model-hashes records the resolved models_dir' || no 'model-hashes models_dir' "$(jq -r .models_dir "$mhcache") vs $mhmodels"
+[ "$before_files" = "$(find "$mhroot" -type f | sort | tr -d '\r')" ] && [ ! -e "$ROOT/model-hashes.json" ] \
+  && ok 'model-hashes writes nothing into the ComfyUI install or the repository' || no 'model-hashes wrote outside the state dir'
+
+stale_sha=$(jq -r '.models[] | select(.name == "sdxl.safetensors") | .sha256' "$mhcache")
+mh_rewrite "$mhmodels/checkpoints/sdxl.safetensors" 'FAKE SDXL BYTES'   # same size, same mtime: the cache cannot tell
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 0 hashed, 1 reused' <<<"$out" && grep -qx 'loras: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors | cut -d' ' -f1)" = "$stale_sha" ] \
+  && ok 'model-hashes reuses a row whose size and mtime_ns are unchanged without reading the file (the stale sha256 is kept)' || no 'model-hashes reuse' "rc=$rc $out"
+mh_rewrite "$mhmodels/checkpoints/sdxl.safetensors" 'FAKE SDXL BYTES' 5000000000   # same size, other mtime
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 1 hashed, 0 reused' <<<"$out" \
+  && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" = "$(mh_sha "$mhmodels/checkpoints/sdxl.safetensors") $(mh_stat "$mhmodels/checkpoints/sdxl.safetensors")" ] \
+  && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors | cut -d' ' -f1)" != "$stale_sha" ] \
+  && ok 'model-hashes rehashes a file whose mtime changed' || no 'model-hashes rehash on mtime' "rc=$rc $out"
+printf 'a longer lora' > "$mhmodels/loras/style.safetensors"
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'loras: 2 files, 1 hashed, 1 reused' <<<"$out" \
+  && [ "$(mh_row "$mhcache" loras style.safetensors | cut -d' ' -f1)" = "$(mh_sha "$mhmodels/loras/style.safetensors")" ] \
+  && ok 'model-hashes rehashes a file whose size changed and reuses the rest' || no 'model-hashes rehash on size' "rc=$rc $out"
+rm "$mhmodels/loras/sub/nested.safetensors"
+out=$(mh_ag --models-dir "$mhmodels" --kind loras 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c '^[a-z_]*: ')" -eq 1 ] && [ -z "$(mh_row "$mhcache" loras sub/nested.safetensors)" ] \
+  && [ -n "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" ] && [ -n "$(mh_row "$mhcache" annotators yolox_l.onnx)" ] \
+  && [ "$(jq -r '[.models[] | "\(.kind)/\(.name)"] | . == sort' "$mhcache")" = true ] \
+  && ok 'model-hashes --kind scans only that kind: a vanished file is dropped, other kinds are kept, rows stay sorted' || no 'model-hashes --kind' "rc=$rc $out"
+
+# Comfy Desktop and headless resolution
+desk="$TMP/mh-desk"; mkdir -p "$desk/a/ComfyUI/models/checkpoints" "$desk/b/ComfyUI/models/checkpoints"
+printf 'desk a' > "$desk/a/ComfyUI/models/checkpoints/only-a.safetensors"; printf 'desk b' > "$desk/b/ComfyUI/models/checkpoints/only-b.safetensors"
+python3 -B - "$desk" <<'PYEOF'
+import json, sys
+d = sys.argv[1]
+json.dump([{"id": "c1", "name": "Cloud", "sourceId": "cloud"}, {"id": "no-path", "name": "No path", "sourceId": "standalone"},
+           {"id": "i1", "name": "Local A", "sourceId": "git", "installPath": d + "/a", "lastLaunchedAt": 5},
+           {"id": "i2", "name": "Local B", "sourceId": "standalone", "installPath": d + "/b", "lastLaunchedAt": 1}],
+          open(d + "/installations.json", "w"))
+PYEOF
+MH_CACHE="$TMP/mh-desk-cache.json"
+out=$(mh_ag --desktop-dir "$desk" --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ -n "$(mh_row "$MH_CACHE" checkpoints only-b.safetensors)" ] && [ -z "$(mh_row "$MH_CACHE" checkpoints only-a.safetensors)" ] \
+  && ok 'model-hashes Desktop: skips cloud and path-less entries, a standalone instance first, ASSETGEN_MODEL_HASHES sets the cache path' || no 'model-hashes desktop pick' "rc=$rc $out"
+out=$(mh_ag --desktop-dir "$desk" --instance 'Local A' --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ -n "$(mh_row "$MH_CACHE" checkpoints only-a.safetensors)" ] && [ -z "$(mh_row "$MH_CACHE" checkpoints only-b.safetensors)" ] \
+  && ok 'model-hashes Desktop --instance picks by name (or id)' || no 'model-hashes desktop --instance' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --comfy-dir "$mhroot" --kind loras 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ -n "$(mh_row "$MH_CACHE" loras style.safetensors)" ] && ok 'model-hashes --comfy-dir uses DIR/models' || no 'model-hashes --comfy-dir' "rc=$rc $out"
+
+# refusals write nothing
+rm -f "$MH_CACHE"
+out=$(mh_ag --desktop-dir "$TMP/mh-no-desktop" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && grep -q -- '--models-dir' <<<"$out" && grep -q -- '--desktop-dir' <<<"$out" && [ ! -e "$MH_CACHE" ] \
+  && ok 'model-hashes with no models directory exits 2 with a one-line message naming the flags and writes nothing' || no 'model-hashes no directory' "rc=$rc $out"
+out=$(mh_ag --models-dir "$TMP/mh-no-models" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && grep -q 'does not exist' <<<"$out" && [ ! -e "$MH_CACHE" ] && ok 'model-hashes with a missing --models-dir exits 2 and writes nothing' || no 'model-hashes missing models dir' "rc=$rc $out"
+out=$(mh_ag --models-dir "$mhmodels" --kind ipadapter 2>&1); rc=$?
+[ "$rc" -eq 2 ] && grep -q 'one of checkpoints, loras, controlnet, upscale_models, annotators' <<<"$out" && [ ! -e "$MH_CACHE" ] \
+  && ok 'model-hashes with an unknown --kind (the preset kind included) exits 2 and writes nothing' || no 'model-hashes unknown kind' "rc=$rc $out"
+out=$(mh_ag --models-dir "$mhmodels" --comfy-dir "$mhroot" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && [ ! -e "$MH_CACHE" ] && ok 'model-hashes --models-dir and --comfy-dir together exit 2' || no 'model-hashes exclusive flags' "rc=$rc $out"
+
+# --json
+out=$(mh_ag --models-dir "$mhmodels" --kind checkpoints --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '[.schema, .kinds.checkpoints.hashed, (.rows | length), (.path | endswith("mh-desk-cache.json"))] | join(" ")' <<<"$out")" = 'rpg-factory.assetgen-model-hashes/1 1 1 true' ] \
+  && ok 'model-hashes --json prints the result object (path, models_dir, kinds, rows)' || no 'model-hashes --json' "rc=$rc $out"
+MH_CACHE=
+
+# the reader: the local manifest of a run, read through the default cache path, records the written sha256 as verified
+rd="$mh/reader/ComfyUI"; rda="$rd/custom_nodes/comfyui_controlnet_aux/ckpts/x"
+mkdir -p "$rd/models/checkpoints" "$rd/models/loras" "$rda"
+printf 'reader sdxl' > "$rd/models/checkpoints/sdxl.safetensors"; printf 'reader style' > "$rd/models/loras/style.safetensors"
+printf 'reader depth' > "$rda/depth_anything_vitl14.pth"; printf 'reader yolox' > "$rda/yolox_l.onnx"; printf 'reader dw' > "$rda/dw-ll_ucoco_384.onnx"
+rm -rf "$mhstate"; out=$(mh_ag --comfy-dir "$mh/reader" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && [ -f "$mhcache" ]; } || no 'model-hashes reader setup' "rc=$rc $out"
+wr="$RUNS/local-writer-001"; cp -R "$RUNS/local-annot-001" "$wr"; rm "$wr/run.md"
+python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/local-writer-001"; json.dump(s, open(p, "w"))' "$wr/spec.json"
+ASSETGEN_MODEL_HASHES= RPG_FACTORY_STATE_DIR="$mhstate" local_step 'local writer manifest' AG manifest --run "$wr"
+python3 -B - "$wr/run.md" "$rd" > "$TMP/mh-reader" 2>&1 <<'PYEOF'
+import hashlib, json, re, sys
+s = open(sys.argv[1], encoding='utf-8').read()
+local = json.loads(re.match(r'\A---json\s*\n(.*?)\n---', s, re.S).group(1))['spec']['generation']['local']
+root = sys.argv[2] + '/'
+sha = lambda p: hashlib.sha256(open(root + p, 'rb').read()).hexdigest()
+ck = 'custom_nodes/comfyui_controlnet_aux/ckpts/x/'
+want = {('checkpoints', 'sdxl.safetensors'): sha('models/checkpoints/sdxl.safetensors'),
+        ('annotators', 'depth_anything_vitl14.pth'): sha(ck + 'depth_anything_vitl14.pth'),
+        ('annotators', 'yolox_l.onnx'): sha(ck + 'yolox_l.onnx'), ('annotators', 'dw-ll_ucoco_384.onnx'): sha(ck + 'dw-ll_ucoco_384.onnx')}
+got = {(m['kind'], m['name']): (m['sha256'], m['verified']) for m in local['models']}
+assert got == {k: (v, True) for k, v in want.items()}, got
+assert [(x['name'], x['sha256'], x['verified']) for x in local['loras']] == [('style.safetensors', sha('models/loras/style.safetensors'), True)], local['loras']
+print('ok')
+PYEOF
+grep -qx ok "$TMP/mh-reader" && ok 'the manifest records the sha256 model-hashes wrote (models, annotators and the LoRA) as verified' || no 'model-hashes then manifest' "$(cat "$TMP/mh-reader")"
+python3 -B - "$ROOT/scripts/assetgen" > "$TMP/mh-unit" 2>&1 <<'PYEOF'
+import json, os, sys, tempfile
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import assetgen, runfiles
+sha = 'a' * 64
+wf = {'1': {'class_type': 'LoraLoader', 'inputs': {'lora_name': 'sub\\style.safetensors', 'strength_model': 1, 'strength_clip': 1}}}
+rec = runfiles.local_generation(wf, {}, {'loras/sub/style.safetensors': sha})['loras'][0]
+assert rec['sha256'] == sha and rec['verified'], rec
+with tempfile.TemporaryDirectory() as d:
+    path = os.path.join(d, 'h.json')
+    json.dump({'schema': 'rpg-factory.comfy-model-hashes/1', 'models': [{'kind': 'loras', 'name': 'sub\\style.safetensors', 'sha256': sha}]}, open(path, 'w'))
+    os.environ['ASSETGEN_MODEL_HASHES'] = path
+    assert assetgen.model_hashes() == {'loras/sub/style.safetensors': sha}
+print('ok')
+PYEOF
+grep -qx ok "$TMP/mh-unit" && ok 'the cache key and the manifest lookup fold a backslash in a model name to /' || no 'model-hashes separator' "$(cat "$TMP/mh-unit")"
+
 group_end; fi
 if group_begin engine-notes; then
 echo "-- engine notes: annotator model kind, KSamplerAdvanced like KSampler, lint reads known-nodes once (UNTESTED on RTX 5060)"

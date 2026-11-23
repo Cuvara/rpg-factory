@@ -33,6 +33,8 @@ Usage:
   assetgen.py style derive --authoring DIR --style ID [--family FAM] [--apply] [--json]
   assetgen.py style bump --authoring DIR --id ID [--list-only] [--json]
   assetgen.py style report --authoring DIR [--style ID] [--json]
+  assetgen.py model-hashes [--models-dir DIR | --comfy-dir DIR] [--desktop-dir DIR] [--instance NAME|ID] [--kind K]...
+                           [--json]
 
 RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
 <authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
@@ -190,10 +192,13 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       an approved status while nothing the approval binds changed (approval.keep_status: the same
                       run.md bytes, so the record's rev still matches), else resets to proposed and names the change
                       Local stages are UNTESTED on RTX 5060: spec.generation.local records models, LoRAs, sampler
-                      settings and the requires hash. Model sha256 values come only from the read-only JSON cache
+                      settings and the requires hash. Model sha256 values come only from the JSON cache
                       <persistent state dir>/comfy/model-hashes.json (or ASSETGEN_MODEL_HASHES when set): schema
-                      rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256; missing entries are
-                      unverified. The record follows the machine's cache: re-running manifest with a different cache
+                      rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256 (a backslash in a name
+                      reads as a slash); missing entries are unverified. manifest only reads it; `model-hashes` (modelhash.py)
+                      is the writer: it hashes the local ComfyUI model files (--models-dir, --comfy-dir or the Comfy
+                      Desktop instance) in 1 MiB chunks into Factory state, adds size and mtime_ns to each row and
+                      reuses a row whose file kept both (it is not a read-only verb). The record follows the machine's cache: re-running manifest with a different cache
                       changes run.md and resets an approved run to proposed. This record makes no measured or quality claim.
   approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
                       (approval.approve_record: refuses an agent or model name and names the run records as agents or
@@ -288,6 +293,7 @@ import graphstyle  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
 import lint  # noqa: E402
+import modelhash  # noqa: E402
 import png  # noqa: E402
 import qa  # noqa: E402
 import runfiles  # noqa: E402
@@ -696,8 +702,8 @@ def workflow_model(run_dir, spec):
 
 
 def model_hashes():
-    """Read verified model hashes from the optional comfy-desktop-setup cache; ignore malformed entries."""
-    path = os.environ.get("ASSETGEN_MODEL_HASHES") or os.path.join(fstate.persistent(), "comfy", "model-hashes.json")
+    """Read verified model hashes from the cache `assetgen.py model-hashes` writes; ignore malformed entries."""
+    path = modelhash.cache_path()
     try:
         with open(path, encoding="utf-8") as f:
             cache = json.load(f)
@@ -708,7 +714,7 @@ def model_hashes():
     rows = cache.get("models")
     if not isinstance(rows, list):
         return {}
-    return {row["kind"] + "/" + row["name"]: row["sha256"] for row in rows
+    return {row["kind"] + "/" + row["name"].replace("\\", "/"): row["sha256"] for row in rows
             if isinstance(row, dict) and isinstance(row.get("kind"), str) and isinstance(row.get("name"), str)
             and isinstance(row.get("sha256"), str) and runfiles.SHA256.fullmatch(row["sha256"])}
 
@@ -1929,6 +1935,7 @@ def main(argv=None):
     style_subs = style_cmd.add_parsers(style_parser)
     style_derive.add_parser(style_subs)
     style_report.add_parser(style_subs)
+    modelhash.add_parser(sp)
     c = sp("manifest"); run_arg(c); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
@@ -2132,6 +2139,8 @@ def main(argv=None):
             if a.style_cmd == "derive":
                 return style_derive.run(a)
             return style_report.run(a) if a.style_cmd == "report" else style_cmd.run(a)
+        if a.cmd == "model-hashes":
+            return modelhash.run(sys.modules[__name__], a)
         if a.cmd == "manifest":
             front, reset, changes = manifest(a.run, a.title, a.prompt_author, a.generated_by)
             newline = run_md_newline(a.run)

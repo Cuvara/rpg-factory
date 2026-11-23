@@ -535,7 +535,7 @@ def local_generation(workflow, spec, hashes=None):
     result = {"models": [], "loras": [], "samplers": [], "requires_sha256": requires}
 
     def digest(kind, name, preset=False):
-        value = hashes.get(kind + "/" + name) if isinstance(name, str) and not preset else None
+        value = hashes.get(kind + "/" + name.replace("\\", "/")) if isinstance(name, str) and not preset else None  # Windows ComfyUI names subfolder models with a backslash
         return value if isinstance(value, str) and SHA256.fullmatch(value) else None
 
     def seed_param(nid):
