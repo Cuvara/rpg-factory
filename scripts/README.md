@@ -34,6 +34,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `registry-ownership.py` - cross-domain ownership and handoff invariants. `tests/handoff-e2e.test.sh`
 - `portable-paths.py` - report tracked machine-specific paths; `--enforce` fails on findings. `tests/portable-paths.test.sh`
 - `english-only.py` - English-only content policy (`--enforce`). `tests/english-only.test.sh`, `tests/skills-lint.sh`
+- `workspace-readers.sh` - workspace reader guard: jq readers of the registry default workspace map the path on the same line, Python readers use the shared helper (`ROOT` argument, exit 1 on a violation). `tests/workspace-default.test.sh`; run-all runs it as a repo-wide guard line
 - `skill-citations.py` - skill `path:line` citations against the integration branches. `tests/skill-citations.test.sh`
 - `netcode-headless.sh` - Netcode headless tests without writing into the repo. `tests/netcode-headless.test.sh`
 - `wire-parity.sh` - wire-generated and protocol-version contract evidence. `tests/checks-candidate.test.sh`
@@ -51,8 +52,9 @@ Two conventions every new script under `scripts/` (so every new check in `checks
   block from `checks/english-only.py` (`for _stream in (sys.stdout, sys.stderr): if hasattr(_stream, "reconfigure"):
   _stream.reconfigure(encoding="utf-8", errors="replace")`). Every `subprocess` call with `text=True` also names
   `encoding="utf-8"`.
-- **Workspace reader guard** (`tests/workspace-default.test.sh`): never write the workspace default as a literal
-  (`/mnt/c/Workspaces/UnityIndie` is allowed only in `lib/workspace.sh`, `lib/workspace.py` and this README). Shell
+- **Workspace reader guard** (reader rules: `checks/workspace-readers.sh`; its self-test and the literal rule:
+  `tests/workspace-default.test.sh`): never write the workspace default as a literal (`/mnt/c/Workspaces/UnityIndie`
+  is allowed only in `lib/workspace.sh`, `lib/workspace.py` and this README). Shell
   reads the default through `rpgf_default_workspace` from `lib/workspace.sh`; a shell line that reads the registry's
   workspace `root_default` key with jq must pass the value through `rpgf_platform_path` on that same line. In Python,
   only `lib/workspace.py` and `lib/fstate.py` may name `root_default`, and a script outside `scripts/lib/` calls

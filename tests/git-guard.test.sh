@@ -1053,6 +1053,33 @@ lang no  "$OUT" "git -C ../language-other commit -m \"$vi_msg\""               #
 lang no  "$OUT" "git -C ../no-such-dir commit -m \"$vi_msg\""
 lang no  "$OUT" "git -C ../language-clone commit -m 'fix login'"               # English text with a relative -C
 lang no  "$LANG_OTHER" "git -C ../outside commit -m \"$vi_msg\""
+# In `cd x && git -C ../y ...` the -C path is relative to x: a preceding cd to a literal directory moves the base
+# (pure path arithmetic, the fixture directory `sub` need not exist); a cd whose target is not a literal (a variable,
+# `-`, a glob, a substitution) gives no opinion for a later relative -C and never crashes; an absolute -C still counts.
+lang yes "$OUT" "cd sub && git -C ../../language-clone commit -m \"$vi_msg\""           # relative to $OUT/sub, not to $OUT
+lang yes "$OUT" "cd .. && git -C language-clone commit -m \"$vi_msg\""                  # only resolves after the cd
+lang yes "$OUT" "cd $LANG_OTHER && git -C ../language-clone commit -m \"$vi_msg\""      # an absolute cd
+lang yes "$OUT" "cd ../language-clone && git -C . commit -m \"$vi_msg\""
+lang yes "$OUT" "cd ../language-other; cd ../language-clone; git -C . commit -m \"$vi_msg\""   # the last cd wins
+lang yes "$OUT" "cd -- ../language-clone && git -C . commit -m \"$vi_msg\""             # an option-looking end marker is skipped
+lang yes "$OUT" "pushd ../language-clone && git -C . commit -m \"$vi_msg\""
+lang no  "$OUT" "cd ../language-other && git -C . commit -m \"$vi_msg\""                # the cd leaves the plugin-named non-rpg-factory dir
+lang no  "$OUT" "cd sub && git -C ../language-clone commit -m \"$vi_msg\""              # $OUT/sub/../language-clone is $OUT/language-clone
+lang no  "$OUT" "cd ../language-clone && git -C ../language-other commit -m \"$vi_msg\""
+lang no  "$OUT" "cd \"\$NOT_SET\" && git -C ../language-clone commit -m \"$vi_msg\""    # a variable: unknown directory, no opinion
+lang no  "$OUT" "cd \$NOT_SET && git -C ../language-clone commit -m \"$vi_msg\""
+lang no  "$OUT" "cd \"\$(pwd)\" && git -C ../language-clone commit -m \"$vi_msg\""      # a substitution
+lang no  "$OUT" "cd - && git -C ../language-clone commit -m \"$vi_msg\""                # the previous directory is unknown
+lang no  "$OUT" "cd ../language-* && git -C ../language-clone commit -m \"$vi_msg\""    # a glob
+lang no  "$OUT" "cd && git -C ../language-clone commit -m \"$vi_msg\""                  # bare cd goes to the machine's home
+lang no  "$OUT" "cd \$NOT_SET && git -C . commit -m \"$vi_msg\""
+lang yes "$OUT" "cd \$NOT_SET && git -C $LANG_CLONE commit -m \"$vi_msg\""              # an absolute -C needs no base
+lang no  "$OUT" "cd \$NOT_SET; cd ../language-clone; git -C . commit -m \"$vi_msg\""    # a relative cd after an unknown one stays unknown
+lang yes "$OUT" "cd \$NOT_SET; cd $LANG_CLONE; git -C . commit -m \"$vi_msg\""         # an absolute cd makes the base known again
+lang yes "$OUT" "Set-Location ../language-clone; git -C . commit -m \"$vi_msg\"" PowerShell
+lang yes "$OUT" "cd ../language-other; git -C ../language-clone commit -m \"$vi_msg\"" PowerShell
+lang no  "$OUT" "Set-Location \$env:NOT_SET; git -C ../language-clone commit -m \"$vi_msg\"" PowerShell
+lang no  "$OUT" "cd ../language-other; git -C . commit -m \"$vi_msg\"" PowerShell
 lang no "$LANG_OTHER" "git commit -m \"$vi_msg\""
 lang no "$LANG_OTHER" "$vi_msg" Agent prompt
 lang yes "$FEATURE" "git commit -m \"$vi_msg\""

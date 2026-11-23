@@ -29,6 +29,56 @@ def parse_git(argv):
     return cdir, argv[i], argv[i + 1:], cfg
 
 
+LITERAL_DIR_BAD = re.compile(r"[$`*?\[\]{}!;|&<>()\"']")
+
+
+def literal_cd_target(argv):
+    """The directory of a `cd <dir>` argv when it is a literal path, else None: no variable, substitution, glob,
+    `cd -`, or bare `cd`/`cd ~` (home is the machine's, not the command's). A leading `~` is expanded."""
+    target = next((x for x in argv[1:] if not x.startswith("-") or x == "-"), None)
+    if not target or target == "-" or LITERAL_DIR_BAD.search(target):
+        return None
+    target = os.path.expanduser(target.replace("\\", "/"))
+    if target.startswith("~"):
+        return None  # `~user` that expanduser could not resolve
+    return native_path(target)
+
+
+def git_c_dirs(argvs, cwd):
+    """Absolute normalised directory of every `git -C <dir>` in the expanded argvs, in order. A relative `-C` is
+    relative to the directory a preceding `cd <literal dir>` in the same command line moved to, else to `cwd`;
+    after a `cd` whose target is not a literal (a variable, `-`, a glob, a substitution) a relative `-C` is skipped
+    (no opinion). Pure path arithmetic: no subprocess, no repository scan, never raises."""
+    base = None
+    try:
+        base = os.path.abspath(cwd or os.getcwd())
+    except (OSError, ValueError, TypeError):
+        pass
+    out = []
+    for argv in argvs:
+        try:
+            if argv and prog(argv[0]) in CD_WORDS:
+                target = literal_cd_target(argv)
+                if target is not None and os.path.isabs(target):
+                    base = os.path.normpath(target)  # an absolute cd makes the directory known again
+                elif target is None or base is None:
+                    base = None
+                else:
+                    base = os.path.normpath(os.path.join(base, target))
+                continue
+            parsed = parse_git(argv)
+            if not parsed or not parsed[0]:
+                continue
+            cdir = os.path.expanduser(parsed[0])
+            if os.path.isabs(cdir):
+                out.append(os.path.normpath(cdir))
+            elif base is not None:
+                out.append(os.path.normpath(os.path.join(base, cdir)))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
 def has_short_flag(args, letter):
     return any(re.match(r"^-[A-Za-z]*" + letter + r"[A-Za-z]*$", a) for a in args)
 

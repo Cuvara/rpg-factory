@@ -125,6 +125,9 @@ EXTRA = {
     # the portable-paths enforce line is global too: any tracked file may hold a machine-specific user path
     "scripts/checks/portable-paths.py": ["*"],
     "tests/portable-paths.test.sh": ["scripts/checks/portable-paths.py"],
+    # the workspace readers guard scans only scripts/ and tests/ (jq and Python readers of the workspace): a change under
+    # either selects its run line; a docs-only change does not
+    "scripts/checks/workspace-readers.sh": ["scripts/*", "tests/*"],
     # the netcode evidence prune case sources prune_evidence from the script through a computed path
     "tests/run-all-parallel.test.sh": ["scripts/checks/netcode-headless.sh"],
     "tests/routing.test.sh": SKILL_TEXT + ["scripts/factory_session.py"],
@@ -613,8 +616,8 @@ def dynamic(path, conservative=False):
 
 def extra_covered(path):
     """A suite's EXTRA patterns cover the path: the suite reads it without naming the file (a computed name), so
-    that is a mention by the suite. Only suites under tests/ count, not the '*' of the global checks
-    (scripts/checks/english-only.py, scripts/checks/portable-paths.py)."""
+    that is a mention by the suite. Only suites under tests/ count, not the patterns of the global guards
+    (scripts/checks/english-only.py, scripts/checks/portable-paths.py, scripts/checks/workspace-readers.sh)."""
     return any(suite.startswith("tests/") and hit(path, patterns) for suite, patterns in EXTRA.items())
 
 

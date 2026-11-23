@@ -9,7 +9,7 @@ import os
 import re
 
 from .common import PLUGIN_ROOT, find_workspace, native_path, outside_workspace, plugin_checkout, within
-from .git import gh_normalise, parse_git
+from .git import gh_normalise, git_c_dirs, parse_git
 from .shell import expand, prog
 
 import english  # noqa: E402  (scripts/lib is on sys.path: common.py appends it)
@@ -114,13 +114,8 @@ def git_dir_in_scope(argvs, cwd, registry):
     hook's cwd (git's own rule), so `git -C ../clone commit ...` from an unrelated directory is still seen. Pure
     path arithmetic plus the marker reads in_scope already does: no subprocess, no repository scan; any error is
     "not in scope" (no opinion)."""
-    base = os.path.abspath(cwd or os.getcwd())
-    for argv in argvs:
+    for path in git_c_dirs(argvs, cwd):
         try:
-            parsed = parse_git(argv)
-            if not parsed or not parsed[0]:
-                continue
-            path = os.path.normpath(os.path.join(base, os.path.expanduser(parsed[0])))
             if (find_workspace(path, registry) or within(path, PLUGIN_ROOT) or plugin_checkout(path)
                     or outside_workspace(path, registry, {})):
                 return True

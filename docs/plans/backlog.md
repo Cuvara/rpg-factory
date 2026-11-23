@@ -17,23 +17,14 @@ None.
 
 From plan test-flakes (`docs/plans/test-flakes/report.md`):
 
-- The workspace reader guard is inline in `tests/workspace-default.test.sh` (no case map), so `--within` task QA
-  cannot run it alone (plan qa-guards). Move it into a script or a case-mapped case and add it to `WITHIN_GUARDS`.
-- The `factory-pipeline.py` dispatch spec still lists the English-only and portable-paths enforcement scripts as
-  left to CI, although `--within` now runs them (plan qa-guards; the file was owned by plan runtime-quirks).
-- `assetgen.py model-hashes` does not read `extra_model_paths.yaml` (extra model folders).
-- A `file:` URL with a host part before the home directory is not flagged by `MACHINE_PATH`; `cd x && git -C ../y` resolves against the hook cwd.
 - The test_lab idle-host CPU assertion branch has not run on this host (busy during QA).
 
 ### test-speed-followups
 
 From plan test-speed (`docs/plans/test-speed/report.md`):
 
-- `factory-pipeline.py` costs 2.5-4 s per start on Windows (imports, many git subprocesses in `status` and `gate`);
-  it dominates `tests/pipeline.test.sh`. Lazy imports and fewer git calls per verb.
 - `tests/affected.py` reach is per file: most `scripts/assetgen/*` changes and any `scripts/factory-pipeline.py`
   change select every case group. A per-function or per-module reach for the case maps.
-- Re-QA in `--phase qa` unions the task check suites with the failed suites; use `--within` the failed suites.
 - Full `tests/assetgen.test.sh` wall times before and after were never measured (every full run was killed for low
   memory); measure once on a quiet machine.
 
@@ -151,13 +142,18 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
 - Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
   start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
 
-### run-lows-followups
+### pipeline-speed-followups
 
-From plan run-lows (`docs/plans/run-lows/report.md`):
+From plan pipeline-speed (`docs/plans/pipeline-speed/report.md`):
 
-- `cleanup` still treats `<topic>-*` branches as the plan's own (status no longer does, `Lineage.owns`).
-- The no-duplicate ERROR assertion of the `model_scope_widen` case would not catch a re-appended "; "-joined
-  multi-problem error.
+- `assetgen.py model-hashes` reads explicit `--extra-model-paths` files before the auto-discovered root file (ComfyUI
+  reads the root file first), and `is_default` accepts true/yes/on words instead of Python truthiness.
+- Stale docstrings: `git_dir_in_scope` (`scripts/lib/rpgf_guard/language.py`, still says hook cwd only) and
+  `literal_cd_target` (`scripts/lib/rpgf_guard/git.py`, `cd ~`); the `_GIT_MEMO_ON` branch in
+  `scripts/factory-pipeline.py` reads awkwardly.
+- The workspace reader guard is selected only for changes under `scripts/` and `tests/`.
+- A run lead stopped its own orphaned QA run that held a test slot while still making progress: `status` could show
+  the slot holder's last log line so a live run is not mistaken for an orphan.
 
 ### path-audit-followups
 
@@ -172,6 +168,12 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   spelling worked (not reproduced).
 
 ## Covered
+
+- **pipeline-speed** (the pipeline start cost and the re-QA scope of test-speed-followups; run-lows-followups; the
+  reader guard, guard-script spec text, `extra_model_paths.yaml`, `file:` URL host and `cd x && git -C` items of
+  test-flakes-followups): shipped in plan pipeline-speed (`changelog.d/pipeline-speed.md`,
+  `changelog.d/pipeline-speed-reader-guard.md`, `changelog.d/pipeline-speed-path-gaps.md`,
+  `changelog.d/pipeline-speed-model-hashes.md`).
 
 - **qa-guards** (the scoped-QA enforcement gap, the netcode prune mapping and the doctor near-duplicate of
   test-flakes-followups; the model-hash cache writer of assetgen-run-followups): shipped in plan qa-guards
