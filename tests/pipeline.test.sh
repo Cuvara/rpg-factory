@@ -4013,10 +4013,11 @@ expect "every run reminds to release worker sessions" 1 "orca orchestration work
 echo dirty > "$TMP/srv-gw/wip.txt"
 expect "a worktree with uncommitted work is kept and named" 1 "KEPT  srv: worktree .* has uncommitted changes" cleanup "$G"
 rm "$TMP/srv-gw/wip.txt"; git -C "$S" worktree remove "$TMP/srv-gw"; git -C "$S" branch -q -d feat/core/demo-gw
-gi "$S" branch feat/core/demo-x develop; gi "$S" checkout -q feat/core/demo-x; echo z > "$S/z.txt"; gi "$S" add z.txt; gi "$S" commit -qm z; gi "$S" checkout -q feat/core/demo
-expect "an unintegrated task branch is kept, not deleted" 1 "KEPT  srv: branch feat/core/demo-x is not in feat/core/demo" cleanup "$G"
-refute "an unintegrated task branch gets no branch -d" "branch -d feat/core/demo-x" cleanup "$G"
-gi "$S" branch -q -D feat/core/demo-x
+# an owned branch: `<task branch>-...` is the plan's (Lineage.owns), unlike a `<topic>-x` branch of another plan
+gi "$S" branch feat/core/demo-gw-x develop; gi "$S" checkout -q feat/core/demo-gw-x; echo z > "$S/z.txt"; gi "$S" add z.txt; gi "$S" commit -qm z; gi "$S" checkout -q feat/core/demo
+expect "an unintegrated task branch is kept, not deleted" 1 "KEPT  srv: branch feat/core/demo-gw-x is not in feat/core/demo" cleanup "$G"
+refute "an unintegrated task branch gets no branch -d" "branch -d feat/core/demo-gw-x" cleanup "$G"
+gi "$S" branch -q -D feat/core/demo-gw-x
 expect "after removal: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 # a <topic>-* branch the plan does not own (Lineage.owns false: another plan whose topic extends this one) is not this
 # plan's leftover, as in status: neither its worktree nor its (merged) branch is listed or offered for removal
@@ -5628,11 +5629,11 @@ git -C "$M" remote add origin "$O"; git -C "$M" push -qu origin main
 git -C "$M" worktree add -q -b feat/merged "$MW" main
 echo merged > "$MW/change"; gi "$MW" add change; gi "$MW" commit -qm change
 git -C "$M" branch feat/merged-task feat/merged
-git -C "$M" branch feat/merged-other main
-git -C "$M" worktree add -q "$TMP/other-wt" feat/merged-other
+git -C "$M" branch feat/merged-task-other main
+git -C "$M" worktree add -q "$TMP/other-wt" feat/merged-task-other
 echo other > "$TMP/other-wt/other"; gi "$TMP/other-wt" add other; gi "$TMP/other-wt" commit -qm other
 git -C "$M" worktree remove "$TMP/other-wt"
-git -C "$M" push -q origin feat/merged feat/merged-task feat/merged-other
+git -C "$M" push -q origin feat/merged feat/merged-task feat/merged-task-other
 MP=$(plan merged "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$M\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 refute "unmerged integration worktree stays" "worktree remove .*merged-topic" cleanup "$MP"
 git -C "$M" merge -q --ff-only feat/merged; git -C "$M" push -q origin main
@@ -5643,8 +5644,8 @@ expect "merged integration branch is removable" 1 "branch -d feat/merged$" clean
 expect "merged task branch is removable" 1 "branch -d feat/merged-task$" cleanup "$MP" --after-merge
 expect "merged remote branch is removable" 1 "push origin --delete feat/merged-task$" cleanup "$MP" --after-merge
 expect "merged remote integration branch is removable" 1 "push origin --delete feat/merged$" cleanup "$MP" --after-merge
-expect "unmerged remote branch is kept" 1 "remote branch feat/merged-other is not in main" cleanup "$MP" --after-merge
-refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-other$" cleanup "$MP" --after-merge
+expect "unmerged remote branch is kept" 1 "remote branch feat/merged-task-other is not in main" cleanup "$MP" --after-merge
+refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-task-other$" cleanup "$MP" --after-merge
 refute "primary checkout is never removed" "worktree remove .*merged-repo$" cleanup "$MP" --after-merge
 MWP=$(plan merged-wt "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged-wt\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$MW\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 expect "integration checkout removal runs from primary checkout" 1 "git -C .*merged-repo worktree remove .*merged-topic" cleanup "$MWP" --after-merge
@@ -5658,8 +5659,8 @@ git -C "$M" push -q origin --delete feat/merged
 expect "merged remote task remains removable without topic refs" 1 "push origin --delete feat/merged-task$" cleanup "$MP" --after-merge
 MISSING=$(plan missing "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"missing\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$MW\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 expect "missing integration checkout is LEFTOVER and names the main checkout remedy" 1 "KEPT  srv: repo path .*merged-topic is missing - point repos.srv.path at the main checkout" cleanup "$MISSING" --after-merge
-git -C "$M" push -q origin --delete feat/merged-task feat/merged-other
-git -C "$M" branch -D feat/merged-other >/dev/null
+git -C "$M" push -q origin --delete feat/merged-task feat/merged-task-other
+git -C "$M" branch -D feat/merged-task-other >/dev/null
 expect "cleanup is clean after removal" 0 "^Cleanup: CLEAN" cleanup "$MP" --after-merge
 expect "clean cleanup names the next plan" 0 "^Next: start the next plan from main$" cleanup "$MP" --after-merge
 

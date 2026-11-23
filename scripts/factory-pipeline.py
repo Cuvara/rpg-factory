@@ -362,18 +362,23 @@ def settings(reg):
     return p
 
 
-# One process, one answer: `rev-parse` and `worktree list` repeat across the status/gate/dispatch/verdict helpers, so
-# their results are kept for the life of the process (never in a file). Every git call that can move a ref or a
-# worktree (anything outside GIT_READ_VERBS: add, commit, ...) drops the memo, so a later read sees the write.
+# One verb run, one answer: `rev-parse` and `worktree list` repeat across the status/gate/dispatch/verdict helpers, so
+# main() keeps their results for the duration of the verb (never in a file, never across processes). The memo is off
+# by default: a caller that imports this module (a test, a library user) changes git between calls and always gets a
+# fresh answer. Every git call that can move a ref or a worktree (anything outside GIT_READ_VERBS: add, commit, ...)
+# drops the memo, so a later read sees the write.
 GIT_MEMO_VERBS = (("rev-parse",), ("worktree", "list"))
 GIT_READ_VERBS = {"rev-parse", "rev-list", "diff", "merge-base", "status", "show", "diff-tree", "for-each-ref",
                   "remote", "ls-tree", "ls-files", "log", "cat-file", "hash-object"}
 _GIT_MEMO = {}
+_GIT_MEMO_ON = False
 
 
 def git(repo, *args):
     memo_key = None
-    if any(args[:len(v)] == v for v in GIT_MEMO_VERBS):
+    if not _GIT_MEMO_ON:
+        pass
+    elif any(args[:len(v)] == v for v in GIT_MEMO_VERBS):
         memo_key = (os.path.normcase(os.path.normpath(repo)), args)
         if memo_key in _GIT_MEMO:
             return _GIT_MEMO[memo_key]
@@ -5675,9 +5680,15 @@ def main():
     reg = load_registry(a.registry)
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
-    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner, "dispatch": cmd_dispatch,
-            "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
-            "report": cmd_report, "sync": cmd_sync, "nudge": cmd_nudge}[a.cmd](a, reg)
+    global _GIT_MEMO_ON
+    _GIT_MEMO_ON = True  # memoize rev-parse / worktree list for this verb only
+    try:
+        return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner,
+                "dispatch": cmd_dispatch, "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup,
+                "status": cmd_status, "report": cmd_report, "sync": cmd_sync, "nudge": cmd_nudge}[a.cmd](a, reg)
+    finally:
+        _GIT_MEMO_ON = False
+        _GIT_MEMO.clear()
 
 
 if __name__ == "__main__":
