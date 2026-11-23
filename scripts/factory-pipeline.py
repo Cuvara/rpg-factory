@@ -141,7 +141,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         is folded into it only when it is one standalone suite or run-all command and its suite is one
         `tests/run-all.sh --list-suites` prints in the task checkout (no such flag: none is; a release-only suite
         never is); other checks, compound commands included, are extra commands, each suite once. Re-QA after a QA
-        FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
+        FAIL that recorded --failed-suites: --base <that FAIL's candidate>, --within only those suites plus the task
+        check suites the fix delta reaches. The WITHIN_GUARDS scripts --within runs are never left to CI. A tier-S task (plan or
         task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
         run the command after the review PASS.
         verify and qa print on stderr `selected N of M suites (tests/affected.py; K affected suites left to CI)` (N:
@@ -2293,20 +2294,29 @@ def runall_suites(path):
 QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when the registry has no pipeline.qa_tiers
 
 
-def affected_case_lines(path, base, sha, suites, explicit):
-    """Report the checkout's own case selection; failure is advisory, never a dispatch failure.
-    Returns (text, counts): counts is (N selected suites, M suites run-all lists, K affected suites left to CI), None
-    when not computed. With explicit (the check suites the tier command passes to --within) only those suites run, each
-    with its affected cases (ALL when the change does not reach it): N is their count and K the affected suites outside
-    them; without explicit N is the whole affected closure and K is 0."""
+def within_guards(path):
+    """The repo-wide guard scripts `tests/run-all.sh --within` also runs whenever the change reaches them
+    (WITHIN_GUARDS in the checkout's run-all.sh, the one copy): they are never left to CI. Empty when the checkout's
+    run-all has no such line (an older run-all runs only the named suites)."""
+    try:
+        with open(os.path.join(path, "tests", "run-all.sh"), encoding="utf-8", errors="replace") as f:
+            m = re.search(r'^WITHIN_GUARDS="([^"]*)"', f.read(), re.M)
+    except OSError:
+        return set()
+    return {x.strip() for x in m.group(1).split(",") if x.strip()} if m else set()
+
+
+def affected_selection(path, base, sha, suites):
+    """(selected, None) with selected = {suite: cases} for the suites tests/affected.py says the change reaches, or
+    (None, 'Affected cases: not computed (<reason>)'); never a dispatch failure."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
-        return "Affected cases: not computed (tests/affected.py missing)", None
+        return None, "Affected cases: not computed (tests/affected.py missing)"
     changed, rc = git(path, "diff", "--name-only", f"{base}...{sha}")
     if rc:
-        return "Affected cases: not computed (git diff failed)", None
+        return None, "Affected cases: not computed (git diff failed)"
     if suites is None or suites is False:
-        return "Affected cases: not computed (suite list unavailable)", None
+        return None, "Affected cases: not computed (suite list unavailable)"
     try:
         with tempfile.TemporaryDirectory() as tmp:
             names = os.path.join(tmp, "changed.txt")
@@ -2315,23 +2325,36 @@ def affected_case_lines(path, base, sha, suites, explicit):
             r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode:
-            return "Affected cases: not computed (tests/affected.py cases failed)", None
+            return None, "Affected cases: not computed (tests/affected.py cases failed)"
         selected = {}
         for line in r.stdout.splitlines():
             suite, cases = line.split("\t", 1)
             selected[suite] = cases
-        left = []
-        if explicit:  # --within: only the named suites run; a named suite the change does not reach runs all its cases
-            left = sorted(set(selected) - set(explicit))
-            selected = {suite: selected.get(suite, "ALL") for suite in explicit}
-        lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
-                 for suite, cases in sorted(selected.items())]
-        text = "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
-        if left:
-            text += f"\nLeft to CI ({len(left)} affected suites outside the task checks): " + ", ".join(left)
-        return text, (len(selected), len(suites), len(left))
+        return selected, None
     except (OSError, subprocess.SubprocessError, ValueError):
-        return "Affected cases: not computed (tests/affected.py cases failed)", None
+        return None, "Affected cases: not computed (tests/affected.py cases failed)"
+
+
+def affected_case_lines(path, base, sha, suites, explicit, selection=None):
+    """Report the checkout's own case selection; failure is advisory, never a dispatch failure.
+    Returns (text, counts): counts is (N selected suites, M suites run-all lists, K affected suites left to CI), None
+    when not computed. With explicit (the check suites the tier command passes to --within) only those suites run, each
+    with its affected cases (ALL when the change does not reach it): N is their count and K the affected suites outside
+    them, the WITHIN_GUARDS scripts excepted (--within runs those); without explicit N is the whole affected closure
+    and K is 0. selection: the (selected, error) of affected_selection when the caller already has it."""
+    selected, err = selection if selection is not None else affected_selection(path, base, sha, suites)
+    if selected is None:
+        return err, None
+    left = []
+    if explicit:  # --within: only the named suites run; a named suite the change does not reach runs all its cases
+        left = sorted(set(selected) - set(explicit) - within_guards(path))
+        selected = {suite: selected.get(suite, "ALL") for suite in explicit}
+    lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
+             for suite, cases in sorted(selected.items())]
+    text = "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+    if left:
+        text += f"\nLeft to CI ({len(left)} affected suites outside the task checks): " + ", ".join(left)
+    return text, (len(selected), len(suites), len(left))
 
 
 SUITE_WARN = 40  # dispatch --suite-warn default: a task QA selecting more suites than this is wide (slow)
@@ -2794,12 +2817,15 @@ def cmd_dispatch(a, reg):
                 and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
             base, failed = previous["sha"], previous["failed_suites"]
         suites = runall_suites(home or info["path"])
-        explicit, _, _ = pr.qa_checks([task], suites, failed)
-        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        qa_task, selection = task, None
+        if failed:  # a re-QA: only the failed suites plus the task check suites the fix delta reaches
+            qa_task, selection = re_qa_task(task, suites, home or info["path"], base, a.sha)
+        explicit, _, _ = pr.qa_checks([qa_task], suites, failed)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit, selection)
         selection_preflight(cases, counts, a.suite_warn)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n" + SPEC_COMPLETE + "\n"
-                  + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
+                  + qa_body(a.sha, [qa_task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
                             runall=suites, tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
                                       if cases.startswith("Affected cases (tests/affected.py cases):") else "")
@@ -2840,9 +2866,11 @@ def cmd_dispatch(a, reg):
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
     if a.phase == "verify":
         suites = runall_suites(home or info["path"])
-        selected_task = dict(task, checks=retry_checks(task, suites)) if retry else task
+        selected_task, selection = task, None
+        if retry:  # a re-verify: only the failed suites plus the task check suites the fix delta reaches
+            selected_task, selection = re_qa_task(task, suites, home or info["path"], base, a.sha)
         explicit, _, _ = pr.qa_checks([selected_task], suites, failed)
-        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit, selection)
         selection_preflight(cases, counts, a.suite_warn)
         prompt += ("\nReview first. If any blocking finding exists, report FAIL and run no tests. "
                    "Otherwise run the following QA once.\n"
@@ -2876,6 +2904,21 @@ def retry_checks(task, runall=None):
     (`dotnet test ...`) all stay, because a failed_suites list cannot name them."""
     return [c for c in task.get("checks", [])
             if not pr.mentions_runall(c) and not (runall and pr.SUITE_CHECK.search(c))]
+
+
+def re_qa_task(task, suites, path, base, sha):
+    """(task, selection) of a re-QA or re-verify after a QA FAIL that recorded --failed-suites: the task's checks are
+    retry_checks (its other commands stay) plus, as one `--only-suites` check, the task check suites the fix delta
+    reaches (tests/affected.py reaches them: base is the failed candidate). The failed suites join through
+    qa_checks(failed_suites), so the tier command is `--within` the failed suites plus those reached task suites, never
+    all the task check suites. selection is affected_selection's result, handed on to affected_case_lines."""
+    selection = affected_selection(path, base, sha, suites)
+    checks = retry_checks(task, suites)
+    if isinstance(suites, set) and selection[0] is not None:
+        reached = [s for s in pr.qa_checks([task], suites)[0] if s in selection[0]]
+        if reached:
+            checks.append("tests/run-all.sh --only-suites " + ",".join(reached))
+    return dict(task, checks=checks), selection
 
 
 def child_branch(parent, sid, phase, sha=None):
@@ -4329,7 +4372,7 @@ BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being 
 
 
 def cleanup(plan, reg, orca_run=None, after_merge=False):
-    """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
+    """Worktrees and task branches the run left (the plan's own: Lineage.owns, as in status; never every <topic>-*), with the commands that remove them, and settled
     Orca workers of the task leads' Runs that are not released. `stacked`: the stacked siblings (stack_groups) with
     their merge order, information only (no effect on state, left, commands or kept). A stacked dependent's worktree
     is a sibling task worktree, never "child of <dependency>": is_child and Lineage skip the plan's own task branches."""
@@ -4358,9 +4401,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         parents.append((f"integration:{key}", topic))
         parents = [(tid, pb, worktree_for(info["path"], pb)[0]) for tid, pb in parents]
         lineage = Lineage((pb for _, pb, _ in parents), topic)
+        own_extra = lambda b: b != topic and lineage.owns(b)  # a branch of this plan other than the integration branch
         prune = orca_cmd.quote(["git", "-C", command_repo, "worktree", "prune"])
         for wt in trees:
-            if wt.get("prunable") and str(wt.get("branch", "")).startswith(topic + "-"):
+            if wt.get("prunable") and own_extra(str(wt.get("branch", ""))):
                 # the directory is gone but git keeps the record: `git branch -d` of its branch fails ('used by worktree')
                 left.append(wt["path"])
                 leftovers.append({"kind": "prunable", "path": wt["path"], "commands": [prune]})
@@ -4385,7 +4429,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                         commands.append(orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{wt['path']}"]))
                 continue
             branch = str(wt.get("branch", ""))
-            if not branch.startswith(topic + "-") and not (merged and branch == topic):
+            if not own_extra(branch) and not (merged and branch == topic):
                 continue
             dirty, rc = git(wt["path"], "status", "--porcelain")
             if rc != 0 or dirty:
@@ -4432,10 +4476,12 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     procs = busy_processes(d)
                     leftovers[-1]["processes"] = procs
                     kept.extend(f"{key}: BUSY? {line}" for line in busy_lines(d, procs))
-        refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
+        refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*",
+                      f"refs/heads/*/{topic}-*")
+        refs = "\n".join(r for r in (refs or "").splitlines() if own_extra(r))
         if after_merge and integrated:
-            refs = (refs or "") + "\n" + topic
-        for br in (refs or "").splitlines():
+            refs = refs + "\n" + topic
+        for br in refs.splitlines():
             target = main if after_merge else integrated
             _, rc = git(info["path"], "merge-base", "--is-ancestor", br, target) if target else (None, 1)
             if rc == 0:
@@ -4450,10 +4496,11 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                 kept.append(f"{key}: branch {br} is not in {'main' if after_merge else topic} - not deleted (integrate it or name it in the report)")
         if after_merge:
             remote_refs, _ = git(info["path"], "for-each-ref", "--format=%(refname)",
-                                 f"refs/remotes/origin/{topic}", f"refs/remotes/origin/{topic}-*")
+                                 f"refs/remotes/origin/{topic}", f"refs/remotes/origin/{topic}-*",
+                                 f"refs/remotes/origin/*/{topic}-*")
             for ref in sorted((remote_refs or "").splitlines(), key=lambda r: r == f"refs/remotes/origin/{topic}"):
                 br = ref.removeprefix("refs/remotes/origin/")
-                if br != topic and not br.startswith(topic + "-"):
+                if br != topic and not own_extra(br):
                     continue
                 left.append(ref)
                 if main and is_ancestor(info["path"], ref, main):
@@ -4462,8 +4509,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     kept.append(f"{key}: remote branch {br} is not in main - not deleted")
         elif not topic_head:
             remote_refs, _ = git(info["path"], "for-each-ref", "--format=%(refname)",
-                                 f"refs/remotes/origin/{topic}-*")
+                                 f"refs/remotes/origin/{topic}-*", f"refs/remotes/origin/*/{topic}-*")
             for ref in (remote_refs or "").splitlines():
+                if not own_extra(ref.removeprefix("refs/remotes/origin/")):
+                    continue
                 left.append(ref)
                 kept.append(f"{key}: {ref} remains but the integration branch is absent - verify the merge before deletion")
     specs_dir = os.path.join(verdict_dir(plan), "specs")
