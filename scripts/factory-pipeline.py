@@ -291,7 +291,6 @@ Read-only against the repos (never fetches, pushes, commits or creates worktrees
 usage error.
 """
 import argparse
-import ast
 import glob
 import hashlib
 import json
@@ -3101,7 +3100,8 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
 
     A first-parent topic merge attributes only its introduced side commits. Direct
     topic edits and conflict resolutions changed against every parent have no owner.
-    A merge's own changes are files whose combined diff keeps a hunk, so a clean merge of a file changed by both sides is not a resolution.
+    A merge's own changes are files whose combined diff keeps a hunk, so a clean merge
+    of a file changed by both sides is not a resolution.
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
     A path whose content at target equals its content at sha is never changed, and the
@@ -3139,14 +3139,7 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
         result = set()
         for line in (out or "").splitlines():
             if line.startswith("diff --cc "):
-                name = line[len("diff --cc "):]
-                if name.startswith('"'):
-                    name = ast.literal_eval(name)
-                    try:
-                        name = name.encode("latin-1").decode("utf-8", "surrogateescape")
-                    except UnicodeEncodeError:
-                        pass
-                result.add(name)
+                result.add(line[len("diff --cc "):])
         return result
     def owns(t, f):
         return any(norm_path(p).rstrip("/") in ("", ".") or norm_path(f) == norm_path(p).rstrip("/")
