@@ -557,10 +557,11 @@ list_runnable() { # file: list_suites without the release-only suites unless --r
 }
 # affected_select <suite...>: one affected.py `cases` call (the import graph is built once per run, before any job
 # forks) answers suite_selected for every candidate - its lines are exactly the selected suites - and gives each
-# one's cases; a name outside the candidates, or a failed call, asks per suite.
+# one's cases; a name outside the candidates, or a failed call, asks per suite. It gets the base `changed` used, so the
+# changed line ranges (symbol-level case reach) come from the same merge-base.
 affected_select() {
   local picked suite cases
-  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" cases "$AFF" "$@") || return 0
+  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" cases ${base:+--base "$base"} "$AFF" "$@") || return 0
   AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'
   while read -r suite cases; do
     suite=${suite%$'\r'}; cases=${cases%$'\r'}
