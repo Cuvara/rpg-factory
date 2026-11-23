@@ -5098,7 +5098,7 @@ st_phase "review PASS: next merges the task branch into the integration worktree
 sv --task a --phase qa --sha "$SA" --by claude --state FAIL
 st_phase "review PASS with QA FAIL on the candidate: reviewed, next is the task lead, never the merge" a reviewed "--task a --phase lead --runner orca"
 pp status --json "$ST"
-if jq -e '(.tasks[] | select(.id == "a")) as $a | ($a.next | test("merge") | not) and any($a.notes[]; test("QA FAIL at .* no merge; fix it .* fresh verify"))' <<<"$OUT" >/dev/null
+if jq -e '(.tasks[] | select(.id == "a")) as $a | ($a.next | test("merge --no-ff") | not) and any($a.notes[]; test("QA FAIL at .* no merge; fix it .* fresh verify"))' <<<"$OUT" >/dev/null
 then pass=$((pass + 1)); echo "PASS  review PASS with QA FAIL: no merge in next, the QA failure is noted"
 else fail=$((fail + 1)); echo "FAIL  review PASS with QA FAIL still proposes the merge"; head -c 1500 <<<"$OUT"; fi
 rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__qa.json"
@@ -5749,13 +5749,14 @@ sed -i '3s/.*/main cafe three/' "$TMP/gm-main/$CAFE"; gi "$TMP/gm-main" commit -
 gi "$GM" merge -q --no-ff --no-edit main >/dev/null 2>&1 || true
 git -C "$GM" show "HEAD:$CAFE" | sed '3s/.*/hand resolved cafe three/' > "$GM/$CAFE"
 gi "$GM" add "$CAFE"; gi "$GM" commit -qm "Merge main into feat/gm (hand resolution in non-ASCII file)"; gmqa
-expect "gate-merge: a hand resolution in a non-ASCII owned file makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/caf" gate "$GP" --no-run-checks
-# the non-ASCII file is removed from both branches because the stray-path check does not decode git's quoted names
-gi "$GM" rm -q "$CAFE"; gi "$GM" commit -qm "test: remove the non-ASCII owned file"
-gi "$TMP/gm-main" rm -q "$CAFE"; gi "$TMP/gm-main" commit -qm "test: remove the non-ASCII owned file"
-gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm (non-ASCII file removed)"
-gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+expect "gate-merge: a hand resolution in a non-ASCII owned file makes the review STALE, naming the file in plain UTF-8" 1 "BLOCKER t: review is STALE - owned paths changed after .*$CAFE" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
 expect "gate-merge: a new review after the non-ASCII hand resolution clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# a clean change to the non-ASCII owned file by its task is not stray (git reports its name raw, not C-quoted)
+sed -i '8s/.*/topic cafe eight/' "$GM/$CAFE"; gi "$GM" commit -qam "feat: topic changes cafe line 8"
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+expect "gate-merge: a clean change to a non-ASCII owned file keeps READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: a non-ASCII owned file is not stray" "changes outside every task's owned paths" gate "$GP" --no-run-checks
 # the run lead's plan file and report.md are never stray; any other unowned file still is
 mkdir -p "$GM/docs/plans/gm"
 python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]="../.."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/docs/plans/gm.json"
