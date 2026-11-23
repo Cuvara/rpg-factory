@@ -52,8 +52,9 @@ Two conventions every new script under `scripts/` (so every new check in `checks
   block from `checks/english-only.py` (`for _stream in (sys.stdout, sys.stderr): if hasattr(_stream, "reconfigure"):
   _stream.reconfigure(encoding="utf-8", errors="replace")`). Every `subprocess` call with `text=True` also names
   `encoding="utf-8"`.
-- **Workspace reader guard** (`tests/workspace-default.test.sh`): never write the workspace default as a literal
-  (`/mnt/c/Workspaces/UnityIndie` is allowed only in `lib/workspace.sh`, `lib/workspace.py` and this README). Shell
+- **Workspace reader guard** (reader rules: `checks/workspace-readers.sh`; its self-test and the literal rule:
+  `tests/workspace-default.test.sh`): never write the workspace default as a literal (`/mnt/c/Workspaces/UnityIndie`
+  is allowed only in `lib/workspace.sh`, `lib/workspace.py` and this README). Shell
   reads the default through `rpgf_default_workspace` from `lib/workspace.sh`; a shell line that reads the registry's
   workspace `root_default` key with jq must pass the value through `rpgf_platform_path` on that same line. In Python,
   only `lib/workspace.py` and `lib/fstate.py` may name `root_default`, and a script outside `scripts/lib/` calls
