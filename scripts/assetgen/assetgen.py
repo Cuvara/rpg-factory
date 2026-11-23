@@ -34,7 +34,7 @@ Usage:
   assetgen.py style bump --authoring DIR --id ID [--list-only] [--json]
   assetgen.py style report --authoring DIR [--style ID] [--json]
   assetgen.py model-hashes [--models-dir DIR | --comfy-dir DIR] [--desktop-dir DIR] [--instance NAME|ID] [--kind K]...
-                           [--json]
+                           [--extra-model-paths FILE]... [--no-extra-model-paths] [--json]
 
 RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
 <authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
@@ -197,8 +197,11 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256 (a backslash in a name
                       reads as a slash); missing entries are unverified. manifest only reads it; `model-hashes`
                       (modelhash.py) is the writer: it hashes the local ComfyUI model files (--models-dir, --comfy-dir
-                      or the Comfy Desktop instance) in 1 MiB chunks into Factory state, adds size and mtime_ns to each
-                      row and reuses a row whose file kept both (it is not a read-only verb). The record follows the
+                      or the Comfy Desktop instance, plus the folders its extra_model_paths.yaml names: --extra-model-paths
+                      FILE, <comfy root>/extra_model_paths.yaml, the Desktop instance-model-paths/<id>.yaml; the first
+                      folder wins a duplicate name, --no-extra-model-paths skips the auto-discovered files) in 1 MiB chunks
+                      into Factory state, adds size and mtime_ns to each row and reuses a row whose file kept both (it is
+                      not a read-only verb). The record follows the
                       machine's cache: re-running manifest with a different cache changes run.md and resets an approved
                       run to proposed. This record makes no measured or quality claim.
   approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
