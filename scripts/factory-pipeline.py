@@ -359,13 +359,36 @@ def settings(reg):
     return p
 
 
+# One process, one answer: `rev-parse` and `worktree list` repeat across the status/gate/dispatch/verdict helpers, so
+# their results are kept for the life of the process (never in a file). Every git call that can move a ref or a
+# worktree (anything outside GIT_READ_VERBS: add, commit, ...) drops the memo, so a later read sees the write.
+GIT_MEMO_VERBS = (("rev-parse",), ("worktree", "list"))
+GIT_READ_VERBS = {"rev-parse", "rev-list", "diff", "merge-base", "status", "show", "diff-tree", "for-each-ref",
+                  "remote", "ls-tree", "ls-files", "log", "cat-file", "hash-object"}
+_GIT_MEMO = {}
+
+
+def git_memo_clear():
+    _GIT_MEMO.clear()
+
+
 def git(repo, *args):
+    memo_key = None
+    if any(args[:len(v)] == v for v in GIT_MEMO_VERBS):
+        memo_key = (os.path.normcase(os.path.normpath(repo)), args)
+        if memo_key in _GIT_MEMO:
+            return _GIT_MEMO[memo_key]
+    elif args[:1] and args[0] not in GIT_READ_VERBS:
+        _GIT_MEMO.clear()  # a possible write: no cached ref or worktree list survives it
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60,
                            encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
-        return None, 1
-    return r.stdout.strip(), r.returncode
+        return None, 1  # a failed launch or a timeout is not an answer: never kept
+    out = (r.stdout.strip(), r.returncode)
+    if memo_key is not None:
+        _GIT_MEMO[memo_key] = out
+    return out
 
 
 def git_blob(repo, head, path):
