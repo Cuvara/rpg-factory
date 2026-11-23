@@ -74,14 +74,18 @@ what the person asked for by invoking this; still ask before `--apply` when the 
 - **Save the model hashes (step 7, local profiles only):** `assetgen.py` reads `<state>/comfy/model-hashes.json` (schema
   `rpg-factory.comfy-model-hashes/1`, rows `kind`, `name`, `sha256`, `size`, `mtime_ns`; `ASSETGEN_MODEL_HASHES`
   overrides the path; reader: `scripts/assetgen/assetgen.py` `model_hashes`) and the writer is
-  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py model-hashes [--models-dir DIR | --comfy-dir DIR] [--desktop-dir DIR] [--instance NAME|ID] [--kind K]... [--json]`
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py model-hashes [--models-dir DIR | --comfy-dir DIR] [--desktop-dir DIR] [--instance NAME|ID] [--extra-model-paths FILE]... [--no-extra-model-paths] [--kind K]... [--json]`
   (logic in `scripts/assetgen/modelhash.py`). Run it after installing or changing a local model; the `api-only`
   profile needs none. It hashes the model files of the kinds asset-gen records (checkpoints, loras, controlnet,
   upscale_models, annotators) with a streamed sha256, so the first run reads every multi-GB file once; later runs reuse
   a row whose size and mtime are unchanged. The models directory is `--models-dir`, else `--comfy-dir`/models (headless
   install), else the Comfy Desktop local instance's `installPath/ComfyUI/models` from `installations.json`
   (`--desktop-dir`, `COMFY_DESKTOP_DIR` or the per-OS default, `--instance` as for the setup script); with none found it
-  exits 2 and names the flags. It needs no network, never downloads a model and writes only the cache through
+  exits 2 and names the flags. It also hashes the extra model folders that ComfyUI extra model path files name for those
+  kinds: `<comfy root>/extra_model_paths.yaml` (next to the models directory) and, on the Desktop route, the instance's
+  `<data dir>/instance-model-paths/<instance id>.yaml`, plus every `--extra-model-paths FILE` (an explicit file that is
+  missing exits 2; `--no-extra-model-paths` skips only the auto-discovery). A malformed or unreadable file is a warning
+  and the file is ignored, never a failure. It needs no network, never downloads a model and writes only the cache through
   `scripts/lib/fstate.py`, never into a repository or the ComfyUI install. Without the file a local model's sha256
   stays unverified in the run manifest and the asset-gen check warns; say so in the report, never write the file by
   hand.
