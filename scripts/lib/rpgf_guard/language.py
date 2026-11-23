@@ -110,10 +110,11 @@ def in_scope(cwd, registry, command=""):
 
 
 def git_dir_in_scope(argvs, cwd, registry):
-    """True when a `git -C <dir>` of the expanded commands lies in scope. A relative `-C` is resolved against the
-    hook's cwd (git's own rule), so `git -C ../clone commit ...` from an unrelated directory is still seen. Pure
-    path arithmetic plus the marker reads in_scope already does: no subprocess, no repository scan; any error is
-    "not in scope" (no opinion)."""
+    """True when a `git -C <dir>` of the expanded commands lies in scope. The directories come from git_c_dirs: a
+    relative `-C` is resolved against the directory a preceding literal `cd` in the same command line moved to,
+    else against the hook's cwd, so `git -C ../clone commit ...` from an unrelated directory is still seen; after
+    a `cd` whose target is not a literal the relative `-C` is skipped. Pure path arithmetic plus the marker reads
+    in_scope already does: no subprocess, no repository scan; any error is "not in scope" (no opinion)."""
     for path in git_c_dirs(argvs, cwd):
         try:
             if (find_workspace(path, registry) or within(path, PLUGIN_ROOT) or plugin_checkout(path)

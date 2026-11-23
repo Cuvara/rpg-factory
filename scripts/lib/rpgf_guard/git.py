@@ -33,8 +33,9 @@ LITERAL_DIR_BAD = re.compile(r"[$`*?\[\]{}!;|&<>()\"']")
 
 
 def literal_cd_target(argv):
-    """The directory of a `cd <dir>` argv when it is a literal path, else None: no variable, substitution, glob,
-    `cd -`, or bare `cd`/`cd ~` (home is the machine's, not the command's). A leading `~` is expanded."""
+    """The directory of a `cd <dir>` argv when it is a literal path, else None. None for a bare `cd`, `cd -`, a
+    target with a variable, substitution or glob, and a `~user` that os.path.expanduser cannot resolve. A leading
+    `~` (`cd ~`, `cd ~/x`) is expanded by os.path.expanduser and returns that path."""
     target = next((x for x in argv[1:] if not x.startswith("-") or x == "-"), None)
     if not target or target == "-" or LITERAL_DIR_BAD.search(target):
         return None

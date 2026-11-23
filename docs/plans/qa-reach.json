@@ -1,0 +1,100 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "qa-reach",
+  "title": "Per-function case reach for the pipeline and assetgen suites, slot progress in status, pipeline-speed lows",
+  "topic": "qa-reach",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "slot-progress",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "status and run-all slot records that every run lead reads before stopping a run",
+      "objective": "Backlog topic pipeline-speed-followups (docs/plans/backlog.md). In plan pipeline-speed the run lead took a run-all QA run that held a test slot for an orphan (its Claude Code shell had been stopped for low memory) and stopped it, although the run was still passing checks. `factory-pipeline.py status` prints each slot holder (`slot_holders`/`slot_lines`: PID, checkout, start time, alive) but nothing about progress. (1) tests/run-all.sh: while a run holds a slot (`$STATE/locks/run-all-slots/<n>`, files owner, pid, checkout, started, winpid, args, record), keep a small `progress` file in the slot directory up to date: the check that is running or last finished, its result, and the counts so far (passed, failed), with a UTC time. Write it atomically, remove it with the slot, and keep the cost negligible. (2) `status` (text and `--json`) shows that progress for each slot holder, and the age of its last update, so a live run is not mistaken for an orphan; the line keeps 'the user decides, the run never stops it'. Also the review nit from plan pipeline-speed: the `if not _GIT_MEMO_ON: pass elif ...` branch near the git memo in scripts/factory-pipeline.py reads awkwardly; rewrite it plainly with no behaviour change. Cases: tests/run-all-parallel.test.sh (a run holding a slot writes progress; the file goes with the slot), tests/pipeline.test.sh (status prints the progress and its age from a fake slot directory). Changelog fragment changelog.d/qa-reach-slot-progress.md (### Added). Update the slot paragraph of skills/factory-core/references/parallel-work.md only if it describes what status prints. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        "changelog.d/qa-reach-slot-progress.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "a run holding a slot keeps a progress file in the slot directory, removed with the slot",
+        "status shows each slot holder's progress and the age of its last update, text and --json",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two ordering and parsing fixes in model-hashes and two docstrings",
+      "objective": "Backlog topic pipeline-speed-followups (docs/plans/backlog.md). (1) scripts/assetgen/modelhash.py (plan pipeline-speed): explicit `--extra-model-paths` files are read before the auto-discovered root `extra_model_paths.yaml`, while ComfyUI's main.py loads the root file first and then the files given on its command line: match ComfyUI's order. `is_default` accepts true/yes/on words, while ComfyUI uses Python truthiness of the YAML value: match ComfyUI for the values its loader can produce (bools, numbers, strings, including a quoted 'false', which is truthy there), and say what you chose for the subset parser. Cases in tests/assetgen.test.sh with fake files only. (2) Stale docstrings: `git_dir_in_scope` in scripts/lib/rpgf_guard/language.py still says a relative `-C` resolves against the hook cwd only (it now follows a preceding literal `cd` through `git_c_dirs`), and `literal_cd_target` in scripts/lib/rpgf_guard/git.py says `cd ~` gives None although `expanduser` resolves it: make both describe the code. Changelog fragment changelog.d/qa-reach-lows.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/assetgen/modelhash.py",
+        "tests/assetgen.test.sh",
+        "scripts/lib/rpgf_guard/language.py",
+        "scripts/lib/rpgf_guard/git.py",
+        "changelog.d/qa-reach-lows.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/git-guard.test.sh"
+      ],
+      "acceptance": [
+        "model-hashes reads extra model path files in ComfyUI's order and treats is_default as ComfyUI does",
+        "the two docstrings describe the code",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "case-reach",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "task QA selection for every plan; a reach that is too narrow lets a regression through to CI",
+      "objective": "Backlog topic test-speed-followups (docs/plans/backlog.md): `tests/affected.py` reach is per file, so any change to scripts/factory-pipeline.py selects every case group of tests/pipeline.test.sh (its `# case-map:` header) and most scripts/assetgen/* changes select every case group of tests/assetgen.test.sh (most groups map `scripts/assetgen/*.py`); task QA then runs the whole suite (tests/pipeline.test.sh took 2589 s for one task in plan pipeline-speed). Narrow the case reach below the file, conservatively: (1) Python files only: read the changed line ranges of the diff (`git diff -U0` against the same base `changed` uses, plus the work tree) and map each changed range to the top-level function or class that encloses it (ast); any change outside a top-level def/class (imports, module constants, decorators, top-level code), a deleted or renamed def, or a parse failure keeps today's file-level reach. (2) A case-map pattern may name symbols: `path::name` (and a `path::*` default is today's file reach). A changed symbol reaches the case groups that name it or any symbol whose static in-module reference closure (names referenced in its body, transitively, within the same file) contains it; a symbol reached by `getattr`, a dict of callables or other dynamic dispatch must be named in the map or the reach stays file-level. Decide with evidence whether module-level reach (which assetgen module each group's commands import) or symbol reach fits tests/assetgen.test.sh better; for scripts/factory-pipeline.py, map the pipeline case groups to the `cmd_*` verbs they run. (3) Rewrite the case-map headers of tests/pipeline.test.sh and tests/assetgen.test.sh to use the narrower reach where it is safe, and leave a group on its file pattern when unsure. Cases in tests/affected.test.sh with fixture repos: a change inside one function selects only its groups; a change to a shared helper selects every group whose verbs reach it; a module-level change, a new import or a renamed function selects ALL as before. Report how many groups a typical one-function change to scripts/factory-pipeline.py and to scripts/assetgen/assetgen.py selects before and after. Changelog fragment changelog.d/qa-reach-cases.md (### Changed). Update the selection rules in the module docstring of tests/affected.py and the case-map section of tests/README.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. Also fix the flaky assetgen case 'CLI help documents --run RUN-ID and resolve --verbose' (review-cmd group of tests/assetgen.test.sh, about line 2051; task lows of this plan saw PASS/FAIL/PASS at its base): it pipes `AG ... --help` into `grep -q` under pipefail, so an early grep exit can fail the pipeline with SIGPIPE; capture the help text first, then match it. Scope widened at the task lead's request: tests/run-all.sh joins the owned paths so `affected.py cases` receives the diff base (`--base`); slot-progress, its earlier owner, is merged.",
+      "paths": [
+        "tests/affected.py",
+        "tests/run-all.sh",
+        "tests/affected.test.sh",
+        "tests/pipeline.test.sh",
+        "tests/assetgen.test.sh",
+        "tests/README.md",
+        "changelog.d/qa-reach-cases.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "slot-progress",
+        "lows"
+      ],
+      "checks": [
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "a change inside one function of scripts/factory-pipeline.py or an assetgen module selects only the case groups that reach it",
+        "module-level changes, new imports, renamed functions and parse failures keep the file-level reach",
+        "the before and after group counts are in the report",
+        "the assetgen CLI help case no longer depends on pipe timing",
+        "the named suite passes"
+      ]
+    }
+  ]
+}

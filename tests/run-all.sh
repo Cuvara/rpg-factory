@@ -194,12 +194,25 @@ STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
 SLOT=""; SLOT_TOKEN=""
 RESULT=""; RESULT_DIR=""; RESULT_STARTED=""; RESULT_WINPID=""; RESULT_ADMITTED=false
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
-_ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
+# slot_progress <check> <result>: while this run holds a test slot, keep $SLOT/progress current so `factory-pipeline.py
+# status` can tell a live run from an orphan. One key=value per line (updated UTC, check, result, passed, failed), written
+# to a temp file and renamed over it; a failed write never fails the run. Parent shell only (a block job has its own
+# counters), and no slot (full run, cap 0) means no file. The check name loses its trailing " [Ns]" timing.
+slot_progress() {
+  [ -n "$SLOT_TOKEN" ] && [ -z "${IN_BLOCK:-}" ] || return 0
+  local c=${1% \[*s\]} tmp="$SLOT/progress.tmp.$$"
+  c=${c//$'\r'/}; c=${c//$'\n'/ }
+  { printf 'updated=%s\ncheck=%s\nresult=%s\npassed=%s\nfailed=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$c" "$2" "$pass" "$fail" > "$tmp" \
+      && mv -f "$tmp" "$SLOT/progress"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null || :
+  return 0
+}
+_ok()   { pass=$((pass + 1)); echo "PASS  $1"; slot_progress "$1" PASS; }
 # failure_tails keeps, in step with failures, the last 40 detail lines of each failure ("" without detail) for the
 # result record, so a failed suite's output survives a run whose terminal is gone.
 _bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; failure_tails+=("")
-  if [ -n "${2:-}" ]; then echo "$2" | sed 's/^/      /'; failure_tails[${#failure_tails[@]}-1]=$(tail -n 40 <<<"$2"); fi; }
-_skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
+  if [ -n "${2:-}" ]; then echo "$2" | sed 's/^/      /'; failure_tails[${#failure_tails[@]}-1]=$(tail -n 40 <<<"$2"); fi
+  slot_progress "$1" FAIL; }
+_skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; slot_progress "$1" SKIP; }
 _note() { echo "$1"; }
 # A WARN is counted apart (never a pass or a fail, the exit code ignores it) and shown in the summary only when non-zero.
 _wrn()  { warn=$((warn + 1)); echo "WARN  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
@@ -262,7 +275,7 @@ runall_cleanup() {
     rmdir "$LOCK" 2>/dev/null || :
   fi
   if [ -n "$SLOT_TOKEN" ] && [ "$(cat "$SLOT/owner" 2>/dev/null)" = "$SLOT_TOKEN" ]; then
-    rm -f "$SLOT/owner" "$SLOT/pid" "$SLOT/checkout" "$SLOT/started" "$SLOT/winpid" "$SLOT/args" "$SLOT/record"
+    rm -f "$SLOT/owner" "$SLOT/pid" "$SLOT/checkout" "$SLOT/started" "$SLOT/winpid" "$SLOT/args" "$SLOT/record" "$SLOT/progress" "$SLOT"/progress.tmp.*
     rmdir "$SLOT" 2>/dev/null || :
   fi
   return "$runall_rc"
@@ -323,6 +336,7 @@ running() { # sets nrun (started, not ended), nlive (of them in the live lane), 
 }
 start() { # queue index [o: the in-order pick]
   QL[$1]=${2:-1}
+  slot_progress "${QM[$1]}" running
   ( t0=$(date +%s); eval "${QC[$1]}" > "$QD/$1.out" 2>&1 < /dev/null; rc=$?; t1=$(date +%s)
     echo "$rc $((t1 - t0))" > "$QD/$1.tmp" && mv "$QD/$1.tmp" "$QD/$1.res" ) &
   QP[$1]=$!
@@ -402,6 +416,7 @@ _run() {
   local publish=$cache_suite
   if [ -n "$case_list" ]; then set -- "$@" --case "$case_list"; publish=""; fi
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
+    slot_progress "$name" running
     if [ -n "$post" ]; then
       t0=$(date +%s); out=$("$@" 2>&1 < /dev/null); rc=$?; t1=$(date +%s)
       [ -z "$timed" ] || timing_add "$timed" "$((t1 - t0))" "$rc" "$case_list"
@@ -542,10 +557,11 @@ list_runnable() { # file: list_suites without the release-only suites unless --r
 }
 # affected_select <suite...>: one affected.py `cases` call (the import graph is built once per run, before any job
 # forks) answers suite_selected for every candidate - its lines are exactly the selected suites - and gives each
-# one's cases; a name outside the candidates, or a failed call, asks per suite.
+# one's cases; a name outside the candidates, or a failed call, asks per suite. It gets the base `changed` used, so the
+# changed line ranges (symbol-level case reach) come from the same merge-base.
 affected_select() {
   local picked suite cases
-  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" cases "$AFF" "$@") || return 0
+  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" cases ${base:+--base "$base"} "$AFF" "$@") || return 0
   AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'
   while read -r suite cases; do
     suite=${suite%$'\r'}; cases=${cases%$'\r'}
@@ -958,7 +974,7 @@ test_slot() {
             printf '%s\n' "$$" > "$LOCK/reclaim/pid"
             if lock_still_stale "$stale_pid" "$stale_ident"; then
               echo "run-all: taking over stale test slot $i ($stale_pid)" >&2
-              rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid" "$LOCK/args" "$LOCK/record"
+              rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid" "$LOCK/args" "$LOCK/record" "$LOCK/progress" "$LOCK"/progress.tmp.*
               rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
             else rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" 2>/dev/null || :; fi
           fi

@@ -3,19 +3,43 @@
 # (ownership, cycles, cross-model review, the no-worktree rule for Unity projects, exclusive resources), dispatch
 # commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate, and run-all's --affected python3 guard
 # and suite timings (runall-preflight). Never touches the real workspace.
-# case-map: dogfood tests/dogfood.sh tests/dogfood/*
-# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
-# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
-# case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py
-# case-map: subplan docs/schemas/pipeline-subplan.schema.json
-# case-map: status docs/schemas/pipeline-status.schema.json
-# case-map: cleanup docs/schemas/pipeline-status.schema.json
-# case-map: settled-workers docs/schemas/pipeline-status.schema.json
-# case-map: runall-preflight tests/run-all.sh
-# case-map: qa-tiers tests/run-all.sh
-# Measured with sys.monitoring and an audit hook over a full run: factory-pipeline.py, registry.json, the plan schema,
-# model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
-# they have no map: ALL is the safe fallback for them (and for any file not listed).
+# case-map: validate scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_validate
+# case-map: plan-edit scripts/factory-pipeline.py::cmd_plan_edit
+# case-map: subplan docs/schemas/pipeline-subplan.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
+# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::python_alias_line
+# case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::grade_paths scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::task_grades
+# case-map: child-dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
+# case-map: tier scripts/factory-pipeline.py::cmd_tier
+# case-map: verdict-gate scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
+# case-map: cleanup docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status
+# case-map: settled-workers docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::place_show_line
+# case-map: orca-first scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status
+# case-map: review-findings scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
+# case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier
+# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_notes
+# case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
+# case-map: dogfood tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
+# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
+# case-map: cleanup-merged scripts/factory-pipeline.py::cmd_cleanup
+# case-map: gate-merge scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::run_lead_file_blockers
+# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::subplan_models scripts/factory-pipeline.py::subtask_failures scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::validate_subplan scripts/factory-pipeline.py::verdict_dir
+# case-map: multiwave scripts/factory-pipeline.py::cleanup scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::own_start scripts/factory-pipeline.py::repo_info scripts/factory-pipeline.py::review_base scripts/factory-pipeline.py::scope_fingerprint scripts/factory-pipeline.py::stack_base scripts/factory-pipeline.py::stack_file scripts/factory-pipeline.py::stack_gate scripts/factory-pipeline.py::stack_groups scripts/factory-pipeline.py::stack_record scripts/factory-pipeline.py::stack_record_live scripts/factory-pipeline.py::stackable scripts/factory-pipeline.py::start_base scripts/factory-pipeline.py::status scripts/factory-pipeline.py::sync_file scripts/factory-pipeline.py::sync_record scripts/factory-pipeline.py::task_status scripts/factory-pipeline.py::uncovered_changes scripts/factory-pipeline.py::verdict_dir scripts/factory-pipeline.py::verdict_file scripts/factory-pipeline.py::verdict_of
+# case-map: qa-tiers tests/run-all.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::emit_lead_handoff scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::qa_body scripts/factory-pipeline.py::retry_checks scripts/factory-pipeline.py::runall_suites scripts/factory-pipeline.py::task_qa_warnings scripts/factory-pipeline.py::tier_command scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::verdict_file
+# case-map: tier-xs scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::implementer_of scripts/factory-pipeline.py::task_context scripts/factory-pipeline.py::validate
+# case-map: runall-preflight tests/run-all.sh scripts/factory-pipeline.py::*
+# case-map: nudge scripts/factory-pipeline.py::cmd_nudge scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status
+# case-map: cli-selftest scripts/factory-pipeline.py::*
+# scripts/factory-pipeline.py has a symbol map (`path::name`, tests/affected.py): a change confined to one top-level
+# function selects only the groups that name it or a symbol that reaches it (a group names the `cmd_*` verb functions its
+# commands run, plus every function its embedded python calls directly on the module it loads with importlib; the helpers
+# below those are found by the static in-module reference closure). `::*` marks a group that exercises the file as a
+# whole (dogfood and cli-selftest run no verb, runall-preflight only run-all.sh): any change to the file selects it. A
+# change to main(), a helper main() runs before the dispatch (registry loading, argument parsing), a module-level
+# statement, an import, or a function that no group names or reaches falls back to every group, as does a new, deleted
+# or renamed function. When a verb or a directly called function is added to a group, name it here; when unsure, name `::*`.
+# The other files run in every case or in most of them (registry.json, the plan schema, model_policy.py, orca_cmd.py,
+# plan_paths.py: measured with sys.monitoring and an audit hook over a full run; pipeline_route.py and fstate.py in 17 of
+# 20), so they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
 CASES='validate plan-edit subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight nudge cli-selftest'
 usage() {
@@ -4559,6 +4583,32 @@ SLOTW="$TMP/proc-slots-win.json"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "status names both PIDs when winpid differs, alive by the Windows PID" 0 "^Slots: slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" status "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "cleanup names both PIDs when winpid differs" 1 "^  SLOT slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot (1) still prints no Windows PID text" "slot 1 held by PID 4242 \(Windows PID" status "$G"
+# progress file of a held slot (written by tests/run-all.sh): status prints the last check, its result, the counts and the
+# age of the update; a slot without one says "no progress yet"; a malformed file is no progress, never an error
+mkdir -p "$SLOTS/8" "$SLOTS/9" "$SLOTS/10"
+for sn in 8 9 10; do
+  printf '%s\n' "818$sn" > "$SLOTS/$sn/pid"; printf '%s\n' "818$sn" > "$SLOTS/$sn/winpid"; wtp "$S" > "$SLOTS/$sn/checkout"; printf '2026-11-11T07:0%s:00Z\n' "$sn" > "$SLOTS/$sn/started"
+done
+FRESH="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+printf 'updated=%s\ncheck=tests/git-guard.test.sh\nresult=PASS\npassed=7\nfailed=1\n' "$FRESH" > "$SLOTS/8/progress"
+printf 'this is not a progress file\nupdated=\n' > "$SLOTS/10/progress"
+jq -n '[{pid:8188,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T07:08:00"},{pid:8189,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T07:09:00"}]' > "$TMP/proc-slots-prog.json"
+SLOTG="$TMP/proc-slots-prog.json"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "status shows the slot's last check, result, counts and update age" 0 "^Slots: slot 8 held by PID 8188 in .* \(alive\), last check tests/git-guard.test.sh PASS \(7 passed, 1 failed\) updated [0-9]+s ago: the user decides, the run never stops it$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "status says no progress yet for a slot without a progress file" 0 "^Slots: slot 9 held by PID 8189 in .*, no progress yet: the user decides, the run never stops it$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "a malformed progress file reads as no progress yet" 0 "^Slots: slot 10 held by PID 81810 in .*, no progress yet: " status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" oref "progress lines never carry a kill command" "$NOKILL" status "$G"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" status --json "$G" > "$TMP/so-prog.json" 2> "$TMP/se-prog.txt"; rc=$?
+if [ $rc = 0 ] && jq -e '.valid' "$TMP/so-prog.json" >/dev/null && grep -q "^Slots: slot 8 held by PID 8188 .*last check tests/git-guard.test.sh PASS (7 passed, 1 failed) updated [0-9]*s ago" "$TMP/se-prog.txt"
+then pass=$((pass + 1)); echo "PASS  status --json: the slot progress line is on stderr"
+else fail=$((fail + 1)); echo "FAIL  status --json slot progress (rc $rc)"; head -5 "$TMP/se-prog.txt"; fi
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-prog.json" 2>&1
+if jq -e '(.slots[] | select(.slot == "8") | .progress | .check == "tests/git-guard.test.sh" and .result == "PASS" and .passed == 7 and .failed == 1 and (.age_seconds | . >= 25 and . < 600) and (.updated | test("Z$"))) and (.slots[] | select(.slot == "9") | .progress == null) and (.slots[] | select(.slot == "10") | .progress == null)' "$TMP/cleanup-prog.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json carries each slot's progress and its age"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json slot progress"; head -c 1500 "$TMP/cleanup-prog.json"; fi
+printf 'updated=2026-11-11T07:00:00Z\ncheck=tests/x.test.sh\nresult=running\npassed=0\nfailed=0\n' > "$SLOTS/8/progress"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "an old progress update shows its age in hours" 0 "^Slots: slot 8 held by PID 8188 in .*last check tests/x.test.sh running \(0 passed, 0 failed\) updated [0-9]+h ago" status "$G"
+rm -rf "$SLOTS/8" "$SLOTS/9" "$SLOTS/10"
 # children of the plan's worktrees count as the plan's checkouts, as `children_of` finds them: a branch with an Orca prefix
 # (codex/<task branch>--qa in a sibling directory) and a plan branch known only through Orca's lineage (any
 # directory); a slot in a checkout that is neither stays unnamed
