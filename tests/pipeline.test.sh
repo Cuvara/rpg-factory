@@ -4559,6 +4559,32 @@ SLOTW="$TMP/proc-slots-win.json"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "status names both PIDs when winpid differs, alive by the Windows PID" 0 "^Slots: slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" status "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "cleanup names both PIDs when winpid differs" 1 "^  SLOT slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot (1) still prints no Windows PID text" "slot 1 held by PID 4242 \(Windows PID" status "$G"
+# progress file of a held slot (written by tests/run-all.sh): status prints the last check, its result, the counts and the
+# age of the update; a slot without one says "no progress yet"; a malformed file is no progress, never an error
+mkdir -p "$SLOTS/8" "$SLOTS/9" "$SLOTS/10"
+for sn in 8 9 10; do
+  printf '%s\n' "818$sn" > "$SLOTS/$sn/pid"; printf '%s\n' "818$sn" > "$SLOTS/$sn/winpid"; wtp "$S" > "$SLOTS/$sn/checkout"; printf '2026-11-11T07:0%s:00Z\n' "$sn" > "$SLOTS/$sn/started"
+done
+FRESH="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+printf 'updated=%s\ncheck=tests/git-guard.test.sh\nresult=PASS\npassed=7\nfailed=1\n' "$FRESH" > "$SLOTS/8/progress"
+printf 'this is not a progress file\nupdated=\n' > "$SLOTS/10/progress"
+jq -n '[{pid:8188,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T07:08:00"},{pid:8189,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T07:09:00"}]' > "$TMP/proc-slots-prog.json"
+SLOTG="$TMP/proc-slots-prog.json"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "status shows the slot's last check, result, counts and update age" 0 "^Slots: slot 8 held by PID 8188 in .* \(alive\), last check tests/git-guard.test.sh PASS \(7 passed, 1 failed\) updated [0-9]+s ago: the user decides, the run never stops it$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "status says no progress yet for a slot without a progress file" 0 "^Slots: slot 9 held by PID 8189 in .*, no progress yet: the user decides, the run never stops it$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "a malformed progress file reads as no progress yet" 0 "^Slots: slot 10 held by PID 81810 in .*, no progress yet: " status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" oref "progress lines never carry a kill command" "$NOKILL" status "$G"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" status --json "$G" > "$TMP/so-prog.json" 2> "$TMP/se-prog.txt"; rc=$?
+if [ $rc = 0 ] && jq -e '.valid' "$TMP/so-prog.json" >/dev/null && grep -q "^Slots: slot 8 held by PID 8188 .*last check tests/git-guard.test.sh PASS (7 passed, 1 failed) updated [0-9]*s ago" "$TMP/se-prog.txt"
+then pass=$((pass + 1)); echo "PASS  status --json: the slot progress line is on stderr"
+else fail=$((fail + 1)); echo "FAIL  status --json slot progress (rc $rc)"; head -5 "$TMP/se-prog.txt"; fi
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-prog.json" 2>&1
+if jq -e '(.slots[] | select(.slot == "8") | .progress | .check == "tests/git-guard.test.sh" and .result == "PASS" and .passed == 7 and .failed == 1 and (.age_seconds | . >= 25 and . < 600) and (.updated | test("Z$"))) and (.slots[] | select(.slot == "9") | .progress == null) and (.slots[] | select(.slot == "10") | .progress == null)' "$TMP/cleanup-prog.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json carries each slot's progress and its age"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json slot progress"; head -c 1500 "$TMP/cleanup-prog.json"; fi
+printf 'updated=2026-11-11T07:00:00Z\ncheck=tests/x.test.sh\nresult=running\npassed=0\nfailed=0\n' > "$SLOTS/8/progress"
+RPG_FACTORY_PROCESS_TABLE="$SLOTG" opath "an old progress update shows its age in hours" 0 "^Slots: slot 8 held by PID 8188 in .*last check tests/x.test.sh running \(0 passed, 0 failed\) updated [0-9]+h ago" status "$G"
+rm -rf "$SLOTS/8" "$SLOTS/9" "$SLOTS/10"
 # children of the plan's worktrees count as the plan's checkouts, as `children_of` finds them: a branch with an Orca prefix
 # (codex/<task branch>--qa in a sibling directory) and a plan branch known only through Orca's lineage (any
 # directory); a slot in a checkout that is neither stays unnamed

@@ -68,7 +68,9 @@ reuse, `--affected` and `--within` selection, test-run slots and case selection.
 - **Before rerunning a tier command whose terminal or wrapping command is gone, look for its run first:** check the slot
   directories (`<persistent state dir>/locks/run-all-slots/<n>`: `checkout`, `pid`, `winpid`, `args`) for a live run of
   your checkout and read its result with `tests/run-all.sh --last-result` instead of starting a copy (a second run of
-  the same checkout and arguments exits 4 and names the holder; `--attach` waits for it and returns its status). Stop
+  the same checkout and arguments exits 4 and names the holder; `--attach` waits for it and returns its status).
+  `factory-pipeline.py status` names each holder with the run's last check, its counts and the age of that update (the
+  slot's `progress` file): a run whose update is recent is live, however it was started. Stop
   that process only when you started it, by its PID and never by pattern. Reason: backlog run-all-orphan-after-reap - a
   stopped wrapper left run-all running and holding its test slot while the session believed it dead, so a rerun queued
   behind or duplicated its own run.
