@@ -385,8 +385,8 @@ def git(repo, *args):
     elif args[:1] and args[0] not in GIT_READ_VERBS:
         _GIT_MEMO.clear()  # a possible write: no cached ref or worktree list survives it
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60,
-                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        r = subprocess.run(["git", "-c", "core.quotePath=false", "-C", repo, *args], capture_output=True,
+                           text=True, timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None, 1  # a failed launch or a timeout is not an answer: never kept
     out = (r.stdout.strip(), r.returncode)
@@ -3178,6 +3178,9 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     of a file changed by both sides is not a resolution.
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
+    Path names are read raw (git runs with core.quotePath=false); a conflict-resolution
+    header whose name git still quotes (a tab, newline, double quote or backslash) counts as
+    every owned path.
     A path whose content at target equals its content at sha is never changed, and the
     side commits of a merge of the repo's default branch (origin/<b>, else <b>, for b the
     plan base unless it is a SHA, the registry default_branch, then main) are nobody's
@@ -3213,7 +3216,11 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
         result = set()
         for line in (out or "").splitlines():
             if line.startswith("diff --cc "):
-                result.add(line[len("diff --cc "):])
+                name = line[len("diff --cc "):]
+                if name.startswith('"'):
+                    result |= set(task["paths"])  # a name git still C-quotes is not decoded: fail safe
+                else:
+                    result.add(name)
         return result
     def owns(t, f):
         return any(norm_path(p).rstrip("/") in ("", ".") or norm_path(f) == norm_path(p).rstrip("/")
