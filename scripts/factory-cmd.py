@@ -230,10 +230,12 @@ def cmd_doctor(args):
     print(f"- scratch state: {fstate.scratch()}  (TMPDIR={os.environ.get('TMPDIR', '<unset>')!r})")
     print(f"- persistent state: {fstate.persistent()}")
     print(f"- tools: {'all present' if not missing else 'MISSING ' + ', '.join(missing)}")
-    if py3["advice"]:
+    stub_fault = any(f["id"] == "python3-store-stub" for f in faults)
+    if py3["advice"] and not stub_fault:  # the stub fault below already carries the fix: one line per fault
         print(f"- python3: {py3['advice']}")
     for f in faults:
-        print(f"- setup fault {f['id']}: {f['detail']}. Fix: {f['fix']}")
+        extra = ". The stub also slows every hook call." if f["id"] == "python3-store-stub" else ""
+        print(f"- setup fault {f['id']}: {f['detail']}. Fix: {f['fix']}{extra}")
     print("- hooks: " + "; ".join(f"{e} [{', '.join(m)}]" for e, m in hooks.items()))
     print("\n## Dev tools (registry dev_tools; names only are read from MCP/plugin config)")
     for t in tools:
