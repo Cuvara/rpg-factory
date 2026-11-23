@@ -4089,8 +4089,8 @@ rd="$mh/reader/ComfyUI"; rda="$rd/custom_nodes/comfyui_controlnet_aux/ckpts/x"
 mkdir -p "$rd/models/checkpoints" "$rd/models/loras" "$rda"
 printf 'reader sdxl' > "$rd/models/checkpoints/sdxl.safetensors"; printf 'reader style' > "$rd/models/loras/style.safetensors"
 printf 'reader depth' > "$rda/depth_anything_vitl14.pth"; printf 'reader yolox' > "$rda/yolox_l.onnx"; printf 'reader dw' > "$rda/dw-ll_ucoco_384.onnx"
-rm -rf "$mhstate"; out=$(mh_ag --comfy-dir "$mh/reader" 2>&1); rc=$?
-{ [ "$rc" -eq 0 ] && [ -f "$mhcache" ]; } || no 'model-hashes reader setup' "rc=$rc $out"
+rm -rf "$mhstate"; out=$(mh_ag --comfy-dir "$rd" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && [ -f "$mhcache" ]; } && ok 'model-hashes reader setup: the fake install is hashed into the default cache' || no 'model-hashes reader setup' "rc=$rc $out"
 wr="$RUNS/local-writer-001"; cp -R "$RUNS/local-annot-001" "$wr"; rm "$wr/run.md"
 python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/local-writer-001"; json.dump(s, open(p, "w"))' "$wr/spec.json"
 ASSETGEN_MODEL_HASHES= RPG_FACTORY_STATE_DIR="$mhstate" local_step 'local writer manifest' AG manifest --run "$wr"

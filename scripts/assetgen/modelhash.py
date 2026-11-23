@@ -133,7 +133,7 @@ def kind_files(models_dir, kind, warnings):
     """[(path, row name)] of one kind. annotators are named by base name (see the module docstring)."""
     if kind != "annotators":
         folder = os.path.join(models_dir, kind)
-        return [(p, n.replace("\\", "/")) for p, n in _model_files(folder)] if os.path.isdir(folder) else []
+        return _model_files(folder) if os.path.isdir(folder) else []
     found = []
     for folder in (os.path.join(os.path.dirname(os.path.abspath(models_dir)), ANNOTATOR_NODE_DIR),
                    os.path.join(models_dir, "annotators")):

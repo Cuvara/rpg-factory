@@ -195,11 +195,12 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       settings and the requires hash. Model sha256 values come only from the JSON cache
                       <persistent state dir>/comfy/model-hashes.json (or ASSETGEN_MODEL_HASHES when set): schema
                       rpg-factory.comfy-model-hashes/1, models rows with kind, name and sha256 (a backslash in a name
-                      reads as a slash); missing entries are unverified. manifest only reads it; `model-hashes` (modelhash.py)
-                      is the writer: it hashes the local ComfyUI model files (--models-dir, --comfy-dir or the Comfy
-                      Desktop instance) in 1 MiB chunks into Factory state, adds size and mtime_ns to each row and
-                      reuses a row whose file kept both (it is not a read-only verb). The record follows the machine's cache: re-running manifest with a different cache
-                      changes run.md and resets an approved run to proposed. This record makes no measured or quality claim.
+                      reads as a slash); missing entries are unverified. manifest only reads it; `model-hashes`
+                      (modelhash.py) is the writer: it hashes the local ComfyUI model files (--models-dir, --comfy-dir
+                      or the Comfy Desktop instance) in 1 MiB chunks into Factory state, adds size and mtime_ns to each
+                      row and reuses a row whose file kept both (it is not a read-only verb). The record follows the
+                      machine's cache: re-running manifest with a different cache changes run.md and resets an approved
+                      run to proposed. This record makes no measured or quality claim.
   approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
                       (approval.approve_record: refuses an agent or model name and names the run records as agents or
                       reviewers; sets run.md status approved; rev = the git blob id of that run.md). An agent runs it
