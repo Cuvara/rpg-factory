@@ -1,0 +1,42 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "clean-merge-gate",
+  "title": "Gate: a clean merge is not a conflict resolution",
+  "topic": "feat/delivery/clean-merge-gate",
+  "goal": "The gate marked every task review of plan runtime-quirks STALE after the topic merged main, although no file needed a hand resolution. _uncovered_changes (scripts/factory-pipeline.py) finds a merge's own resolutions with `git diff-tree --cc --name-only`, which lists every file changed on both sides of the merge, also when git merged it cleanly and the combined diff has no hunk (merge 2674fe6 listed 7 files, only docs/plans/backlog.md had a combined hunk). A merge's own resolutions are the files with a combined hunk.",
+  "tier": "S",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "clean-merge-resolutions",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "In scripts/factory-pipeline.py _uncovered_changes, the three places that read a merge's own changes with `git diff-tree --cc --name-only --no-commit-id -r <merge> -- <owned paths>` (the topic merge 'evil' set, a commit brought in from the default branch, and a sync merge on a task branch) use one helper that returns only the files with a combined hunk: run `git diff-tree --cc -p --no-commit-id -r <merge> -- <paths>` and take the file names of its `diff --cc <file>` headers (git prints a header only for a file whose combined diff keeps a hunk; a binary file with a resolution keeps its header). A git error keeps the current fail-safe (every owned path). Nothing else changes: a hand resolution in an owned file, a direct topic commit and a later real change still make the review STALE.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/clean-merge-gate.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "docs/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "gate-merge: the topic changes an owned file after the review is recorded at a later SHA, the default branch changes another region of the same file, and the topic merges the default branch cleanly: the gate stays READY_FOR_PR with no STALE line",
+        "the same shape where the merge needs a hand resolution in that owned file makes the review STALE naming the file",
+        "the existing evil-merge, subtask-evil-merge and stack-sync-evil cases still report their resolution",
+        "every existing pipeline case passes"
+      ]
+    }
+  ]
+}
