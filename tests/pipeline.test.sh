@@ -5776,6 +5776,23 @@ NP=$(plan nq "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"nq\",\"title\
 python3 -B "$P" verdict "$NP" --task t --phase review --sha "$NQT" --by codex --state PASS >/dev/null || echo "verdict failed: nq review"
 python3 -B "$P" verdict "$NP" --task integration:r --phase qa --sha "$NQX" --by codex --state PASS >/dev/null || echo "verdict failed: nq qa"
 expect "gate-merge: a hand resolution in an owned file whose name git still quotes makes the review STALE, naming it" 1 'BLOCKER t: review is STALE - owned paths changed after .*own/a.*b\.txt' gate "$NP" --no-run-checks
+# a name ending in U+00A0 (raw, last line of git diff --name-only): git() must not strip it, or it no longer matches the diff --cc header
+NB="$TMP/nb-repo"; git init -q -b main "$NB"
+nbtree() {
+  local blob inner
+  blob=$(git -C "$NB" hash-object -w --stdin)
+  inner=$(printf '100644 blob %s\tz\302\240\0' "$blob" | git -C "$NB" mktree -z)
+  printf '040000 tree %s\town\0' "$inner" | git -C "$NB" mktree -z
+}
+NB0=$(gi "$NB" commit-tree "$(nqline2 'line 2' | nbtree)" -m base)
+NBT=$(gi "$NB" commit-tree "$(nqline2 'topic two' | nbtree)" -p "$NB0" -m "feat: topic changes line 2")
+NBM=$(gi "$NB" commit-tree "$(nqline2 'main two' | nbtree)" -p "$NB0" -m "fix: main changes line 2")
+NBX=$(gi "$NB" commit-tree "$(nqline2 'hand resolved two' | nbtree)" -p "$NBT" -p "$NBM" -m "Merge main into feat/nb (hand resolution)")
+git -C "$NB" update-ref refs/heads/main "$NBM"; git -C "$NB" update-ref refs/heads/feat/nb "$NBX"
+NBP=$(plan nb "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"nb\",\"title\":\"Nb\",\"topic\":\"feat/nb\",\"deliver\":\"pr\",\"repos\":{\"r\":{\"path\":\"$NB\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/\"],\"acceptance\":[\"a\"]}]}")
+python3 -B "$P" verdict "$NBP" --task t --phase review --sha "$NBT" --by codex --state PASS >/dev/null || echo "verdict failed: nb review"
+python3 -B "$P" verdict "$NBP" --task integration:r --phase qa --sha "$NBX" --by codex --state PASS >/dev/null || echo "verdict failed: nb qa"
+expect "gate-merge: a hand resolution in an owned file whose name ends in U+00A0 makes the review STALE, naming it" 1 'BLOCKER t: review is STALE - owned paths changed after .*own/z' gate "$NBP" --no-run-checks
 # the run lead's plan file and report.md are never stray; any other unowned file still is
 mkdir -p "$GM/docs/plans/gm"
 python3 -B -c 'import json,sys; p=json.load(open(sys.argv[1])); p["repos"]["r"]["path"]="../.."; json.dump(p,open(sys.argv[2],"w"))' "$GP" "$GM/docs/plans/gm.json"

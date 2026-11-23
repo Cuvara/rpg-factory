@@ -389,7 +389,8 @@ def git(repo, *args):
                            text=True, timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None, 1  # a failed launch or a timeout is not an answer: never kept
-    out = (r.stdout.strip(), r.returncode)
+    # ASCII whitespace only: str.strip() also drops Unicode spaces (U+00A0), which a raw path name may end in
+    out = (r.stdout.strip(" \t\r\n\f\v"), r.returncode)
     if memo_key is not None:
         _GIT_MEMO[memo_key] = out
     return out
