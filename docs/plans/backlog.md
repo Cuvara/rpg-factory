@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-- qa-reach (`docs/plans/qa-reach.json`): pipeline-speed-followups, the case reach item of test-speed-followups.
+None.
 
 ## Open
 
@@ -23,8 +23,6 @@ From plan test-flakes (`docs/plans/test-flakes/report.md`):
 
 From plan test-speed (`docs/plans/test-speed/report.md`):
 
-- `tests/affected.py` reach is per file: most `scripts/assetgen/*` changes and any `scripts/factory-pipeline.py`
-  change select every case group. A per-function or per-module reach for the case maps.
 - Full `tests/assetgen.test.sh` wall times before and after were never measured (every full run was killed for low
   memory); measure once on a quiet machine.
 
@@ -142,18 +140,20 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
 - Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
   start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
 
-### pipeline-speed-followups
+### qa-reach-followups
 
-From plan pipeline-speed (`docs/plans/pipeline-speed/report.md`):
+From plan qa-reach (`docs/plans/qa-reach/report.md`):
 
-- `assetgen.py model-hashes` reads explicit `--extra-model-paths` files before the auto-discovered root file (ComfyUI
-  reads the root file first), and `is_default` accepts true/yes/on words instead of Python truthiness.
-- Stale docstrings: `git_dir_in_scope` (`scripts/lib/rpgf_guard/language.py`, still says hook cwd only) and
-  `literal_cd_target` (`scripts/lib/rpgf_guard/git.py`, `cd ~`); the `_GIT_MEMO_ON` branch in
-  `scripts/factory-pipeline.py` reads awkwardly.
-- The workspace reader guard is selected only for changes under `scripts/` and `tests/`.
-- A run lead stopped its own orphaned QA run that held a test slot while still making progress: `status` could show
-  the slot holder's last log line so a live run is not mistaken for an orphan.
+- `status --json` carries the slot progress only in the stderr "Slots:" text line; add a structured slots field to the
+  status output (and its schema).
+- `scripts/ci-plan.py` and `factory-pipeline.py` `affected_selection` call `affected.py cases` without `--base`, so
+  they get symbol reach only when their file list equals the default-base changed set; pass the base.
+- Any `scripts/assetgen/assetgen.py` change selects every group of `tests/pipeline.test.sh` (its import closure reaches
+  `scripts/checks/domains/assetgen.py`, `scripts/factory-cmd.py` and `tests/fixtures/assetgen/*.py`, which no
+  pipeline group maps). Six assetgen groups keep the plain `assetgen.py` glob.
+- The `hashes.py` stand-in in `tests/run-all-parallel.test.sh` reads the `cases` suites positionally (tolerates
+  `--base`, fragile).
+- The workspace reader guard is selected only for changes under `scripts/` and `tests/` (from plan pipeline-speed).
 
 ### path-audit-followups
 
@@ -168,6 +168,10 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   spelling worked (not reproduced).
 
 ## Covered
+
+- **qa-reach** (pipeline-speed-followups except the reader-guard selection note; the case reach item of
+  test-speed-followups): shipped in plan qa-reach (`changelog.d/qa-reach-slot-progress.md`,
+  `changelog.d/qa-reach-lows.md`, `changelog.d/qa-reach-cases.md`).
 
 - **pipeline-speed** (the pipeline start cost and the re-QA scope of test-speed-followups; run-lows-followups; the
   reader guard, guard-script spec text, `extra_model_paths.yaml`, `file:` URL host and `cd x && git -C` items of
