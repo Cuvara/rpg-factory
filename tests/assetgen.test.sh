@@ -4851,6 +4851,15 @@ for origin in 'C:/art/x.png' '/home/me/art.png'; do
   AG promote-anchor --external "$TMP/outside/art.png" --origin "$origin" --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: absolute origin $origin refused without writes" || no "external absolute origin rc=$rc" "$(cat "$TMP/err")"
 done
+for uri_env in 'file:///C:/art/a.png' 'file:/art/a.png' 'FILE://host/share/a.png' '$HOME/art/a.png' '${HOME}/art/a.png' '%USERPROFILE%\art\a.png' '%USERPROFILE%/art/a.png'; do
+  for ext_field in origin rights-note; do
+    ext_origin=art; ext_rights=owned
+    [ "$ext_field" = origin ] && ext_origin="$uri_env" || ext_rights="$uri_env"
+    AG promote-anchor --external "$TMP/outside/art.png" --origin "$ext_origin" --rights-note "$ext_rights" --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+    [ $rc -eq 1 ] && grep -Fq 'must not contain an absolute path or credential' "$TMP/err" && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] \
+      && ok "external promote: $uri_env in $ext_field refused without writes" || no "external uri/env $uri_env in $ext_field rc=$rc" "$(cat "$TMP/err")"
+  done
+done
 AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note 'token=abc123' --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: credential refused without writes" || no "external credential rc=$rc" "$(cat "$TMP/err")"
 AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
@@ -4880,6 +4889,14 @@ AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible / page 4
 ext_prose="$SG/styles/rpg-base/anchors/ext-prose"
 [ $rc -eq 0 ] && jq -e '.external_source.origin == "art bible / page 4" and .external_source.rights_note == "monkey: yes"' "$ext_prose.json" >/dev/null \
   && ok "external promote: ordinary prose accepted" || no "external prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'https://example.com/a.png' --rights-note 'bought for $5' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.external_source.origin == "https://example.com/a.png" and .external_source.rights_note == "bought for $5"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: https URL and a price accepted" || no "external url/price rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note '100% original work' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.external_source.rights_note == "100% original work"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: a percentage accepted" || no "external percentage rc=$rc" "$(cat "$TMP/err")"
 rm -f "$ext_prose.json" "$ext_prose.png"
 
 # reject: validation, deterministic ids, asset rejections bound to a recorded output

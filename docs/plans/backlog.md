@@ -45,29 +45,25 @@ core style hash, so every existing run, anchor and rejection recorded against a 
 (`assetgen.py drift` reports `older-version`: the bump moves the six core styles from version 1 to version 2, and the
 version is checked before the hash).
 
-### external-path-uri
-
-`stylelock.EXTERNAL_PATH` still accepts `file:` URIs (with a drive letter) and `$HOME` / `%USERPROFILE%` forms in the
-`external_source` `origin` and `rights_note`. Refuse a `file:` scheme and environment-variable paths, with a test.
-
 ### assetgen-run-followups
 
 Left open by the plans assetgen-hybrid, assetgen-style and assetgen-batch (review notes and lead reports, none
 blocking). Plan assetgen-followups covered the rest (see Covered); what remains:
 
-- Environment: the check "registry paths exist in workspace" fails inside Orca agent terminals and passes in a
-  direct shell and in integration QA; the workspace path resolves differently there.
 - The local SDXL, IPAdapter and ControlNet paths of plan assetgen-hybrid have never run on the target hardware:
   the owner runs `docs/plans/assetgen-hybrid/e2e-local.md` on the RTX 5060.
 
 ### agent-runtime-quirks
 
-Seen while running plan plugin-flow-2, not reproduced yet: a Codex session's start prompt sometimes stays
-unsubmitted in its terminal, and Codex under PowerShell resolves `bash` to WSL instead of Git Bash (CLAUDE.md
-"Operating lessons": Git Bash, never WSL). Find the cause; make dispatch detect or prevent each one.
+Seen while running plan plugin-flow-2, not reproduced yet: Codex under PowerShell resolves `bash` to WSL instead of
+Git Bash (CLAUDE.md "Operating lessons": Git Bash, never WSL). Find the cause; make dispatch detect or prevent it. The
+unsubmitted start prompt of the same report is covered by `factory-pipeline.py nudge` (plan runtime-quirks).
 
+### external-path-dollar
 
-
+The external-path-uri review left a low note: the `$NAME` branch of `stylelock.EXTERNAL_URI_OR_ENV`
+(`scripts/assetgen/stylelock.py`) also refuses a dollar sign followed by a letter with no path separator after it, so
+prose such as "priced in $USD" in an `origin` or `rights_note` is refused. Narrow the branch to a `$NAME` followed by a path separator (or `${NAME}`), with a test.
 
 ### generic-explorer-name
 
@@ -169,7 +165,9 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 
 - An Orca Codex worker can start with an empty prompt and idle with no escalation (task citation-drift: about 4.5
   hours), and a Claude implementer ended its turn without sending `worker_done`. Same class as agent-runtime-quirks:
-  the task lead should time out a dispatch that shows no turn start and re-dispatch it.
+  the task lead should time out a dispatch that shows no turn start and re-dispatch it. `factory-pipeline.py nudge`
+  (plan runtime-quirks) now finds a start prompt left unsubmitted; an empty prompt and a turn ended without
+  `worker_done` remain open.
 - In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
   spelling worked (not reproduced).
 
@@ -178,6 +176,16 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 - **qa-guards** (the scoped-QA enforcement gap, the netcode prune mapping and the doctor near-duplicate of
   test-flakes-followups; the model-hash cache writer of assetgen-run-followups): shipped in plan qa-guards
   (`changelog.d/qa-guards-within.md`, `changelog.d/qa-guards-model-hashes.md`, `changelog.d/qa-guards-doctor.md`).
+
+- **external-path-uri**, the start-prompt item of **agent-runtime-quirks** and the environment note of
+  **assetgen-run-followups**: shipped in plan runtime-quirks (task external-path-uri,
+  `changelog.d/external-path-uri.md`: `file:` URIs and environment-variable paths are refused in external sources;
+  tasks launch-note-file and stuck-prompt-nudge, `changelog.d/launch-note-file.md` and
+  `changelog.d/stuck-prompt-nudge.md`: launch notes travel through the spec file, `factory-pipeline.py nudge` finds
+  and submits stuck start prompts; task quirks-docs, `changelog.d/runtime-quirks-docs.md`). Evidence for the
+  environment note: the check "registry paths exist in workspace" was fixed by 6b1ba64 "shell callers convert the
+  registry workspace default"; every recorded failure ran on a tree without it, and task QA in Orca terminals passes
+  since.
 
 - **test-flakes** (load-sensitive flakes of netcode-headless, routing, test_lab and orca-wait; the orca-wait INT
   skip; slot message, netcode prune order, doctor setup faults, scripts README conventions; MACHINE_PATH file: URLs,
@@ -202,8 +210,9 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
   shipped in plan assetgen-followups (tasks engine-notes, batch-report-notes and followup-docs;
   `changelog.d/assetgen-engine-notes.md`, `changelog.d/assetgen-batch-report-notes.md`,
   `changelog.d/assetgen-followup-docs.md`: comfy-desktop-setup ends with saving `hardware-profile.json`, the
-  architecture doc states the tech skill count); the environment note, the owner's local e2e run and the missing
-  model-hash cache writer stay under assetgen-run-followups in Open.
+  architecture doc states the tech skill count); the owner's local e2e run and the missing
+  model-hash cache writer stay under assetgen-run-followups in Open (the environment note moved to the
+  runtime-quirks entry above).
 
 - **delivery.md headroom** (plan-edit-followups, workflow-slim-followups), the `tests/README.md` QA tiers restatement
   and four plugin-flow-5-followups lows (hook-perf `.new`, gitcfg re-snapshot, netcode-headless evidence, `/mnt/`
