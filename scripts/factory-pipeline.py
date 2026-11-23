@@ -54,8 +54,16 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
           [--grade light|standard|heavy] [--model ID] [--effort LEVEL]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
-        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
-        planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
+        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec or misread
+        parentheses and quotes. The one-line prompt carries only the pointer ('Read your task spec at <path> and
+        follow it.'): the planner's request (the spec's own "Request:" line) and every dispatch note ("Session note"
+        lines and sections) live in the spec, which the file name's digest covers (two dispatches differing only in a
+        note write two spec files).
+  dispatch ... [--note TEXT]... [--note-file FILE]...
+        --note TEXT (whitespace collapsed) and RPG_FACTORY_SESSION_NOTE become "Session note:" lines of the spec;
+        --note-file FILE (repeatable) adds the file's text verbatim as its own "Session note file <path>:" section
+        (nothing collapsed, so parentheses, quotes, & | and newlines survive). A missing, unreadable or blank file
+        exits 2 before anything is written or printed. A lead forwards both to every session it dispatches.
   dispatch ... [--grade light|standard|heavy] [--model ID] [--effort LEVEL]   (every phase, and planner)
         every session runs with the model and effort of its role in the model policy: planner, lead, implement (the
         subtask's grade, else the task's), review (heavy work: heavy, else review) and qa. Orca commands (worker-start,
@@ -211,6 +219,18 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         prints the `git merge` it needs and records <dependent>__sync.json, which status shows until the dependent's
         HEAD contains the SHA (a message is only a nudge). --send also runs `orca orchestration send --type status` to
         the dependent's lead (task orca_run, else its Orca worktree). Exit 0, 1 when a send failed, 2 usage.
+  nudge <plan.json> [--task ID] [--idle SECONDS] [--send]
+        finds start prompts that stayed unsubmitted in a task session's terminal. Per task with a task worktree it lists
+        the Orca terminals of that worktree (`orca terminal list --json`, read-only) and reads each screen (`orca
+        terminal read --screen --json`). A terminal is STUCK only when its screen still shows `Read your task spec at
+        <a spec file of this plan>` (a wrapped pointer is joined), its last output is older than --idle seconds (default
+        120) and the task made no progress since the spec file was written (no new commit on the task branch, no new
+        lead report, no new review or QA verdict). One row per terminal: task, handle, idle seconds, ok or STUCK, reason,
+        and for a STUCK one the exact send command. --send runs `orca terminal send --terminal H --text <CR>` once per
+        STUCK terminal and writes <task>__nudge.json (handle, time, spec path); a spec that was already nudged is never
+        sent again: `nudged, still stuck: relaunch the session`. Without --send nothing is written. Orca missing or
+        unreachable: a note, exit 0. Exit 1 when a send failed, 2 usage. status shows a `stuck?:` note on a task whose
+        last nudge record shows it still stuck and which made no progress since.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -271,6 +291,7 @@ Read-only against the repos (never fetches, pushes, commits or creates worktrees
 usage error.
 """
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -280,6 +301,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1568,6 +1590,12 @@ def sync_record(plan, task_id):
     return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
 
 
+def nudge_file(plan, task_id):
+    """The nudge record of a task: <task>__nudge.json beside its verdicts, written only by `nudge --send` (one entry per
+    spec file whose unsubmitted start prompt got a carriage return). status reads it for the `stuck?` note."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__nudge.json")
+
+
 def stacked_dependents(plan, reg, dep_id):
     """The plan tasks stacked on dep_id, in plan order: their stack record names it, same repo key, not tier XS, a
     worktree repo with a checkout, and their task branch exists. A stale record (stack_record_live) names no one."""
@@ -1770,14 +1798,17 @@ AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions o
 
 def orca_prompt(a, prompt, plan=None, note=None):
     """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state.
-    `note` is appended after the pointer with every whitespace run collapsed to one space."""
+    `note` goes into the spec file as a 'Run lead notes:' section (text unchanged), before the digest is computed, so
+    the file name covers it; the command line carries only the pointer (cmd.exe misreads parentheses and quotes)."""
     root = os.path.join(fstate.persistent(), "pipeline", PLANNER_DIR) if plan is None else verdict_dir(plan)
     task = fstate.session_key(getattr(a, "task", None) or "planner")
     phase = getattr(a, "phase", None) or "plan"
+    if note:
+        prompt = prompt + ("" if prompt.endswith("\n") else "\n") + "Run lead notes:\n" + note + "\n"
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     path = os.path.abspath(os.path.join(root, "specs", f"{task}-{phase}-{digest}.md"))
     fstate.write_text(path, prompt)
-    return f"Read your task spec at {path} and follow it." + (f" {' '.join(note.split())}" if note else "")
+    return f"Read your task spec at {path} and follow it."
 
 
 def resolve_runner(a):
@@ -1899,7 +1930,7 @@ def cmd_planner(a, reg):
               "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
               + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
-    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
+    emit(a, reg, agent, prompt, place, "pipeline planner", role="planner")
     return 0
 
 
@@ -2045,6 +2076,33 @@ def session_notes(a):
     return notes
 
 
+def session_note_files(a):
+    """Read the --note-file files: [(abs_path, text)] in argument order, deduplicated by absolute path. A missing,
+    unreadable or blank file exits 2 before anything is written or printed. The text is kept verbatim. Read once per
+    dispatch: the result is cached on `a` (cmd_dispatch validates first)."""
+    cached = getattr(a, "_note_files", None)
+    if cached is not None:
+        return cached
+    files, seen = [], set()
+    for raw in getattr(a, "note_file", None) or []:
+        path = os.path.abspath(raw)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            die(f"--note-file {raw}: not found")
+        except (OSError, UnicodeDecodeError) as e:
+            die(f"--note-file {raw}: unreadable: {e}")
+        if not text.strip():
+            die(f"--note-file {raw}: is blank")
+        files.append((path, text))
+    a._note_files = files
+    return files
+
+
 def python_alias_line(platform=None, which=None, exe=None, probe=None):
     """Describe the Windows Store python3 alias on PATH or in WindowsApps."""
     platform = sys.platform if platform is None else platform
@@ -2077,6 +2135,8 @@ def language_line(reg):
 def spec_session_lines(a, reg=None):
     """Return the lines to append to a dispatch spec."""
     lines = [language_line(reg)] + [f"Session note: {note}" for note in session_notes(a)]
+    for path, text in session_note_files(a):  # verbatim, not whitespace-collapsed; one trailing newline dropped
+        lines.append(f"Session note file {path}:\n" + (text[:-1] if text.endswith("\n") else text))
     alias = python_alias_line()
     return lines + ([alias] if alias else [])
 
@@ -2102,13 +2162,15 @@ def base_health_hint(info, spec):
     return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None,
+                note_files=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
     # one token --note=<value>: a note starting with "-" would be read as an option after a bare --note
     note_args = "".join(f" {orca_cmd.quote([f'--note={note}'])}" for note in (notes or []))
+    note_args += "".join(f" {orca_cmd.quote([f'--note-file={path}'])}" for path in (note_files or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
@@ -2170,7 +2232,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
          "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
-        "9. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch." if notes else None,
+        "9. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch." if (notes or note_files) else None,
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
@@ -2414,6 +2476,7 @@ SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/deliver
 
 def cmd_dispatch(a, reg):
     session_notes(a)  # reject empty --note even when no spec is written
+    session_note_files(a)  # reject a missing, unreadable or blank --note-file before anything is written or printed
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -2566,7 +2629,8 @@ def cmd_dispatch(a, reg):
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
-                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
+                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a),
+                             note_files=[p for p, _ in session_note_files(a)])
         prompt = with_session_lines(a, prompt, reg)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
@@ -4742,6 +4806,63 @@ def lead_report_file(plan, task):
     return os.path.join(verdict_dir(plan), f"{safe_name(task)}__lead-report.json")
 
 
+def task_progress_since(plan, reg, task, ts):
+    """The first kind of progress the task made after epoch seconds `ts`, or None: `commit` (the task branch tip's
+    committer time), `report` (the lead report file) or `verdict` (a review or QA verdict file of the task or one of its
+    subtasks). Read-only; a missing branch or file is no progress."""
+    info = repo_info(plan, reg, task["repo"])
+    if info["path"]:
+        out, rc = git(info["path"], "log", "-1", "--format=%ct", f"refs/heads/{task_branch(plan, info, task)}")
+        try:
+            if rc == 0 and out and int(out) > ts:
+                return "commit"
+        except ValueError:
+            pass
+    try:
+        if os.path.getmtime(lead_report_file(plan, task["id"])) > ts:
+            return "report"
+    except OSError:
+        pass
+    me = glob.escape(safe_name(task["id"]))
+    # verdict files only: `<task>[@<subtask>]__review.json|__qa.json` and their `__<suffix>` forms. The implementer and
+    # reviewer model records (`*.model.json`) are written by dispatch together with the spec: not progress.
+    patterns = []
+    for stem in (me, f"{me}@*"):
+        for kind in ("review", "qa"):
+            patterns += [f"{stem}__{kind}.json", f"{stem}__{kind}__*.json"]
+    for pattern in patterns:
+        for path in glob.glob(os.path.join(glob.escape(verdict_dir(plan)), pattern)):
+            if path.endswith(".model.json"):
+                continue
+            try:
+                if os.path.getmtime(path) > ts:
+                    return "verdict"
+            except OSError:
+                continue
+    return None
+
+
+def nudge_notes(plan, reg, task):
+    """The `stuck?:` note of a task whose latest nudge record entry still shows the unsubmitted start prompt and which
+    made no progress since that check; [] otherwise. A missing or garbled record is no opinion, never an error."""
+    try:
+        rec = fstate.read_json(nudge_file(plan, task["id"]))
+        entries = [e for e in rec.get("nudges", []) if isinstance(e, dict)] if isinstance(rec, dict) else []
+        if not entries:
+            return []
+        last = max(entries, key=lambda e: str(e.get("checked_at") or ""))
+        if last.get("still_stuck") is not True:
+            return []
+        checked = datetime.strptime(str(last.get("checked_at")), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc).timestamp()
+        if task_progress_since(plan, reg, task, checked) is not None:
+            return []
+        return [f"stuck?: session {last.get('handle', '?')} still shows its start prompt after a nudge at "
+                f"{last.get('at', '?')}: relaunch the session"]
+    except Exception:  # a note must never break status
+        return []
+
+
 def lead_report_summary(body):
     first = next((ln.strip() for ln in str(body).splitlines() if ln.strip()), "")
     return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
@@ -4994,6 +5115,7 @@ def status(plan, reg, orca_run=None):
         rinfo = repo_info(plan, reg, t["repo"])
         rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done, rinfo["path"],
                                                     no_worktree=not rinfo["worktrees"], blockers=task_fails[t["id"]])
+        rows[t["id"]]["notes"] += nudge_notes(plan, reg, t)
     for key in keys:  # the run lead file blockers of `gate`, once per repo, on that repo's first task (plan order)
         info = repo_info(plan, reg, key)
         if not info["path"] or not os.path.isdir(info["path"]):
@@ -5202,6 +5324,145 @@ def cmd_sync(a, reg):
     return rc
 
 
+NUDGE_POINTER = re.compile(r"Read your task spec at\s+(\S.*?\.md)")
+NUDGE_POINTER_JOINED = re.compile(r"Read your task spec at\s*(\S.*?\.md)")  # the "".join text has no space after "at"
+
+
+def nudge_spec(plan, tail):
+    """The spec file of this plan that a terminal screen's start-prompt pointer names, or None. `tail` is the screen's
+    lines; each is stripped (Orca indents a wrapped line). The pointer is searched in the lines joined by newline and by a
+    space (it wraps after `at`) and, for a path that itself wraps, joined with nothing; the first match that names an
+    existing file inside <verdict dir>/specs/ wins."""
+    stripped = [str(ln).strip() for ln in tail]
+    specs_dir = os.path.normcase(os.path.realpath(os.path.join(verdict_dir(plan), "specs")))
+    for text, rx in (("\n".join(stripped), NUDGE_POINTER), (" ".join(stripped), NUDGE_POINTER),
+                     ("".join(stripped), NUDGE_POINTER_JOINED)):
+        for m in rx.finditer(text):
+            path = m.group(1).strip()
+            real = os.path.normcase(os.path.realpath(path))
+            if real.startswith(specs_dir + os.sep) and os.path.isfile(path):
+                return path
+    return None
+
+
+def orca_json(argv, timeout=60):
+    """(result dict or None, why): run one read-only orca argv and return the JSON `result` of its stdout. Never raises."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None, "orca is not on PATH"
+    try:
+        r = subprocess.run([exe] + list(argv[1:]), capture_output=True, text=True, timeout=timeout, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            return None, f"exit {r.returncode}: " + " ".join(((r.stderr or "").strip() or (r.stdout or "").strip()
+                                                            or "no output").split())[:200]
+        data = json.loads(r.stdout or "")
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return None, " ".join(str(e).split())[:200]
+    res = data.get("result") if isinstance(data, dict) and data.get("ok") is not False else None
+    return (res, "") if isinstance(res, dict) else (None, "unexpected JSON")
+
+
+def cmd_nudge(a, reg):
+    """Find start prompts that stayed unsubmitted (see the module docstring) and with --send press Enter once per spec.
+    Exit 0, 1 when a send failed, 2 usage."""
+    plan = read_plan(a.plan, reg)
+    plan["_path"] = a.plan
+    if a.task and a.task.startswith("integration:"):
+        die("nudge is per plan task: --task <id>")
+    tasks = [find_task(plan, a.task)] if a.task else list(plan.get("tasks", []))
+    if a.idle < 0:
+        die("--idle must be 0 or more seconds")
+    why = "orca is not on PATH" if shutil.which("orca") is None else (
+        None if orca_cmd.orca_reachable() else "the Orca runtime is not reachable")
+    if why:
+        print(f"nudge: Orca is not available ({why}): nothing to check")
+        return 0
+    rc = 0
+    for t in tasks:
+        tid = t["id"]
+        info = repo_info(plan, reg, t["repo"])
+        branch = task_branch(plan, info, t)
+        wt = worktree_for(info["path"], branch)[0] if info["path"] else None
+        if not wt:
+            print(f"{tid}: no task worktree (no live session)")
+            continue
+        res, why = orca_json(orca_cmd.terminal_list(wt))
+        rows = [r for r in (res or {}).get("terminals", []) if isinstance(r, dict)
+                and norm_wt(r.get("worktreePath")) == norm_wt(wt)] if isinstance(
+            (res or {}).get("terminals"), list) else []
+        if res is None:
+            print(f"{tid}: terminal list failed ({why}): no opinion")
+            continue
+        if not rows:
+            print(f"{tid}: no Orca terminal in {wt}")
+            continue
+        rec = fstate.read_json(nudge_file(plan, tid))
+        nudges = [e for e in rec.get("nudges", []) if isinstance(e, dict)] if isinstance(rec, dict) and isinstance(
+            rec.get("nudges"), list) else []
+        changed = False
+        for row in rows:
+            handle = str(row.get("handle") or "?")
+            last = row.get("lastOutputAt")
+            try:
+                idle = (int(time.time() - float(last) / 1000) if isinstance(last, (int, float, str))
+                        and not isinstance(last, bool) else None)
+            except ValueError:
+                idle = None
+            head = f"{tid}  {handle}  idle {'?' if idle is None else idle}s"
+            screen, why = orca_json(orca_cmd.terminal_read(handle))
+            term = (screen or {}).get("terminal")
+            tail = term.get("tail") if isinstance(term, dict) else None
+            if not isinstance(tail, list):
+                print(f"{head}  ok  screen unreadable (no opinion)")
+                continue
+            spec = nudge_spec(plan, tail)
+            if not spec:
+                print(f"{head}  ok  no start-prompt pointer on screen")
+                continue
+            if idle is None:
+                print(f"{head}  ok  no lastOutputAt (no opinion)")
+                continue
+            if idle < a.idle:
+                print(f"{head}  ok  recent output ({idle}s < {a.idle}s)")
+                continue
+            try:
+                since = os.path.getmtime(spec)
+            except OSError:
+                print(f"{head}  ok  spec file unreadable (no opinion)")
+                continue
+            progress = task_progress_since(plan, reg, t, since)
+            if progress:
+                print(f"{head}  ok  progress since the spec was written: {progress}")
+                continue
+            real = os.path.normcase(os.path.realpath(spec))
+            prior = next((e for e in nudges if os.path.normcase(os.path.realpath(str(e.get("spec") or ""))) == real), None)
+            if prior:
+                print(f"{head}  STUCK  nudged, still stuck: relaunch the session (nudged at {prior.get('at', '?')})")
+                if a.send:
+                    prior["still_stuck"], prior["checked_at"], changed = True, now_utc(), True
+                continue
+            print(f"{head}  STUCK  start prompt not submitted (spec {spec})")
+            print(f"  send: orca terminal send --terminal {shlex.quote(handle)} --text $'\\r'")
+            if a.send:
+                # cmd.exe drops a bare carriage return argument: through a .cmd/.bat shim the send would lose its text
+                shim = os.path.splitext(shutil.which("orca") or "")[1].lower() in (".cmd", ".bat")
+                sent, why = ((False, "orca resolves to a batch shim, which drops the CR argument: run the send command "
+                              "above by hand") if shim else send_orca(orca_cmd.terminal_send(handle)))
+                if sent:
+                    print(f"  sent CR to {handle}")
+                    stamp = now_utc()
+                    nudges.append({"spec": os.path.abspath(spec), "handle": handle, "at": stamp, "checked_at": stamp,
+                                   "still_stuck": False})
+                    changed = True
+                else:
+                    print(f"  send FAILED ({handle}): {why}")
+                    rc = 1
+        if changed:
+            fstate.write_json(nudge_file(plan, tid), {"plan": plan.get("id"), "task": tid, "nudges": nudges}, indent=2)
+    return rc
+
+
 def cmd_agents(a, reg):
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -5260,6 +5521,7 @@ def main():
             d.add_argument("--subtask")
             d.add_argument("--suite-warn", type=suite_warn_arg, default=SUITE_WARN, metavar="N")
             d.add_argument("--note", action="append", default=[], metavar="TEXT")
+            d.add_argument("--note-file", action="append", default=[], metavar="FILE")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
@@ -5306,6 +5568,11 @@ def main():
     sy.add_argument("plan")
     sy.add_argument("--task", required=True)
     sy.add_argument("--send", action="store_true")
+    nu = sub.add_parser("nudge", parents=[common])
+    nu.add_argument("plan")
+    nu.add_argument("--task")
+    nu.add_argument("--idle", type=int, default=120, metavar="SECONDS")
+    nu.add_argument("--send", action="store_true")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
@@ -5332,7 +5599,7 @@ def main():
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
     return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner, "dispatch": cmd_dispatch,
             "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
-            "report": cmd_report, "sync": cmd_sync}[a.cmd](a, reg)
+            "report": cmd_report, "sync": cmd_sync, "nudge": cmd_nudge}[a.cmd](a, reg)
 
 
 if __name__ == "__main__":
