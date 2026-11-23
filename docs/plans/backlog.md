@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None.
+- qa-reach (`docs/plans/qa-reach.json`): pipeline-speed-followups, the case reach item of test-speed-followups.
 
 ## Open
 
