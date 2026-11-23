@@ -291,6 +291,7 @@ Read-only against the repos (never fetches, pushes, commits or creates worktrees
 usage error.
 """
 import argparse
+import ast
 import glob
 import hashlib
 import json
@@ -3100,6 +3101,7 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
 
     A first-parent topic merge attributes only its introduced side commits. Direct
     topic edits and conflict resolutions changed against every parent have no owner.
+    A merge's own changes are files whose combined diff keeps a hunk, so a clean merge of a file changed by both sides is not a resolution.
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
     A path whose content at target equals its content at sha is never changed, and the
@@ -3130,6 +3132,22 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     def files(a, b):
         out, rc = git(path, "diff", "--name-only", a, b, "--", *specs(task["paths"]))
         return set(out.splitlines()) if rc == 0 else set(task["paths"])
+    def resolutions(c):
+        out, rc = git(path, "diff-tree", "--cc", "-p", "--no-commit-id", "-r", c, "--", *specs(task["paths"]))
+        if rc != 0:
+            return None
+        result = set()
+        for line in (out or "").splitlines():
+            if line.startswith("diff --cc "):
+                name = line[len("diff --cc "):]
+                if name.startswith('"'):
+                    name = ast.literal_eval(name)
+                    try:
+                        name = name.encode("latin-1").decode("utf-8", "surrogateescape")
+                    except UnicodeEncodeError:
+                        pass
+                result.add(name)
+        return result
     def owns(t, f):
         return any(norm_path(p).rstrip("/") in ("", ".") or norm_path(f) == norm_path(p).rstrip("/")
                    or norm_path(f).startswith(norm_path(p).rstrip("/") + "/") for p in t["paths"])
@@ -3206,10 +3224,10 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
         if rc != 0 or not parents:
             return list(task["paths"])
         if len(parents) > 1:
-            evil = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", merge, "--", *specs(task["paths"]))
-            if evil[1] != 0:
+            evil = resolutions(merge)
+            if evil is None:
                 return list(task["paths"])
-            bad.update((evil[0] or "").splitlines())
+            bad.update(evil)
             introduced, rc = git(path, "rev-list", *parents[1:], "--not", parents[0])
             if rc != 0:
                 return list(task["paths"])
@@ -3226,12 +3244,12 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             if from_default(commit):
                 if is_ancestor(path, commit, default_tip):
                     continue
-                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
-                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
+                cc = resolutions(commit)
+                touched = cc if cc is not None else set(task["paths"])
             elif len(ps) > 1 and (all(q in topic_chain for q in ps[1:])
                                   or (len(parents) > 1 and all(is_ancestor(path, q, parents[0]) for q in ps[1:]))):
-                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
-                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
+                cc = resolutions(commit)
+                touched = cc if cc is not None else set(task["paths"])
             else:
                 touched = files(ps[0], commit) if ps else set(task["paths"])
             for f in touched:
