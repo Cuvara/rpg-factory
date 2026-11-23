@@ -181,6 +181,17 @@ printf 'b\n' >> "$RUN_LOG"
 SUITE
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
+# hold: a suite that blocks while it runs (HOLD_SUITE_MARK appears, then it waits for HOLD_SUITE_MARK.release), so a test
+# can observe the slot while a check is running
+cat > "$TMP/repo/tests/hold.sh" <<'SUITE'
+#!/usr/bin/env bash
+printf 'hold\n' >> "$RUN_LOG"
+touch "$HOLD_SUITE_MARK"; hold_until=$((SECONDS + 240))
+while [ ! -f "$HOLD_SUITE_MARK.release" ]; do
+  [ "$SECONDS" -lt "$hold_until" ] || { echo 'fixture suite hold timed out'; exit 1; }
+  sleep 0.1
+done
+SUITE
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
 # stand-ins for the three repo-wide enforcement scripts a --within run also runs (WITHIN_GUARDS); PP_BREACH=1 plants a
 # portable-paths breach, RG_BREACH=1 a raw jq reader breach in the workspace readers guard
@@ -229,6 +240,7 @@ runall_prepare; rc=$?
 if ! $workspace_only; then
 run a bash tests/a.sh
 run b bash tests/b.sh
+[ "${WITH_HOLD:-0}" = 0 ] || run hold bash tests/hold.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
 if [ "${WITH_GUARDS:-0}" != 0 ]; then   # the three enforcement lines, like run-all.sh's
@@ -352,12 +364,12 @@ done
 # --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
 : > "$RUN_LOG"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
-[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/hold.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
   && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites --release); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '
-' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
+' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/hold.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
 out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
@@ -691,6 +703,7 @@ out=$(RPG_FACTORY_TEST_SLOTS=bad cache_plan --affected --no-reuse 2>&1); rc=$?
   && good 'invalid slot cap exits 2 before checks' || no 'invalid slot cap' "$out"
 mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"
 printf 'old arguments\n' > "$SL/1/args"; printf '/old/result.json\n' > "$SL/1/record"
+printf 'check=old\n' > "$SL/1/progress"; printf 'check=old\n' > "$SL/1/progress.tmp.99999999"   # a dead holder's progress goes with its slot
 out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait 2>"$TMP/slot-takeover.err"); rc=$?
 [ "$rc" = 0 ] && ! grep -q 'taking over stale test slot' <<<"$out" && grep -q 'taking over stale test slot 1 (99999999)' "$TMP/slot-takeover.err" && [ ! -d "$SL/1" ] \
   && good 'dead targeted slot is reclaimed under guard and released; the takeover message is on stderr, not stdout' || no 'stale test slot' "$out $(cat "$TMP/slot-takeover.err")"
@@ -842,6 +855,25 @@ for broken in 0 1; do
     && grep -q '^result: ' "$TMP/attached.out" && grep -qx "exit: $broken" "$TMP/attached.out" && [ -z "$(ls -A "$SL")" ] \
     && good "--attach prints the holder's only result and returns its exit status ($broken)" \
     || no "attached result (holder $hrc, attached $arc, records $nr)" "$(cat "$TMP/attached.out")"
+done
+# While a run holds a slot it keeps a progress file in the slot directory (UTC time, the check running or last finished,
+# its result, the counts so far); the file goes with the slot. tests/a.sh passes (or fails) first, then tests/hold.sh runs.
+for broken in 0 1; do
+  reset_cache
+  mark="$TMP/progress-held-$broken"
+  HOLD_SUITE_MARK="$mark" WITH_HOLD=1 BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh,tests/hold.sh --no-reuse -j 1 > "$TMP/progress.out" 2>&1 & pg=$!
+  slot_wait_for "$mark"
+  prog=$(tr -d '\r' < "$SL/1/progress" 2>/dev/null)
+  keys=$(cut -d= -f1 <<<"$prog" | tr '\n' ' ')
+  [ "$keys" = 'updated check result passed failed ' ] && grep -qx 'check=hold' <<<"$prog" && grep -qx 'result=running' <<<"$prog" \
+    && grep -qx "passed=$((1 - broken))" <<<"$prog" && grep -qx "failed=$broken" <<<"$prog" \
+    && grep -Eqx 'updated=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' <<<"$prog" && [ -z "$(ls "$SL/1" | grep 'progress\.tmp')" ] \
+    && good "a held slot has a progress file: the running check, its result and the counts so far (failing first suite: $broken)" \
+    || no "slot progress file (broken $broken)" "$prog"
+  touch "$mark.release"; wait "$pg"; prc=$?
+  for ((i=0; i<300; i++)); do [ -d "$SL/1" ] || break; sleep 0.1; done
+  [ "$prc" = "$broken" ] && [ -z "$(ls -A "$SL")" ] \
+    && good 'the progress file is gone once the slot is released' || no "slot progress cleanup (rc $prc)" "$(ls -A "$SL/1" 2>/dev/null)"
 done
 # A newer result wins over an older failure. Neither the printer nor a run writes into the checkout.
 out=$(cache_plan --only-suites tests/a.sh,tests/b.sh --no-reuse); rc=$?

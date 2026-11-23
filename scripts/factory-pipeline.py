@@ -376,13 +376,11 @@ _GIT_MEMO_ON = False
 
 def git(repo, *args):
     memo_key = None
-    if not _GIT_MEMO_ON:
-        pass
-    elif any(args[:len(v)] == v for v in GIT_MEMO_VERBS):
+    if _GIT_MEMO_ON and any(args[:len(v)] == v for v in GIT_MEMO_VERBS):
         memo_key = (os.path.normcase(os.path.normpath(repo)), args)
         if memo_key in _GIT_MEMO:
             return _GIT_MEMO[memo_key]
-    elif args[:1] and args[0] not in GIT_READ_VERBS:
+    elif _GIT_MEMO_ON and args[:1] and args[0] not in GIT_READ_VERBS:
         _GIT_MEMO.clear()  # a possible write: no cached ref or worktree list survives it
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60,
@@ -4281,8 +4279,9 @@ def plan_checkouts(plan, reg):
 
 
 def read_slots():
-    """[{slot, pid, winpid, checkout, started}] of the held test slots `tests/run-all.sh` publishes under
-    <persistent state>/locks/run-all-slots/<n>/{pid,checkout,started,winpid}; [] when none."""
+    """[{slot, pid, winpid, checkout, started, progress}] of the held test slots `tests/run-all.sh` publishes under
+    <persistent state>/locks/run-all-slots/<n>/{pid,checkout,started,winpid,progress}; [] when none. `progress` is
+    parse_slot_progress of the slot's progress file (None without a usable one)."""
     root = os.path.join(fstate.persistent(), "locks", "run-all-slots")
     try:
         names = sorted(os.listdir(root), key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
@@ -4300,8 +4299,45 @@ def read_slots():
         d = os.path.join(root, n)
         if os.path.isdir(d) and get(d, "pid"):
             out.append({"slot": n, "pid": get(d, "pid"), "winpid": get(d, "winpid"), "checkout": get(d, "checkout"),
-                        "started": get(d, "started")})
+                        "started": get(d, "started"), "progress": parse_slot_progress(get(d, "progress"))})
     return out
+
+
+def parse_slot_progress(text):
+    """The `progress` file of a test slot (one key=value per line: updated, check, result, passed, failed) as {check,
+    result, passed, failed, updated, age_seconds}; None when the text is empty or has no check. A partial or malformed
+    file never raises: a missing field is "" (counts None), an unparsable `updated` gives age_seconds None."""
+    fields = {}
+    for line in (text or "").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            fields[key.strip()] = value.strip()
+    if not fields.get("check"):
+        return None
+
+    def count(key):
+        try:
+            return int(fields.get(key, ""))
+        except ValueError:
+            return None
+    updated = fields.get("updated", "")
+    try:
+        age = max(0, int((datetime.now(timezone.utc) - datetime.strptime(updated, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)).total_seconds()))
+    except ValueError:
+        age = None
+    return {"check": fields["check"], "result": fields.get("result", ""), "passed": count("passed"),
+            "failed": count("failed"), "updated": updated, "age_seconds": age}
+
+
+def _age_text(seconds):
+    if seconds is None:
+        return "an unknown time"
+    if seconds < 120:
+        return f"{seconds}s"
+    if seconds < 7200:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h"
 
 
 def slot_holders(plan, reg):
@@ -4320,11 +4356,21 @@ def slot_holders(plan, reg):
     return held
 
 
+def slot_progress_text(progress):
+    """What the slot's run last reported, with the age of that report: a live run keeps updating it, an orphan does not."""
+    if not progress:
+        return ", no progress yet"
+    counts = ", ".join(f"{progress[k]} {k}" for k in ("passed", "failed") if progress[k] is not None)
+    return (f", last check {progress['check']} {progress['result'] or '?'}" + (f" ({counts})" if counts else "")
+            + f" updated {_age_text(progress['age_seconds'])} ago")
+
+
 def slot_lines(holders):
     return [f"slot {h['slot']} held by PID {h['pid']}"
             + (f" (Windows PID {h['winpid']})" if h["winpid"] and h["winpid"] != h["pid"] else "")
             + f" in {h['checkout']} since {h['started'] or '?'}"
             + {True: " (alive)", False: " (not running)", None: " (liveness unknown)"}[h["alive"]]
+            + slot_progress_text(h.get("progress"))
             + ": the user decides, the run never stops it" for h in holders]
 
 
