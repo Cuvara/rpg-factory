@@ -2,7 +2,7 @@
 name: comfy-desktop-setup
 description: How to set up, repair or verify the machine side of asset-gen - Comfy Desktop with a local instance, the vendored 9router image node copied into it, and comfy-mcp registered for Claude and Codex with the instance's real port - through the read-only-by-default script `scripts/comfy-desktop-setup.py`, including the human steps (New Instance, Stop + Launch) and the traps (Cloud instance, moving port, stdio server hang, nodes load at start). Use when asset-gen finds comfy-mcp missing, the image node absent from `server_info`, a COMFY_LOCAL_URL that does not answer, or a person asks to set up ComfyUI for image generation on a new machine. Not for running a workflow, templates or the node's run-time behaviour (`comfyui`), and not for deciding scope, gates or approving images (`asset-gen` and the art leads).
 argument-hint: "[task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/comfy-desktop-setup.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py:*)
 ---
 
 # Comfy Desktop + 9router node + comfy-mcp setup (machine side of asset-gen)
@@ -55,13 +55,15 @@ what the person asked for by invoking this; still ask before `--apply` when the 
 
 ## Idioms
 
-- **Order (the skill's own steps end with step 6):**
+- **Order (the skill's own steps end with step 7):**
   1. `setup --check`.
   2. Do the human steps it names.
   3. `setup --apply`.
   4. Human restart (Stop + Launch).
   5. `setup --check` until READY (exit 0); `--generate-test` proves the whole chain once.
-  6. **Save the profile** (below): `hardware-profile.json` is written. Then a new session and the `comfyui` run sequence.
+  6. **Save the profile** (below): `hardware-profile.json` is written.
+  7. **Save the model hashes** (below, local profiles only): `model-hashes.json` is written. Then a new session and the
+     `comfyui` run sequence.
 - **Save the profile (step 6):** `assetgen.py resolve --profile auto` reads `<state>/assetgen/hardware-profile.json` and
   nothing else writes it (`scripts/assetgen/assetgen.py` `recorded_profile_path`; `<state>` is `scripts/lib/fstate.py`
   `persistent`: `$RPG_FACTORY_STATE_DIR` if absolute, else `$XDG_STATE_HOME/rpg-factory`, else `~/.local/state/rpg-factory`).
@@ -69,10 +71,20 @@ what the person asked for by invoking this; still ask before `--apply` when the 
   (adjust the directory when a state variable is set). The script exits 3 while a step needs action but still prints the
   JSON: never chain on its exit code. Save again after a GPU, driver or instance change; without the file `auto` means
   `api-only`. `tests/comfy-desktop-setup.test.sh` checks this command is here and runs the same redirect into a temp state dir.
-- **No command writes the model-hash cache yet:** `assetgen.py` reads `<state>/comfy/model-hashes.json` (schema
-  `rpg-factory.comfy-model-hashes/1`, `scripts/assetgen/assetgen.py` `model_hashes`), but no command in this repo
-  writes it, so these steps cannot produce it. Until one exists, a local model's sha256 stays unverified in the run
-  manifest and the asset-gen check warns; say so in the report, never write the file by hand or invent a command.
+- **Save the model hashes (step 7, local profiles only):** `assetgen.py` reads `<state>/comfy/model-hashes.json` (schema
+  `rpg-factory.comfy-model-hashes/1`, rows `kind`, `name`, `sha256`, `size`, `mtime_ns`; `ASSETGEN_MODEL_HASHES`
+  overrides the path; reader: `scripts/assetgen/assetgen.py` `model_hashes`) and the writer is
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/assetgen/assetgen.py model-hashes [--models-dir DIR | --comfy-dir DIR] [--desktop-dir DIR] [--instance NAME|ID] [--kind K]... [--json]`
+  (logic in `scripts/assetgen/modelhash.py`). Run it after installing or changing a local model; the `api-only`
+  profile needs none. It hashes the model files of the kinds asset-gen records (checkpoints, loras, controlnet,
+  upscale_models, annotators) with a streamed sha256, so the first run reads every multi-GB file once; later runs reuse
+  a row whose size and mtime are unchanged. The models directory is `--models-dir`, else `--comfy-dir`/models (headless
+  install), else the Comfy Desktop local instance's `installPath/ComfyUI/models` from `installations.json`
+  (`--desktop-dir`, `COMFY_DESKTOP_DIR` or the per-OS default, `--instance` as for the setup script); with none found it
+  exits 2 and names the flags. It needs no network, never downloads a model and writes only the cache through
+  `scripts/lib/fstate.py`, never into a repository or the ComfyUI install. Without the file a local model's sha256
+  stays unverified in the run manifest and the asset-gen check warns; say so in the report, never write the file by
+  hand.
 - **Human steps an agent cannot do** (give them as a short list, then stop): (1) Desktop starts with only a "Comfy
   Cloud" instance: Dashboard > New Instance > Standalone / Local (for the `api-only` profile a CPU instance is enough, only API nodes run; the local profiles need the GPU the `profile` row reports). (2) Launch the
   instance. (3) After `--apply` copies the node: Stop + Launch the instance (custom nodes load only at start).
