@@ -1,0 +1,92 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "qa-guards",
+  "title": "Repo-wide guards in scoped task QA, the assetgen model-hash cache writer, doctor output cleanup",
+  "topic": "qa-guards",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "within-enforce",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "the scoped task QA every plan runs; a missing guard lets a breach reach CI, an extra one slows every task",
+      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md). In plan test-flakes, scoped task QA (`tests/run-all.sh --affected --base <b> --within <suites> -j 1`) let two breaches through that only the merged tree caught: placeholder user paths in new test fixtures (the `Portable-paths enforcement` run line, `scripts/checks/portable-paths.py --enforce`) and README text that tripped the workspace reader guard of tests/workspace-default.test.sh. (1) In tests/run-all.sh, make a `--within` run also run the repo-wide enforcement lines whenever the change reaches them: `English-only enforcement` and `Portable-paths enforcement` (each takes seconds; they are scripts with EXTRA ['*'] in tests/affected.py, so any change reaches them). Do not add whole suites: the reader guard lives inside tests/workspace-default.test.sh; if that guard can run alone cheaply (a case or a script it calls), add that one case under the same rule, otherwise say so. (2) tests/affected.py: the netcode evidence prune case lives in tests/run-all-parallel.test.sh and sources `prune_evidence` from scripts/checks/netcode-headless.sh, but a change to that script does not select it; map it (EXTRA or a case-map line of tests/run-all-parallel.test.sh, whichever the suite uses). Cases in tests/run-all-parallel.test.sh and tests/affected.test.sh: a --within run of an unrelated suite still runs both enforcement lines and fails on a planted portable-paths breach; a netcode-headless.sh change selects the prune case. Changelog fragment changelog.d/qa-guards-within.md (### Changed). Do not edit scripts/factory-pipeline.py (another plan owns it). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "changelog.d/qa-guards-within.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "a --within run also runs the English-only and portable-paths enforcement lines when the change reaches them, and fails on a breach",
+        "a change to scripts/checks/netcode-headless.sh selects the netcode prune case",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "model-hash-writer",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a new assetgen command that writes Factory state; it must stay out of product repos and handle multi-GB files",
+      "objective": "Backlog topic assetgen-run-followups (docs/plans/backlog.md): no command writes the model-hash cache. `scripts/assetgen/assetgen.py` `model_hashes` (around line 700) reads `<persistent state dir>/comfy/model-hashes.json` (or ASSETGEN_MODEL_HASHES), schema `rpg-factory.comfy-model-hashes/1`, rows with kind, name and sha256, so the manifest records local model sha256 as unverified and the assetgen check warns. Add a command (e.g. `assetgen.py model-hashes [--models-dir <dir>] [--kind <k>]`) that hashes the local ComfyUI model files of the kinds asset-gen uses and writes that cache through scripts/lib/fstate.py (never $TMPDIR directly, never into a product repo, never into the ComfyUI install). Model files are multi-GB: hash in streamed chunks, and reuse an existing row when the file's size and mtime are unchanged (store both in the row; keep the schema version unless a new field needs a bump, and say which). Resolve the models directory the way skills/comfy-desktop-setup/SKILL.md and the comfy-mcp setup describe (Desktop and headless installs); with no directory found, exit with a clear message. Update skills/comfy-desktop-setup/SKILL.md (the 'No command writes the model-hash cache yet' item) and the assetgen usage text. Cases in tests/assetgen.test.sh with small fake model files (no real models, no network): first write, reuse on unchanged size and mtime, rehash on change, the reader then records the sha256 as verified. Changelog fragment changelog.d/qa-guards-model-hashes.md (### Added). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/assetgen/",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "skills/comfy-desktop-setup/SKILL.md",
+        "tests/comfy-desktop-setup.test.sh",
+        "changelog.d/qa-guards-model-hashes.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/comfy-desktop-setup.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "a command writes the model-hash cache under the Factory state dir with streamed hashing and size/mtime reuse",
+        "after it runs, the manifest records the local model sha256 as verified",
+        "the comfy-desktop-setup skill and assetgen usage describe the command",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "doctor-dedupe",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one output cleanup in doctor with its case",
+      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md): `doctor` (scripts/factory-cmd.py) text prints the older python3 hook-speed advice line next to the new setup-fault line for the Git Bash python3 Store stub (near-duplicate). Print one line per fault: when the setup fault names the stub, drop or merge the older advice so the fix hint appears once; keep the `--json` fields stable (or say what changed). Case in tests/commands.test.sh with the fake stub. Changelog fragment changelog.d/qa-guards-doctor.md (### Fixed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-cmd.py",
+        "tests/commands.test.sh",
+        "changelog.d/qa-guards-doctor.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/commands.test.sh"
+      ],
+      "acceptance": [
+        "doctor prints the python3 stub fault and its fix hint once",
+        "the named suite passes"
+      ]
+    }
+  ]
+}

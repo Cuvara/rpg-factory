@@ -9,7 +9,8 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None.
+- **qa-guards** (`docs/plans/qa-guards.json`): repo-wide enforcement lines in `--within` task QA, the assetgen
+  model-hash cache writer, doctor output cleanup.
 
 ## Open
 
