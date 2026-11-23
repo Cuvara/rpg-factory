@@ -20,8 +20,10 @@ from workspace import find_workspace, native_abs  # scripts/lib is on sys.path (
 MACHINE_PATH = re.compile(
     r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/'
     r'|/mnt/[A-Za-z](?=\W|$)|(?<![\w/:.-])/(?:Users|home)/|AppData'
-    # a file: URL with a home path: the lookbehind above rejects the '/' that ends 'file://', so name it here
-    r'|\bfile:/+(?:localhost/)?(?:[A-Za-z]:/)?(?:Users|home)/', re.I | re.M)
+    # a file: URL with a home path: the lookbehind above rejects the '/' that ends 'file://', so name it here. A host
+    # part (any one segment: localhost, host, server.example.com) is read only after exactly two slashes, so the
+    # first segment of 'file:///docs/home/x' is a path, not a host
+    r'|\bfile:(?://[^/\s]+/|/+)(?:[A-Za-z]:/)?(?:Users|home)/', re.I | re.M)
 
 
 def machine_path_hit(text):

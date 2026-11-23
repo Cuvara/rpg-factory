@@ -210,10 +210,14 @@ flagged = [
     'file:///C:/Users/user/repo/x.md', 'file:///c:/Users/user', 'file:///home/user/repo', 'file:///Users/user/repo',
     'file://localhost/home/user', 'file:/home/user/repo', 'see (file:///home/user/x) here', 'FILE:///HOME/user/x',
     'file:///C:/work/repo', '/home/user/repo', '/Users/user/repo',
+    'file://host/C:/Users/user/repo/x.md', 'file://host/home/user/repo', 'file://host/Users/user/repo',
+    'file://server.example.com/home/user/x', 'file://localhost/C:/Users/user', 'see (file://host/home/user/x) here',
 ]
 allowed = [
     'docs/home/readme.md', 'src/Users/list.md', 'https://example.com/home/x', 'http://example.com/Users/x',
     'docs/home/', 'file:///docs/readme.md', 'profile:/home/x', 'file:relative/home/x',
+    'file://host/docs/readme.md', 'file://host/work/x', 'file://host/docs/home/x', 'file:///docs/home/x',
+    'file://server.example.com/shared/Users/x',
 ]
 for text in flagged:
     assert machine_path_hit(text), 'not flagged: ' + text
