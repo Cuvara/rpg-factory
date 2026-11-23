@@ -9,7 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-None.
+- pipeline-speed (`docs/plans/pipeline-speed.json`): test-speed-followups (pipeline start cost), run-lows-followups, test-flakes-followups.
 
 ## Open
 

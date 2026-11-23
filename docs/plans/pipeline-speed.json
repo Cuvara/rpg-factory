@@ -1,0 +1,127 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "pipeline-speed",
+  "title": "Fewer subprocesses per factory-pipeline.py verb, pipeline lows, the workspace reader guard in scoped QA, path and model-hash gaps",
+  "topic": "pipeline-speed",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "verb-speed",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "the pipeline every plugin plan runs; a stale cache could report a wrong task state or a wrong agent",
+      "objective": "Backlog topics test-speed-followups and run-lows-followups (docs/plans/backlog.md). Measured on main 8a2843e on Windows: `factory-pipeline.py status docs/plans/qa-guards.json` takes about 2.5 s, of which about 2.3 s is 21 subprocess calls; imports take about 0.1 s (`--help` runs in 0.5 s). cProfile: `worktree_records` runs 5 times (`git worktree list`, about 0.63 s), `pipeline_route.available` 3 times (about 1.0 s of agent probes), `task_status` 3 times (about 1.0 s). (1) Speed: within one process, compute `git worktree list` once per repo and the agent availability once per agent (memoize; never cache across processes), and drop git calls whose answer the verb already has, in `status`, `gate`, `dispatch` and `verdict`. Keep every output byte-identical. Measure before and after (`python3 -B -m cProfile -o <scratch file> scripts/factory-pipeline.py status <plan>` and the subprocess count) and put both numbers in your report. (2) Lows: (a) the dispatch spec and `tier_command` text still name `scripts/checks/english-only.py` and `scripts/checks/portable-paths.py` among the suites left to CI, although `tests/run-all.sh --within` now runs them (`WITHIN_GUARDS` in tests/run-all.sh): stop listing those as left to CI; (b) a re-QA after a QA FAIL with `--failed-suites` unions the task check suites with the failed suites: make the re-QA command `--within` only the failed suites (plus the task suites the fix delta reaches) and say so in docs/pipeline-cli.md; (c) `cleanup` still treats every `<topic>-*` branch as the plan's own, while `status` uses `Lineage.owns`: use the same ownership in cleanup; (d) the no-duplicate ERROR assertion of the `model_scope_widen` case in tests/pipeline.test.sh would not catch a re-appended '; '-joined multi-problem error: make it count the problem text. Cases in tests/pipeline.test.sh: a fake `git` on PATH that counts calls shows `status` calls `git worktree list` once per repo; the spec text no longer lists the two guard scripts as left to CI; re-QA scope; cleanup ownership. Changelog fragment changelog.d/pipeline-speed.md (### Changed, ### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/pipeline-speed.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "status calls git worktree list once per repo and probes each agent once per process; outputs unchanged",
+        "the before and after time and subprocess count of status are in the report",
+        "the dispatch spec does not list the two guard scripts as left to CI",
+        "re-QA after a QA FAIL runs --within the failed suites",
+        "cleanup uses the same branch ownership as status",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "reader-guard",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "moves an existing guard into a script and adds it to the scoped QA guard list",
+      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md). The workspace reader guard (`reader_violations` in tests/workspace-default.test.sh, around line 148: jq readers must map paths on the same line, Python readers must use the shared helper) is inline in a long suite, so `tests/run-all.sh --within` task QA cannot run it alone and a plan once broke it with README text that only CI caught. Move the guard into a read-only check script under scripts/checks/ (same rules and output; exit non-zero on a violation; it takes the root to scan as an argument), keep the negative self-test cases in tests/workspace-default.test.sh calling the script, register the script as a run line in tests/run-all.sh and add it to `WITHIN_GUARDS` (a change that reaches it runs it under `--within`), and make tests/affected.py select it the way it selects the English-only and portable-paths guards (EXTRA). List it in scripts/README.md. Cases: tests/run-all-parallel.test.sh (a --within run of an unrelated suite also runs the reader guard, and fails on a planted raw jq reader; update the `--list-suites` expectations that list the guards), tests/affected.test.sh if the selection changes. Changelog fragment changelog.d/pipeline-speed-reader-guard.md (### Changed). Do not edit scripts/factory-pipeline.py (task verb-speed owns it). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/workspace-default.test.sh",
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "scripts/checks/workspace-readers.sh",
+        "scripts/checks/workspace-readers.py",
+        "scripts/README.md",
+        "changelog.d/pipeline-speed-reader-guard.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/workspace-default.test.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "the reader guard is a check script with the same rules, and the suite's self-test calls it",
+        "a --within run also runs the reader guard when the change reaches it, and fails on a planted violation",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "path-gaps",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two pattern gaps in existing guards, each with its case",
+      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md). (1) `MACHINE_PATH` in scripts/lib/plan_paths.py flags `file:` URLs that name a home directory, but not one with a host part before it (`file://host/C:/Users/<name>/...`, `file://localhost/home/<name>/...`): flag those too, without flagging a URL whose path is not under a home directory. Cases in tests/plan-paths.test.sh. (2) The git guard's relative `git -C` check (scripts/lib/rpgf_guard/git.py, plan test-flakes) resolves a relative `-C` path against the hook cwd, but in `cd x && git -C ../y ...` the path is relative to `x`: track a preceding `cd <dir>` in the same command line (only a literal directory; anything else is 'no opinion', never a crash) and resolve against it. Cases in tests/git-guard.test.sh. Hooks stay fast (no repository scan) and never crash. Changelog fragment changelog.d/pipeline-speed-path-gaps.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/lib/plan_paths.py",
+        "scripts/lib/rpgf_guard/git.py",
+        "tests/plan-paths.test.sh",
+        "tests/git-guard.test.sh",
+        "changelog.d/pipeline-speed-path-gaps.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/plan-paths.test.sh",
+        "tests/git-guard.test.sh"
+      ],
+      "acceptance": [
+        "MACHINE_PATH flags a file: URL with a host part before a home directory",
+        "the git guard resolves git -C against a preceding literal cd in the same command",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "hash-extra-paths",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "the model-hash writer also reads the ComfyUI extra model folders",
+      "objective": "Backlog topic test-flakes-followups (docs/plans/backlog.md): `assetgen.py model-hashes` (scripts/assetgen/modelhash.py, plan qa-guards) hashes only the main models directory and ignores ComfyUI's `extra_model_paths.yaml` (extra model folders per kind, next to the ComfyUI install or in the Desktop config). Read that file when it exists (ComfyUI's format: named sections with `base_path` and per-kind relative or absolute folders, a kind may list several folders separated by newlines), add the folders of the kinds asset-gen hashes, and keep reuse by size and mtime. With no YAML parser in the standard library, parse the subset ComfyUI writes or use a parser the repo already ships; never add a dependency. A malformed file is a clear warning, not a crash. Update skills/comfy-desktop-setup/SKILL.md step 7 and the usage text. Cases in tests/assetgen.test.sh with a small fake extra_model_paths.yaml and fake model files (no real models, no network). Changelog fragment changelog.d/pipeline-speed-model-hashes.md (### Added). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/assetgen/modelhash.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "skills/comfy-desktop-setup/SKILL.md",
+        "changelog.d/pipeline-speed-model-hashes.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/comfy-desktop-setup.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "model-hashes also hashes the model folders that extra_model_paths.yaml names for the hashed kinds",
+        "a malformed file gives a warning, not a crash",
+        "the named suites pass"
+      ]
+    }
+  ]
+}
