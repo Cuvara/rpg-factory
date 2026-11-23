@@ -27,16 +27,24 @@ ComfyUI/custom_nodes/comfyui_controlnet_aux/ckpts/<repo>/ and workflows name the
 models/annotators when present) is walked and the row name is the base name; a base name found twice is skipped with a
 warning.
 
-Extra model folders (ComfyUI's extra_model_paths.yaml): the files read, in this order and each once, are every
---extra-model-paths FILE (repeatable; a FILE that does not exist exits 2), then, unless --no-extra-model-paths (it turns
-off auto-discovery only), <comfy root>/extra_model_paths.yaml (the parent directory of the models directory: headless
-ComfyUI keeps it next to main.py) and, on the Comfy Desktop route, <desktop data dir>/instance-model-paths/<instance id>.yaml
-(Comfy Desktop writes it). A missing auto-discovered file is skipped silently. The files are parsed with a stdlib reader of
+Extra model folders (ComfyUI's extra_model_paths.yaml): the files read, in this order and each once, follow ComfyUI's
+main.py (apply_custom_paths), which loads <comfy root>/extra_model_paths.yaml first and then the files named on its command
+line: unless --no-extra-model-paths (it turns off auto-discovery only), <comfy root>/extra_model_paths.yaml (the parent
+directory of the models directory: headless ComfyUI keeps it next to main.py); then, on the Comfy Desktop route, <desktop
+data dir>/instance-model-paths/<instance id>.yaml (Comfy Desktop writes it and passes it to ComfyUI on the command line;
+it is auto-discovered, so it is read right after the root file and before the explicit files, and --no-extra-model-paths
+skips it too); then every --extra-model-paths FILE in the order given (repeatable; a FILE that does not exist exits 2). A
+missing auto-discovered file is skipped silently. The files are parsed with a stdlib reader of
 the YAML subset ComfyUI and Comfy Desktop write (named sections; indented key: value lines; plain, 'single' and "double"
 quoted scalars; | |- |+ block scalars; # comments; no flow collections, nesting, anchors or tabs). Folders resolve as
 ComfyUI's load_extra_path_config does: base_path (expanduser, expandvars, relative to the file's directory), then per hashed
 kind each non-empty line of the value joined to base_path, or, without one, relative to the file's directory; base_path and
-is_default are not kinds. Per kind the folders are walked in order: the extra folders of is_default sections in REVERSE
+is_default are not kinds. is_default follows Python truthiness of the value yaml.safe_load gives ComfyUI, mapped by the
+subset reader without a YAML library: a plain true/True/TRUE/yes/Yes/YES/on/On/ON is true, a plain false/no/off (same
+spellings), null/Null/NULL/~ or an empty value is false, a plain number is true unless it is zero (0, -0, 0.0, 0x0, 0b0, 00 ...,
+the PyYAML YAML 1.1 forms), any other plain text is a non-empty string and so true; a quoted or block scalar is always a
+string, so 'false', "no" and '0' are true (ComfyUI treats them as is_default) and only an empty quoted string is false. Per
+kind the folders are walked in order: the extra folders of is_default sections in REVERSE
 declaration order (ComfyUI inserts each is_default folder at index 0, so the last declared wins), the models folder as
 before, then the other extra folders in declaration order; a folder named twice is walked once and a missing one is skipped. ComfyUI
 loads the first match, so a row name found in a later folder is skipped with a warning (annotators keep the base name rule
@@ -59,6 +67,7 @@ usage (no models directory, an unknown kind, a missing --extra-model-paths file)
 import hashlib
 import json
 import os
+import re
 import sys
 
 import fstate
@@ -160,7 +169,51 @@ def _model_files(directory):
 
 
 EXTRA_FILE = "extra_model_paths.yaml"
-TRUE_WORDS = ("true", "yes", "on")
+# PyYAML's YAML 1.1 resolver (yaml.safe_load, which ComfyUI's load_extra_path_config uses): the exact spellings of a plain
+# bool and null, and the plain int / float forms. Anything else plain is a string.
+YAML_TRUE = ("true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON")
+YAML_FALSE = ("false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF")
+YAML_NULL = ("", "~", "null", "Null", "NULL")
+YAML_NUMBER = re.compile(
+    r"[-+]?0b[0-1_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+"
+    r"|[-+]?[0-9][0-9_]*\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9_]+(?:[eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*"
+    r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)")
+
+
+class Quoted(str):
+    """A scalar the parser read quoted ('...' or "...") or as a | block: YAML makes it a string whatever its text, so
+    'false' stays a non-empty (truthy) string. A plain scalar stays a bare str."""
+
+
+def _number_is_zero(text):
+    """True when a plain scalar that matched YAML_NUMBER has the value zero (so Python truthiness says false)."""
+    t = text.replace("_", "").lstrip("+-")
+    try:
+        if ":" in t:
+            return all(float(part) == 0 for part in t.split(":"))
+        if t.startswith("0x"):
+            return int(t[2:], 16) == 0
+        if t.startswith("0b"):
+            return int(t[2:], 2) == 0
+        if re.fullmatch(r"0[0-7]+", t):
+            return int(t, 8) == 0
+        return float(t) == 0   # 0, 0.0, .0, 1e+5; .inf and .nan raise ValueError: truthy
+    except ValueError:
+        return False
+
+
+def yaml_truthy(value):
+    """Python truthiness of what yaml.safe_load would give ComfyUI for this scalar (the reader keeps Quoted apart): a quoted
+    or block scalar is a string (empty is false); a plain one is a bool word, null, a number (zero is false) or a string."""
+    if isinstance(value, Quoted):
+        return bool(value)
+    if value in YAML_TRUE:
+        return True
+    if value in YAML_FALSE or value in YAML_NULL:
+        return False
+    if YAML_NUMBER.fullmatch(value):
+        return not _number_is_zero(value)
+    return True
 
 
 def _fail(reason):
@@ -221,7 +274,7 @@ def _scalar(rest, lineno):
         value, end = _quoted(rest, 0, lineno)
         if not _tail_ok(rest[end:]):
             _fail("line %d: unexpected text after the quoted value" % lineno)
-        return value
+        return Quoted(value)
     if rest[0] in "{[":
         _fail("line %d: flow collections are not supported" % lineno)
     if rest[0] in "&*!>@`":
@@ -285,7 +338,7 @@ def parse_extra_paths(text):
                 i += 1
             while block and not block[-1]:
                 block.pop()
-            value = "\n".join(block)
+            value = Quoted("\n".join(block))
         else:
             value = _scalar(rest, lineno)
         current[key] = value
@@ -319,7 +372,7 @@ def read_extra_file(path, kinds):
                 base = os.path.expandvars(os.path.expanduser(base))
                 if not os.path.isabs(base):
                     base = os.path.abspath(os.path.join(here, base))
-            default = conf.get("is_default", "").strip().lower() in TRUE_WORDS
+            default = yaml_truthy(conf.get("is_default", ""))
             for key, value in conf.items():
                 if key not in kinds:
                     continue
@@ -335,13 +388,16 @@ def read_extra_file(path, kinds):
 
 
 def extra_candidates(explicit, no_auto, models_dir, desktop_file):
-    """The extra files to read, in order and each once: the explicit ones, then (unless no_auto) <comfy root>/extra_model_paths.yaml
-    and the Comfy Desktop instance file. Only the auto-discovered ones may be missing (they are dropped here)."""
-    found = list(explicit)
+    """The extra files to read, in ComfyUI's load order and each once: (unless no_auto) <comfy root>/extra_model_paths.yaml
+    (main.py loads it first), the Comfy Desktop instance file (Desktop passes it on the command line; auto-discovered, so
+    before the explicit ones), then the explicit files as given (the command line files). Only the auto-discovered ones may
+    be missing (they are dropped here). A file named again later is not read again (its first position stands)."""
+    found = []
     if not no_auto:
         for auto in (os.path.join(os.path.dirname(os.path.abspath(models_dir)), EXTRA_FILE), desktop_file):
             if auto and os.path.isfile(auto):
                 found.append(auto)
+    found += list(explicit)
     out, seen = [], set()
     for path in found:
         if _norm(path) not in seen:
@@ -516,8 +572,9 @@ def add_parser(subs):
     c.add_argument("--kind", action="append", default=[], metavar="K", help="limit to this model kind (repeatable; default: "
                    + ", ".join(default_kinds()) + ")")
     c.add_argument("--extra-model-paths", action="append", default=[], metavar="FILE", help="an extra_model_paths.yaml whose "
-                   "model folders are hashed too (repeatable; default: <comfy root>/extra_model_paths.yaml and the Comfy "
-                   "Desktop instance-model-paths/<id>.yaml when present)")
+                   "model folders are hashed too (repeatable; read in the order given, after the auto-discovered "
+                   "<comfy root>/extra_model_paths.yaml and Comfy Desktop instance-model-paths/<id>.yaml, the order "
+                   "ComfyUI loads them; is_default follows Python truthiness, so a quoted 'false' is a default)")
     c.add_argument("--no-extra-model-paths", action="store_true", help="do not auto-discover extra_model_paths files "
                    "(explicit --extra-model-paths files are still read)")
     c.add_argument("--json", action="store_true")
