@@ -7,10 +7,38 @@
   affected.py select-many FILE SUITE...
                                     print each SUITE that must run (same rule as select), one per line; the
                                     import graph is built once (run-all --affected calls it once per run)
-  affected.py cases FILE SUITE...   print each selected suite and its affected cases, or ALL when uncertain: the
+  affected.py cases [--base REF] FILE SUITE...
+                                    print each selected suite and its affected cases, or ALL when uncertain: the
                                     case map must name every file the suite selects in the import closure of a
-                                    changed file
+                                    changed file. REF (default as for changed) gives the changed line ranges for
+                                    symbol reach, used only when FILE is exactly the changed set from REF
   affected.py hashes SUITE...       print suite and input hash (or '-' when reuse is unsafe)
+
+Case maps (`# case-map: <group> <pattern>...` header lines of a suite) and symbol reach (cases only):
+  - a plain pattern (a glob, or a directory ending in /) reaches the files it matches (file-level);
+  - PATH::NAME names a top-level def, class or module-level assignment NAME of the Python file PATH (an exact path,
+    no glob) that the group runs as an entry point (a CLI verb's cmd_* function, a function a test calls directly);
+    PATH::* reaches the whole file. A group with any PATH:: pattern for a file matches that file only through them
+    (its own plain globs are ignored for that file); a group whose plain pattern matches the file without one keeps
+    the whole file. A glob in PATH or a NAME that is not `*` or an identifier makes the map invalid (ALL);
+  - a changed Python file some group names by symbol: the changed top-level def/class names come from the hunks of
+    `git diff -U0` against the merge-base (old side: `git show <merge-base>:PATH`, new side: the work tree), each
+    hunk mapped with ast to the def/class whose span (the def/class line to its end, decorators excluded) holds it on
+    both sides, the same name on both. File-level instead: a new or deleted file, a side that does not parse, a
+    duplicate or a different set of def/class names (added, deleted or renamed), a hunk outside one def/class
+    (imports, constants, decorators, comments or blank lines between defs, top-level code) or across two;
+  - a changed symbol reaches a group that names it or a symbol whose in-module reference closure holds it: the edges
+    are the top-level names a def, class or assignment may read (ast.Name, scope-aware: a parameter or a name local
+    to a function, lambda or comprehension shadows a top-level one unless declared global). File-level instead: a
+    changed symbol that the import-time code reaches without entering a named symbol (the module-level statements, the
+    `if __name__ == "__main__":` block and so main() and the helpers it calls before dispatch, class bodies,
+    decorators, argument defaults and annotations), one no named symbol reaches, one that is not named in a module
+    that can look its names up dynamically (globals(), locals(), vars(), eval, exec, __import__,
+    importlib.import_module, sys.modules: a dict of callables or getattr dispatch must be named), or a NAME the file
+    does not define. Groups that reach the whole file (PATH::* or a plain pattern) are always selected;
+  - file-level reach of a file is every group with any pattern for it (PATH::NAME included), none -> ALL; a file the
+    import closure reaches that is not itself changed is always matched file-level (no cross-module symbol
+    reasoning). select, select-many and hashes never use symbols.
 
 A suite runs when one of these holds (anything unsure runs):
   - a global input changed (GLOBAL: registry, hooks, manifests) - every suite runs;
@@ -205,16 +233,24 @@ def git(*args):
     return r.stdout if r.returncode == 0 else None
 
 
-def changed(base=None):
+def merge_base_changed(base=None):
+    """(merge-base commit, changed files): merge-base(BASE, HEAD)..work tree plus untracked files; None without a base
+    (BASE default: origin/main, else main)."""
     for b in ([base] if base else ["origin/main", "main"]):
         mb = git("merge-base", b, "HEAD")
         if mb:
             break
     else:
         return None  # no base: caller runs everything
-    files = set((git("diff", "--name-only", mb.strip()) or "").split())
+    mb = mb.strip()
+    files = set((git("diff", "--name-only", mb) or "").split())
     files |= set((git("ls-files", "--others", "--exclude-standard") or "").split())
-    return sorted(files)
+    return mb, sorted(files)
+
+
+def changed(base=None):
+    found = merge_base_changed(base)
+    return None if found is None else found[1]
 
 
 def hit(path, patterns):
@@ -817,11 +853,277 @@ def case_map(suite):
             if not match:
                 return None
             name, patterns = match.groups()
+            for pattern in patterns.split():
+                symbol = split_symbol(pattern)
+                if symbol and not valid_symbol(*symbol):
+                    return None
             cases.setdefault(name, []).extend(patterns.split())
     return cases or None
 
 
-def affected_cases(files, suite):
+# symbol-level case reach (`PATH::NAME` case-map patterns, see the module docstring)
+IDENT = re.compile(r"[A-Za-z_]\w*")
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
+DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def split_symbol(pattern):
+    """(PATH, NAME) of a `PATH::NAME` case-map pattern, else None (a plain glob)."""
+    return tuple(pattern.split("::", 1)) if "::" in pattern else None
+
+
+def valid_symbol(path, name):
+    """PATH is an exact path of a Python file (no glob, no directory); NAME is `*` or an identifier."""
+    return (path.endswith(".py") and not any(c in path for c in "*?[") and not path.startswith("/")
+            and (name == "*" or IDENT.fullmatch(name) is not None))
+
+
+def plain_hit(path, pattern):
+    return fnmatch.fnmatchcase(path, pattern + "*" if pattern.endswith("/") else pattern)
+
+
+def group_reach(path, patterns):
+    """How one case group reaches a file: "whole" (a plain pattern matches it and the group has no `PATH::` pattern for
+    it, or `PATH::*`), the frozenset of NAMEs of its `PATH::NAME` patterns, or None (the group does not run it).
+    `PATH::` patterns override the group's own plain globs for that file."""
+    names = frozenset(s[1] for s in map(split_symbol, patterns) if s and s[0] == path)
+    if names:
+        return "whole" if "*" in names else names
+    return "whole" if any(plain_hit(path, p) for p in patterns if "::" not in p) else None
+
+
+def file_groups(path, mapping):
+    """Every group with any pattern for the file (file-level reach)."""
+    return {g for g, patterns in mapping.items() if group_reach(path, patterns) is not None}
+
+
+def top_level(tree_):
+    """name -> the top-level statements that bind it: def, class, and Assign/AnnAssign/AugAssign name targets."""
+    found = {}
+    for node in tree_.body:
+        if isinstance(node, DEFS):
+            found.setdefault(node.name, []).append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                for n in ast.walk(target):
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                        found.setdefault(n.id, []).append(node)
+    return found
+
+
+def import_time_parts(node):
+    """The parts of a top-level statement that run when the module is imported: a def's decorators, argument defaults
+    and annotations; a class's decorators, bases, keywords and body (its methods by the def rule); any other statement
+    whole."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        args = node.args
+        parts = list(node.decorator_list) + list(args.defaults) + [d for d in args.kw_defaults if d is not None]
+        parts += [a.annotation for a in args.posonlyargs + args.args + args.kwonlyargs + [x for x in (args.vararg,
+                  args.kwarg) if x] if a.annotation is not None]
+        return parts + ([node.returns] if node.returns is not None else [])
+    if isinstance(node, ast.ClassDef):
+        parts = list(node.decorator_list) + list(node.bases) + [k.value for k in node.keywords]
+        return parts + [p for stmt in node.body for p in import_time_parts(stmt)]
+    return [node]
+
+
+COMPS = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+
+
+def scope_names(fn):
+    """(locals, globals) of a function or lambda scope: its parameters and the names its own body binds (assignment,
+    for/with/except/match targets, local def/class, import aliases; nested scopes and comprehensions excluded), minus
+    the names it declares global or nonlocal; and the names it declares global. A binding missed here only adds edges."""
+    args = fn.args
+    bound = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs + [x for x in (args.vararg, args.kwarg) if x]}
+    declared, globals_ = set(), set()
+    todo = list(fn.body) if isinstance(fn.body, list) else [fn.body]
+    while todo:
+        n = todo.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(n.name)
+            continue
+        if isinstance(n, (ast.Lambda,) + COMPS):
+            continue
+        if isinstance(n, (ast.Global, ast.Nonlocal)):
+            declared.update(n.names)
+            if isinstance(n, ast.Global):
+                globals_.update(n.names)
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            bound.add(n.id)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            bound.update(a.asname or a.name.split(".")[0] for a in n.names if a.name != "*")
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            bound.add(n.name)
+        elif isinstance(n, (getattr(ast, "MatchAs", ()), getattr(ast, "MatchStar", ()))) and n.name:
+            bound.add(n.name)
+        elif isinstance(n, getattr(ast, "MatchMapping", ())) and n.rest:
+            bound.add(n.rest)
+        todo.extend(ast.iter_child_nodes(n))
+    return bound - declared, globals_
+
+
+def module_refs(node, shadow=frozenset()):
+    """ast.Name ids in node that may read module scope: a name local to an enclosing function, lambda or comprehension
+    scope is not one (unless declared global there). Decorators, defaults and annotations read the enclosing scope;
+    a class body is not a scope for its methods, and its own bindings do not shadow (conservative)."""
+    found = set()
+
+    def visit(n, shadow):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = n.args
+            outer = list(args.defaults) + [d for d in args.kw_defaults if d is not None]
+            if not isinstance(n, ast.Lambda):
+                outer += list(n.decorator_list) + [a.annotation for a in args.posonlyargs + args.args + args.kwonlyargs
+                                                   + [x for x in (args.vararg, args.kwarg) if x] if a.annotation]
+                outer += [n.returns] if n.returns is not None else []
+            for x in outer:
+                visit(x, shadow)
+            local, globals_ = scope_names(n)
+            inner = (shadow - globals_) | local
+            for x in (n.body if isinstance(n.body, list) else [n.body]):
+                visit(x, inner)
+            return
+        if isinstance(n, COMPS):
+            targets = {t.id for g in n.generators for t in ast.walk(g.target) if isinstance(t, ast.Name)}
+            visit(n.generators[0].iter, shadow)   # the first iterable runs in the enclosing scope
+            rest = [n.key, n.value] if isinstance(n, ast.DictComp) else [n.elt]
+            rest += [x for i, g in enumerate(n.generators) for x in ([g.target] + list(g.ifs) + ([g.iter] if i else []))]
+            for x in rest:
+                visit(x, shadow | targets)
+            return
+        if isinstance(n, ast.Name):
+            if n.id not in shadow:
+                found.add(n.id)
+            return
+        for child in ast.iter_child_nodes(n):
+            visit(child, shadow)
+
+    visit(node, frozenset(shadow))
+    return found
+
+
+def dynamic_module(tree_):
+    """The module can reach its own names by a computed name: globals(), locals() or vars() without an argument, eval,
+    exec, __import__, importlib.import_module or sys.modules."""
+    for n in ast.walk(tree_):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("globals", "locals", "vars") \
+                and not n.args and not n.keywords:
+            return True
+        if isinstance(n, ast.Name) and n.id in ("eval", "exec", "__import__"):
+            return True
+        if isinstance(n, ast.Attribute) and (n.attr == "import_module" or n.attr == "modules" and isinstance(
+                n.value, ast.Name) and n.value.id == "sys"):
+            return True
+        if isinstance(n, ast.ImportFrom) and (n.module or "") in ("sys", "importlib") \
+                and any(a.name in ("modules", "import_module") for a in n.names):
+            return True
+    return False
+
+
+@lru_cache(None)
+def symbol_index(path):
+    """(top-level names, reference edges, import-time root references, dynamic) of the work-tree file; None when it
+    does not parse. An edge name -> every top-level name of the same file that a statement binding name may read
+    (module_refs: a function-local name that shadows a top-level one is no edge)."""
+    tree_ = parsed(path)
+    if tree_ is None:
+        return None
+    tops = top_level(tree_)
+    edges = {name: frozenset(r for node in nodes for r in module_refs(node) if r in tops)
+             for name, nodes in tops.items()}
+    roots = frozenset(r for stmt in tree_.body for part in import_time_parts(stmt) for r in module_refs(part)
+                      if r in tops)
+    return frozenset(tops), edges, roots, dynamic_module(tree_)
+
+
+def symbol_closure(starts, edges, stop=frozenset()):
+    """Every name reachable from starts through edges; names in stop are neither entered nor included."""
+    seen, todo = set(), [s for s in starts if s not in stop]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        todo.extend(x for x in edges.get(name, ()) if x not in seen and x not in stop)
+    return seen
+
+
+def def_spans(tree_):
+    """[(name, first line, last line)] of the top-level def/class statements (decorators excluded); None when a name
+    is defined twice."""
+    spans = [(n.name, n.lineno, n.end_lineno) for n in tree_.body if isinstance(n, DEFS)]
+    return spans if len({s[0] for s in spans}) == len(spans) else None
+
+
+def def_at(spans, start, count):
+    """The top-level def/class whose span holds one side of a hunk (count 0: an insertion point after line start,
+    strictly inside the span), else None."""
+    for name, first, last in spans:
+        if (first <= start < last) if count == 0 else (first <= start and start + count - 1 <= last):
+            return name
+    return None
+
+
+@lru_cache(None)
+def changed_symbols(path, mb):
+    """The top-level def/class names a change to the Python file touches (merge-base mb against the work tree), or
+    None (file-level): a new or deleted file, a side that does not parse, a duplicate or a different set of def/class
+    names (added, deleted or renamed), a hunk outside one def/class on either side or mapping to two names, no hunk."""
+    old_raw, new_raw = git("show", f"{mb}:{path}"), contents(path)
+    if old_raw is None or new_raw is None:
+        return None
+    try:
+        old_tree, new_tree = ast.parse(old_raw), ast.parse(new_raw)
+    except (SyntaxError, ValueError):
+        return None
+    old_spans, new_spans = def_spans(old_tree), def_spans(new_tree)
+    if old_spans is None or new_spans is None or {s[0] for s in old_spans} != {s[0] for s in new_spans}:
+        return None
+    diff = git("diff", "-U0", "--no-color", "--no-ext-diff", mb, "--", path)
+    if diff is None:
+        return None
+    found = set()
+    for a, b, c, d in HUNK.findall(diff):
+        old = def_at(old_spans, int(a), 1 if b == "" else int(b))
+        new = def_at(new_spans, int(c), 1 if d == "" else int(d))
+        if old is None or old != new:
+            return None
+        found.add(old)
+    return frozenset(found) or None
+
+
+def symbol_groups(path, mapping, mb):
+    """The groups a change to the changed Python file reaches through its changed top-level symbols, or None
+    (file-level): see the module docstring for the rules."""
+    reach = {g: group_reach(path, patterns) for g, patterns in mapping.items()}
+    named = frozenset(n for r in reach.values() if isinstance(r, frozenset) for n in r)
+    if not named or mb is None:
+        return None
+    index = symbol_index(path)
+    touched = changed_symbols(path, mb)
+    if index is None or touched is None:
+        return None
+    tops, edges, roots, dynamic_ = index
+    if not named <= tops:
+        return None  # a NAME the file does not define: the map is invalid for this file
+    common = symbol_closure(roots, edges, stop=named)
+    hits = {g for g, r in reach.items() if r == "whole"}
+    for symbol in touched:
+        if symbol in common or (dynamic_ and symbol not in named):
+            return None
+        groups = {g for g, r in reach.items() if isinstance(r, frozenset)
+                  and any(symbol in symbol_closure([n], edges) for n in r)}
+        if not groups:
+            return None
+        hits |= groups
+    return hits
+
+
+def affected_cases(files, suite, mb=None):
+    """The comma list of the suite's affected case groups, or ALL. mb: the merge-base commit the changed list files
+    was computed from (cases checks it is exactly that list); with it, a changed Python file the map names by symbol
+    (`PATH::NAME`) narrows to the groups its changed top-level symbols reach. None: file-level reach only."""
     mapping = case_map(suite)
     if mapping is None or suite in files or any(always(f) for f in files) or library_graph()[2]:
         return "ALL"
@@ -839,9 +1141,13 @@ def affected_cases(files, suite):
             return "ALL"
         # a shared module reaches every file that imports it: each reached file the suite selects must be mapped
         # (the suite itself is reached through its own named scripts and says nothing about a case)
+        # (a reached file that is not the changed one itself is matched file-level: no cross-module symbol reasoning)
         for hit_path in sorted(p for p in reached if p != suite and selects(p, suite)):
-            matched = {name for name, patterns in mapping.items() for pattern in patterns
-                       if fnmatch.fnmatchcase(hit_path, pattern + "*" if pattern.endswith("/") else pattern)}
+            matched = None
+            if mb and hit_path == path and path.endswith(".py"):
+                matched = symbol_groups(path, mapping, mb)
+            if matched is None:
+                matched = file_groups(hit_path, mapping)
             if not matched:
                 return "ALL"
             selected.update(matched)
@@ -911,11 +1217,15 @@ def main(argv):
         with open(argv[1], encoding="utf-8") as fh:
             files = [x.strip() for x in fh if x.strip()]
         return 0 if needed(files, argv[2]) else 1
-    if argv[:1] == ["cases"] and len(argv) >= 2:
-        with open(argv[1], encoding="utf-8") as fh:
+    if argv[:1] == ["cases"] and len(argv) >= 2 and (argv[1] != "--base" or len(argv) >= 4):
+        ref, args = (argv[2], argv[3:]) if argv[1] == "--base" else (None, argv[1:])
+        with open(args[0], encoding="utf-8") as fh:
             files = [x.strip() for x in fh if x.strip()]
-        lines = [suite + "\t" + affected_cases(files, suite) + "\n"
-                 for suite in dict.fromkeys(argv[2:]) if needed(files, suite)]
+        # line ranges only when FILE is exactly the changed set from that base (else every file is file-level)
+        found = merge_base_changed(ref)
+        mb = found[0] if found is not None and set(found[1]) == set(files) else None
+        lines = [suite + "\t" + affected_cases(files, suite, mb) + "\n"
+                 for suite in dict.fromkeys(args[1:]) if needed(files, suite)]
         sys.stdout.buffer.write("".join(lines).encode())
         return 0
     if argv[:1] == ["select-many"] and len(argv) >= 2:

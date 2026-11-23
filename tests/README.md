@@ -109,3 +109,16 @@ suite), and an explicit `--only-suites` name runs all its cases unless `--only-c
 `--only-suites` suite that has a case map; misuse exits 2; `ALL` or an empty list runs every case).
 `routing.test.sh` also takes `--case` and `--list-cases` when run by hand, but it has no case map: `--affected` always
 runs all its cases and `--only-cases` rejects it.
+
+A case-map line is `# case-map: <group> <pattern>...`. A plain pattern (a glob, or a directory ending in `/`) reaches
+the whole file. `PATH::NAME` names a top-level function, class or module-level name of the Python file `PATH` (an exact
+path) that the group runs as an entry point (a CLI verb's `cmd_*` function, a function the test calls on a module it
+loads), and `PATH::*` reaches the whole file. A group's `PATH::` patterns override its own plain globs for that file.
+run-all passes its `--base` to `affected.py cases`, which maps the changed lines (`git diff -U0` against the
+merge-base) to top-level functions and classes and selects the groups whose named entries reach them through the
+file's own static references (scope-aware). It falls back to the whole file (every group with any pattern for it)
+when unsure: a change outside one function or class (imports, constants, decorators, top-level code), an added,
+deleted or renamed function, a parse failure, a helper the import-time code or `main()` reaches, a changed helper no
+named entry reaches, or an unnamed changed helper in a module that looks names up dynamically (`globals()`,
+`sys.modules`, ...). Map rules: every group that runs the file names it (`::*` or every entry it runs, prerequisites
+excepted); when unsure, keep the plain pattern or `PATH::*`. The full rules are in the `tests/affected.py` docstring.

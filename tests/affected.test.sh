@@ -451,6 +451,207 @@ while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# symbol-level case reach (`PATH::NAME` case-map patterns): a throwaway repo with a base commit on main and work-tree
+# edits; the changed line ranges come from `git diff -U0` against the merge-base, mapped with ast to top-level defs
+out=$(python3 -B - "$A" "$TMP" <<'PY'
+import importlib.util, pathlib, subprocess, sys
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+tmp = pathlib.Path(sys.argv[2]); root = tmp / "symbol-fixture"
+def git(*args):
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True, capture_output=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+TOOL = """import functools
+import sys
+
+import helper_lib
+
+LIMIT = 3
+
+
+def shared():
+    return 1
+
+
+def only_a():
+    return shared() + 1
+
+
+def cmd_a(x):
+    return only_a()
+
+
+def cmd_b(x):
+    return shared() + 2
+
+
+def cmd_c(x):
+    main = decorated()   # a local that shadows the top-level main(): no edge to main
+    return main
+
+
+def boot():
+    return 0
+
+
+@functools.lru_cache(None)
+def decorated():
+    return 4
+
+
+def main():
+    boot()
+    return {"a": cmd_a, "b": cmd_b, "c": cmd_c}[sys.argv[1]](None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+DYN = """import sys
+
+
+def helper():
+    return 1
+
+
+def cmd_a(x):
+    return helper()
+
+
+def cmd_b(x):
+    return 2
+
+
+def main():
+    return globals()["cmd_" + sys.argv[1]](None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+files = {
+    "scripts/tool.py": TOOL, "scripts/dyn.py": DYN, "scripts/other.py": "def run():\n    return 1\n",
+    "scripts/lib/helper_lib.py": "VALUE = 1\n",
+    "tests/sym.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                         "# case-map: gc scripts/tool.py::cmd_c\npython scripts/tool.py\n",
+    "tests/star.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                          "# case-map: gs scripts/tool.py::*\npython scripts/tool.py\n",
+    "tests/glob.test.sh": "# case-map: ga scripts/*.py scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                          "# case-map: gp scripts/*.py\npython scripts/tool.py scripts/other.py\n",
+    "tests/ghost.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gx scripts/tool.py::no_such\npython scripts/tool.py\n",
+    "tests/dyn.test.sh": "# case-map: ga scripts/dyn.py::cmd_a\n# case-map: gb scripts/dyn.py::cmd_b\npython scripts/dyn.py\n",
+    "tests/badglob.test.sh": "# case-map: ga scripts/*.py::cmd_a\npython scripts/tool.py\n",
+    "tests/badname.test.sh": "# case-map: ga scripts/tool.py::\npython scripts/tool.py\n",
+}
+for path, text in files.items():
+    p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+git("add", "."); git("commit", "-qm", "base"); git("checkout", "-qb", "work")
+m.ROOT = str(root)
+def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
+def reset():
+    for name in [n for n, v in vars(m).items() if hasattr(v, "cache_clear")]:
+        getattr(m, name).cache_clear()
+def edit(path, text):
+    (root / path).write_text(text)
+def restore():
+    for path in ("scripts/tool.py", "scripts/dyn.py", "scripts/other.py", "scripts/lib/helper_lib.py"):
+        edit(path, files[path])
+def cases(suite, tool=None, base="main"):
+    """affected_cases for the work tree against base, the way `cases` calls it (FILE = the changed set)."""
+    if tool is not None:
+        edit("scripts/tool.py", tool)
+    reset()
+    mb, changed = m.merge_base_changed(base)
+    got = m.affected_cases(changed, suite, mb)
+    restore()
+    return got
+FILE_LEVEL = "ga,gb,gc"
+check("symbol reach: a file-level change reaches every group that maps the file (no base)",
+      m.affected_cases(["scripts/tool.py"], "tests/sym.test.sh") == FILE_LEVEL)
+check("symbol reach: a change inside one function selects only the group naming it",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb")
+check("symbol reach: a change to a helper one named entry reaches selects only that group",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga")
+check("symbol reach: a local variable that shadows a top-level function name does not create an edge",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 1", "return shared() + 7")) == "ga"
+      and "main" not in m.symbol_index("scripts/tool.py")[1]["cmd_c"])
+import ast
+scoped = ast.parse("def f(a, *r):\n    global g\n    g = 1\n    h = 2\n    import os as k2\n"
+                   "    def inner():\n        return a + h + n1\n"
+                   "    return a + g + h + k + k2 + [q for q in z] + [lambda w: w + v]\n").body[0]
+check("symbol reach: parameters, locals, imports, nested scopes and comprehension targets shadow; global does not",
+      m.module_refs(scoped) == {"g", "k", "z", "v", "n1"})
+check("symbol reach: a change to a shared helper selects every group whose named entry reaches it",
+      cases("tests/sym.test.sh", TOOL.replace("def shared():\n    return 1", "def shared():\n    return 10")) == "ga,gb")
+check("symbol reach: a decorated function's body change selects the group whose entry calls it",
+      cases("tests/sym.test.sh", TOOL.replace("    return 4\n", "    return 40\n")) == "gc")
+check("symbol reach: a helper only main() reaches (import-time Common) is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("def boot():\n    return 0", "def boot():\n    return 9")) == FILE_LEVEL)
+check("symbol reach: a module-level constant change is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("LIMIT = 3", "LIMIT = 4")) == FILE_LEVEL)
+check("symbol reach: a new import is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("import sys\n", "import os\nimport sys\n")) == FILE_LEVEL)
+check("symbol reach: a decorator change is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("lru_cache(None)", "lru_cache(8)")) == FILE_LEVEL)
+check("symbol reach: a comment between two defs is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("\n\ndef cmd_c", "\n# note\n\ndef cmd_c")) == FILE_LEVEL)
+check("symbol reach: an added def is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("\n\ndef main", "\n\ndef extra():\n    return 0\n\n\ndef main")) == FILE_LEVEL)
+check("symbol reach: a deleted def is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("def boot():\n    return 0\n", "")) == FILE_LEVEL)
+check("symbol reach: a renamed def is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("def only_a():", "def only_b():")) == FILE_LEVEL)
+check("symbol reach: a parse failure selects ALL",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 2", "return shared( + 2")) == "ALL")
+check("symbol reach: PATH::* reaches the whole file while the other groups narrow",
+      cases("tests/star.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga,gs")
+check("symbol reach: a PATH:: pattern overrides its own group's plain glob; a plain-glob group stays whole-file",
+      cases("tests/glob.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga,gp")
+edit("scripts/other.py", "def run():\n    return 2\n")
+check("symbol reach: the overridden glob still matches the group's other files",
+      cases("tests/glob.test.sh") == "ga,gp")
+check("symbol reach: a NAME the file does not define makes the file file-level",
+      cases("tests/ghost.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga,gx")
+edit("scripts/dyn.py", DYN.replace("def helper():\n    return 1", "def helper():\n    return 2"))
+check("symbol reach: a dynamic module (globals()) with an unnamed changed helper is file-level",
+      cases("tests/dyn.test.sh") == "ga,gb")
+edit("scripts/dyn.py", DYN.replace("    return 2\n", "    return 3\n"))
+check("symbol reach: a dynamic module still narrows a change to a named entry", cases("tests/dyn.test.sh") == "gb")
+edit("scripts/lib/helper_lib.py", "VALUE = 2\n")
+check("symbol reach: an unchanged file reached through the import closure matches file-level (its :: patterns too)",
+      cases("tests/sym.test.sh") == FILE_LEVEL)
+reset()
+check("symbol reach: a glob in a PATH:: pattern makes the map invalid (ALL)",
+      m.case_map("tests/badglob.test.sh") is None and m.affected_cases(["scripts/tool.py"], "tests/badglob.test.sh") == "ALL")
+check("symbol reach: an empty NAME makes the map invalid (ALL)", m.case_map("tests/badname.test.sh") is None)
+# the cases command: --base REF against the default base (origin/main, else main), and a FILE list that is not the
+# changed set. A commit on work changes cmd_b; the work tree then changes only_a.
+edit("scripts/tool.py", TOOL.replace("return shared() + 2", "return shared() + 3"))
+git("commit", "-qam", "cmd_b"); git("branch", "side")
+edit("scripts/tool.py", TOOL.replace("return shared() + 2", "return shared() + 3").replace("return shared() + 1", "return shared() + 5"))
+runner = ("import importlib.util,sys; s=importlib.util.spec_from_file_location('a',sys.argv[1]); m=importlib.util.module_from_spec(s); "
+          "s.loader.exec_module(m); m.ROOT=sys.argv[2]; sys.exit(m.main(sys.argv[3:]))")
+def cli(*args):
+    r = subprocess.run([sys.executable, "-B", "-c", runner, sys.argv[1], str(root), "cases", *args], capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else f"rc={r.returncode} {r.stderr}"
+listed = tmp / "symbol-changed"; listed.write_text("scripts/tool.py\n")
+check("cases --base REF: line ranges from merge-base(REF, HEAD) (only the work-tree change)",
+      cli("--base", "side", str(listed), "tests/sym.test.sh") == "tests/sym.test.sh\tga\n")
+check("cases without --base: the default base main (the commit and the work-tree change)",
+      cli(str(listed), "tests/sym.test.sh") == "tests/sym.test.sh\tga,gb\n")
+listed.write_text("scripts/tool.py\nscripts/other.py\n")
+check("cases: a FILE list that differs from the recomputed changed set keeps file-level reach",
+      cli("--base", "side", str(listed), "tests/sym.test.sh") == f"tests/sym.test.sh\t{FILE_LEVEL}\n")
+check("cases --base with an unknown ref keeps file-level reach",
+      cli("--base", "no-such-ref", str(tmp / "symbol-changed"), "tests/sym.test.sh") == f"tests/sym.test.sh\t{FILE_LEVEL}\n")
+check("the symbol-reach fixture block ran to its end", True)
+PY
+)
+while IFS= read -r line; do
+  echo "$line"
+  case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
+done <<< "$out"
+# a crash in the heredoc loses the checks after it: count it as a failure
+grep -qF "PASS  the symbol-reach fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the symbol-reach fixture block crashed before its end"; }
 # the plugin's own sys.path idiom (a directory of this repo built from __file__ and string literals) is not unsure for
 # selection; a computed entry, importlib and __import__ stay unsure; the conservative rule (reuse hashes) is unchanged
 out=$(python3 -B - "$A" "$TMP" <<'PY'
