@@ -100,7 +100,10 @@ each subtask with its commit, and the verify verdict (state, SHA, model).
   its creator runs exactly
   `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`
   (`<parent>`: the integration checkout, else - and for the integration checkout itself - the main checkout; a task
-  lead's child: the task worktree). Every printed worktree creation includes it. If `orca repo list --json`
+  lead's child: the task worktree). Every printed worktree creation includes it, chained after
+  `factory-pipeline.py orca-wait --worktree <dir> &&`: Orca lists a worktree it did not create only after a while,
+  and a set before that changes nothing (exit 1: still hidden; retry, or set by hand once `orca worktree list` shows
+  it). This read-only verb is not `scripts/orca-wait.sh`, the run lead's message waiter. If `orca repo list --json`
   shows `externalWorktreeVisibility` `hide` for the repo, first run
   `orca repo set --repo path:<repo> --external-worktree-visibility show` (printed too) before the worktree add:
   lineage alone leaves it hidden.
@@ -211,8 +214,10 @@ A task is done when integrated with its review and QA recorded; the run, when th
 `deliver: pr`: at READY_FOR_PR). Then:
 
 1. **Worktrees.** The run lead removes each task worktree its run created once the task is integrated and clean: `git worktree remove <path>` (never `--force`; or `orca worktree rm`, then `git worktree prune`, else
-   `git branch -d` fails). Unintegrated work is reported, not removed. Never remove the main checkout, the integration
-   checkout before its PR is open, another coordinator's worktree, or one in use ("Session lifecycle" below).
+   `git branch -d` fails). `orca worktree rm` removes asynchronously: delete its branch only after
+   `factory-pipeline.py orca-wait --gone --worktree <path>` (else 'used by worktree'). Unintegrated work is reported,
+   not removed. Never remove the main checkout, the integration checkout before its PR is open, another
+   coordinator's worktree, or one in use ("Session lifecycle" below).
 2. **Task branches.** A task branch whose commits are in the integration branch goes with its worktree
    (`git branch -d`, never `-D`); the integration branch stays until its PR is merged.
 3. **Agent sessions.** Released per "Session lifecycle" below; the run lead ends each task-lead
