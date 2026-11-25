@@ -60,8 +60,9 @@ reuse, `--affected` and `--within` selection, test-run slots and case selection.
   before merging (`gh pr checks <pr> --watch`).
 - **Integration QA is scoped too:** `tests/run-all.sh --workspace-only --base <plan base>` runs only the workspace
   checks whose declared inputs in `tests/affected.py` the change reaches (unsure or a global input runs the check;
-  without `--base` all of them). `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run everything and
-  only for a release.
+  without `--base` all of them). Exit 6 (nothing the change reaches) is NOT_RUN, never a pass: then run
+  `tests/run-all.sh --workspace-only` without a base and grade that run. `tests/run-all.sh --release` and
+  `tests/dogfood.sh --installed` run everything and only for a release.
 - **On a loaded machine run task QA with `-j 1`, one task QA at a time; a task lead reports NOT_RUN after one retry
   instead of looping.** Reason: plans policy-followups, path-audit, flow-lows and run-lows - verify sessions lost their
   tier run many times when Claude Code stopped background shells under low memory.
