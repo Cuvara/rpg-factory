@@ -62,27 +62,16 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 - Tier XS is accepted only for a one-task plan. A small prose follow-up found mid-run (final-pointers) had to become
   a full task with a task lead. Consider an XS task inside a multi-task plan, reviewed and gated like the one-task form.
 - The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines.
-- `factory-pipeline.py` usage text: `verdict` lists no `verify` phase and still says a subtask needs its own review;
-  factory-core `SKILL.md` step 11 is still titled "Review + QA".
 - The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
   `changelog.d/base-health.md` does not say the verify prompt carries `known_failing` too.
-- Three low nits of the base-health review: `known_failing_text(plan)` computed twice per prompt; an entry with an
-  unknown key gets both the error and the warning; the test fixture's origin remote is removed only on success.
 - `orca terminal close --terminal <handle>` of a finished task lead returned `runtime_error`; `orca worktree rm`
   then deleted the branch a few seconds later (asynchronously), so `git branch -d` right after it failed with
   "used by worktree". Cleanup should wait for the worktree record to go before deleting the branch.
-- `gate` reports files that came in with a merge of the default branch (`changelog.d/qa-lean.md`,
-  `tests/affected.test.sh` through main-sync) and the run lead's `docs/plans/backlog.md` edit as "changes outside
-  every task's owned paths"; credit both, like the plan file and the run report.
 
 ### plugin-flow-5-followups
 
 Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
 
-- The task-lead report and READY_FOR_PR are in `status` notes, not structured fields:
-  `docs/schemas/pipeline-status.schema.json` forbids extra fields (add them).
-- `docs/pipeline-cli.md` lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6;
-  `scripts/README.md` line 22 still says the waiter wakes on three message types and leaves messages unacked.
 - `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
   the plan task's owned paths); `--list-suites` hides `tests/plan-paths.test.sh` until it is wired.
 - Lesson: a `status` message sent to a dispatch that has already finished creates an Orca follow-up worker (two
@@ -90,13 +79,8 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   the start prompt.
 - The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
   `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
-- `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
-  checks-lows, after ci-coverage) then shows nine foreign files as scope findings (a false FAIL). Use the task's
-  recorded base or the integration base it merged.
 - The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
   `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
-- A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
-  spec template should use `"${S:?}"` or a literal path.
 
 ### policy-followups-leftovers
 
@@ -110,8 +94,6 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
   `state` is still counted in the "settledness not checked" note.
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
 
-- `status --json` prints the `model_scope_widen` lines on stderr (`pipeline-status.schema.json` has no field for
-  them).
 - A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
   session must stop its own run before it reports.
 
@@ -144,11 +126,14 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 From plan qa-reach-followups (`docs/plans/qa-reach-followups/report.md`):
 
 - The workspace reader guard is selected only for changes under `scripts/` and `tests/` (from plan pipeline-speed).
-- `dispatch` prints a worker-start command without `--run`, so a task lead with its own Orca Run adds it by hand.
 - The generic defaults name the Codex plugin runner `codex:codex-rescue` (`pipeline.agents.codex.agent_runner`).
 - A dollar word directly before a slash in prose (`$USD/month`) is still refused by the style lock.
 
 ## Covered
+
+- **pipeline-lows** (status fields, pipeline CLI docs, dispatch and gate lows of plugin-flow-5-followups,
+  policy-followups-leftovers, workflow-slim-followups and qa-reach-followups-2): shipped in plan pipeline-lows
+  (`changelog.d/pipeline-lows-status.md`, `changelog.d/pipeline-lows-dispatch.md`).
 
 - **qa-reach-followups** (qa-reach-followups except the reader-guard selection note, external-path-dollar,
   generic-explorer-name): shipped in plan qa-reach-followups (`changelog.d/qa-reach-followups-pipeline.md`,
