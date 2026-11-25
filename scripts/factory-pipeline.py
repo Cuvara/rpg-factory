@@ -4832,7 +4832,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     base = info["base_sha"] or info["base"]
     row = {"id": task["id"], "repo": task["repo"], "branch": branch, "worktree": None, "sha": None,
            "phase": "pending", "review": None, "qa": None, "children": [], "notes": [],
-           "stale": {}}  # kind -> why: the one currency test below, which lead_report_notes reuses for READY_FOR_PR
+           "stale": {}}  # kind -> why: the one currency test below, which lead_report_state reuses for READY_FOR_PR
     if not path or not os.path.isdir(path):
         row["notes"].append(f"checkout {path} missing")
         return row, info
@@ -5032,11 +5032,6 @@ def nudge_notes(plan, reg, task):
 def lead_report_summary(body):
     first = next((ln.strip() for ln in str(body).splitlines() if ln.strip()), "")
     return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
-
-
-def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):
-    """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only): lead_report_state's notes."""
-    return lead_report_state(plan, row, task, orca_done, path, no_worktree, blockers)["notes"]
 
 
 def lead_report_state(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):

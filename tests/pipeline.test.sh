@@ -16,7 +16,7 @@
 # case-map: orca-first scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status
 # case-map: review-findings scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
 # case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier
-# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_notes
+# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_state
 # case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
 # case-map: dogfood scripts/factory-cmd.py tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
@@ -3736,7 +3736,7 @@ w = wide["model_scope_widen"]
 assert [(e["agent"], e["model"], e["basis"]) for e in w] == [("claude", "claude-haiku-4-5", "owner-approved"),
                                                              ("codex", "example-model", "necessary")], w
 assert all(set(e) == {"agent", "model", "efforts", "basis", "reason", "text"} for e in w), w
-err = [ln.rstrip("\r") for ln in open(sys.argv[3], encoding="utf-8")]
+err = [ln.rstrip("\r\n") for ln in open(sys.argv[3], encoding="utf-8")]
 assert ["model scope widening: " + e["text"] for e in w] == [ln for ln in err if ln.startswith("model scope widening: ")], err
 assert w[0]["text"] == "claude claude-haiku-4-5 [medium] (basis owner-approved: Owner approved on 2026-11-17)", w[0]
 assert light["model_scope_widen"] == [], light["model_scope_widen"]
@@ -5370,7 +5370,7 @@ st_phase "and next redispatches the task lead, as the same blocker says" a qa "-
 refute "and status offers no gate while it is open" "^Next: .* gate " status "$ST"
 sv --task a --phase review --sha "$SA" --by claude --state PASS --subtask sx
 st_note "the subtask PASS clears it: READY_FOR_PR: yes again" a '^READY_FOR_PR: yes$'
-# lead_report_notes called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
+# lead_report_state called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
 import importlib.util, os, pathlib, subprocess, sys, tempfile
 root, tmp = sys.argv[1:]
@@ -5389,20 +5389,20 @@ plan = {'id': 'ready-notes', 'tasks': []}
 task = {'id': 't1', 'repo': 'srv'}
 m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': b, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
 row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
-assert 'READY_FOR_PR: yes' in m.lead_report_notes(plan, row, task, set(), path=str(repo)), 'baseline'
+assert 'READY_FOR_PR: yes' in m.lead_report_state(plan, row, task, set(), path=str(repo))["notes"], 'baseline'
 fails = ['subtask s1 qa FAIL at abcdef1234 by codex (fix it)', 'subtask s2 review FAIL at 1234567890 by claude (fix it)']
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), blockers=fails)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), blockers=fails)["notes"]
 assert 'READY_FOR_PR: no (subtask s1 qa FAIL at abcdef1234 by codex (fix it) (+1 more))' in notes, notes
 row = dict(row, phase='integrated', qa={'state': 'PASS', 'sha': a}, stale={'qa': 'QA at ' + a[:10] + ' is STALE: owned paths changed on t since'})
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=True)["notes"]
 assert 'READY_FOR_PR: no (QA at ' + a[:10] + ' is STALE: owned paths changed on t since)' in notes, notes
-notes = m.lead_report_notes(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))
+notes = m.lead_report_state(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))["notes"]
 assert 'READY_FOR_PR: no (review at x is STALE: owned paths changed since)' in notes, notes
-notes = m.lead_report_notes(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))
+notes = m.lead_report_state(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))["notes"]
 assert not any(n.startswith('READY_FOR_PR') for n in notes), notes
 PY
-then pass=$((pass + 1)); echo "PASS  lead_report_notes: blockers and stale review/QA are never READY_FOR_PR"
-else fail=$((fail + 1)); echo "FAIL  lead_report_notes blockers and stale"; fi
+then pass=$((pass + 1)); echo "PASS  lead_report_state: blockers and stale review/QA are never READY_FOR_PR"
+else fail=$((fail + 1)); echo "FAIL  lead_report_state blockers and stale"; fi
 # a worktree repo: a report at A with a later commit B on the task branch is superseded, even in the qa phase with
 # review and QA PASS at B (only a no-worktree repo, whose HEAD is the shared topic, accepts a report at an ancestor)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
@@ -5423,10 +5423,10 @@ plan = {'id': 'ancestor-report', 'tasks': []}
 task = {'id': 't1', 'repo': 'srv'}
 m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': a, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
 row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=False)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=False)["notes"]
 assert any('(stale: task HEAD is ' + b[:10] + ')' in n for n in notes), notes
 assert 'READY_FOR_PR: no (lead report is for ' + a[:10] + ', task HEAD is ' + b[:10] + ')' in notes, notes
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=True)["notes"]
 assert not any('stale' in n for n in notes) and 'READY_FOR_PR: yes' in notes, notes
 PY
 then pass=$((pass + 1)); echo "PASS  worktree repo: a report at an ancestor of the task HEAD is stale (READY_FOR_PR: no); no-worktree keeps it current"

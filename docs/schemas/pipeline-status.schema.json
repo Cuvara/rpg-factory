@@ -448,7 +448,7 @@
       }
     },
     "model_scope_widen": {
-      "description": "The plan's valid model scope widenings (`model_scope_widen` entries that pass the model policy; invalid ones are left out, also for an invalid plan), in plan order; empty when none. Always present in `status --json` output; optional so an older output still validates. The stderr `model scope widening:` lines carry the same `text`.",
+      "description": "The plan's valid model scope widenings (`model_scope_widen` entries that pass the model policy; invalid ones are left out, also for an invalid plan), in plan order; empty when none. Always present in `status --json` output, also for an invalid plan. Optional like `models` and `slots`: the `status` command adds these three around the status core, whereas the core sets every required field (the per-task `lead_report` and `ready_for_pr` included) on each output. The stderr `model scope widening:` lines carry the same `text`.",
       "type": "array",
       "items": {
         "type": "object",
