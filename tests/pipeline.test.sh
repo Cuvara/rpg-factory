@@ -6,7 +6,7 @@
 # case-map: validate scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_validate
 # case-map: plan-edit scripts/factory-pipeline.py::cmd_plan_edit
 # case-map: subplan docs/schemas/pipeline-subplan.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
-# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::python_alias_line
+# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::known_failing_block scripts/factory-pipeline.py::python_alias_line
 # case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::grade_paths scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::task_grades
 # case-map: child-dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
 # case-map: tier scripts/factory-pipeline.py::cmd_tier
@@ -369,7 +369,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order stack-deps-merged stack-stale-record topic-start-no-deps"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order stack-deps-merged stack-stale-record topic-start-no-deps merged-topic-review-base"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -972,6 +972,30 @@ if case == 'stack-no-worktree':
     assert m.stackable(plan, reg, info, plan['tasks'][1]) is None
     assert m.start_base(plan, info, plan['tasks'][1], reg) == (info['base_sha'] or info['base'])
     assert_unstacked_lead()
+    print(case + ' assertions passed')
+    sys.exit(0)
+if case == 'merged-topic-review-base':
+    # a task cut from main that merged the topic (another integrated task's file): the review, verify and QA diff starts
+    # at the topic commit it merged, so that file is no scope finding; not merged, or once integrated, the base stays
+    info = m.repo_info(plan, reg, 'fixture')
+    start_main = info['base_sha'] or info['base']
+    other = commit('other task', 'other.txt')  # integrated on the topic: a file task a does not own
+    git('switch', '--no-track', '-c', 'topic-a', start_main)
+    own = commit('a own', 'shared.txt')
+    assert m.review_base(info, plan['topic'], start_main, own) == (start_main, None)
+    git('merge', '--no-ff', '-q', '-m', 'merge topic', 'topic')
+    merged = git('rev-parse', 'HEAD')
+    rb, note = m.review_base(info, plan['topic'], start_main, merged)
+    assert rb == other and note and 'merge-base(topic, sha)' in note, (rb, note)
+    assert git('diff', '--name-only', rb + '...' + merged) == 'shared.txt', rb
+    # the merge on a child branch, the task branch tip before it: start_base keeps main, the review diff does not
+    git('branch', 'topic-a--s1', merged); git('reset', '-q', '--hard', own)
+    assert m.start_base(plan, info, plan['tasks'][0], reg) == start_main
+    out = cli('dispatch', str(pf), '--task', 'a', '--phase', 'review', '--sha', merged, '--runner', 'print').stdout
+    assert 'git diff ' + other + '...' + merged in out and 'git diff ' + start_main + '...' not in out, out
+    # integrated: the candidate is on the topic, review_base keeps its answer for a branch cut from main
+    git('switch', 'topic'); git('merge', '--no-ff', '-q', '-m', 'integrate a', merged)
+    assert m.review_base(info, plan['topic'], start_main, merged) == (start_main, None)
     print(case + ' assertions passed')
     sys.exit(0)
 if case == 'topic-start-no-deps':
@@ -2010,7 +2034,7 @@ for check in ('tests/run-all.sh --within', 'tests/run-all.sh --within=', 'tests/
 old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
             'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
             'run the checks (run-checks.py fast tier for registry repos), regressions, edge and failure cases. A Unity '
-            'test run waits for the `unity-test` resource; never a second Editor.\n'
+            'test run waits for the `unity-test` resource; never a second Editor.\n' + m.QA_CLEANUP + '\n'
             'Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n'
             '- [s] tests pass\nChecks:\n- [s] dotnet test x\n- [s] tests/run-all.sh -j 4')
 srv = {'id': 's', 'checks': ['dotnet test x', 'tests/run-all.sh -j 4'], 'acceptance': ['tests pass']}
@@ -2740,6 +2764,7 @@ for bad in '[{"check":"a"}]' '["a"]' '[{"check":"","reason":"r"}]'; do
 done
 X=$(plan kf-key "{$HEAD,\"known_failing\":[{\"check\":\"a\",\"reason\":\"r\",\"x\":1}],$KFT}")
 expect "known_failing: an unknown key is rejected" 1 "known_failing\[0\]: unknown key x" validate "$X"
+refute "known_failing: an entry with an unknown key gets the error only, not also the warning" "known failing at base" validate "$X"
 # the schema carries the same shape: items need check and reason, nothing else
 if python3 -B - "$ROOT" <<'PY'
 import json, pathlib, sys
@@ -3344,6 +3369,34 @@ for ph in "--phase lead" "--phase qa --sha abc1234" "--phase verify --sha abc123
   expect_spec "known_failing: the $ph spec carries FAIL_AT_BASE" "FAIL_AT_BASE" dispatch "$KFP" --task gw $ph --runner orca
   refute_spec "no known_failing: the $ph spec has no known-failing text" "Known failing at base|FAIL_AT_BASE" dispatch "$OK" --task gw $ph --runner orca
 done
+# known_failing_text runs once per prompt: known_failing_block computes it once, and no call site repeats it
+cat > "$TMP/kf-once.py" <<'KFONCE'
+import importlib.util, sys
+root = sys.argv[1]
+spec = importlib.util.spec_from_file_location('kf_once', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+calls, real = [], m.known_failing_text
+m.known_failing_text = lambda plan: calls.append(1) or real(plan)
+block = m.known_failing_block({'known_failing': [{'check': 'tests/foo.test.sh', 'reason': 'fails on base'}]})
+assert len(calls) == 1 and block.startswith('\nKnown failing at base (plan known_failing):\n'), (calls, block)
+assert m.known_failing_block({}) == ''
+src = open(root + '/scripts/factory-pipeline.py', encoding='utf-8').read()
+assert 'known_failing_text(plan) if known_failing_text(plan)' not in src
+KFONCE
+if python3 -B "$TMP/kf-once.py" "$ROOT"
+then pass=$((pass + 1)); echo "PASS  known_failing: the known-failing text is computed once per prompt"
+else fail=$((fail + 1)); echo "FAIL  known_failing: the known-failing text is computed more than once per prompt"; fi
+# the QA cleanup names a guarded variable: an empty one can never expand to an unscoped path (QA and verify specs)
+for ph in "--phase qa --sha abc1234" "--phase verify --sha abc1234"; do
+  expect_spec "QA cleanup: the $ph spec guards its variable" 'rm -f -- "\$\{S:\?\}"/\*\.log' dispatch "$KFP" --task gw $ph --runner orca
+  refute_spec "QA cleanup: the $ph spec never removes by an unguarded variable" 'rm -f (-- )?"?\$[A-Za-z_]' dispatch "$KFP" --task gw $ph --runner orca
+done
+# worker-start joins the task lead's Run: --orca-run, else the task's recorded orca_run; no Run known: no --run
+ORP=$(plan orca-run-spec "{$(sed 's/"id":"demo"/"id":"demorun"/' <<<"$HEAD"),\"tasks\":[{\"id\":\"gw\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"],\"orca_run\":\"run:run_T\"}]}")
+expect "worker-start carries the task's recorded orca_run" 0 "^orca orchestration worker-start .* --run run_T --json$" dispatch "$ORP" --task gw --phase qa --sha abc1234 --runner orca
+expect "worker-start: --orca-run wins over the recorded orca_run" 0 "^orca orchestration worker-start .* --run run_X --json$" dispatch "$ORP" --task gw --phase qa --sha abc1234 --runner orca --orca-run run_X
+expect "worker-start: --orca-run names the Run when the plan records none" 0 "^orca orchestration worker-start .* --run run_X --json$" dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca --orca-run run:run_X
+refute "worker-start: no Run known, no --run" "^orca orchestration worker-start .* --run " dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca
 # base health hint: print only, for a repo with a GitHub remote
 refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote add origin https://github.com/x/y.git
@@ -6110,6 +6163,35 @@ git -C "$GX" worktree add -q "$TMP/gm-late-main" main; gi "$TMP/gm-late-main" me
 gi "$GX" merge -q --no-ff main -m "Merge main into feat/gl"; gxqa "$GXP" r
 expect "gate-merge: a post-review topic commit that also landed on the default branch is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
 git -C "$GX" worktree remove --force "$TMP/gm-late-main"
+# stray changes: a file a merge of the default branch brought in is nobody's task work, also with the plan base pinned to
+# a SHA, and docs/plans/backlog.md is the run lead's with the plan file outside the repo; a real stray file still blocks
+gm_fixture gm-stray feat/gs main gs r HEAD
+git -C "$GX" worktree add -q "$TMP/gm-stray-main" main; echo u > "$TMP/gm-stray-main/unrelated.txt"
+gi "$TMP/gm-stray-main" add unrelated.txt; gi "$TMP/gm-stray-main" commit -qm "docs: main adds unrelated.txt"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gs"; gxqa "$GXP" r
+expect "gate-merge: a file a default-branch merge brought in is not stray (plan base a SHA)" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for the default-branch merge file" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+mkdir -p "$GX/docs/plans"; echo b > "$GX/docs/plans/backlog.md"; gi "$GX" add -A; gi "$GX" commit -qm "docs(plans): backlog follow-ups"; gxqa "$GXP" r
+expect "gate-merge: docs/plans/backlog.md is not stray with the plan file outside the repo" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans/backlog.md (plan file outside the repo)" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+echo s > "$GX/stray.txt"; gi "$GX" add stray.txt; gi "$GX" commit -qm "chore: stray"; gxqa "$GXP" r
+expect "gate-merge: a real stray file still blocks, naming only it" 1 "BLOCKER r: changes outside every task's owned paths: stray.txt$" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-stray-main"
+# the topic merged origin/main while the local main is stale (a main-sync after a fetch): the merged file is not stray;
+# a merge that edits that file beyond the default branch's content still is
+gm_fixture gm-origin feat/go main go r main
+git -C "$GX" worktree add -q --detach "$TMP/gm-origin-up" main
+echo o > "$TMP/gm-origin-up/upstream.txt"; gi "$TMP/gm-origin-up" add upstream.txt; gi "$TMP/gm-origin-up" commit -qm "docs: upstream adds upstream.txt"
+git -C "$GX" update-ref refs/remotes/origin/main "$(git -C "$TMP/gm-origin-up" rev-parse HEAD)"
+gi "$GX" merge -q --no-ff origin/main -m "Merge origin/main into feat/go"; gxqa "$GXP" r
+expect "gate-merge: a file an origin/main merge brought in is not stray (stale local main)" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for the origin/main merge file" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+echo o2 > "$TMP/gm-origin-up/upstream.txt"; gi "$TMP/gm-origin-up" commit -qam "docs: upstream edits upstream.txt"
+git -C "$GX" update-ref refs/remotes/origin/main "$(git -C "$TMP/gm-origin-up" rev-parse HEAD)"
+gi "$GX" merge -q --no-ff --no-commit origin/main >/dev/null 2>&1; echo hand > "$GX/upstream.txt"; gi "$GX" add upstream.txt
+gi "$GX" commit -qm "Merge origin/main into feat/go (edits upstream.txt)"; gxqa "$GXP" r
+expect "gate-merge: a default-branch merge that edits an unowned file beyond the default branch is stray" 1 "BLOCKER r: changes outside every task's owned paths: upstream.txt$" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-origin-up"
 # The plan plugin-subagent-rules shape: task ta owns own/a.txt, ts (main-sync) depends on ta (or not) and also owns it, tl depends
 # on ts and owns own/l.txt only. ta is reviewed on the topic; main edits own/a.txt; ts merges main inside its branch (a conflict
 # resolution) and the topic merges ts; tl is cut from the topic before that merge, syncs the topic into itself and the topic merges tl.
