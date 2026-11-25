@@ -64,21 +64,11 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 - The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines.
 - The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
   `changelog.d/base-health.md` does not say the verify prompt carries `known_failing` too.
-- `orca terminal close --terminal <handle>` of a finished task lead returned `runtime_error`; `orca worktree rm`
-  then deleted the branch a few seconds later (asynchronously), so `git branch -d` right after it failed with
-  "used by worktree". Cleanup should wait for the worktree record to go before deleting the branch.
 
 ### plugin-flow-5-followups
 
 Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
 
-- `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
-  the plan task's owned paths); `--list-suites` hides `tests/plan-paths.test.sh` until it is wired.
-- Lesson: a `status` message sent to a dispatch that has already finished creates an Orca follow-up worker (two
-  appeared in this run). Send lead messages only to the run (`--to run:<id>`) of a live task lead, and put context in
-  the start prompt.
-- The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
-  `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
 - The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
   `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
 
@@ -87,11 +77,6 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
 From plans policy-followups and owner-policy (`docs/plans/policy-followups/report.md`,
 `docs/plans/owner-policy/report.md`):
 
-- `plan_branch` in `scripts/factory-pipeline.py` treats `<topic>-*` as this plan's, so a plan whose topic extends
-  this one (`<topic>-v2`) can count as a child when Orca's lineage names this plan's worktree as its parent; an
-  Orca-prefixed branch equal to the topic (`codex/<topic>`) is not matched by lineage.
-- With concise `worker-list` rows (Orca without `--full`), a worker released through `terminalState` but without
-  `state` is still counted in the "settledness not checked" note.
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
 
 - A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
@@ -101,9 +86,6 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
 
 From plan plan-edit (`docs/plans/plan-edit/report.md`):
 
-- `plan-edit` re-reads the copy after validation, and repeats the no-worktree marker step instead of using
-  `read_plan` (low, from review).
-- `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does.
 - Released verify sessions leave their `tests/run-all.sh` alive, holding test slots for hours (plans owner-policy and
   plan-edit); a verify session must stop its own run before it reports.
 - Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
@@ -125,11 +107,15 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 
 From plan qa-reach-followups (`docs/plans/qa-reach-followups/report.md`):
 
-- The workspace reader guard is selected only for changes under `scripts/` and `tests/` (from plan pipeline-speed).
 - The generic defaults name the Codex plugin runner `codex:codex-rescue` (`pipeline.agents.codex.agent_runner`).
 - A dollar word directly before a slash in prose (`$USD/month`) is still refused by the style lock.
 
 ## Covered
+
+- **flow-lows-2** (Orca lineage wait, cleanup order, concise worker rows, plan-edit and validate lows, the
+  `pipeline_route.py` case map, the follow-up worker lesson, the reader guard selection; `plan_branch` was already
+  fixed by `Lineage.owns`): shipped in plan flow-lows-2 (`changelog.d/flow-lows-2-orca.md`,
+  `changelog.d/flow-lows-2-plan.md`, `changelog.d/flow-lows-2-guard.md`).
 
 - **pipeline-lows** (status fields, pipeline CLI docs, dispatch and gate lows of plugin-flow-5-followups,
   policy-followups-leftovers, workflow-slim-followups and qa-reach-followups-2): shipped in plan pipeline-lows
