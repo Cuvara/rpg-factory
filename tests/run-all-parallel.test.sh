@@ -219,7 +219,10 @@ elif sys.argv[1] == 'select-many':
     print('\n'.join(s for s in sys.argv[3:] if s in os.environ.get('SELECT', 'tests/b.sh').split(',')))
 elif sys.argv[1] == 'cases':
     if os.environ.get('CASES_FAIL'): sys.exit(1)
-    for suite in sys.argv[3:]:   # like affected.py: one line per selected suite only
+    args = sys.argv[2:]   # cases [--NAME VALUE | --NAME=VALUE]... FILE SUITE...: options in any order, never a suite
+    while args and args[0].startswith('--'):
+        args = args[1:] if '=' in args[0] else args[2:]
+    for suite in args[1:]:   # like affected.py: one line per selected suite only
         if suite in os.environ.get('SELECT', 'tests/b.sh').split(','):
             print(suite, os.environ.get('CASE_SELECT', 'ALL') if suite == 'tests/b.sh' else 'ALL')
 PY
