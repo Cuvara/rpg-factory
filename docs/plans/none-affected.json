@@ -1,0 +1,44 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "none-affected",
+  "title": "run-all: an affected run that reaches no check exits 0",
+  "topic": "feat/delivery/none-affected",
+  "goal": "Close issue #149. Integration QA runs `tests/run-all.sh --workspace-only --base <plan base>`. For a change that reaches no workspace check (plan nudge-composer touched only scripts/factory-pipeline.py, its test and a changelog fragment) every check counts as not affected, so the run has 0 passed and 0 failed, and run-all's last line `[ \"$pass\" -gt 0 ] && [ \"$fail\" -eq 0 ]` exits 1. The QA worker then reported FAIL for a correct change.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "none-affected-exit",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "In tests/run-all.sh: in affected mode with a base (AFF set: --affected or --base resolved a base and wrote the changed-file list), a run with 0 passed, 0 failed and every skipped check counted as not affected (skip == naff, naff > 0) exits 0 and prints one line after the summary: `run-all: nothing the change reaches: no check ran (not affected: N)`. Every other run keeps the current exit rule: 0 passes without that shape (a skip for another reason, a run with no base, --only-suites or --within alone, a full run) still exits 1, and any failure still exits 1. The result record and the suite PASS records are unchanged in meaning: a run that ran nothing writes no suite PASS record. Update the header comment of tests/run-all.sh where it states the exit rule. In tests/run-all-parallel.test.sh: (a) an --affected run whose base diff reaches no suite and no gated script exits 0 and prints the nothing-the-change-reaches line; (b) the same with one check skipped for another reason (for example a missing tool) exits 1; (c) an --affected run that reaches a suite still exits 0 on pass and 1 on a failure, as before.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "changelog.d/none-affected.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "docs/",
+        "scripts/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh"
+      ],
+      "acceptance": [
+        "an --affected run that reaches no check exits 0 and prints `run-all: nothing the change reaches: no check ran (not affected: N)`",
+        "a run with 0 passes where any skip is not a not-affected skip still exits 1",
+        "a run without a base (no AFF), --only-suites alone and a full run keep the current exit rule",
+        "an affected run that reaches a failing suite exits 1, a passing one exits 0",
+        "every existing run-all-parallel case passes"
+      ]
+    }
+  ]
+}

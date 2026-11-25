@@ -246,6 +246,7 @@ run b bash tests/b.sh
 [ "${WITH_HOLD:-0}" = 0 ] || run hold bash tests/hold.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
+[ "${WITH_SKIP:-0}" = 0 ] || skp "tool check" "tool not on PATH"   # a skip for another reason than not affected
 if [ "${WITH_GUARDS:-0}" != 0 ]; then   # the three enforcement lines, like run-all.sh's
   run "English-only enforcement (report available)" bash scripts/checks/english-only.py --enforce
   run "Portable-paths enforcement" bash scripts/checks/portable-paths.py --enforce
@@ -286,7 +287,10 @@ fi
 [ "${SLOWEST:-0}" = 0 ] || runall_slowest
 runall_summary
 echo "counts $pass $fail $skip"
-[ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
+# run-all.sh's own exit rule: every line after its last top-level summary call (the nothing-reached line, the status)
+exit_rule=$(awk '{ sub(/\r$/, "") } /^runall_summary$/ { n = NR } { l[NR] = $0 } END { for (i = n + 1; n && i <= NR; i++) print l[i] }' "$ROOT_UNDER_TEST/tests/run-all.sh")
+[ -n "$exit_rule" ] || { echo 'fixture: no exit rule after runall_summary in run-all.sh'; exit 99; }
+eval "$exit_rule"
 PLAN
 git -C "$TMP/repo" init -q
 git -C "$TMP/repo" add .
@@ -1039,6 +1043,53 @@ out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --inline-only --no-reuse --no-wait); r
 [ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (1 in use:' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--inline-only takes a test slot (busy slot: exit 3 with --no-wait) and no full-run lock' || no '--inline-only test slot' "$out"
 rm -rf "$SL/1"
+# Exit rule of an affected run with a base: a change that reaches no check (0 passed, 0 failed, every skip not affected)
+# exits 0 and says so in one line after the summary; it writes no suite PASS record. A skip for another reason, a run
+# without a base and --only-suites alone keep the old rule (0 passes exit 1); a run that reaches a suite exits on it.
+NONE_LINE='run-all: nothing the change reaches: no check ran (not affected: 2)'
+none_after_summary() { # out: the nothing-reached line appears once, after the summary line
+  local s n
+  s=$(grep -n '^run-all: [0-9]* checks, ' <<<"$1" | tail -1 | cut -d: -f1)
+  n=$(grep -nxF "$NONE_LINE" <<<"$1" | cut -d: -f1)
+  [ -n "$s" ] && [ -n "$n" ] && [ "$(grep -cxF "$NONE_LINE" <<<"$1")" = 1 ] && [ "$n" -gt "$s" ]
+}
+no_suite_record() { [ "$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')" = 0 ]; }
+for j in 1 3; do
+  reset_cache
+  out=$(SELECT=none cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 0 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && none_after_summary "$out" \
+    && grep -qx 'run-all: 2 checks, 0 passed, 0 failed, 2 skipped (2 not affected by the change)' <<<"$out" && no_suite_record \
+    && good "--affected --base reaching no check exits 0 and prints the nothing-reached line after the summary (-j $j)" \
+    || no "--affected reaching nothing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"
+  reset_cache
+  out=$(WITH_SKIP=1 SELECT=none cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 1 ] && grep -qx 'counts 0 0 3' <<<"$out" && grep -q '^SKIP  tool check (tool not on PATH)' <<<"$out" \
+    && ! grep -q 'nothing the change reaches' <<<"$out" && no_suite_record \
+    && good "--affected reaching no check with a skip for another reason still exits 1, no nothing-reached line (-j $j)" \
+    || no "--affected reaching nothing plus a tool skip (-j $j): rc $rc" "$out"
+  reset_cache
+  out=$(cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$RUN_LOG")" = b ] && grep -qx 'counts 1 0 1' <<<"$out" && ! grep -q 'nothing the change reaches' <<<"$out" \
+    && good "--affected --base reaching a passing suite exits 0 without the nothing-reached line (-j $j)" \
+    || no "--affected reaching a passing suite (-j $j): rc $rc" "$out"
+  reset_cache
+  out=$(BREAK_CASE=1 cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 1 ] && grep -qx 'counts 0 1 1' <<<"$out" && ! grep -q 'nothing the change reaches' <<<"$out" && no_suite_record \
+    && good "--affected --base reaching a failing suite exits 1 without the nothing-reached line (-j $j)" \
+    || no "--affected reaching a failing suite (-j $j): rc $rc" "$out"
+  # tests/never.sh is a listed suite whose run line is off (no WITH_NEVER): nothing runs, a and b are not affected
+  reset_cache
+  out=$(NO_BASE=1 cache_plan --no-reuse -j "$j" --affected --only-suites tests/never.sh); rc=$?
+  [ "$rc" = 1 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && grep -q 'no base, running only --only-suites tests/never.sh' <<<"$out" \
+    && ! grep -q 'nothing the change reaches' <<<"$out" \
+    && good "--affected without a base and nothing passing keeps exit 1, no nothing-reached line (-j $j)" \
+    || no "--affected no base, nothing passing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"
+  reset_cache
+  out=$(cache_plan --no-reuse -j "$j" --only-suites tests/never.sh); rc=$?
+  [ "$rc" = 1 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && ! grep -q 'nothing the change reaches' <<<"$out" \
+    && good "--only-suites alone with nothing passing keeps exit 1, no nothing-reached line (-j $j)" \
+    || no "--only-suites nothing passing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"
+done
 # --within (task QA's scoped selection, with --affected --base): only the named suites and gated scripts run. A named suite
 # the change reaches gets only its affected cases (as --affected passes them), one the change does not reach still runs
 # with every case, what the change selects outside the list is left to CI (counted as not affected, named in one line
