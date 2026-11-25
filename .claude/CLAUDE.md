@@ -33,9 +33,10 @@ Architecture and layout: `docs/architecture/overview.md`. Release procedure: `do
   gate: every affected suite per PR on Linux and Windows (`scripts/ci-plan.py`, one matrix job per suite,
   `--no-workspace --no-claude`; every suite through `workflow_dispatch` with `full=true`); `ci-ok` is the single
   required check and must be green (`gh pr checks <pr> --watch`) before merging; start the next task meanwhile.
-  Before a PR, integration QA runs `tests/run-all.sh --workspace-only --base <plan base>` with 0 failed. Full
-  `--release` and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers: `delivery.md`
-  section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
+  Before a PR, integration QA runs `tests/run-all.sh --workspace-only --base <plan base>` with 0 failed; its exit 6
+  ("nothing the change reaches") is NOT_RUN, never a pass, and integration QA then runs and grades
+  `tests/run-all.sh --workspace-only` without a base. Full `--release` and `tests/dogfood.sh --installed` run only for
+  releases. Report the pass count. Tiers: `delivery.md` section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
 - English only for everything written: code, comments, docs, changelog fragments, commit messages, PR and issue text,
   plan files (including the harness plan-mode file), briefs and specs for agents, messages between sessions, artifacts and
   memory files. Only the report to the owner (chat replies, status, questions, the final report) uses the registry
@@ -79,6 +80,7 @@ Each lesson names its reason. Delivery-flow lessons (Orca, Codex, sessions, load
 - **Never stop a process by pattern (`pkill -f <name>`):** a worker that did so to stop its own duplicate skills-lint run may have killed other sessions' runs; stop only the PID you started.
 - **The language policy needs an advisory, not only prose:** sessions wrote plans, briefs and inter-agent messages in the owner's language because the rule was English-only prose with no signal at write time, and a long session drifts to the language it is spoken to in. Text the owner never reads is English; `workspace.report_language` covers only the report to the owner. `file-guard.py` and the git guard now warn (rule `english-only`) on a write or command that carries non-English text; tests in `tests/file-guard.test.sh` and `tests/git-guard.test.sh`.
 - **Low memory: -j 1 and one task QA at a time:** verify sessions in plans policy-followups, path-audit, flow-lows and run-lows lost their tier run many times when Claude Code stopped background shells under low memory; a task lead reports NOT_RUN after one retry instead of looping (`parallel-work.md`).
+- **A run that checked nothing is NOT_RUN, never a pass:** an affected run (`--affected`, `--workspace-only --base`) whose change reached no check used to exit 0 and report success (PR #150), which would have let a QA session record PASS with no evidence. Such a run now exits 6 = NOT_RUN; integration QA then runs `tests/run-all.sh --workspace-only` without a base and grades that run (`tests/run-all-parallel.test.sh`, `tests/pipeline.test.sh`).
 - **Learning loop:** a new lesson goes here or into its policy file (`parallel-work.md`, `docs/dogfood.md`, `git-safety.md`) with its reason and a test when possible. Private agent memory only points here: Codex, other machines and new sessions never see it.
 
 ## Commands
@@ -86,7 +88,7 @@ Each lesson names its reason. Delivery-flow lessons (Orca, Codex, sessions, load
 ```bash
 tests/run-all.sh --affected --base <base> --within <suites> -j 1   # task QA: the task's check suites, affected cases only
 tests/run-all.sh --only-suites a,b               # only the named suites (--list-suites prints names)
-tests/run-all.sh --workspace-only --base <base>  # integration QA: workspace checks the change reaches
+tests/run-all.sh --workspace-only --base <base>  # integration QA: workspace checks the change reaches; exit 6 = NOT_RUN (never a pass): rerun without --base
 tests/run-all.sh --release                       # full release gate (releases only, under the lock)
 tests/git-guard.test.sh                          # also: skills-lint.sh, routing.test.sh, pipeline.test.sh, new-skill.test.sh
 python3 -B scripts/build-registry.py [--check]   # registry.json from registry/
