@@ -16,7 +16,7 @@
 # case-map: orca-first scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status
 # case-map: review-findings scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
 # case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier
-# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_notes
+# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_state
 # case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
 # case-map: dogfood scripts/factory-cmd.py tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
@@ -3719,6 +3719,30 @@ for cmd in validate status; do
     pass=$((pass + 1)); echo "PASS  plan widening: $cmd lists both entries"
   else fail=$((fail + 1)); echo "FAIL  plan widening: $cmd lists both entries (rc=$RC)"; sed 's/^/      /' <<<"$OUT" | head -30; fi
 done
+# status --json: the valid widenings as objects (entry fields plus the text of the stderr line), [] without the field
+python3 -B "$P" status --json "$WIDE" > "$TMP/wide-status.json" 2> "$TMP/wide-status.err"
+python3 -B "$P" status --json "$LT" > "$TMP/lt-status.json" 2>/dev/null
+if python3 - "$ROOT" "$TMP/wide-status.json" "$TMP/wide-status.err" "$TMP/lt-status.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+wide = json.load(open(sys.argv[2], encoding="utf-8"))
+light = json.load(open(sys.argv[4], encoding="utf-8"))
+for value in (wide, light):
+    errors = m.schema_errors(value, schema, schema)
+    assert not errors, errors
+w = wide["model_scope_widen"]
+assert [(e["agent"], e["model"], e["basis"]) for e in w] == [("claude", "claude-haiku-4-5", "owner-approved"),
+                                                             ("codex", "example-model", "necessary")], w
+assert all(set(e) == {"agent", "model", "efforts", "basis", "reason", "text"} for e in w), w
+err = [ln.rstrip("\r\n") for ln in open(sys.argv[3], encoding="utf-8")]
+assert ["model scope widening: " + e["text"] for e in w] == [ln for ln in err if ln.startswith("model scope widening: ")], err
+assert w[0]["text"] == "claude claude-haiku-4-5 [medium] (basis owner-approved: Owner approved on 2026-11-17)", w[0]
+assert light["model_scope_widen"] == [], light["model_scope_widen"]
+PY
+then pass=$((pass + 1)); echo "PASS  plan widening: status --json carries model_scope_widen (stderr lines kept), [] without widenings"
+else fail=$((fail + 1)); echo "FAIL  plan widening: status --json model_scope_widen"; head -c 800 "$TMP/wide-status.json"; head -5 "$TMP/wide-status.err"; fi
 expect "plan widening: another plan in the same state remains restricted" 2 'Nothing was dispatched' dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
 refute "plan widening: another plan dispatches nothing" '^orca |^# agent:' dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
 printf '{"scope":{"claude":{"claude-haiku-4-5":["medium"]}}}\n' > "$TMP/mp-plan-wide.json"
@@ -3864,6 +3888,21 @@ fi
 if has_case verdict-gate; then
 case_start
 echo "-- verdict and gate"
+expect "verdict --help names the verify phase" 0 "--phase \{review,qa,verify\}" verdict --help
+# the usage text (module docstring) describes verify as cmd_verdict records it, and no longer asks a subtask review
+if python3 -B - "$ROOT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("usage_pipeline", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+doc = m.__doc__
+assert "verdict <plan.json> --task ID --phase review|qa|verify --sha SHA" in doc, "synopsis"
+assert "[--failed-at review|qa]" in doc, "--failed-at"
+assert "--phase verify (per plan task, never integration:<repo>) records what one verify session ran" in doc
+assert "needs its own PASS review" not in doc, "stale subtask review claim"
+assert "One task review covers every subtask" in doc
+PY
+then pass=$((pass + 1)); echo "PASS  the verdict usage text names --phase verify and --failed-at and drops the own-subtask-review claim"
+else fail=$((fail + 1)); echo "FAIL  verdict usage text"; fi
 # srv/cli: plan.repos aliases of the fixture checkouts (unregistered: no run-checks); cli is a Unity project by its marker
 G=$(plan gate "{$HEAD,\"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"},\"cli\":{\"path\":\"ws/IndieRPGMMOAdventure\",\"base\":\"develop\"}},\"tasks\":[
  {\"id\":\"gw\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]},
@@ -5150,9 +5189,33 @@ assert any(re.search(sys.argv[3], n) for n in r["notes"]), r["notes"]' "$out" "$
     pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
 }
+# st_json <name> <python expression over o (status --json of a plan, default $ST) and t (its task rows by id)> [plan]:
+# the expression holds, the output validates against the status schema, and every task's READY_FOR_PR note says what
+# its ready_for_pr field says (one computation for both)
+st_json() {
+  local name="$1" expr="$2" out; pp status --json "${3:-$ST}"; out="$OUT"
+  if python3 - "$ROOT" "$out" "$expr" <<'PY'
+import importlib.util, json, re, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+o = json.loads(sys.argv[2]); t = {r["id"]: r for r in o["tasks"]}
+errors = m.schema_errors(o, schema, schema)
+assert not errors, errors
+for r in o["tasks"]:
+    f = r["ready_for_pr"]
+    want = [] if f is None else ["READY_FOR_PR: yes" if f["ready"] else f"READY_FOR_PR: no ({f['missing']})"]
+    assert [n for n in r["notes"] if n.startswith("READY_FOR_PR: ")] == want, (r["id"], r["notes"], f)
+assert eval(sys.argv[3]), {k: (v["lead_report"], v["ready_for_pr"]) for k, v in t.items()}
+PY
+  then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
+}
 st_phase "nothing started in a worktree repo: pending, next starts the task lead" a pending "dispatch .* --task a --phase lead --runner orca"
 st_phase "nothing started in the Unity project: next starts its task lead in the main checkout" c1 pending "dispatch .* --task c1 --phase lead --runner orca"
 st_phase "a dependent task waits (no next command)" b pending '^$'
+st_json "status --json: a pending task has lead_report and ready_for_pr null; no widening is model_scope_widen []" \
+  't["b"]["lead_report"] is None and t["b"]["ready_for_pr"] is None and o["model_scope_widen"] == []'
 refute "no integration commits in owned paths: no \"integrated earlier\" note" "no review record: integrated earlier" status "$ST"
 expect "the first Unity task is ready, the second waits for its QA" 0 "note: waits for c1" status "$ST"
 expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
@@ -5213,6 +5276,8 @@ st_phase "QA FAIL record removed: next merges the task branch again" a reviewed 
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
 st_note "no lead report yet: READY_FOR_PR: no, the first missing thing" a '^READY_FOR_PR: no \(no lead report\)$'
 refute "no lead report: no lead report line" "note: lead report:" status "$ST"
+st_json "status --json: no lead report is lead_report null, ready_for_pr names it" \
+  't["a"]["lead_report"] is None and t["a"]["ready_for_pr"] == {"ready": False, "missing": "no lead report"}'
 expect "report: an unknown task is a usage error" 2 "unknown task zz" report "$ST" --task zz --sha "$SA" --body x
 expect "report: a body is required" 2 "one of the arguments --body --body-file is required" report "$ST" --task a --sha "$SA"
 expect "report: an empty body is refused" 2 "report body is empty" report "$ST" --task a --sha "$SA" --body "  "
@@ -5226,9 +5291,13 @@ then pass=$((pass + 1)); echo "PASS  the report record keeps SHA, time, a summar
 else fail=$((fail + 1)); echo "FAIL  report record"; head -c 800 "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"; fi
 st_note "a report at an older commit is shown with the stale marker" a "^lead report: .* @${SD:0:10} First line.*\(stale: task HEAD is ${SA:0:10}\)$"
 st_note "a stale report: READY_FOR_PR: no names both commits" a "^READY_FOR_PR: no \(lead report is for ${SD:0:10}, task HEAD is ${SA:0:10}\)$"
+st_json "status --json: a stale report is lead_report with current false, ready_for_pr names both commits" \
+  "t['a']['lead_report']['sha'] == '$SD' and t['a']['lead_report']['current'] is False and t['a']['lead_report']['summary'].startswith('First line of the lead report ') and t['a']['ready_for_pr'] == {'ready': False, 'missing': 'lead report is for ${SD:0:10}, task HEAD is ${SA:0:10}'}"
 expect "report: a later report replaces the first one" 0 "^recorded lead report for a at ${SA:0:10}: " report "$ST" --task a --sha "$SA" --body $'Task a done: all green\nsecond line'
 st_note "a report at the task HEAD: no stale marker, first line as summary" a "^lead report: [0-9TZ:-]+ @${SA:0:10} Task a done: all green$"
 st_note "report at HEAD and review PASS, no QA yet: READY_FOR_PR: no (no QA)" a '^READY_FOR_PR: no \(no QA\)$'
+st_json "status --json: the recorded report at the task HEAD is lead_report {at, sha, summary, current}; ready_for_pr no QA" \
+  "t['a']['lead_report']['sha'] == '$SA' and t['a']['lead_report']['current'] is True and t['a']['lead_report']['summary'] == 'Task a done: all green' and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z', t['a']['lead_report']['at']) and t['a']['ready_for_pr'] == {'ready': False, 'missing': 'no QA'}"
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-a -m "merge a"
 st_phase "merged after review PASS: integrated" a integrated '^$'
 # Prior tasks can touch paths a later task also owns. That integration history is not evidence the later
@@ -5290,6 +5359,8 @@ st_phase "QA PASS on a commit containing the review: qa" a qa
 st_phase "and for the second task" b qa
 st_note "report at HEAD, review and QA PASS: READY_FOR_PR: yes (without any message)" a '^READY_FOR_PR: yes$'
 st_note "a task without a lead report is not ready, whatever its verdicts" b '^READY_FOR_PR: no \(no lead report\)$'
+st_json "status --json: ready_for_pr is ready with no missing reason, and not ready for the task without a report" \
+  't["a"]["ready_for_pr"] == {"ready": True, "missing": None} and t["b"]["ready_for_pr"] == {"ready": False, "missing": "no lead report"} and t["b"]["lead_report"] is None'
 # a current subtask review FAIL at the task HEAD blocks the task in status (next redispatches the lead), so the same
 # status must not call it ready, though the lead report, task review and QA are all PASS at HEAD
 sv --task a --phase review --sha "$SA" --by claude --state FAIL --subtask sx
@@ -5299,7 +5370,7 @@ st_phase "and next redispatches the task lead, as the same blocker says" a qa "-
 refute "and status offers no gate while it is open" "^Next: .* gate " status "$ST"
 sv --task a --phase review --sha "$SA" --by claude --state PASS --subtask sx
 st_note "the subtask PASS clears it: READY_FOR_PR: yes again" a '^READY_FOR_PR: yes$'
-# lead_report_notes called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
+# lead_report_state called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
 import importlib.util, os, pathlib, subprocess, sys, tempfile
 root, tmp = sys.argv[1:]
@@ -5318,20 +5389,20 @@ plan = {'id': 'ready-notes', 'tasks': []}
 task = {'id': 't1', 'repo': 'srv'}
 m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': b, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
 row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
-assert 'READY_FOR_PR: yes' in m.lead_report_notes(plan, row, task, set(), path=str(repo)), 'baseline'
+assert 'READY_FOR_PR: yes' in m.lead_report_state(plan, row, task, set(), path=str(repo))["notes"], 'baseline'
 fails = ['subtask s1 qa FAIL at abcdef1234 by codex (fix it)', 'subtask s2 review FAIL at 1234567890 by claude (fix it)']
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), blockers=fails)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), blockers=fails)["notes"]
 assert 'READY_FOR_PR: no (subtask s1 qa FAIL at abcdef1234 by codex (fix it) (+1 more))' in notes, notes
 row = dict(row, phase='integrated', qa={'state': 'PASS', 'sha': a}, stale={'qa': 'QA at ' + a[:10] + ' is STALE: owned paths changed on t since'})
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=True)["notes"]
 assert 'READY_FOR_PR: no (QA at ' + a[:10] + ' is STALE: owned paths changed on t since)' in notes, notes
-notes = m.lead_report_notes(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))
+notes = m.lead_report_state(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))["notes"]
 assert 'READY_FOR_PR: no (review at x is STALE: owned paths changed since)' in notes, notes
-notes = m.lead_report_notes(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))
+notes = m.lead_report_state(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))["notes"]
 assert not any(n.startswith('READY_FOR_PR') for n in notes), notes
 PY
-then pass=$((pass + 1)); echo "PASS  lead_report_notes: blockers and stale review/QA are never READY_FOR_PR"
-else fail=$((fail + 1)); echo "FAIL  lead_report_notes blockers and stale"; fi
+then pass=$((pass + 1)); echo "PASS  lead_report_state: blockers and stale review/QA are never READY_FOR_PR"
+else fail=$((fail + 1)); echo "FAIL  lead_report_state blockers and stale"; fi
 # a worktree repo: a report at A with a later commit B on the task branch is superseded, even in the qa phase with
 # review and QA PASS at B (only a no-worktree repo, whose HEAD is the shared topic, accepts a report at an ancestor)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
@@ -5352,10 +5423,10 @@ plan = {'id': 'ancestor-report', 'tasks': []}
 task = {'id': 't1', 'repo': 'srv'}
 m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': a, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
 row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=False)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=False)["notes"]
 assert any('(stale: task HEAD is ' + b[:10] + ')' in n for n in notes), notes
 assert 'READY_FOR_PR: no (lead report is for ' + a[:10] + ', task HEAD is ' + b[:10] + ')' in notes, notes
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=True)["notes"]
 assert not any('stale' in n for n in notes) and 'READY_FOR_PR: yes' in notes, notes
 PY
 then pass=$((pass + 1)); echo "PASS  worktree repo: a report at an ancestor of the task HEAD is stale (READY_FOR_PR: no); no-worktree keeps it current"
@@ -5459,6 +5530,8 @@ st_phase "a changed task in the plan: its review is no longer counted; review th
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
 X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
+st_json "status --json of an invalid plan still validates: no tasks, model_scope_widen []" \
+  'o["valid"] is False and o["tasks"] == [] and o["model_scope_widen"] == []' "$X"
 # the chain unit creates feat/core/demo; a standalone status unit has no such branch
 git -C "$C" rev-parse -q --verify refs/heads/feat/core/demo >/dev/null && gi "$C" checkout -q feat/core/demo
 git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
