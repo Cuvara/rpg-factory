@@ -199,6 +199,24 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase veri
 - A stacked task: a review or QA PASS (task, `--subtask`, or `--phase verify`) on a SHA without the dependency's
   current review PASS is refused (exit 2, nothing written); FAIL and the other states are recorded.
 
+## report
+
+```
+factory-pipeline.py report plan.json --task <id> --sha <sha> (--body TEXT | --body-file FILE)
+```
+
+- The task lead's durable report. It writes `<state dir>/pipeline/<plan id>/<task>__lead-report.json` beside the
+  verdicts: `plan`, `task`, `sha` (the full commit id `--sha` resolves to in the task's repo), `at` (UTC time),
+  `summary` (the first non-blank line of the body, capped at 200 characters) and the full `body`. A new report
+  replaces the previous one.
+- The task lead runs it after the verify verdict and before its Orca `status` message to the run lead (delivery.md
+  section 1 "Roles" and section 8 "Session lifecycle"), so the run lead's `status` shows completion even when the
+  message never arrives.
+- `status` shows the record as the `lead report:` note of the task row and uses it for `READY_FOR_PR` (see "status and
+  cleanup"); `nudge` counts a new report as progress.
+- Exit 0 recorded, 2 usage: an unknown task or `--task integration:<repo>`, a `--sha` that is no commit of the task's
+  repo, an unreadable `--body-file` or an empty body.
+
 ## sync
 
 ```
@@ -327,6 +345,19 @@ The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca 
 `orca worktree rm`, `orca terminal list`, `orca terminal read`, `orca terminal send` (the last three: `nudge`).
 `scripts/orca-wait.sh` allows one waiter per Run through a lock file in the state dir.
 
+`scripts/orca-wait.sh --run <id> [--timeout-ms N] [--types T] [--stall-poll-ms N] [--stall-ms N]` exits:
+
+- 0: a real delivery, printed on stdout.
+- 2: usage, NOT_AVAILABLE (no `orca` on PATH), an invalid receipt or state.
+- 3: the lock is held by another waiter (an orphaned holder is named and exits at its next poll) or the acquisition
+  stays busy.
+- 4: `orca orchestration check` failed.
+- 5: a stalled worker (`STALL` lines; a provider error also prints the `agents --down` command as a `NEXT` line).
+- 6: its parent process is gone (an orphaned waiter). It releases the lock. A real delivery it had already received
+  is saved to `<lock>.orphan.<pid>.json` and the file is named on stderr; otherwise read it with
+  `orca orchestration inbox` (Orca marks a returned batch as handled).
+- 130 and 143: interrupted (INT, TERM).
+
 ## agents
 
 An agent is available when its `agents.<a>.bin` of the pipeline settings is on PATH. Codex additionally needs one
@@ -356,6 +387,24 @@ quota, idle terminal, a 401), then dispatch the role again.
   excluded. Named child branches still match the `<parent branch>--` rule.
 - `stuck?: session <handle> still shows its start prompt after a nudge at <time>: relaunch the session` on a task row:
   the latest `nudge` record still shows the unsubmitted prompt and the task made no progress since (`nudge`).
+- `lead report: <at> @<sha10> <summary>` on a task row comes from the task's `report` record, with
+  `(stale: task HEAD is <sha10>)` when the task HEAD moved on. Without a record, a `task done: <id>` message of the
+  task lead's Orca Run (read-only `orca orchestration check --run <id> --all --json`, never marks a message read; any
+  failure is no opinion) shows as `lead report: task done: <id> (an Orca message only ...)`.
+- `READY_FOR_PR: yes` or `READY_FOR_PR: no (<first missing reason>)` on each task row once the task has a candidate
+  (phase candidate, reviewed, integrated or qa; never for a tier XS task). `yes` needs all of: a lead report at the
+  task HEAD, a current review PASS and a current QA PASS at the task HEAD (an integrated task may have them at an
+  ancestor, as the phase rules allow), and no blocker such as a subtask review or QA FAIL. The reason names the first
+  of these that fails, for example `no lead report`, `review is at <sha10>, task HEAD is <sha10>` or `no QA`.
+- `status --json` (`docs/schemas/pipeline-status.schema.json`) carries the same facts as typed fields; the text
+  output is unchanged:
+  - per task `lead_report`: `{at, sha, summary, current}` (`current` is true when the report counts for the task HEAD),
+    or null without a durable record;
+  - per task `ready_for_pr`: `{ready, missing}` (`missing` is the first missing reason, null when ready), or null
+    where the text output prints no `READY_FOR_PR` note;
+  - top-level `model_scope_widen`: the plan's valid model scope widenings (`agent`, `model`, `efforts`, `basis`,
+    `reason`, plus the `text` the stderr line prints), `[]` when none. The `model scope widening: ...` lines still
+    go to stderr.
 - Test slots held by a run in one of the plan's checkouts print as `Slots: slot <n> held by PID <pid> in <checkout>
   since <start>` with the holder's liveness and its last progress (check, result, counts, age of the update); with
   `--json` these lines go to stderr and the `slots` field carries the same holders (slot, pid, winpid, alive,
@@ -381,6 +430,12 @@ quota, idle terminal, a 401), then dispatch the role again.
   worker's terminal and keeps its output readable). A leftover task directory (empty or not) or an Orca
   record of a removed worktree is LEFTOVER, never CLEAN, with `git worktree prune`, then
   `orca worktree rm --worktree path:<dir>` once the directory is free.
+- For such a leftover directory `cleanup` lists `BUSY?` candidates from a read-only process listing (Windows:
+  PowerShell `Get-CimInstance Win32_Process`, 20 s timeout; elsewhere `ps`): processes whose command line names the
+  directory and an orphaned `wsl.exe ... sleep infinity` whose parent is gone, each with PID, command and start time.
+  The user decides: no kill command is printed, and a failing probe names nothing. Before a task worktree is removed
+  it names the Orca terminals bound to it (read-only `orca terminal list`). It also prints `SLOT` lines for held test
+  slots in the plan's checkouts, as `status` prints its `Slots:` lines (`slots` in `--json`).
 - `cleanup` prints the stacked siblings as `STACK <repo>: stacked siblings ... merge order ...` (`stacked` in
   `--json`: repo, dep, dependents, order, states `merged|not merged|gone`, text); they never change the state. A
   stacked dependent's worktree is a task worktree, never "child of <dependency>".
@@ -422,7 +477,8 @@ The model policy is delivery.md section 10 "Model choice"; these are its flags a
     change. `subplan` validation uses the widened scope too. Without an entry a model outside the scope still exits 2.
   - `validate` fails on a malformed entry, an unknown agent, an unknown basis or an empty reason, and prints a NOTE for
     an entry whose model and efforts are already in scope. It prints `Model scope widening: ...` per entry, `status`
-    prints `model scope widening: ...` per entry (stderr with `--json`), and `gate` prints a note per widening
+    prints `model scope widening: ...` per entry (stderr with `--json`, where the `model_scope_widen` field carries
+    the entries), and `gate` prints a note per widening
     and the lead report lists them, so the final report shows them.
   - Every command that accepts a widened model prints one line, for example
     `model scope widened by plan <id>: <agent> <model> [<efforts>] (basis <basis>: <reason>)`.

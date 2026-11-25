@@ -6,7 +6,7 @@
 # case-map: validate scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_validate
 # case-map: plan-edit scripts/factory-pipeline.py::cmd_plan_edit
 # case-map: subplan docs/schemas/pipeline-subplan.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
-# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::python_alias_line
+# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::known_failing_block scripts/factory-pipeline.py::python_alias_line
 # case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::grade_paths scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::task_grades
 # case-map: child-dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
 # case-map: tier scripts/factory-pipeline.py::cmd_tier
@@ -16,7 +16,7 @@
 # case-map: orca-first scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status
 # case-map: review-findings scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
 # case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier
-# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_notes
+# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_state
 # case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
 # case-map: dogfood scripts/factory-cmd.py tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
@@ -369,7 +369,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline codex-provider codex-no-config codex-openai-provider codex-no-base-url codex-invalid-toml codex-non-utf8 codex-api-key codex-override validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry codex-header codex-no-auth codex-login codex-env-key codex-openai-auth codex-profile codex-malformed codex-secrets codex-precedence"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order stack-deps-merged stack-stale-record topic-start-no-deps"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-delta stack-gate-delta-both stack-gate-delta-late stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order stack-deps-merged stack-stale-record topic-start-no-deps merged-topic-review-base"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -972,6 +972,30 @@ if case == 'stack-no-worktree':
     assert m.stackable(plan, reg, info, plan['tasks'][1]) is None
     assert m.start_base(plan, info, plan['tasks'][1], reg) == (info['base_sha'] or info['base'])
     assert_unstacked_lead()
+    print(case + ' assertions passed')
+    sys.exit(0)
+if case == 'merged-topic-review-base':
+    # a task cut from main that merged the topic (another integrated task's file): the review, verify and QA diff starts
+    # at the topic commit it merged, so that file is no scope finding; not merged, or once integrated, the base stays
+    info = m.repo_info(plan, reg, 'fixture')
+    start_main = info['base_sha'] or info['base']
+    other = commit('other task', 'other.txt')  # integrated on the topic: a file task a does not own
+    git('switch', '--no-track', '-c', 'topic-a', start_main)
+    own = commit('a own', 'shared.txt')
+    assert m.review_base(info, plan['topic'], start_main, own) == (start_main, None)
+    git('merge', '--no-ff', '-q', '-m', 'merge topic', 'topic')
+    merged = git('rev-parse', 'HEAD')
+    rb, note = m.review_base(info, plan['topic'], start_main, merged)
+    assert rb == other and note and 'merge-base(topic, sha)' in note, (rb, note)
+    assert git('diff', '--name-only', rb + '...' + merged) == 'shared.txt', rb
+    # the merge on a child branch, the task branch tip before it: start_base keeps main, the review diff does not
+    git('branch', 'topic-a--s1', merged); git('reset', '-q', '--hard', own)
+    assert m.start_base(plan, info, plan['tasks'][0], reg) == start_main
+    out = cli('dispatch', str(pf), '--task', 'a', '--phase', 'review', '--sha', merged, '--runner', 'print').stdout
+    assert 'git diff ' + other + '...' + merged in out and 'git diff ' + start_main + '...' not in out, out
+    # integrated: the candidate is on the topic, review_base keeps its answer for a branch cut from main
+    git('switch', 'topic'); git('merge', '--no-ff', '-q', '-m', 'integrate a', merged)
+    assert m.review_base(info, plan['topic'], start_main, merged) == (start_main, None)
     print(case + ' assertions passed')
     sys.exit(0)
 if case == 'topic-start-no-deps':
@@ -2010,7 +2034,7 @@ for check in ('tests/run-all.sh --within', 'tests/run-all.sh --within=', 'tests/
 old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
             'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
             'run the checks (run-checks.py fast tier for registry repos), regressions, edge and failure cases. A Unity '
-            'test run waits for the `unity-test` resource; never a second Editor.\n'
+            'test run waits for the `unity-test` resource; never a second Editor.\n' + m.QA_CLEANUP + '\n'
             'Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n'
             '- [s] tests pass\nChecks:\n- [s] dotnet test x\n- [s] tests/run-all.sh -j 4')
 srv = {'id': 's', 'checks': ['dotnet test x', 'tests/run-all.sh -j 4'], 'acceptance': ['tests pass']}
@@ -2740,6 +2764,7 @@ for bad in '[{"check":"a"}]' '["a"]' '[{"check":"","reason":"r"}]'; do
 done
 X=$(plan kf-key "{$HEAD,\"known_failing\":[{\"check\":\"a\",\"reason\":\"r\",\"x\":1}],$KFT}")
 expect "known_failing: an unknown key is rejected" 1 "known_failing\[0\]: unknown key x" validate "$X"
+refute "known_failing: an entry with an unknown key gets the error only, not also the warning" "known failing at base" validate "$X"
 # the schema carries the same shape: items need check and reason, nothing else
 if python3 -B - "$ROOT" <<'PY'
 import json, pathlib, sys
@@ -3344,6 +3369,34 @@ for ph in "--phase lead" "--phase qa --sha abc1234" "--phase verify --sha abc123
   expect_spec "known_failing: the $ph spec carries FAIL_AT_BASE" "FAIL_AT_BASE" dispatch "$KFP" --task gw $ph --runner orca
   refute_spec "no known_failing: the $ph spec has no known-failing text" "Known failing at base|FAIL_AT_BASE" dispatch "$OK" --task gw $ph --runner orca
 done
+# known_failing_text runs once per prompt: known_failing_block computes it once, and no call site repeats it
+cat > "$TMP/kf-once.py" <<'KFONCE'
+import importlib.util, sys
+root = sys.argv[1]
+spec = importlib.util.spec_from_file_location('kf_once', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+calls, real = [], m.known_failing_text
+m.known_failing_text = lambda plan: calls.append(1) or real(plan)
+block = m.known_failing_block({'known_failing': [{'check': 'tests/foo.test.sh', 'reason': 'fails on base'}]})
+assert len(calls) == 1 and block.startswith('\nKnown failing at base (plan known_failing):\n'), (calls, block)
+assert m.known_failing_block({}) == ''
+src = open(root + '/scripts/factory-pipeline.py', encoding='utf-8').read()
+assert 'known_failing_text(plan) if known_failing_text(plan)' not in src
+KFONCE
+if python3 -B "$TMP/kf-once.py" "$ROOT"
+then pass=$((pass + 1)); echo "PASS  known_failing: the known-failing text is computed once per prompt"
+else fail=$((fail + 1)); echo "FAIL  known_failing: the known-failing text is computed more than once per prompt"; fi
+# the QA cleanup names a guarded variable: an empty one can never expand to an unscoped path (QA and verify specs)
+for ph in "--phase qa --sha abc1234" "--phase verify --sha abc1234"; do
+  expect_spec "QA cleanup: the $ph spec guards its variable" 'rm -f -- "\$\{S:\?\}"/\*\.log' dispatch "$KFP" --task gw $ph --runner orca
+  refute_spec "QA cleanup: the $ph spec never removes by an unguarded variable" 'rm -f (-- )?"?\$[A-Za-z_]' dispatch "$KFP" --task gw $ph --runner orca
+done
+# worker-start joins the task lead's Run: --orca-run, else the task's recorded orca_run; no Run known: no --run
+ORP=$(plan orca-run-spec "{$(sed 's/"id":"demo"/"id":"demorun"/' <<<"$HEAD"),\"tasks\":[{\"id\":\"gw\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"],\"orca_run\":\"run:run_T\"}]}")
+expect "worker-start carries the task's recorded orca_run" 0 "^orca orchestration worker-start .* --run run_T --json$" dispatch "$ORP" --task gw --phase qa --sha abc1234 --runner orca
+expect "worker-start: --orca-run wins over the recorded orca_run" 0 "^orca orchestration worker-start .* --run run_X --json$" dispatch "$ORP" --task gw --phase qa --sha abc1234 --runner orca --orca-run run_X
+expect "worker-start: --orca-run names the Run when the plan records none" 0 "^orca orchestration worker-start .* --run run_X --json$" dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca --orca-run run:run_X
+refute "worker-start: no Run known, no --run" "^orca orchestration worker-start .* --run " dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca
 # base health hint: print only, for a repo with a GitHub remote
 refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote add origin https://github.com/x/y.git
@@ -3719,6 +3772,30 @@ for cmd in validate status; do
     pass=$((pass + 1)); echo "PASS  plan widening: $cmd lists both entries"
   else fail=$((fail + 1)); echo "FAIL  plan widening: $cmd lists both entries (rc=$RC)"; sed 's/^/      /' <<<"$OUT" | head -30; fi
 done
+# status --json: the valid widenings as objects (entry fields plus the text of the stderr line), [] without the field
+python3 -B "$P" status --json "$WIDE" > "$TMP/wide-status.json" 2> "$TMP/wide-status.err"
+python3 -B "$P" status --json "$LT" > "$TMP/lt-status.json" 2>/dev/null
+if python3 - "$ROOT" "$TMP/wide-status.json" "$TMP/wide-status.err" "$TMP/lt-status.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+wide = json.load(open(sys.argv[2], encoding="utf-8"))
+light = json.load(open(sys.argv[4], encoding="utf-8"))
+for value in (wide, light):
+    errors = m.schema_errors(value, schema, schema)
+    assert not errors, errors
+w = wide["model_scope_widen"]
+assert [(e["agent"], e["model"], e["basis"]) for e in w] == [("claude", "claude-haiku-4-5", "owner-approved"),
+                                                             ("codex", "example-model", "necessary")], w
+assert all(set(e) == {"agent", "model", "efforts", "basis", "reason", "text"} for e in w), w
+err = [ln.rstrip("\r\n") for ln in open(sys.argv[3], encoding="utf-8")]
+assert ["model scope widening: " + e["text"] for e in w] == [ln for ln in err if ln.startswith("model scope widening: ")], err
+assert w[0]["text"] == "claude claude-haiku-4-5 [medium] (basis owner-approved: Owner approved on 2026-11-17)", w[0]
+assert light["model_scope_widen"] == [], light["model_scope_widen"]
+PY
+then pass=$((pass + 1)); echo "PASS  plan widening: status --json carries model_scope_widen (stderr lines kept), [] without widenings"
+else fail=$((fail + 1)); echo "FAIL  plan widening: status --json model_scope_widen"; head -c 800 "$TMP/wide-status.json"; head -5 "$TMP/wide-status.err"; fi
 expect "plan widening: another plan in the same state remains restricted" 2 'Nothing was dispatched' dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
 refute "plan widening: another plan dispatches nothing" '^orca |^# agent:' dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5 --effort medium
 printf '{"scope":{"claude":{"claude-haiku-4-5":["medium"]}}}\n' > "$TMP/mp-plan-wide.json"
@@ -3864,6 +3941,21 @@ fi
 if has_case verdict-gate; then
 case_start
 echo "-- verdict and gate"
+expect "verdict --help names the verify phase" 0 "--phase \{review,qa,verify\}" verdict --help
+# the usage text (module docstring) describes verify as cmd_verdict records it, and no longer asks a subtask review
+if python3 -B - "$ROOT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("usage_pipeline", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+doc = m.__doc__
+assert "verdict <plan.json> --task ID --phase review|qa|verify --sha SHA" in doc, "synopsis"
+assert "[--failed-at review|qa]" in doc, "--failed-at"
+assert "--phase verify (per plan task, never integration:<repo>) records what one verify session ran" in doc
+assert "needs its own PASS review" not in doc, "stale subtask review claim"
+assert "One task review covers every subtask" in doc
+PY
+then pass=$((pass + 1)); echo "PASS  the verdict usage text names --phase verify and --failed-at and drops the own-subtask-review claim"
+else fail=$((fail + 1)); echo "FAIL  verdict usage text"; fi
 # srv/cli: plan.repos aliases of the fixture checkouts (unregistered: no run-checks); cli is a Unity project by its marker
 G=$(plan gate "{$HEAD,\"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"},\"cli\":{\"path\":\"ws/IndieRPGMMOAdventure\",\"base\":\"develop\"}},\"tasks\":[
  {\"id\":\"gw\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]},
@@ -5150,9 +5242,33 @@ assert any(re.search(sys.argv[3], n) for n in r["notes"]), r["notes"]' "$out" "$
     pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
 }
+# st_json <name> <python expression over o (status --json of a plan, default $ST) and t (its task rows by id)> [plan]:
+# the expression holds, the output validates against the status schema, and every task's READY_FOR_PR note says what
+# its ready_for_pr field says (one computation for both)
+st_json() {
+  local name="$1" expr="$2" out; pp status --json "${3:-$ST}"; out="$OUT"
+  if python3 - "$ROOT" "$out" "$expr" <<'PY'
+import importlib.util, json, re, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+o = json.loads(sys.argv[2]); t = {r["id"]: r for r in o["tasks"]}
+errors = m.schema_errors(o, schema, schema)
+assert not errors, errors
+for r in o["tasks"]:
+    f = r["ready_for_pr"]
+    want = [] if f is None else ["READY_FOR_PR: yes" if f["ready"] else f"READY_FOR_PR: no ({f['missing']})"]
+    assert [n for n in r["notes"] if n.startswith("READY_FOR_PR: ")] == want, (r["id"], r["notes"], f)
+assert eval(sys.argv[3]), {k: (v["lead_report"], v["ready_for_pr"]) for k, v in t.items()}
+PY
+  then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
+}
 st_phase "nothing started in a worktree repo: pending, next starts the task lead" a pending "dispatch .* --task a --phase lead --runner orca"
 st_phase "nothing started in the Unity project: next starts its task lead in the main checkout" c1 pending "dispatch .* --task c1 --phase lead --runner orca"
 st_phase "a dependent task waits (no next command)" b pending '^$'
+st_json "status --json: a pending task has lead_report and ready_for_pr null; no widening is model_scope_widen []" \
+  't["b"]["lead_report"] is None and t["b"]["ready_for_pr"] is None and o["model_scope_widen"] == []'
 refute "no integration commits in owned paths: no \"integrated earlier\" note" "no review record: integrated earlier" status "$ST"
 expect "the first Unity task is ready, the second waits for its QA" 0 "note: waits for c1" status "$ST"
 expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
@@ -5213,6 +5329,8 @@ st_phase "QA FAIL record removed: next merges the task branch again" a reviewed 
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
 st_note "no lead report yet: READY_FOR_PR: no, the first missing thing" a '^READY_FOR_PR: no \(no lead report\)$'
 refute "no lead report: no lead report line" "note: lead report:" status "$ST"
+st_json "status --json: no lead report is lead_report null, ready_for_pr names it" \
+  't["a"]["lead_report"] is None and t["a"]["ready_for_pr"] == {"ready": False, "missing": "no lead report"}'
 expect "report: an unknown task is a usage error" 2 "unknown task zz" report "$ST" --task zz --sha "$SA" --body x
 expect "report: a body is required" 2 "one of the arguments --body --body-file is required" report "$ST" --task a --sha "$SA"
 expect "report: an empty body is refused" 2 "report body is empty" report "$ST" --task a --sha "$SA" --body "  "
@@ -5226,9 +5344,13 @@ then pass=$((pass + 1)); echo "PASS  the report record keeps SHA, time, a summar
 else fail=$((fail + 1)); echo "FAIL  report record"; head -c 800 "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"; fi
 st_note "a report at an older commit is shown with the stale marker" a "^lead report: .* @${SD:0:10} First line.*\(stale: task HEAD is ${SA:0:10}\)$"
 st_note "a stale report: READY_FOR_PR: no names both commits" a "^READY_FOR_PR: no \(lead report is for ${SD:0:10}, task HEAD is ${SA:0:10}\)$"
+st_json "status --json: a stale report is lead_report with current false, ready_for_pr names both commits" \
+  "t['a']['lead_report']['sha'] == '$SD' and t['a']['lead_report']['current'] is False and t['a']['lead_report']['summary'].startswith('First line of the lead report ') and t['a']['ready_for_pr'] == {'ready': False, 'missing': 'lead report is for ${SD:0:10}, task HEAD is ${SA:0:10}'}"
 expect "report: a later report replaces the first one" 0 "^recorded lead report for a at ${SA:0:10}: " report "$ST" --task a --sha "$SA" --body $'Task a done: all green\nsecond line'
 st_note "a report at the task HEAD: no stale marker, first line as summary" a "^lead report: [0-9TZ:-]+ @${SA:0:10} Task a done: all green$"
 st_note "report at HEAD and review PASS, no QA yet: READY_FOR_PR: no (no QA)" a '^READY_FOR_PR: no \(no QA\)$'
+st_json "status --json: the recorded report at the task HEAD is lead_report {at, sha, summary, current}; ready_for_pr no QA" \
+  "t['a']['lead_report']['sha'] == '$SA' and t['a']['lead_report']['current'] is True and t['a']['lead_report']['summary'] == 'Task a done: all green' and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z', t['a']['lead_report']['at']) and t['a']['ready_for_pr'] == {'ready': False, 'missing': 'no QA'}"
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-a -m "merge a"
 st_phase "merged after review PASS: integrated" a integrated '^$'
 # Prior tasks can touch paths a later task also owns. That integration history is not evidence the later
@@ -5290,6 +5412,8 @@ st_phase "QA PASS on a commit containing the review: qa" a qa
 st_phase "and for the second task" b qa
 st_note "report at HEAD, review and QA PASS: READY_FOR_PR: yes (without any message)" a '^READY_FOR_PR: yes$'
 st_note "a task without a lead report is not ready, whatever its verdicts" b '^READY_FOR_PR: no \(no lead report\)$'
+st_json "status --json: ready_for_pr is ready with no missing reason, and not ready for the task without a report" \
+  't["a"]["ready_for_pr"] == {"ready": True, "missing": None} and t["b"]["ready_for_pr"] == {"ready": False, "missing": "no lead report"} and t["b"]["lead_report"] is None'
 # a current subtask review FAIL at the task HEAD blocks the task in status (next redispatches the lead), so the same
 # status must not call it ready, though the lead report, task review and QA are all PASS at HEAD
 sv --task a --phase review --sha "$SA" --by claude --state FAIL --subtask sx
@@ -5299,7 +5423,7 @@ st_phase "and next redispatches the task lead, as the same blocker says" a qa "-
 refute "and status offers no gate while it is open" "^Next: .* gate " status "$ST"
 sv --task a --phase review --sha "$SA" --by claude --state PASS --subtask sx
 st_note "the subtask PASS clears it: READY_FOR_PR: yes again" a '^READY_FOR_PR: yes$'
-# lead_report_notes called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
+# lead_report_state called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
 import importlib.util, os, pathlib, subprocess, sys, tempfile
 root, tmp = sys.argv[1:]
@@ -5318,20 +5442,20 @@ plan = {'id': 'ready-notes', 'tasks': []}
 task = {'id': 't1', 'repo': 'srv'}
 m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': b, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
 row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
-assert 'READY_FOR_PR: yes' in m.lead_report_notes(plan, row, task, set(), path=str(repo)), 'baseline'
+assert 'READY_FOR_PR: yes' in m.lead_report_state(plan, row, task, set(), path=str(repo))["notes"], 'baseline'
 fails = ['subtask s1 qa FAIL at abcdef1234 by codex (fix it)', 'subtask s2 review FAIL at 1234567890 by claude (fix it)']
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), blockers=fails)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), blockers=fails)["notes"]
 assert 'READY_FOR_PR: no (subtask s1 qa FAIL at abcdef1234 by codex (fix it) (+1 more))' in notes, notes
 row = dict(row, phase='integrated', qa={'state': 'PASS', 'sha': a}, stale={'qa': 'QA at ' + a[:10] + ' is STALE: owned paths changed on t since'})
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=True)["notes"]
 assert 'READY_FOR_PR: no (QA at ' + a[:10] + ' is STALE: owned paths changed on t since)' in notes, notes
-notes = m.lead_report_notes(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))
+notes = m.lead_report_state(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))["notes"]
 assert 'READY_FOR_PR: no (review at x is STALE: owned paths changed since)' in notes, notes
-notes = m.lead_report_notes(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))
+notes = m.lead_report_state(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))["notes"]
 assert not any(n.startswith('READY_FOR_PR') for n in notes), notes
 PY
-then pass=$((pass + 1)); echo "PASS  lead_report_notes: blockers and stale review/QA are never READY_FOR_PR"
-else fail=$((fail + 1)); echo "FAIL  lead_report_notes blockers and stale"; fi
+then pass=$((pass + 1)); echo "PASS  lead_report_state: blockers and stale review/QA are never READY_FOR_PR"
+else fail=$((fail + 1)); echo "FAIL  lead_report_state blockers and stale"; fi
 # a worktree repo: a report at A with a later commit B on the task branch is superseded, even in the qa phase with
 # review and QA PASS at B (only a no-worktree repo, whose HEAD is the shared topic, accepts a report at an ancestor)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
@@ -5352,10 +5476,10 @@ plan = {'id': 'ancestor-report', 'tasks': []}
 task = {'id': 't1', 'repo': 'srv'}
 m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': a, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
 row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=False)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=False)["notes"]
 assert any('(stale: task HEAD is ' + b[:10] + ')' in n for n in notes), notes
 assert 'READY_FOR_PR: no (lead report is for ' + a[:10] + ', task HEAD is ' + b[:10] + ')' in notes, notes
-notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+notes = m.lead_report_state(plan, row, task, set(), path=str(repo), no_worktree=True)["notes"]
 assert not any('stale' in n for n in notes) and 'READY_FOR_PR: yes' in notes, notes
 PY
 then pass=$((pass + 1)); echo "PASS  worktree repo: a report at an ancestor of the task HEAD is stale (READY_FOR_PR: no); no-worktree keeps it current"
@@ -5459,6 +5583,8 @@ st_phase "a changed task in the plan: its review is no longer counted; review th
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
 X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
+st_json "status --json of an invalid plan still validates: no tasks, model_scope_widen []" \
+  'o["valid"] is False and o["tasks"] == [] and o["model_scope_widen"] == []' "$X"
 # the chain unit creates feat/core/demo; a standalone status unit has no such branch
 git -C "$C" rev-parse -q --verify refs/heads/feat/core/demo >/dev/null && gi "$C" checkout -q feat/core/demo
 git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
@@ -6037,6 +6163,35 @@ git -C "$GX" worktree add -q "$TMP/gm-late-main" main; gi "$TMP/gm-late-main" me
 gi "$GX" merge -q --no-ff main -m "Merge main into feat/gl"; gxqa "$GXP" r
 expect "gate-merge: a post-review topic commit that also landed on the default branch is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
 git -C "$GX" worktree remove --force "$TMP/gm-late-main"
+# stray changes: a file a merge of the default branch brought in is nobody's task work, also with the plan base pinned to
+# a SHA, and docs/plans/backlog.md is the run lead's with the plan file outside the repo; a real stray file still blocks
+gm_fixture gm-stray feat/gs main gs r HEAD
+git -C "$GX" worktree add -q "$TMP/gm-stray-main" main; echo u > "$TMP/gm-stray-main/unrelated.txt"
+gi "$TMP/gm-stray-main" add unrelated.txt; gi "$TMP/gm-stray-main" commit -qm "docs: main adds unrelated.txt"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gs"; gxqa "$GXP" r
+expect "gate-merge: a file a default-branch merge brought in is not stray (plan base a SHA)" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for the default-branch merge file" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+mkdir -p "$GX/docs/plans"; echo b > "$GX/docs/plans/backlog.md"; gi "$GX" add -A; gi "$GX" commit -qm "docs(plans): backlog follow-ups"; gxqa "$GXP" r
+expect "gate-merge: docs/plans/backlog.md is not stray with the plan file outside the repo" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans/backlog.md (plan file outside the repo)" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+echo s > "$GX/stray.txt"; gi "$GX" add stray.txt; gi "$GX" commit -qm "chore: stray"; gxqa "$GXP" r
+expect "gate-merge: a real stray file still blocks, naming only it" 1 "BLOCKER r: changes outside every task's owned paths: stray.txt$" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-stray-main"
+# the topic merged origin/main while the local main is stale (a main-sync after a fetch): the merged file is not stray;
+# a merge that edits that file beyond the default branch's content still is
+gm_fixture gm-origin feat/go main go r main
+git -C "$GX" worktree add -q --detach "$TMP/gm-origin-up" main
+echo o > "$TMP/gm-origin-up/upstream.txt"; gi "$TMP/gm-origin-up" add upstream.txt; gi "$TMP/gm-origin-up" commit -qm "docs: upstream adds upstream.txt"
+git -C "$GX" update-ref refs/remotes/origin/main "$(git -C "$TMP/gm-origin-up" rev-parse HEAD)"
+gi "$GX" merge -q --no-ff origin/main -m "Merge origin/main into feat/go"; gxqa "$GXP" r
+expect "gate-merge: a file an origin/main merge brought in is not stray (stale local main)" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for the origin/main merge file" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+echo o2 > "$TMP/gm-origin-up/upstream.txt"; gi "$TMP/gm-origin-up" commit -qam "docs: upstream edits upstream.txt"
+git -C "$GX" update-ref refs/remotes/origin/main "$(git -C "$TMP/gm-origin-up" rev-parse HEAD)"
+gi "$GX" merge -q --no-ff --no-commit origin/main >/dev/null 2>&1; echo hand > "$GX/upstream.txt"; gi "$GX" add upstream.txt
+gi "$GX" commit -qm "Merge origin/main into feat/go (edits upstream.txt)"; gxqa "$GXP" r
+expect "gate-merge: a default-branch merge that edits an unowned file beyond the default branch is stray" 1 "BLOCKER r: changes outside every task's owned paths: upstream.txt$" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-origin-up"
 # The plan plugin-subagent-rules shape: task ta owns own/a.txt, ts (main-sync) depends on ta (or not) and also owns it, tl depends
 # on ts and owns own/l.txt only. ta is reviewed on the topic; main edits own/a.txt; ts merges main inside its branch (a conflict
 # resolution) and the topic merges ts; tl is cut from the topic before that merge, syncs the topic into itself and the topic merges tl.
