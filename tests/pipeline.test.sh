@@ -4871,6 +4871,7 @@ T0=$(date +%s)
 # mkspec <name>: a spec file of this plan whose mtime is T0 (the moment the session was started)
 mkspec() { local f="$NSP/nd-$1-implement-0123456789abcdef.md"; printf 'spec %s\n' "$1" > "$f"; touch -d "@$T0" "$f"; echo "$f"; }
 SA=$(mkspec stuck); SW=$(mkspec wrap); SM=$(mkspec mid); SC=$(mkspec commit); SR=$(mkspec report); SV=$(mkspec verdict)
+SE=$(mkspec echo); SX=$(mkspec composer)
 printf 'not a spec of this plan\n' > "$TMP/nd-foreign.md"
 # screen <handle> <line>...: the visible screen (result.terminal.tail) of a terminal
 screen() { local h="$1" t; shift; t=$(jq -nc '$ARGS.positional' --args "$@")
@@ -4885,12 +4886,17 @@ screen term_mid "Read your task spec at ${SM:0:$((${#SM} - 8))}" "${SM: -8} and 
 screen term_commit "> Read your task spec at $SC and follow it."
 screen term_report "> Read your task spec at $SR and follow it."
 screen term_verdict "> Read your task spec at $SV and follow it."
+# an echoed worker-start command carries a pointer to a spec of this plan, but not on a composer line: no pointer
+screen term_echo "$ orca worker-start --spec 'Read your task spec at $SE and follow it.'" "Started." "> "
+# the same echo above a real composer-line pointer: the composer line's spec counts
+screen term_echoabove "$ orca worker-start --spec 'Read your task spec at $SE and follow it.'" "" \
+  "> Read your task spec at $SX and follow it."
 # trow <handle> <worktree> <seconds since the last output|->: one `terminal list` row (lastOutputAt in epoch ms)
 trow() { local ts=null; [ "$3" = - ] || ts=$(( ($(date +%s) - $3) * 1000 ))
   jq -nc --arg h "$1" --arg w "$2" --argjson t "$ts" '{handle:$h,worktreePath:$w,title:$h,status:"running"} + (if $t == null then {} else {lastOutputAt:$t} end)'; }
 { trow term_stuck "$WGW" 600; trow term_recent "$WGW" 5; trow term_nopointer "$WGW" 600; trow term_nolast "$WGW" -
-  trow term_noread "$WGW" 600; trow term_foreign "$WGW" 600; trow term_other "$TMP/elsewhere" 600
-  trow term_wrap "$WWR" 600; trow term_mid "$WWR" 600; trow term_commit "$WCM" 600; trow term_report "$WRP" 600
+  trow term_noread "$WGW" 600; trow term_foreign "$WGW" 600; trow term_other "$TMP/elsewhere" 600; trow term_echo "$WGW" 600
+  trow term_wrap "$WWR" 600; trow term_mid "$WWR" 600; trow term_echoabove "$WWR" 600; trow term_commit "$WCM" 600; trow term_report "$WRP" 600
   trow term_verdict "$WVD" 600; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.json"
 # nrun <args...>: the verb with the fake orca first on PATH (NPATH overrides it), its output and exit code in NOUT/NRC and a
 # fresh call log; each nrun runs the verb (no capture-once reuse: a --send changes what the next run sees)
@@ -4906,6 +4912,7 @@ nchk() { local n="$1"; shift; if "$@"; then pass=$((pass + 1)); echo "PASS  $n"
   else fail=$((fail + 1)); echo "FAIL  $n"; sed 's/^/      /' <<<"$NOUT" | head -20; sed 's/^/      log: /' "$FAKE_ORCA_LOG" | head -10; fi; }
 nsends() { [ "$(grep -c '^terminal send ' "$FAKE_ORCA_LOG")" = "$1" ]; }
 nsent_to() { grep -Eq "^terminal send --terminal $1 --text( <CR>)? --json$" "$FAKE_ORCA_LOG"; }
+nnosent() { ! nsent_to "$1"; }
 nonly_reads() { [ -s "$FAKE_ORCA_LOG" ] && ! grep -qvE '^(status --json|terminal list --worktree path:[^ ]+ --limit 100 --json|terminal read --terminal [a-z_]+ --screen --json)$' "$FAKE_ORCA_LOG"; }
 nrec() { jq -e "$1" "$NREC/${2:-gw}__nudge.json" >/dev/null; }
 norecord() { [ ! -e "$NREC/${1:-gw}__nudge.json" ]; }
@@ -4920,10 +4927,11 @@ nok "the exact send command is printed" "$SENDCMD"
 nok "recent output is ok and gets nothing" "^gw  term_recent  idle [0-9]+s  ok  recent output \([0-9]+s < 120s\)$"
 nok "a screen without the start-prompt pointer is ok" "^gw  term_nopointer  idle [0-9]+s  ok  no start-prompt pointer on screen$"
 nok "a pointer to a file outside this plan's specs is no pointer" "^gw  term_foreign  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "an echoed worker-start command carrying a pointer is no pointer" "^gw  term_echo  idle [0-9]+s  ok  no start-prompt pointer on screen$"
 nok "a row without lastOutputAt is ok (no opinion)" "^gw  term_nolast  idle \?s  ok  no lastOutputAt \(no opinion\)$"
 nok "an unreadable screen is ok (no opinion)" "^gw  term_noread  idle [0-9]+s  ok  screen unreadable \(no opinion\)$"
 nno "a terminal of another worktree is not listed" "term_other"
-nno "other tasks' terminals are not listed under --task gw" "term_(wrap|mid|commit|report|verdict)"
+nno "other tasks' terminals are not listed under --task gw" "term_(wrap|mid|commit|report|verdict|echoabove)"
 nchk "without --send nothing is sent and only read-only orca calls run" nsends 0
 nchk "the calls are status, terminal list for the task worktree and terminal read" nonly_reads
 nchk "without --send nothing is written" norecord gw
@@ -4952,6 +4960,7 @@ if [ -z "$RPGF_WINDOWS" ]; then
   nok "--send says it sent the carriage return" "^  sent CR to term_stuck$"
   nchk "exactly one send, to the stuck terminal" nsends 1
   nchk "a terminal send --terminal <handle> --text line is logged" nsent_to term_stuck
+  nchk "the echoed worker-start pointer gets no send" nnosent term_echo
   nrec_ok() { nrec '.plan == "nd" and .task == "gw" and (.nudges | length) == 1 and .nudges[0].handle == "term_stuck"
     and (.nudges[0].spec | endswith("nd-stuck-implement-0123456789abcdef.md")) and .nudges[0].still_stuck == false
     and (.nudges[0].at | test("^[0-9]{4}-")) and (.nudges[0].checked_at | test("^[0-9]{4}-"))'; }
@@ -5028,6 +5037,7 @@ nrun "$ND" --task wr
 nok "a pointer wrapped after 'at' (indented continuation) is recognised" "^wr  term_wrap  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-wrap-implement-0123456789abcdef\.md\)$"
 nok "a path wrapped in the middle is recognised" "^wr  term_mid  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-mid-implement-0123456789abcdef\.md\)$"
 nchk "the wrapped screens send nothing without --send" nsends 0
+nok "an echoed pointer above a composer-line pointer: the composer line's spec counts" "^wr  term_echoabove  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-composer-implement-0123456789abcdef\.md\)$"
 # dispatch writes the implementer and reviewer model records together with the spec: they are not task progress
 printf '{}\n' > "$NREC/wr__reviewer__0123456789ab.model.json"; printf '{}\n' > "$NREC/wr@sub__implementer.model.json"
 touch -d "@$((T0 + 100))" "$NREC/wr__reviewer__0123456789ab.model.json" "$NREC/wr@sub__implementer.model.json"
