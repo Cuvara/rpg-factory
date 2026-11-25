@@ -1501,10 +1501,15 @@ if case.startswith('stack-'):
                 assert len(hits) == 1, (hits, r.stdout)
                 return hits[0]
             i_add = find(lambda x: x[:2] == ['git', '-C'] and x[3:5] == ['worktree', 'add'])
-            i_set = find(lambda x: x[:3] == ['orca', 'worktree', 'set'])
+            # the set runs only once orca-wait saw Orca list the new worktree: `<pipeline> orca-wait ... && orca worktree set`
+            after = lambda x: x[x.index('&&') + 1:] if '&&' in x else []
+            i_set = find(lambda x: after(x)[:3] == ['orca', 'worktree', 'set'])
             i_launch = find(lambda x: x[:3] == ['orca', 'agent', 'launch'])
             assert i_add < i_set < i_launch, r.stdout
-            add, wset, launch = rows[i_add], rows[i_set], rows[i_launch]
+            add, wset, launch = rows[i_add], after(rows[i_set]), rows[i_launch]
+            wait = rows[i_set][:rows[i_set].index('&&')]
+            assert wait[:2] == ['python3', '-B'] and wait[2].replace('\\', '/').endswith('factory-pipeline.py'), wait
+            assert wait[-3:-1] == ['orca-wait', '--worktree'] and same_path(wait[-1], add[8]), (wait, add)
             assert add[5:8] == ['--no-track', '-b', 'topic-b'] and len(add) == 10 and add[-1] == a, add
             assert os.path.basename(add[8].replace('\\', '/').rstrip('/')) == 'topic-b', add
             assert same_path(arg_of(wset, '--worktree').removeprefix('path:'), add[8]), (wset, add)
@@ -1826,7 +1831,7 @@ else:
 print(case + ' assertions passed')
 MULTIWAVE
 cat > "$TMP/qa-tiers.py" <<'QA_TIERS'
-import argparse, contextlib, importlib.util, io, json, os, pathlib, re, subprocess, sys
+import argparse, contextlib, importlib.util, io, json, os, pathlib, re, shlex, subprocess, sys
 root, tmp = sys.argv[1:]
 spec = importlib.util.spec_from_file_location('qa_pipeline', root + '/scripts/factory-pipeline.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -1982,7 +1987,10 @@ wait, _, setc = commands[1].partition(' && ')
 assert ' orca-wait --worktree ' in wait and 'topic-task' in wait and '--gone' not in wait, commands[1]
 assert setc.startswith('orca worktree set ') and '--parent-worktree' in setc, commands[1]
 assert m.orca_wait_command(dict(reg, _defaults=True), 'x').endswith(' --registry none orca-wait --worktree x')
-assert m.orca_wait_command(reg, 'x', gone=True).endswith('factory-pipeline.py orca-wait --gone --worktree x')
+# compare argv tokens, not text: on Windows the script path is quoted
+wait_argv = shlex.split(m.orca_wait_command(reg, 'x', gone=True))
+assert wait_argv[-4:] == ['orca-wait', '--gone', '--worktree', 'x'], wait_argv
+assert wait_argv[-5].replace('\\', '/').endswith('/factory-pipeline.py'), wait_argv
 assert commands[2].startswith('orca agent launch ') and 'path:' in commands[2]
 assert 'worktree create' not in handoff.getvalue()
 # without a known suite list, an --only-suites suite path runs as run-all runs it (TMPDIR unset), attributed to its task
@@ -4575,7 +4583,7 @@ rm_at=$(grep -nE "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw'?
 wait_at=$(grep -nE "^  python3 -B [^ ]*factory-pipeline.py'? orca-wait --gone --worktree '?[^ ]*feat-core-demo-gw'?$" "$TMP/cleanup-wait.txt" | head -1 | cut -d: -f1)
 br_at=$(grep -nE "^  git -C .* branch -d feat/core/demo-gw$" "$TMP/cleanup-wait.txt" | head -1 | cut -d: -f1)
 if [ -n "$rm_at" ] && [ -n "$wait_at" ] && [ -n "$br_at" ] && [ "$rm_at" -lt "$wait_at" ] && [ "$wait_at" -lt "$br_at" ] \
-   && [ "$(grep -c "orca-wait --gone" "$TMP/cleanup-wait.txt")" = 1 ]
+   && [ "$(grep -cE "^  python3 .* orca-wait --gone " "$TMP/cleanup-wait.txt")" = 1 ]
 then pass=$((pass + 1)); echo "PASS  cleanup: orca worktree rm, then one orca-wait --gone, then git branch -d"
 else fail=$((fail + 1)); echo "FAIL  cleanup wait order (rm $rm_at, wait $wait_at, branch -d $br_at)"; sed 's/^/      /' "$TMP/cleanup-wait.txt" | head -12; fi
 opath "cleanup: the leftover note says the branch goes only once the worktree record is gone" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw.*its branch is deleted only once the worktree record is gone \(.orca-wait --gone.\)" cleanup "$G"
