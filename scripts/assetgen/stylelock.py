@@ -60,8 +60,9 @@ SHA = re.compile(r"\A[0-9a-f]{64}\Z")
 DATE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 EXTERNAL_PATH = re.compile(r"(?<![\w/.:])(?:/(?:[^\s/\\]+/[^\s/\\]+|[^\s/\\]+\.[\w-]+)|~[/\\]|[a-zA-Z]:[/\\]|\\\\|\.\.[/\\])")
 # file: URIs and environment-variable paths ($HOME/x, ${HOME}/x, %USERPROFILE%\x): a local path in disguise.
-# A price like $5 (a $ then a digit) and a percentage like 100% are not variables.
-EXTERNAL_URI_OR_ENV = re.compile(r"(?<![\w])file:[/\\]|\$\{?[A-Za-z_]|%[A-Za-z_][A-Za-z0-9_]*%[/\\]", re.I)
+# A price like $5, prose like "priced in $USD" ($NAME with no separator after it) and a percentage like 100% are not
+# paths: $NAME counts only when a slash or backslash follows; the braced ${NAME} counts with or without one.
+EXTERNAL_URI_OR_ENV = re.compile(r"(?<![\w])file:[/\\]|\$(?:\{[A-Za-z_]|[A-Za-z_][A-Za-z0-9_]*[/\\])|%[A-Za-z_][A-Za-z0-9_]*%[/\\]", re.I)
 EXTERNAL_CREDENTIAL = re.compile(r"(?<![\w-])(?:api[_-]?key|access_token|auth_token|token|secret|client_secret|password|passwd|authorization)(?![\w-])\s*[\"']?\s*[:=]\s*\S|\bBearer\s+\S|\bsk-[A-Za-z0-9_-]{12,}", re.I)
 ASPECT = re.compile(r"\A[1-9]\d*:[1-9]\d*\Z")
 ID = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
