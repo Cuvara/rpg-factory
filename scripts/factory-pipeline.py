@@ -226,10 +226,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         finds start prompts that stayed unsubmitted in a task session's terminal. Per task with a task worktree it lists
         the Orca terminals of that worktree (`orca terminal list --json`, read-only) and reads each screen (`orca
         terminal read --screen --json`). A terminal is STUCK only when its screen still shows `Read your task spec at
-        <a spec file of this plan>` (a wrapped pointer is joined), its last output is older than --idle seconds (default
-        120) and the task made no progress since the spec file was written (no new commit on the task branch, no new
-        lead report, no new review or QA verdict). One row per terminal: task, handle, idle seconds, ok or STUCK, reason,
-        and for a STUCK one the exact send command. --send runs `orca terminal send --terminal H --text <CR>` once per
+        <a spec file of this plan>` on a composer line, alone or after a composer marker (`>`, `|` and the like; an
+        echoed command that carries the pointer is no pointer; a wrapped pointer is joined), its last output is older
+        than --idle seconds (default 120) and the task made no progress since the spec file was written (no new commit
+        on the task branch, no new lead report, no new review or QA verdict). One row per terminal: task, handle, idle
+        seconds, ok or STUCK, reason, and for a STUCK one the exact send command. --send runs `orca terminal send --terminal H --text <CR>` once per
         STUCK terminal and writes <task>__nudge.json (handle, time, spec path); a spec that was already nudged is never
         sent again: `nudged, still stuck: relaunch the session`. Without --send nothing is written. Orca missing or
         unreachable: a note, exit 0. Exit 1 when a send failed, 2 usage. status shows a `stuck?:` note on a task whose
@@ -296,6 +297,7 @@ Read-only against the repos (never fetches, pushes, commits or creates worktrees
 usage error.
 """
 import argparse
+import bisect
 import glob
 import hashlib
 import json
@@ -5478,22 +5480,37 @@ def cmd_sync(a, reg):
 
 NUDGE_POINTER = re.compile(r"Read your task spec at\s+(\S.*?\.md)")
 NUDGE_POINTER_JOINED = re.compile(r"Read your task spec at\s*(\S.*?\.md)")  # the "".join text has no space after "at"
+# what a composer line may show before the prompt besides whitespace: > and | and the Unicode prompt and box marks
+# U+203A, U+276F, U+00BB, U+2502, U+2503
+NUDGE_COMPOSER_MARKERS = ">›❯»│┃|"
 
 
 def nudge_spec(plan, tail):
     """The spec file of this plan that a terminal screen's start-prompt pointer names, or None. `tail` is the screen's
     lines; each is stripped (Orca indents a wrapped line). The pointer is searched in the lines joined by newline and by a
-    space (it wraps after `at`) and, for a path that itself wraps, joined with nothing; the first match that names an
-    existing file inside <verdict dir>/specs/ wins."""
+    space (it wraps after `at`) and, for a path that itself wraps, joined with nothing. A match counts only on a composer
+    line: the text before `Read your task spec at` on the screen line where the match starts is empty or only composer
+    markers (whitespace and NUDGE_COMPOSER_MARKERS), so an echoed command that carries the pointer (`orca worker-start --spec
+    'Read your task spec at ...'`) is no pointer and the search goes on. The first counting match that names an existing
+    file inside <verdict dir>/specs/ wins."""
     stripped = [str(ln).strip() for ln in tail]
     specs_dir = os.path.normcase(os.path.realpath(os.path.join(verdict_dir(plan), "specs")))
-    for text, rx in (("\n".join(stripped), NUDGE_POINTER), (" ".join(stripped), NUDGE_POINTER),
-                     ("".join(stripped), NUDGE_POINTER_JOINED)):
-        for m in rx.finditer(text):
-            path = m.group(1).strip()
-            real = os.path.normcase(os.path.realpath(path))
-            if real.startswith(specs_dir + os.sep) and os.path.isfile(path):
-                return path
+    for sep, rx in (("\n", NUDGE_POINTER), (" ", NUDGE_POINTER), ("", NUDGE_POINTER_JOINED)):
+        text = sep.join(stripped)
+        starts, pos = [], 0
+        for ln in stripped:  # the offset of each stripped line in the joined text
+            starts.append(pos)
+            pos += len(ln) + len(sep)
+        m = rx.search(text)
+        while m:
+            i = bisect.bisect_right(starts, m.start()) - 1
+            prefix = stripped[i][:m.start() - starts[i]]
+            if all(c.isspace() or c in NUDGE_COMPOSER_MARKERS for c in prefix):
+                path = m.group(1).strip()
+                real = os.path.normcase(os.path.realpath(path))
+                if real.startswith(specs_dir + os.sep) and os.path.isfile(path):
+                    return path
+            m = rx.search(text, m.start() + 1)
     return None
 
 
