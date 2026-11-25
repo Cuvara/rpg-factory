@@ -1,6 +1,6 @@
 # Run report: flow-lows-2
 
-Tier M plan, three tasks in two waves, on branch `flow-lows-2` (base `main` `faf2745`, plan commit `6873b21`). It
+Tier M plan, four tasks in three waves, on branch `flow-lows-2` (base `main` `faf2745`, plan commit `6873b21`). It
 covers the Orca, cleanup, plan-edit, validate and case-map lows of plugin-flow-5-followups, workflow-slim-followups,
 policy-followups-leftovers, plan-edit-followups and qa-reach-followups-2. Wave 2 (plan-lows) waited for orca-lows: both
 own `scripts/factory-pipeline.py` and `tests/pipeline.test.sh`.
@@ -30,6 +30,10 @@ own `scripts/factory-pipeline.py` and `tests/pipeline.test.sh`.
     or 26: `cmd_dispatch` and `cmd_status` reach most of the module). A cli-selftest case recomputes the closure.
   - Scope widened by plan-edit (reason in the plan): `delivery.md` "Orca visibility" and cleanup and
     `docs/pipeline-cli.md` describe the worktree wait and the verb. Changelog fragment `changelog.d/flow-lows-2-plan.md`.
+- Task `ci-fix` (added by plan-edit after CI failed on PR 153: `tests/delivery-generic.test.sh` delivery.md size cap
+  and a stale `tests/affected.test.sh` expectation): `delivery.md` 33282 -> 32307 bytes (wording tightened in sections
+  4, 5, 8 and 10, no rule, command, flag or heading removed); the pipeline_route.py half of the affected case accepts
+  ALL or the full case list, like the factory-pipeline.py half.
 
 Mode: implement. Model rule: Codex was unavailable (`agents --down codex`), so by the owner's instruction Claude
 Sonnet 5.5 implemented, Claude Opus 5.5 led and reviewed (SAME_MODEL), and verify sessions ran QA.
@@ -41,7 +45,8 @@ Sonnet 5.5 implemented, Claude Opus 5.5 led and reviewed (SAME_MODEL), and verif
 | guard-reach | review PASS, QA PASS | fa88d64 | `--affected --within tests/affected.test.sh,tests/parallel-policy.test.sh -j 1`: 418 passed, 0 failed |
 | orca-lows | review PASS, QA FAIL (three test-side matches); review and QA PASS | 3805474 | `--affected --base 33c4bbe --within tests/pipeline.test.sh -j 1`: 407 passed, 0 failed |
 | plan-lows | review PASS, QA PASS | fd11997 | `--affected --base 21ded14 --within tests/pipeline.test.sh,tests/parallel-policy.test.sh -j 1`: 426 passed, 0 failed |
-| integration:plugin | QA by the run lead | a7565ad | first run: 7 passed, 1 failed (orca-commands: the new lesson cited a bare `orca orchestration`); run lead fix a7565ad cites `orca orchestration send`; rerun `--workspace-only --base origin/main`: 8 of 19 checks run, 8 passed, 0 failed (616 s); `--only-suites tests/parallel-policy.test.sh,tests/skills-lint.sh -j 1`: 399 passed, 0 failed |
+| ci-fix | review PASS, QA PASS | 897d200 | `--affected --base 1573104 --within tests/delivery-generic.test.sh,tests/affected.test.sh,tests/parallel-policy.test.sh -j 1`: 421 passed, 0 failed |
+| integration:plugin | QA by the run lead | a7565ad | first run: 7 passed, 1 failed (orca-commands: the new lesson cited a bare `orca orchestration`); run lead fix a7565ad cites `orca orchestration send`; rerun `--workspace-only --base origin/main`: 8 of 19 checks run, 8 passed, 0 failed (616 s); `--only-suites tests/parallel-policy.test.sh,tests/skills-lint.sh -j 1`: 399 passed, 0 failed; after ci-fix (8691187): 8 passed, 0 failed (391 s) |
 
 ## Limitations
 
@@ -50,4 +55,5 @@ Sonnet 5.5 implemented, Claude Opus 5.5 led and reviewed (SAME_MODEL), and verif
 - Every review is SAME_MODEL (Claude implemented and reviewed).
 - The `pipeline_route.py` narrowing is modest; the other pipeline libraries stay ALL by design.
 - The validate stale-verdict case covers a paths change only, not an acceptance change (review nit).
+- The first CI run of PR 153 failed two suites that task QA had left to CI (delivery-generic, affected).
 - Cost: NOT_AVAILABLE.
