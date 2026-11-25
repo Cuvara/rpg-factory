@@ -18,11 +18,11 @@
 # case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier
 # case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_notes
 # case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
-# case-map: dogfood tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
-# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
+# case-map: dogfood scripts/factory-cmd.py tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
+# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
 # case-map: cleanup-merged scripts/factory-pipeline.py::cmd_cleanup
-# case-map: gate-merge scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::run_lead_file_blockers
-# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::subplan_models scripts/factory-pipeline.py::subtask_failures scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::validate_subplan scripts/factory-pipeline.py::verdict_dir
+# case-map: gate-merge tests/fixtures/assetgen/*.py scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::run_lead_file_blockers
+# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::subplan_models scripts/factory-pipeline.py::subtask_failures scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::validate_subplan scripts/factory-pipeline.py::verdict_dir
 # case-map: multiwave scripts/factory-pipeline.py::cleanup scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::own_start scripts/factory-pipeline.py::repo_info scripts/factory-pipeline.py::review_base scripts/factory-pipeline.py::scope_fingerprint scripts/factory-pipeline.py::stack_base scripts/factory-pipeline.py::stack_file scripts/factory-pipeline.py::stack_gate scripts/factory-pipeline.py::stack_groups scripts/factory-pipeline.py::stack_record scripts/factory-pipeline.py::stack_record_live scripts/factory-pipeline.py::stackable scripts/factory-pipeline.py::start_base scripts/factory-pipeline.py::status scripts/factory-pipeline.py::sync_file scripts/factory-pipeline.py::sync_record scripts/factory-pipeline.py::task_status scripts/factory-pipeline.py::uncovered_changes scripts/factory-pipeline.py::verdict_dir scripts/factory-pipeline.py::verdict_file scripts/factory-pipeline.py::verdict_of
 # case-map: qa-tiers tests/run-all.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::emit_lead_handoff scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::qa_body scripts/factory-pipeline.py::retry_checks scripts/factory-pipeline.py::runall_suites scripts/factory-pipeline.py::task_qa_warnings scripts/factory-pipeline.py::tier_command scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::verdict_file
 # case-map: tier-xs scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::implementer_of scripts/factory-pipeline.py::task_context scripts/factory-pipeline.py::validate
@@ -2191,8 +2191,10 @@ for phase in ('verify', 'qa'):
         assert p.returncode == 2 and '--suite-warn' in p.stderr and not p.stdout, (phase, bad, p.returncode, p.stdout, p.stderr)
         assert not SELECTED_RE.search(p.stderr) and 'not computed' not in p.stderr, (phase, bad, p.stderr)
 affected = work / 'task' / 'tests' / 'affected.py'
-stand_in_affected = ('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
-                     'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
+# affected_selection passes the base it diffs against (`cases --base <base> FILE SUITE...`): affected.py's per-symbol
+# reach applies only when FILE equals the changed set from that base, so without --base it held only for its default
+stand_in_affected = ('import pathlib, sys\nassert sys.argv[1:4] == ["cases", "--base", "main"], sys.argv\n'
+                     'assert pathlib.Path(sys.argv[4]).read_text().splitlines() == ["code.py"]\n'
                      'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
                      'print("tests/routing.test.sh\\tselection")\n')
 affected.write_text(stand_in_affected, encoding='utf-8')
@@ -2331,7 +2333,9 @@ cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
     '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh,tests/orca-wait.test.sh')
 (repo / 'fix.py').write_text('fix'); git('add', 'fix.py'); git('commit', '-qm', 'fix'); second = git('rev-parse', 'HEAD')
-affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["fix.py"]\n'
+# a re-verify diffs against the failed candidate: affected.py gets that SHA as --base
+affected.write_text('import pathlib, sys\nassert sys.argv[1:4] == ["cases", "--base", "' + first + '"], sys.argv\n'
+                    'assert pathlib.Path(sys.argv[4]).read_text().splitlines() == ["fix.py"]\n'
                     'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
 verify_again = dispatch('verify', second)
 assert 'git diff ' + first + '...' + second in verify_again
@@ -2355,7 +2359,8 @@ assert 'tests/pipeline.test.sh' not in tier_line(out) and 'tests/routing-propert
 assert 'tests/routing.test.sh --case selection' in out and 'tests/routing.test.sh ALL' not in out and 'not computed' not in out, out
 assert 'Left to CI' not in out, out
 # the fix delta also reaches a task check suite: the re-QA names the failed suite and that task suite, not the third one
-affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["fix.py"]\n'
+affected.write_text('import pathlib, sys\nassert sys.argv[1:4] == ["cases", "--base", "' + first + '"], sys.argv\n'
+                    'assert pathlib.Path(sys.argv[4]).read_text().splitlines() == ["fix.py"]\n'
                     'print("tests/pipeline.test.sh\tdispatch")\nprint("tests/routing.test.sh\tselection")\n', encoding='utf-8')
 reached = dispatch('qa', second)
 assert sorted(within_of(reached)) == ['tests/pipeline.test.sh', 'tests/routing.test.sh'], reached
@@ -4602,6 +4607,48 @@ PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" status --json "
 if [ $rc = 0 ] && jq -e '.valid' "$TMP/so-prog.json" >/dev/null && grep -q "^Slots: slot 8 held by PID 8188 .*last check tests/git-guard.test.sh PASS (7 passed, 1 failed) updated [0-9]*s ago" "$TMP/se-prog.txt"
 then pass=$((pass + 1)); echo "PASS  status --json: the slot progress line is on stderr"
 else fail=$((fail + 1)); echo "FAIL  status --json slot progress (rc $rc)"; head -5 "$TMP/se-prog.txt"; fi
+# status --json also carries the holders as a structured `slots` field (the cleanup --json entries): slot 8 with its
+# progress fields, 9 (no file) and 10 (malformed) with progress null, liveness from the process table; schema-valid;
+# the stderr Slots: lines stay the same text as without --json
+if [ $rc = 0 ] && jq -e '(.slots | map(.slot) | sort) == ["1", "10", "3", "4", "8", "9"]
+     and (.slots[] | select(.slot == "8") | .pid == "8188" and .winpid == "8188" and .alive == true and (.checkout | test("rpg-mmo-server$"))
+          and .started == "2026-11-11T07:08:00Z"
+          and (.progress | .check == "tests/git-guard.test.sh" and .result == "PASS" and .passed == 7 and .failed == 1
+               and (.age_seconds | . >= 25 and . < 600) and (.updated | test("Z$"))))
+     and (.slots[] | select(.slot == "9") | .progress == null and .alive == true)
+     and (.slots[] | select(.slot == "10") | .progress == null and .alive == false)
+     and (has("_slots") | not)' "$TMP/so-prog.json" >/dev/null && python3 - "$ROOT" "$TMP/so-prog.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+out = json.load(open(sys.argv[2], encoding="utf-8"))
+assert not m.schema_errors(out, schema, schema), m.schema_errors(out, schema, schema)
+# the schema rejects a slot entry whose progress lacks a field or whose alive is not boolean/null
+bad = dict(out, slots=[dict(out["slots"][0], alive="yes")])
+assert m.schema_errors(bad, schema, schema), "alive must be boolean or null"
+PY
+then pass=$((pass + 1)); echo "PASS  status --json carries a schema-valid slots field with each holder's progress (null without one)"
+else fail=$((fail + 1)); echo "FAIL  status --json slots field"; jq -c '.slots' "$TMP/so-prog.json" 2>/dev/null | head -c 1500; fi
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" status "$G" > "$TMP/st-prog.txt" 2>/dev/null
+if diff <(grep '^Slots: ' "$TMP/st-prog.txt" | sed -E 's/updated [0-9]+s ago/updated Ns ago/') \
+        <(sed -E 's/updated [0-9]+s ago/updated Ns ago/' "$TMP/se-prog.txt" | grep '^Slots: ') >/dev/null \
+   && [ "$(grep -c '^Slots: ' "$TMP/se-prog.txt")" = 6 ] && grep -q ': the user decides, the run never stops it$' "$TMP/se-prog.txt"
+then pass=$((pass + 1)); echo "PASS  status --json: the stderr Slots: lines equal the text output's"
+else fail=$((fail + 1)); echo "FAIL  status --json stderr Slots: lines differ from the text output"; cat "$TMP/se-prog.txt" | head -8; fi
+# an INVALID plan: status --json still validates, with an empty slots field (exit 1)
+printf '%s\n' '{"schema":"rpg-factory.pipeline-plan/1","id":"badslots","title":"t","topic":"feat/core/badslots","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[{"repo":"rec","objective":"o","paths":["x/"],"acceptance":["a"]}]}' > "$TMP/badslots.json"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" status --json "$TMP/badslots.json" > "$TMP/so-badslots.json" 2>/dev/null; rc=$?
+if [ $rc = 1 ] && jq -e '(.valid | not) and .slots == []' "$TMP/so-badslots.json" >/dev/null && python3 - "$ROOT" "$TMP/so-badslots.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+out = json.load(open(sys.argv[2], encoding="utf-8"))
+assert not m.schema_errors(out, schema, schema), m.schema_errors(out, schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status --json of an invalid plan has an empty slots field and validates"
+else fail=$((fail + 1)); echo "FAIL  status --json invalid plan slots (rc $rc)"; head -c 800 "$TMP/so-badslots.json"; fi
 PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTG" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-prog.json" 2>&1
 if jq -e '(.slots[] | select(.slot == "8") | .progress | .check == "tests/git-guard.test.sh" and .result == "PASS" and .passed == 7 and .failed == 1 and (.age_seconds | . >= 25 and . < 600) and (.updated | test("Z$"))) and (.slots[] | select(.slot == "9") | .progress == null) and (.slots[] | select(.slot == "10") | .progress == null)' "$TMP/cleanup-prog.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  cleanup --json carries each slot's progress and its age"

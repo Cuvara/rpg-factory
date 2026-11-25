@@ -48,19 +48,6 @@ Seen while running plan plugin-flow-2, not reproduced yet: Codex under PowerShel
 Git Bash (CLAUDE.md "Operating lessons": Git Bash, never WSL). Find the cause; make dispatch detect or prevent it. The
 unsubmitted start prompt of the same report is covered by `factory-pipeline.py nudge` (plan runtime-quirks).
 
-### external-path-dollar
-
-The external-path-uri review left a low note: the `$NAME` branch of `stylelock.EXTERNAL_URI_OR_ENV`
-(`scripts/assetgen/stylelock.py`) also refuses a dollar sign followed by a letter with no path separator after it, so
-prose such as "priced in $USD" in an `origin` or `rights_note` is refused. Narrow the branch to a `$NAME` followed by a path separator (or `${NAME}`), with a test.
-
-### generic-explorer-name
-
-`skills/delivery/pipeline-defaults.json` and the generic `skills/delivery/references/delivery.md` name the
-RPG plugin's agent type `rpg-factory:factory-explorer`. The generic copy should name the subagent type through the
-registry (`pipeline.subagents.models.claude.agent`) only, with a neutral default for a project without the plugin
-agent.
-
 ### codex-subagent-model-enforce
 
 `orca orchestration worker-start` and `orca agent launch` take no Codex `-c` override, so a Codex dispatch cannot set
@@ -140,21 +127,6 @@ From plan plan-edit (`docs/plans/plan-edit/report.md`):
 - Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
   start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
 
-### qa-reach-followups
-
-From plan qa-reach (`docs/plans/qa-reach/report.md`):
-
-- `status --json` carries the slot progress only in the stderr "Slots:" text line; add a structured slots field to the
-  status output (and its schema).
-- `scripts/ci-plan.py` and `factory-pipeline.py` `affected_selection` call `affected.py cases` without `--base`, so
-  they get symbol reach only when their file list equals the default-base changed set; pass the base.
-- Any `scripts/assetgen/assetgen.py` change selects every group of `tests/pipeline.test.sh` (its import closure reaches
-  `scripts/checks/domains/assetgen.py`, `scripts/factory-cmd.py` and `tests/fixtures/assetgen/*.py`, which no
-  pipeline group maps). Six assetgen groups keep the plain `assetgen.py` glob.
-- The `hashes.py` stand-in in `tests/run-all-parallel.test.sh` reads the `cases` suites positionally (tolerates
-  `--base`, fragile).
-- The workspace reader guard is selected only for changes under `scripts/` and `tests/` (from plan pipeline-speed).
-
 ### path-audit-followups
 
 Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
@@ -167,7 +139,20 @@ Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 - In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
   spelling worked (not reproduced).
 
+### qa-reach-followups-2
+
+From plan qa-reach-followups (`docs/plans/qa-reach-followups/report.md`):
+
+- The workspace reader guard is selected only for changes under `scripts/` and `tests/` (from plan pipeline-speed).
+- `dispatch` prints a worker-start command without `--run`, so a task lead with its own Orca Run adds it by hand.
+- The generic defaults name the Codex plugin runner `codex:codex-rescue` (`pipeline.agents.codex.agent_runner`).
+- A dollar word directly before a slash in prose (`$USD/month`) is still refused by the style lock.
+
 ## Covered
+
+- **qa-reach-followups** (qa-reach-followups except the reader-guard selection note, external-path-dollar,
+  generic-explorer-name): shipped in plan qa-reach-followups (`changelog.d/qa-reach-followups-pipeline.md`,
+  `changelog.d/qa-reach-followups-ci.md`, `changelog.d/external-path-dollar.md`, `changelog.d/generic-explorer-name.md`).
 
 - **qa-reach** (pipeline-speed-followups except the reader-guard selection note; the case reach item of
   test-speed-followups): shipped in plan qa-reach (`changelog.d/qa-reach-slot-progress.md`,

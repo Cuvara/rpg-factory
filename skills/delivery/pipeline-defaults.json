@@ -232,7 +232,7 @@
         "claude": {
           "model": "claude-sonnet-5-5",
           "alias": "sonnet",
-          "agent": "rpg-factory:factory-explorer"
+          "agent": "Explore"
         },
         "codex": {
           "model": "gpt-6.1-terra",

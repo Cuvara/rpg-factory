@@ -5162,7 +5162,7 @@ for origin in 'C:/art/x.png' '/home/me/art.png'; do
   AG promote-anchor --external "$TMP/outside/art.png" --origin "$origin" --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: absolute origin $origin refused without writes" || no "external absolute origin rc=$rc" "$(cat "$TMP/err")"
 done
-for uri_env in 'file:///C:/art/a.png' 'file:/art/a.png' 'FILE://host/share/a.png' '$HOME/art/a.png' '${HOME}/art/a.png' '%USERPROFILE%\art\a.png' '%USERPROFILE%/art/a.png'; do
+for uri_env in 'file:///C:/art/a.png' 'file:/art/a.png' 'FILE://host/share/a.png' '$HOME/art/a.png' '${HOME}/art/a.png' '$HOME\art\a.png' '${HOME}' '%USERPROFILE%\art\a.png' '%USERPROFILE%/art/a.png'; do
   for ext_field in origin rights-note; do
     ext_origin=art; ext_rights=owned
     [ "$ext_field" = origin ] && ext_origin="$uri_env" || ext_rights="$uri_env"
@@ -5171,6 +5171,9 @@ for uri_env in 'file:///C:/art/a.png' 'file:/art/a.png' 'FILE://host/share/a.png
       && ok "external promote: $uri_env in $ext_field refused without writes" || no "external uri/env $uri_env in $ext_field rc=$rc" "$(cat "$TMP/err")"
   done
 done
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'priced in $USD' --rights-note 'priced in $USD' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ -e "$SG/styles/rpg-base/anchors/ext-prose.json" ] && ok "external promote: prose with a dollar word ('priced in \$USD') accepted" || no "external dollar prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$SG/styles/rpg-base/anchors/ext-prose.json" "$SG/styles/rpg-base/anchors/ext-prose.png"
 AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note 'token=abc123' --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: credential refused without writes" || no "external credential rc=$rc" "$(cat "$TMP/err")"
 AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
