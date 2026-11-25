@@ -119,11 +119,17 @@ if grep -qx scripts/checks/portable-paths.py <<<"$got"; then
 else fail=$((fail + 1)); echo "FAIL  a docs-only change selects the portable-paths enforce line: got [$(tr '\n' ' ' <<<"$got")]"; fi
 sel 0 "a change to the portable-paths check selects its suite" tests/portable-paths.test.sh scripts/checks/portable-paths.py
 sel 1 "an unrelated script skips the portable-paths suite" tests/portable-paths.test.sh scripts/changelog.py
-# the workspace readers guard scans scripts/ and tests/ only (EXTRA scripts/*, tests/*): a change under either selects its
-# run line, a docs-only change does not
+# the workspace readers guard greps only scripts/ and tests/ under its ROOT (EXTRA scripts/*, tests/*): a change under
+# either, nested fixtures and the guard itself included, selects its run line; hooks and registry fragments select it
+# through GLOBAL; a docs or skills change does not (the guard reads neither)
 sel 0 "a scripts/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh scripts/changelog.py
 sel 0 "a tests/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh tests/portable-paths.test.sh
+sel 0 "a nested tests/fixtures/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh tests/fixtures/check-registry-p4.sh
+sel 0 "the guard's own change selects the workspace readers guard" scripts/checks/workspace-readers.sh scripts/checks/workspace-readers.sh
+sel 0 "a hooks/ change selects the workspace readers guard (global)" scripts/checks/workspace-readers.sh hooks/hooks.json
+sel 0 "a registry/ fragment change selects the workspace readers guard (global)" scripts/checks/workspace-readers.sh registry/core.json
 sel 1 "a docs-only change does not select the workspace readers guard" scripts/checks/workspace-readers.sh docs/x.md
+sel 1 "a skills/ change does not select the workspace readers guard" scripts/checks/workspace-readers.sh skills/factory-core/SKILL.md
 # the netcode evidence prune case (tests/run-all-parallel.test.sh) sources prune_evidence from the check script by a
 # computed path: the EXTRA mapping selects the suite, not an incidental literal mention
 sel 0 "a netcode-headless.sh change selects the run-all-parallel suite (prune case, EXTRA)" tests/run-all-parallel.test.sh scripts/checks/netcode-headless.sh
