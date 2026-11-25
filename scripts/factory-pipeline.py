@@ -168,12 +168,21 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         `tests/run-all.sh --workspace-only --base <plan base>` (the workspace checks the change reaches; without a
         known base `--workspace-only`); after the PR opens, CI runs the affected suites and ci-ok must be
         green before merging (every suite through workflow_dispatch with full=true).
-  verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
+  verdict <plan.json> --task ID --phase review|qa|verify --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
-        records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
-        --model ID / --effort LEVEL record the session model and effort as run.
+          [--failed-at review|qa] [--model ID] [--effort LEVEL]
+        records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py).
+        --model ID / --effort LEVEL record the session model and effort as run. A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
-        --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
+        --phase verify (per plan task, never integration:<repo>) records what one verify session ran, review and QA
+        at the same SHA: the review record first (it takes --implementer and --fallback), then the QA record with the
+        same --state. A FAIL needs --failed-at: review (the review blocked the candidate, no test ran: only the review
+        FAIL is written, no QA record, so the next verify keeps the previous QA base and the task checks; never with
+        --failed-suites) or qa (the review passed and a test failed: review PASS and QA FAIL; --failed-suites alone
+        implies it). --failed-at goes with --state FAIL only.
+        --subtask records to the subtask's own file, never the task review the gate reads; it is optional (one task
+        review covers every subtask), and a current subtask review or QA that is not PASS blocks the task and the
+        gate until a PASS on a commit containing it. Every verdict is also kept
         per candidate (<task>__<phase>__<sha12>__<by>.json). A task review by a model other than the task's paired
         reviewer never replaces the pair's record for the same SHA (stderr note). A subtask review pairs against the
         subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
@@ -193,9 +202,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
         paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
         and are never stray), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
-        was created for the plan. A subtask
-        whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
-        model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
+        was created for the plan. One task review covers every subtask: a code subtask implemented by the task
+        reviewer's own model is a note (`subtask <id> SAME_MODEL (single verify)`), never a blocker, and a subtask
+        needs no review of its own; a current subtask review or QA that is not PASS on the integration HEAD (or an
+        ancestor of it) is a blocker. A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
         starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
         integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. A stacked
@@ -254,10 +264,14 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         Full rows also use resource release/ownership state, releaseCompletedAt, and projection resource state.
         Lineage-only children must have the topic or a <topic>-* branch (also with an Orca prefix);
         foreign and detached siblings are excluded.
-        Per task (notes, so the schema is unchanged): `lead report: <at> @<sha10> <summary>` from the `report` record
+        Per task notes: `lead report: <at> @<sha10> <summary>` from the `report` record
         (plus `(stale: task HEAD is <sha10>)` when the task HEAD moved on), and once the task has commits
         `READY_FOR_PR: yes` (lead report, PASS review and PASS QA at the task HEAD) or `READY_FOR_PR: no (<first
-        missing thing>)`. With an Orca Run (read-only `orca orchestration check --run R --all --json`, never marks a
+        missing thing>)`. With --json each task row also carries them as fields, computed with the notes:
+        `lead_report` ({at, sha, summary, current}, null without a record) and `ready_for_pr` ({ready, missing}, null
+        when no READY_FOR_PR note applies); the top-level `model_scope_widen` lists the plan's valid model scope
+        widenings (the entry fields plus `text`, [] when none) whose `model scope widening:` lines go to stderr.
+        With an Orca Run (read-only `orca orchestration check --run R --all --json`, never marks a
         message read; any failure is no opinion) a `task done: <id>` message is shown as a note when no durable record
         exists. Test slots held by a run in one of the plan's checkouts (`<state dir>/locks/run-all-slots/<n>/`, written
         by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
@@ -5021,7 +5035,17 @@ def lead_report_summary(body):
 
 
 def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):
-    """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only). `orca_done`: task ids whose 'task done: <id>'
+    """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only): lead_report_state's notes."""
+    return lead_report_state(plan, row, task, orca_done, path, no_worktree, blockers)["notes"]
+
+
+def lead_report_state(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):
+    """The `lead report:` and `READY_FOR_PR:` notes of a task row and the same facts as `status --json` fields, computed
+    once so the note and the field never disagree (read-only): {notes, lead_report, ready_for_pr}. `lead_report`:
+    {at, sha, summary, current} of the durable `report` record (current: it counts for the task HEAD), None without
+    one. `ready_for_pr`: {ready, missing} (missing: the first missing reason the note prints, None when ready), None
+    when no READY_FOR_PR note applies (a tier XS plan, a phase outside READY_PHASES). `orca_done`: task ids whose
+    'task done: <id>'
     message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only).
     `path`: the task's repo checkout. In a no-worktree repo the task HEAD is plan.topic and moves when the next task
     commits, so in the integrated and qa phases a report at an ancestor of the HEAD still counts (as review and QA do).
@@ -5031,10 +5055,13 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, 
     is not ready while any exists. `row["stale"]` (set by task_status, the one review/QA currency test the phase and
     `next` use) also keeps it not ready: a review or QA that is not current is never READY_FOR_PR."""
     rec = fstate.read_json(lead_report_file(plan, task["id"]))
-    rec = rec if isinstance(rec, dict) and rec.get("sha") else None
+    rec = rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
     head, notes = row["sha"], []
     report_current = bool(rec) and (rec["sha"] == head or (
         no_worktree and row["phase"] in ("integrated", "qa") and bool(path) and is_ancestor(path, rec["sha"], head)))
+    out = {"notes": notes, "ready_for_pr": None, "lead_report": None if not rec else {
+        "at": rec["at"] if isinstance(rec.get("at"), str) else None, "sha": rec["sha"],
+        "summary": str(rec.get("summary", "")), "current": report_current}}
     if rec:
         stale = f" (stale: task HEAD is {head[:10]})" if head and not report_current else ""
         notes.append(f"lead report: {rec.get('at', '?')} @{rec['sha'][:10]} {rec.get('summary', '')}{stale}")
@@ -5042,10 +5069,10 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, 
         notes.append(f"lead report: task done: {task['id']} (an Orca message only: no durable record, ask the lead to run "
                      "`report`)")
     if pr.xs_plan(plan, task):
-        return notes
+        return out
     stale = row.get("stale") or {}
     if row["phase"] not in READY_PHASES:
-        return notes
+        return out
     rv, qa, phase = row["review"], row["qa"], row["phase"]
     missing = None
     if not rec:
@@ -5072,7 +5099,8 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, 
     elif blockers:
         missing = blockers[0] + (f" (+{len(blockers) - 1} more)" if len(blockers) > 1 else "")
     notes.append("READY_FOR_PR: yes" if missing is None else f"READY_FOR_PR: no ({missing})")
-    return notes
+    out["ready_for_pr"] = {"ready": missing is None, "missing": missing}
+    return out
 
 
 def orca_done_tasks(runs):
@@ -5265,8 +5293,10 @@ def status(plan, reg, orca_run=None):
     orca_done = orca_done_tasks(runs) if runs else set()
     for t in tasks:
         rinfo = repo_info(plan, reg, t["repo"])
-        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done, rinfo["path"],
-                                                    no_worktree=not rinfo["worktrees"], blockers=task_fails[t["id"]])
+        lr = lead_report_state(plan, rows[t["id"]], t, orca_done, rinfo["path"], no_worktree=not rinfo["worktrees"],
+                               blockers=task_fails[t["id"]])
+        rows[t["id"]]["notes"] += lr["notes"]
+        rows[t["id"]]["lead_report"], rows[t["id"]]["ready_for_pr"] = lr["lead_report"], lr["ready_for_pr"]
         rows[t["id"]]["notes"] += nudge_notes(plan, reg, t)
     for key in keys:  # the run lead file blockers of `gate`, once per repo, on that repo's first task (plan order)
         info = repo_info(plan, reg, key)
@@ -5281,7 +5311,7 @@ def status(plan, reg, orca_run=None):
     for t in tasks:
         r = rows[t["id"]]
         out_rows.append({k: r[k] for k in ("id", "repo", "wave", "phase", "branch", "worktree", "sha", "review", "qa",
-                                           "children", "next", "notes")})
+                                           "children", "next", "notes", "lead_report", "ready_for_pr")})
     return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
             "waves": v["waves"], "tasks": out_rows, "integration_children": int_children, "ready_wave": open_waves[0] if open_waves else None,
             "ready": ready, "next": nxt, "_workers": workers, "_slots": slot_holders(plan, reg)}
@@ -5302,11 +5332,15 @@ def cmd_status(a, reg):
         for tid, roles in models.items():
             for role, model in roles.items():
                 print(f"model: {tid} {role} -> {model['agent']} ({model['why']})")
-    for entry in valid_widenings(plan, reg):
+    widenings = valid_widenings(plan, reg)
+    for entry in widenings:
         print("model scope widening: " + model_policy.widening_text(entry), file=sys.stderr if a.json else sys.stdout)
     out = status(plan, reg, a.orca_run)
     if a.json:
         out["models"] = models
+        # the plan entry's fields plus the text the stderr line prints: only valid entries, so the schema holds
+        out["model_scope_widen"] = [{**{k: e[k] for k in model_policy.WIDEN_KEYS},
+                                     "text": model_policy.widening_text(e)} for e in widenings]
     workers = out.pop("_workers", [])
     slots = out.pop("_slots", [])
     if a.json:
