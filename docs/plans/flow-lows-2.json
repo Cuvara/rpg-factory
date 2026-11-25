@@ -41,24 +41,28 @@
       "kind": "code",
       "grade": "standard",
       "grade_reason": "plan editing and validation used by every run lead, and the case reach of the pipeline suite",
-      "objective": "Backlog topics plan-edit-followups and plugin-flow-5-followups (docs/plans/backlog.md). (1) `plan-edit` re-reads the copy after validation and repeats the no-worktree marker step instead of using `read_plan`: simplify with no behaviour change. (2) `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does: make validate print the same note when a task's paths or acceptance changed after its verdicts (read-only, a note, not an error). (3) tests/pipeline.test.sh runs ALL cases for scripts/lib/pipeline_route.py (and any other pipeline library file its case map does not name): map the case groups that reach it, with evidence from `tests/affected.py cases`, and report the group counts before and after. Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh. Changelog fragment changelog.d/flow-lows-2-plan.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "objective": "Backlog topics plan-edit-followups and plugin-flow-5-followups (docs/plans/backlog.md). (1) `plan-edit` re-reads the copy after validation and repeats the no-worktree marker step instead of using `read_plan`: simplify with no behaviour change. (2) `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does: make validate print the same note when a task's paths or acceptance changed after its verdicts (read-only, a note, not an error). (3) tests/pipeline.test.sh runs ALL cases for scripts/lib/pipeline_route.py (and any other pipeline library file its case map does not name): map the case groups that reach it, with evidence from `tests/affected.py cases`, and report the group counts before and after. Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh. Changelog fragment changelog.d/flow-lows-2-plan.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. (4) Scope widened by the run lead (strictly necessary follow-up of task orca-lows, which added the read-only `factory-pipeline.py orca-wait --worktree PATH [--gone]` verb and prints it before `orca worktree set` and before `git branch -d` after `orca worktree rm`): skills/delivery/references/delivery.md ('Orca visibility', session lifecycle and cleanup) and docs/pipeline-cli.md still describe `orca worktree set` right after the add and `git branch -d` right after `orca worktree rm` with no wait, and pipeline-cli.md does not document the verb; make both describe the code, and keep tests/parallel-policy.test.sh and tests/skills-lint.sh green. The verb name can be confused with scripts/orca-wait.sh (the run lead's message waiter): say in the docs which is which.",
       "paths": [
         "scripts/factory-pipeline.py",
         "tests/pipeline.test.sh",
-        "changelog.d/flow-lows-2-plan.md"
+        "changelog.d/flow-lows-2-plan.md",
+        "skills/delivery/references/delivery.md",
+        "docs/pipeline-cli.md"
       ],
       "exclusions": [],
       "deps": [
         "orca-lows"
       ],
       "checks": [
-        "tests/pipeline.test.sh"
+        "tests/pipeline.test.sh",
+        "tests/parallel-policy.test.sh"
       ],
       "acceptance": [
         "validate prints a staleness note for changed paths or acceptance",
         "plan-edit uses read_plan with no behaviour change",
         "a pipeline_route.py change no longer selects every pipeline case group, or the report says with evidence why not",
-        "the named suite passes"
+        "the named suite passes",
+        "delivery.md and docs/pipeline-cli.md describe the worktree wait and the orca-wait verb"
       ]
     },
     {
