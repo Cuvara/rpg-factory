@@ -356,6 +356,11 @@ quota, idle terminal, a 401), then dispatch the role again.
   excluded. Named child branches still match the `<parent branch>--` rule.
 - `stuck?: session <handle> still shows its start prompt after a nudge at <time>: relaunch the session` on a task row:
   the latest `nudge` record still shows the unsubmitted prompt and the task made no progress since (`nudge`).
+- Test slots held by a run in one of the plan's checkouts print as `Slots: slot <n> held by PID <pid> in <checkout>
+  since <start>` with the holder's liveness and its last progress (check, result, counts, age of the update); with
+  `--json` these lines go to stderr and the `slots` field carries the same holders (slot, pid, winpid, alive,
+  checkout, started, and `progress` with check, result, passed, failed, updated, age_seconds, or null before the
+  first one), the entries `cleanup --json` has. Status never stops a holder: the user decides.
 - Worker listing requests `--full` and retries without it when Orca reports that flag as unknown, keeping the concise
   form for later pages. Concise rows use `terminalState` for release and `state` for settledness; the Run line names
   missing fields and the checks they prevent. Other Orca failures remain NOT_AVAILABLE.

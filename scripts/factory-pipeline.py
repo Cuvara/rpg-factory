@@ -260,7 +260,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         message read; any failure is no opinion) a `task done: <id>` message is shown as a note when no durable record
         exists. Test slots held by a run in one of the plan's checkouts (`<state dir>/locks/run-all-slots/<n>/`, written
         by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
-        PID is alive (stderr with --json); status never stops the process and prints no command that would.
+        PID is alive and the slot's last progress (stderr with --json, where `slots` also carries them: slot, pid,
+        winpid, alive, checkout, started and progress, null before the first one, the same entries as cleanup --json);
+        status never stops the process and prints no command that would.
         Stacked siblings (a dependency D and the tasks stacked on it, while one of their branches exists and one of
         them is not integrated) get the note `stacked siblings <ids> on D: sibling worktrees, not children of D's
         worktree; merge order <D branch>, then <dependent branch> ... into <topic> (dependency first, git merge
@@ -2310,7 +2312,9 @@ def within_guards(path):
 
 def affected_selection(path, base, sha, suites):
     """(selected, None) with selected = {suite: cases} for the suites tests/affected.py says the change reaches, or
-    (None, 'Affected cases: not computed (<reason>)'); never a dispatch failure."""
+    (None, 'Affected cases: not computed (<reason>)'); never a dispatch failure. affected.py gets `--base <base>`: its
+    per-symbol reach applies only when the file list equals the changed set from that base (else every file is
+    file-level), so without it the reach held only when `base` matched affected.py's default base."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
         return None, "Affected cases: not computed (tests/affected.py missing)"
@@ -2324,8 +2328,8 @@ def affected_selection(path, base, sha, suites):
             names = os.path.join(tmp, "changed.txt")
             with open(names, "w", encoding="utf-8", newline="\n") as f:
                 f.write(changed + "\n" if changed else "")
-            r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
-                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            r = subprocess.run([sys.executable, "-B", script, "cases", "--base", base, names, *sorted(suites)],
+                               cwd=path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode:
             return None, "Affected cases: not computed (tests/affected.py cases failed)"
         selected = {}
@@ -5304,8 +5308,10 @@ def cmd_status(a, reg):
     workers = out.pop("_workers", [])
     slots = out.pop("_slots", [])
     if a.json:
+        out["slots"] = slots  # the held test slots with their progress, as cleanup --json has them (read-only)
         print(json.dumps(out, indent=2))
-        # the status schema has no workers or slots field: those lines (NOT_AVAILABLE, UNRELEASED, held slots) go to stderr
+        # the status schema has no workers field: those lines (NOT_AVAILABLE, UNRELEASED) go to stderr, and the held
+        # slots keep their text lines there too
         for line in session_lines(workers):
             print("Workers: " + line, file=sys.stderr)
         for line in slot_lines(slots):
