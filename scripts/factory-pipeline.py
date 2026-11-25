@@ -206,11 +206,12 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
         paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
-        and are never stray, nor is a file a merge of the default branch brought in), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
-        was created for the plan. One task review covers every subtask: a code subtask implemented by the task
-        reviewer's own model is a note (`subtask <id> SAME_MODEL (single verify)`), never a blocker, and a subtask
-        needs no review of its own; a current subtask review or QA that is not PASS on the integration HEAD (or an
-        ancestor of it) is a blocker. A per-task
+        and are never stray, nor is a file a merge of the default branch brought in), verdicts match the current
+        plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. One task review covers
+        every subtask: a code subtask implemented by the task reviewer's own model is a note
+        (`subtask <id> SAME_MODEL (single verify)`), never a blocker, and a subtask needs no review of its own; a
+        current subtask review or QA that is not PASS on the integration HEAD (or an ancestor of it) is a blocker.
+        A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
         starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
         integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. A stacked
@@ -4762,7 +4763,7 @@ def review_base(info, topic, start, sha):
     if start != topic and not on_topic:
         mb, rc = git(path, "merge-base", f"refs/heads/{topic}", sha)
         if rc == 0 and mb and not is_ancestor(path, mb, start):
-            return mb, f"the task merged {topic} at {mb[:10]}: only its own changes since"
+            return mb, f"diff starts at merge-base({topic}, sha) {mb[:10]}: only changes since"
         return start, None
     if start != topic or not on_topic:
         return start, None

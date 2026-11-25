@@ -986,7 +986,7 @@ if case == 'merged-topic-review-base':
     git('merge', '--no-ff', '-q', '-m', 'merge topic', 'topic')
     merged = git('rev-parse', 'HEAD')
     rb, note = m.review_base(info, plan['topic'], start_main, merged)
-    assert rb == other and note and 'merged topic' in note, (rb, note)
+    assert rb == other and note and 'merge-base(topic, sha)' in note, (rb, note)
     assert git('diff', '--name-only', rb + '...' + merged) == 'shared.txt', rb
     # the merge on a child branch, the task branch tip before it: start_base keeps main, the review diff does not
     git('branch', 'topic-a--s1', merged); git('reset', '-q', '--hard', own)
@@ -2034,7 +2034,7 @@ for check in ('tests/run-all.sh --within', 'tests/run-all.sh --within=', 'tests/
 old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
             'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
             'run the checks (run-checks.py fast tier for registry repos), regressions, edge and failure cases. A Unity '
-            'test run waits for the `unity-test` resource; never a second Editor.\n'
+            'test run waits for the `unity-test` resource; never a second Editor.\n' + m.QA_CLEANUP + '\n'
             'Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n'
             '- [s] tests pass\nChecks:\n- [s] dotnet test x\n- [s] tests/run-all.sh -j 4')
 srv = {'id': 's', 'checks': ['dotnet test x', 'tests/run-all.sh -j 4'], 'acceptance': ['tests pass']}
