@@ -92,21 +92,19 @@ each subtask with its commit, and the verify verdict (state, SHA, model).
 - **Shared exclusive resources** (settings `exclusive_resources`: an editor or test runner, a container stack, a test
   lab, fixed ports) go to one task at a time; a task without one reports the check `NOT_RUN`.
 - **Full test runs are shared:** one per machine (section 10 "QA tiers"); where the runner checks the shared
-  `.git/config`, never create a worktree or branch while one runs ("Orca visibility").
+  `.git/config`, never create a worktree or branch while one runs.
 - **Orca visibility: a plain git worktree has no Orca lineage.** Create a task worktree with
   `git worktree add --no-track -b <branch> <path> <base>`, never `orca worktree create` (it writes
   `branch.<name>.base` into the shared `.git/config`, breaking checks that hash it). Unregistered it is hidden in Orca
-  (maintainer rule: never), so before `orca agent launch --worktree path:<path>`
-  its creator runs exactly
+  (maintainer rule: never), so before `orca agent launch --worktree path:<path>` its creator runs exactly
   `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`
   (`<parent>`: the integration checkout, else - and for the integration checkout itself - the main checkout; a task
-  lead's child: the task worktree). Every printed worktree creation includes it, chained after
-  `factory-pipeline.py orca-wait --worktree <dir> &&`: Orca lists a worktree it did not create only after a while,
-  and a set before that changes nothing (exit 1: still hidden; retry, or set by hand once `orca worktree list` shows
-  it). This read-only verb is not `scripts/orca-wait.sh`, the run lead's message waiter. If `orca repo list --json`
-  shows `externalWorktreeVisibility` `hide` for the repo, first run
-  `orca repo set --repo path:<repo> --external-worktree-visibility show` (printed too) before the worktree add:
-  lineage alone leaves it hidden.
+  lead's child: the task worktree). Every printed worktree creation chains it after
+  `factory-pipeline.py orca-wait --worktree <dir> &&` (read-only; not the message waiter `scripts/orca-wait.sh`):
+  Orca lists a worktree it did not create late, and an earlier set does nothing (exit 1: still hidden; retry, or
+  set by hand once `orca worktree list` shows it). If `orca repo list --json` shows
+  `externalWorktreeVisibility` `hide`, first run `orca repo set --repo path:<repo> --external-worktree-visibility show`
+  (printed too) before the worktree add: lineage alone leaves it hidden.
 
 ### Child worktrees
 
@@ -121,7 +119,7 @@ Either level may place a session in an Orca child worktree when that is faster o
 - **Run lead.** `dispatch --phase lead` creates, registers and launches the task worktree ("Orca visibility").
   Integration QA (`--placement child`) or a quick fix may run in a child of the integration checkout.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child` + `reason`); `dispatch --subtask`
-  prints the matching `--worktree` (`${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`, "dispatch").
+  prints the matching `--worktree` (`docs/pipeline-cli.md`, "dispatch").
 - A child session commits on its own child branch (`<task branch>--<subtask or phase>`) with explicit paths. Review
   and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`.
 
@@ -155,14 +153,14 @@ A dependent task with exactly one in-flight dependency starts from that dependen
 - **Orca message traps:**
   - Only a dispatched Orca worker can send `--type escalation` or `worker_done` (else "No active Dispatch belongs to
     this message sender"): a task lead reports with `--type status` (asks with `--type question`).
-  - `orca orchestration check --wait --types <types>` still returns heartbeats: `orca-wait.sh` consumes them and keeps
-    waiting. The run lead's single waiter is `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (its
-    default types include `status`, so a filter without the sender's type drops its messages).
+  - `orca orchestration check --wait --types <types>` still returns heartbeats; the run lead's single waiter,
+    `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>`, consumes them and keeps waiting (its default types
+    include `status`: a filter without the sender's type drops its messages).
   - A multi-line `--prompt` through `cmd.exe` (Windows) is cut at the first newline: send a one-line prompt naming a
     spec file (`dispatch` does this).
   - After a start or launch with `--agent codex`, read its terminal (`orca orchestration worker-read`) until it shows
     the prompt being worked on; `input_accepted` alone is no proof.
-  - A dispatched session with no progress a few minutes after launch may have an unsubmitted start prompt: run
+  - A session with no progress a few minutes after launch may have an unsubmitted start prompt: run
     `factory-pipeline.py nudge plan.json`, then `--send` (`docs/pipeline-cli.md`, "nudge").
 - **Codex, else Claude.** A Codex session that cannot start or never picks up its prompt is marked down
   (`agents --down codex`, "Which model") and its role redispatched on Claude; the report names it.
@@ -213,17 +211,17 @@ Merging task branches into the integration branch is the run lead's decision; me
 A task is done when integrated with its review and QA recorded; the run, when the PR is open (without
 `deliver: pr`: at READY_FOR_PR). Then:
 
-1. **Worktrees.** The run lead removes each task worktree its run created once the task is integrated and clean: `git worktree remove <path>` (never `--force`; or `orca worktree rm`, then `git worktree prune`, else
-   `git branch -d` fails). `orca worktree rm` removes asynchronously: delete its branch only after
-   `factory-pipeline.py orca-wait --gone --worktree <path>` (else 'used by worktree'). Unintegrated work is reported,
-   not removed. Never remove the main checkout, the integration checkout before its PR is open, another
-   coordinator's worktree, or one in use ("Session lifecycle" below).
+1. **Worktrees.** The run lead removes each task worktree its run created once the task is integrated and clean:
+   `git worktree remove <path>` (never `--force`), or `orca worktree rm`, which removes asynchronously:
+   `factory-pipeline.py orca-wait --gone --worktree <path>` and `git worktree prune` before deleting its branch (else
+   `git branch -d` fails: 'used by worktree'). Unintegrated work is reported, not removed. Never remove the main
+   checkout, the integration checkout before its PR is open, another coordinator's worktree, or one in use ("Session
+   lifecycle" below).
 2. **Task branches.** A task branch whose commits are in the integration branch goes with its worktree
    (`git branch -d`, never `-D`); the integration branch stays until its PR is merged.
-3. **Agent sessions.** Released per "Session lifecycle" below; the run lead ends each task-lead
-   session.
+3. **Agent sessions.** Released per "Session lifecycle" below; the run lead ends each task-lead session.
 4. **Check.** `cleanup plan.json` must report CLEAN before the final report (`docs/pipeline-cli.md`, "status and
-   cleanup"); the report's Cleanup column names what was removed and what was kept, and why.
+   cleanup"); the report's Cleanup column names what was removed or kept, and why.
 5. **After the integration PR is merged into main**, the run lead removes the integration checkout, deletes the
    plan's branches that main contains locally and on origin (`git push origin --delete <branch>`), reports any other,
    releases every worker and starts the next plan from the updated main (`cleanup --after-merge`: CLEAN).
@@ -234,8 +232,8 @@ A task is done when integrated with its review and QA recorded; the run, when th
   (role, model, Orca Run), verdicts (phase, SHA, model, result), checks with exact counts, limitations. Verdicts and
   specs stay per machine.
 - **Cost ledger.** The run report's "Cost" table has one row per session (task, role, model, effort, tokens or cost)
-  as the runtime shows it (`/cost`, session footer, Codex usage line, Orca), else
-  `NOT_AVAILABLE`; plus the run lead's own total. Never an estimate.
+  as the runtime shows it (`/cost`, session footer, Codex usage line, Orca), else `NOT_AVAILABLE`; plus the run
+  lead's own total. Never an estimate.
 - **Learning loop.** In the integration commit, the report's limitations and follow-ups go to the project's backlog
   (one topic each) and every new operating lesson to the file its learning-loop rule names (for example
   `docs/plans/backlog.md`, `CLAUDE.md` Operating lessons).
@@ -251,14 +249,13 @@ A task is done when integrated with its review and QA recorded; the run, when th
   settled session never waits for a later wave; one with a superseded candidate is released at once.
 - **Releasing a session does not stop its test processes** (Windows): a worker stops its own test process tree
   first; the lead stops leftovers whose cwd is the task worktree. A leftover `codex` CLI keeps the directory busy
-  (`orca worktree rm`: "Delete failed"): before removal the Run has no unreleased worker, no Orca terminal bound to
-  the worktree, and each released worker's CLI exited. Never kill a process the run did not start: name it (PID, command) to the user.
+  (`orca worktree rm`: "Delete failed"): remove only with no unreleased worker in the Run, no Orca terminal on the
+  worktree and every released worker's CLI exited. Never kill a process the run did not start: name it (PID, command) to the user.
 - **Few sessions:** memory pressure kills background shells and test runs. A lead keeps only its state (plan or
   subplan, branch, SHAs, verdicts).
 - **The run lead polls, never trusts messages alone:** on each wake and timer it reads `factory-pipeline.py status <plan>`
-  (per task: last lead report, READY_FOR_PR). A dispatched session with no progress a few minutes after launch gets
-  `factory-pipeline.py nudge plan.json` (then `--send`). Extra notes for a session go through `dispatch --note` or
-  `--note-file`, never appended to `--prompt`.
+  (per task: last lead report, READY_FOR_PR); a stalled new session gets `nudge` (section 5). Extra notes for a
+  session go through `dispatch --note` or `--note-file`, never appended to `--prompt`.
 - **Handoff.** After a wave, or when its context grows long, the run lead ends its session with the wave settled; the
   next resumes from `factory-pipeline.py status plan.json`.
 
@@ -367,30 +364,29 @@ run-checks fast tier). Re-verify flags: `docs/pipeline-cli.md`, "verdict".
 | When | Runs | Who | Typical time |
 |---|---|---|---|
 | Implementer | no test suites; only a syntax check of the files it edited (`bash -n`, `python -m py_compile`, a JSON parse) | the implementation session | seconds |
-| Verify, once per candidate | the diff review first (a blocking finding is a FAIL and no test runs); then `tests/run-all.sh --affected --base <review base> --within <check suites> -j 1`: only the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists), each limited to the cases the change reaches (all its cases when unsure); a named suite the change does not reach still runs; the other suites the change reaches are printed as left to CI and not run. Other checks are extra commands; never a full run | one fresh verify session (section 6) | minutes: only the named suites, only the cases the change reaches |
+| Verify, once per candidate | the diff review first (a blocking finding is a FAIL and no test runs); then `tests/run-all.sh --affected --base <review base> --within <check suites> -j 1`: only the suites the task's checks name (those `--list-suites` lists), each limited to the cases the change reaches (all its cases when unsure); a named suite the change does not reach still runs; other suites it reaches are printed as left to CI. Other checks are extra commands; never a full run | one fresh verify session (section 6) | minutes |
 | Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>` with the same `--within` scope; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task tier command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a task lead's own QA verdict counts for tier S only | as verify |
 | Tier XS (step 1) | the task tier command, after the cross-model review PASS; no QA session | the run lead: `verdict --phase qa --state PASS --by <lead model> --note 'tier XS: lead ran task suites'` | as verify |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only --base <plan base>` (what CI cannot run: only the live-workspace suites and checks the change reaches; all of them without a base and in `--release`; suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | CI runs the affected suites in the background while the next task starts |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only --base <plan base>` (what CI cannot run: only the live-workspace suites and checks the change reaches; all of them without a base and in `--release`; suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | CI in the background; the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` | the release session | release only |
 
-- **Test-run slots.** A targeted run (`--affected`, `--within` or `--only-suites`) takes one of a few machine-wide slots and,
-  when all are busy, waits instead of slowing every suite; a full run keeps its own lock (section 4). The slot
+- **Test-run slots.** A targeted run (`--affected`, `--within` or `--only-suites`) takes one of a few machine-wide slots,
+  waiting while all are busy; a full run keeps its own lock (section 4). The slot
   belongs to the run, not the session: stop a QA worker's test run before abandoning it.
-- **Pre-flight and cases.** Read the suite count `dispatch --phase verify|qa` prints; a slow suite with cases runs
-  only the cases the change touches (the list it prints). Frozen suite copies go under a temp dir, never into its folder.
+- **Pre-flight and cases.** Read the suite count and case list `dispatch --phase verify|qa` prints. Frozen suite
+  copies go under a temp dir, never into its folder.
 - **CI is the merge gate and the breadth gate.** CI runs every affected suite on Linux and Windows per PR
   (`scripts/ci-plan.py`, one matrix job per suite, `--no-workspace --no-claude`) and every suite through
   `workflow_dispatch` with `full=true`; `ci-ok` is the single required check and must be green before merging. The
-  suites outside a task's checks are left to it. No full local run before a PR; fix a red check before merging.
+  suites outside a task's checks are left to it. No full local run before a PR.
 - **Tier S.** `dispatch` marks a task tier S when the plan or task says so or every owned path is prose
   (`docs/pipeline-cli.md`, "dispatch"). The gate accepts a lead's own QA verdict only for the tier its note starts
   with (`tier S`, `tier XS`), a fresh QA session's PASS for every tier ("Token rule").
-- **Plans.** A task's `checks` name the suites that test the changed behaviour (the precise set; the plan author
-  picks them) and run in the verify session, which may add a suite it finds missing and says so in its report;
-  no check or acceptance criterion requires a full run. `validate` warns on a full run or a check that makes an
+- **Plans.** A task's `checks` name the suites that test the changed behaviour (the plan author picks them) and run
+  in the verify session, which may add a suite it finds missing and says so in its report; no check or acceptance criterion requires a full run. `validate` warns on a full run or a check that makes an
   implementer run a suite (`docs/pipeline-cli.md`, "validate").
-- The run-all lock, suite reuse and selection rules of this plugin repo's runner are in `tests/README.md`.
+- This plugin repo's run-all lock, suite reuse and selection rules: `tests/README.md`.
 
 ### Model choice
 
