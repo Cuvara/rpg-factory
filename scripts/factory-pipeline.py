@@ -207,8 +207,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
         paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
         and are never stray, nor is a file a merge of the default branch brought in), verdicts match the current
-        plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. One task review covers
-        every subtask: a code subtask implemented by the task reviewer's own model is a note
+        plan (fingerprint), and no worktree of a no-worktree repo was created for the plan.
+        One task review covers every subtask: a code subtask implemented by the task reviewer's own model is a note
         (`subtask <id> SAME_MODEL (single verify)`), never a blocker, and a subtask needs no review of its own; a
         current subtask review or QA that is not PASS on the integration HEAD (or an ancestor of it) is a blocker.
         A per-task
