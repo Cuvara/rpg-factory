@@ -206,7 +206,7 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
         paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
-        and are never stray), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
+        and are never stray, nor is a file a merge of the default branch brought in), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
         was created for the plan. One task review covers every subtask: a code subtask implemented by the task
         reviewer's own model is a note (`subtask <id> SAME_MODEL (single verify)`), never a blocker, and a subtask
         needs no review of its own; a current subtask review or QA that is not PASS on the integration HEAD (or an
@@ -3325,9 +3325,8 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     if net_rc == 0 and not (net_out or "").strip():
         return []
     net = set(net_out.splitlines()) if net_rc == 0 else None
-    branches = [b for b in (info["base"], ((reg.get("repos") or {}).get(info["registry"] or task["repo"]) or {}).get("default_branch"), "main")
-                if b and not re.fullmatch(r"[0-9a-f]{7,40}", b)]
-    default_tip = next((t for b in dict.fromkeys(branches) for r in ("remotes/origin", "heads")
+    branches = default_branch_names(reg, info, task["repo"])
+    default_tip = next((t for b in branches for r in ("remotes/origin", "heads")
                         for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t), None)
     def merges_default(c):
         """c is a merge and all its parents but the first are on the default branch."""
@@ -3685,10 +3684,41 @@ def worktree_for(path, branch):
     return home, trees[1:]
 
 
+def default_branch_names(reg, info, key):
+    """Branch names of the repo's default branch, most specific first: the plan base unless it is a SHA, the registry
+    default_branch, then main."""
+    rreg = (reg.get("repos") or {}).get(info["registry"] or key) or {}
+    return list(dict.fromkeys(b for b in (info["base"], rreg.get("default_branch"), "main")
+                              if b and not re.fullmatch(r"[0-9a-f]{7,40}", b)))
+
+
+def default_merge_stray(info, key, reg, head, stray):
+    """The files of `stray` (changed between the plan base and head) that a merge of the default branch did not bring
+    in. A file is credited when head has the content of the merge-base of head and a default branch ref (origin/<b> or
+    <b>, every name of default_branch_names): that change is on the default branch, the topic only merged it. A conflict
+    resolution or a later topic edit leaves the file different from every such merge-base, so it stays stray. A ref
+    that is missing or a git error credits nothing."""
+    path = info["path"]
+    tips = [t for b in default_branch_names(reg, info, key) for r in ("remotes/origin", "heads")
+            for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t]
+    for tip in dict.fromkeys(tips):
+        if not stray:
+            break
+        mb, rc = git(path, "merge-base", tip, head)
+        if rc != 0 or not mb:
+            continue
+        out, rc = git(path, "diff", "--name-only", mb, head)
+        if rc != 0 or out is None:
+            continue
+        differs = set(out.splitlines())
+        stray = [f for f in stray if f in differs]
+    return stray
+
+
 def run_lead_files(plan, repo_path):
     """Repo-relative files the run lead owns on the integration branch: the plan file (its own path when it sits inside
-    the repo, else docs/plans/<id>.json), its report and the backlog.md beside it (follow-ups); never task work and
-    never stray."""
+    the repo, else docs/plans/<id>.json), its report, the backlog.md beside it and docs/plans/backlog.md (follow-ups,
+    wherever the plan file lives); never task work and never stray."""
     names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
     own = plan.get("_path")
     if own and repo_path:
@@ -3699,7 +3729,8 @@ def run_lead_files(plan, repo_path):
         if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
             names.add(rel)
     names |= ({os.path.splitext(n)[0] + "/report.md" for n in names}
-              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names})
+              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names}
+              | {"docs/plans/backlog.md"})
     return {norm_path(n) for n in names}
 
 
@@ -3896,6 +3927,8 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             lead_files = run_lead_files(plan, info["path"])
             stray = [f for f in (changed or "").splitlines() if norm_path(f) not in lead_files
                      and not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
+            if rc == 0 and stray:  # what a merge of the default branch brought in is nobody's task work
+                stray = default_merge_stray(info, key, reg, head, stray)
             if rc != 0 or stray:
                 blockers.append(f"{key}: changes outside every task's owned paths: {', '.join(stray[:5]) or 'git diff failed'}")
         xs_task = next((t for t in plan["tasks"] if t.get("repo") == key and pr.xs_plan(plan, t)), None)

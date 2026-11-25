@@ -6163,6 +6163,35 @@ git -C "$GX" worktree add -q "$TMP/gm-late-main" main; gi "$TMP/gm-late-main" me
 gi "$GX" merge -q --no-ff main -m "Merge main into feat/gl"; gxqa "$GXP" r
 expect "gate-merge: a post-review topic commit that also landed on the default branch is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
 git -C "$GX" worktree remove --force "$TMP/gm-late-main"
+# stray changes: a file a merge of the default branch brought in is nobody's task work, also with the plan base pinned to
+# a SHA, and docs/plans/backlog.md is the run lead's with the plan file outside the repo; a real stray file still blocks
+gm_fixture gm-stray feat/gs main gs r HEAD
+git -C "$GX" worktree add -q "$TMP/gm-stray-main" main; echo u > "$TMP/gm-stray-main/unrelated.txt"
+gi "$TMP/gm-stray-main" add unrelated.txt; gi "$TMP/gm-stray-main" commit -qm "docs: main adds unrelated.txt"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gs"; gxqa "$GXP" r
+expect "gate-merge: a file a default-branch merge brought in is not stray (plan base a SHA)" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for the default-branch merge file" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+mkdir -p "$GX/docs/plans"; echo b > "$GX/docs/plans/backlog.md"; gi "$GX" add -A; gi "$GX" commit -qm "docs(plans): backlog follow-ups"; gxqa "$GXP" r
+expect "gate-merge: docs/plans/backlog.md is not stray with the plan file outside the repo" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans/backlog.md (plan file outside the repo)" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+echo s > "$GX/stray.txt"; gi "$GX" add stray.txt; gi "$GX" commit -qm "chore: stray"; gxqa "$GXP" r
+expect "gate-merge: a real stray file still blocks, naming only it" 1 "BLOCKER r: changes outside every task's owned paths: stray.txt$" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-stray-main"
+# the topic merged origin/main while the local main is stale (a main-sync after a fetch): the merged file is not stray;
+# a merge that edits that file beyond the default branch's content still is
+gm_fixture gm-origin feat/go main go r main
+git -C "$GX" worktree add -q --detach "$TMP/gm-origin-up" main
+echo o > "$TMP/gm-origin-up/upstream.txt"; gi "$TMP/gm-origin-up" add upstream.txt; gi "$TMP/gm-origin-up" commit -qm "docs: upstream adds upstream.txt"
+git -C "$GX" update-ref refs/remotes/origin/main "$(git -C "$TMP/gm-origin-up" rev-parse HEAD)"
+gi "$GX" merge -q --no-ff origin/main -m "Merge origin/main into feat/go"; gxqa "$GXP" r
+expect "gate-merge: a file an origin/main merge brought in is not stray (stale local main)" 0 "^Gate: READY_FOR_PR" gate "$GXP" --no-run-checks
+refute "gate-merge: no stray line for the origin/main merge file" "changes outside every task's owned paths" gate "$GXP" --no-run-checks
+echo o2 > "$TMP/gm-origin-up/upstream.txt"; gi "$TMP/gm-origin-up" commit -qam "docs: upstream edits upstream.txt"
+git -C "$GX" update-ref refs/remotes/origin/main "$(git -C "$TMP/gm-origin-up" rev-parse HEAD)"
+gi "$GX" merge -q --no-ff --no-commit origin/main >/dev/null 2>&1; echo hand > "$GX/upstream.txt"; gi "$GX" add upstream.txt
+gi "$GX" commit -qm "Merge origin/main into feat/go (edits upstream.txt)"; gxqa "$GXP" r
+expect "gate-merge: a default-branch merge that edits an unowned file beyond the default branch is stray" 1 "BLOCKER r: changes outside every task's owned paths: upstream.txt$" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-origin-up"
 # The plan plugin-subagent-rules shape: task ta owns own/a.txt, ts (main-sync) depends on ta (or not) and also owns it, tl depends
 # on ts and owns own/l.txt only. ta is reviewed on the topic; main edits own/a.txt; ts merges main inside its branch (a conflict
 # resolution) and the topic merges ts; tl is cut from the topic before that merge, syncs the topic into itself and the topic merges tl.
