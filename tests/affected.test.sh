@@ -204,7 +204,7 @@ def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
 pipeline_all = ",".join(sorted(m.case_map("tests/pipeline.test.sh")))
 check("a pipeline script runs every case of the pipeline suite without a base",
       m.affected_cases(["scripts/factory-pipeline.py"], "tests/pipeline.test.sh") in ("ALL", pipeline_all)
-      and m.affected_cases(["scripts/lib/pipeline_route.py"], "tests/pipeline.test.sh") == "ALL")
+      and m.affected_cases(["scripts/lib/pipeline_route.py"], "tests/pipeline.test.sh") in ("ALL", pipeline_all))
 import inspect
 check("only selection is narrowed: the import closure still reaches the suites it did, and hashes ignore the table",
       any(m.selects(p, "tests/codex-plugin.test.sh") for p in m.closure("scripts/factory-pipeline.py"))
