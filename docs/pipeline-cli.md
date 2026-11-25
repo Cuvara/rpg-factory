@@ -154,7 +154,9 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   `scripts/checks/portable-paths.py`) are never listed as left to CI.
   Integration QA (`--task integration:<repo> --phase qa`): `tests/run-all.sh --workspace-only --base
   <plan base>` (the plan's comparison base: `repos.<key>.base_sha`, else `base`), only the workspace checks the
-  change reaches; without a known base `tests/run-all.sh --workspace-only`.
+  change reaches; without a known base `tests/run-all.sh --workspace-only`. Exit 6 (nothing the change reaches) is
+  NOT_RUN, never a pass: integration QA then runs `tests/run-all.sh --workspace-only` without a base and grades
+  that run.
 - Pre-flight (advisory): `--phase verify|qa` prints on stderr `factory-pipeline: selected N of M suites
   (tests/affected.py; K affected suites left to CI)` (N: the suites the tier command runs, the check suites under
   `--within`, else the whole affected closure; K: the affected suites outside the checks, the clause is omitted

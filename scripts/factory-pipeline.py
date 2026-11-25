@@ -171,8 +171,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
         `tests/run-all.sh --workspace-only --base <plan base>` (the workspace checks the change reaches; without a
-        known base `--workspace-only`); after the PR opens, CI runs the affected suites and ci-ok must be
-        green before merging (every suite through workflow_dispatch with full=true).
+        known base `--workspace-only`); exit 6 from that command means no workspace check was reached: NOT_RUN,
+        never PASS; then run `tests/run-all.sh --workspace-only` without --base and grade that run. After the PR
+        opens, CI runs the affected suites and ci-ok must be green before merging (every suite through
+        workflow_dispatch with full=true).
   verdict <plan.json> --task ID --phase review|qa|verify --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
           [--failed-at review|qa] [--model ID] [--effort LEVEL]
@@ -2491,8 +2493,10 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
                            task=not integration, plan_base=plan_base if integration else None)
     policy = ("Integration QA: run the workspace checks the change reaches (--workspace-only --base <plan base>) before "
-              "the PR; after the PR opens, CI runs the affected suites and ci-ok must be green before merging (every "
-              "suite through workflow_dispatch with full=true)."
+              "the PR. Exit 6 from the tier command means no workspace check was reached: that is NOT_RUN, never PASS; "
+              "then run `tests/run-all.sh --workspace-only` without --base and grade that run. After the PR opens, CI "
+              "runs the affected suites and ci-ok must be green before merging (every suite through workflow_dispatch "
+              "with full=true)."
               if integration and ((tiers or {}).get(key) or QA_TIERS[key]) == "ci+workspace" else
               "Integration QA: one full run per batch under the run-all lock; reuse a PASS record of the same clean tree."
               if integration else
