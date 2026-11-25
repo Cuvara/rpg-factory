@@ -809,24 +809,29 @@ def session_model(a, agent, role):
 
 # ---------------------------------------------------------------- plan
 
-def read_json_file(path, what):
-    """A JSON object from a file; utf-8-sig, since PowerShell's `Out-File`/`Set-Content` write a UTF-8 BOM."""
+def read_json_file(path, what, raw=False):
+    """A JSON object from a file; utf-8-sig, since PowerShell's `Out-File`/`Set-Content` write a UTF-8 BOM. With
+    raw=True, (object, the bytes read): a caller that writes the file elsewhere writes exactly what it parsed."""
     try:
-        with open(path, encoding="utf-8-sig") as fh:
-            doc = json.load(fh)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        doc = json.loads(data.decode("utf-8-sig"))
     except (OSError, ValueError) as e:
         die(f"cannot read {what} {path}: {e}")
     if not isinstance(doc, dict):
         die(f"{what} must be a JSON object")
-    return doc
+    return (doc, data) if raw else doc
 
 
-def read_plan(path, reg):
-    plan = read_json_file(path, "plan")
+def read_plan(path, reg, what="plan", raw=False):
+    """A plan (read_json_file) whose no_worktree_markers replace the registry's for this run; `what` names the file in
+    a read error (plan-edit: "edited copy")."""
+    got = read_json_file(path, what, raw)
+    plan = got[0] if raw else got
     markers = plan.get("no_worktree_markers")
     if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
         reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
-    return plan
+    return got
 
 
 def repo_info(plan, reg, key):
@@ -1212,6 +1217,8 @@ def cmd_validate(a, reg):
     out.pop("order")
     out["models"] = plan_models(plan, reg, out["errors"])
     out["model_scope_widen"] = plan.get("model_scope_widen", [])
+    if not out["errors"]:
+        out["notes"].extend(stale_verdict_notes(plan, reg))
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -1236,6 +1243,21 @@ def cmd_validate(a, reg):
     return 1 if out["errors"] else 0
 
 
+def stale_verdict_notes(plan, reg):
+    """One note per recorded review or QA verdict (a task's, or integration:<repo> QA) whose fingerprint no longer
+    matches the plan: its objective, paths, acceptance, checks or agents changed since. Read-only; no record, none."""
+    tasks = [t for t in plan.get("tasks") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)]
+    phases = [(t["id"], phase) for t in tasks for phase in ("review", "qa")]
+    repos = dict.fromkeys(t.get("repo") for t in tasks if isinstance(t.get("repo"), str))
+    phases += [(f"integration:{key}", "qa") for key in repos]
+    notes = []
+    for tid, phase in phases:
+        if verdict_of(plan, reg, tid, phase)[1]:
+            notes.append(f"recorded {phase} verdict of {tid} is stale: the task's objective, paths, acceptance, checks "
+                         "or agents changed since it was recorded; re-run review/QA (status shows it)")
+    return notes
+
+
 def plan_task_changes(old, new):
     """Task-level difference of two plans: (added ids, removed ids, {id: [changed keys among paths/acceptance/deps]})."""
     def by_id(plan):
@@ -1257,7 +1279,8 @@ def cmd_plan_edit(a, reg):
     plan_path = a.plan
     plan_old = read_json_file(plan_path, "plan")
     copy_path = a.from_file
-    plan = read_json_file(copy_path, "edited copy")  # exit 2: missing, unreadable, not JSON
+    # exit 2: missing, unreadable, not JSON. Read once: the bytes validated are the bytes written to the plan
+    plan, data = read_plan(copy_path, reg, "edited copy", raw=True)
     if plan.get("id") != plan_old.get("id"):
         die(f"the edited copy has id {json.dumps(plan.get('id'))} but the plan has id {json.dumps(plan_old.get('id'))}: "
             "a plan edit never changes the plan id")
@@ -1269,9 +1292,6 @@ def cmd_plan_edit(a, reg):
         top, rc = git(plan_dir, "rev-parse", "--show-toplevel")
         if rc != 0 or not top:
             die(f"--commit: {plan_path} is not inside a git checkout")
-    markers = plan.get("no_worktree_markers")
-    if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
-        reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
     plan["_path"] = plan_path  # the copy is read as if it were the plan: relative repos.*.path resolve the same
     out = validate(plan, reg)
     out.pop("order", None)
@@ -1285,8 +1305,6 @@ def cmd_plan_edit(a, reg):
     if out["errors"]:
         print(f"INVALID ({len(out['errors'])} error(s)): {plan_path} not replaced" + (", nothing committed" if a.commit else ""))
         return 1
-    with open(copy_path, "rb") as fh:
-        data = fh.read()
     fd, tmp = tempfile.mkstemp(prefix=".plan-edit-", suffix=".tmp", dir=plan_dir)
     try:
         with os.fdopen(fd, "wb") as fh:
