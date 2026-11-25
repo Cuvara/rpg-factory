@@ -128,3 +128,7 @@ lessons of this repo behind it, each with its reason.
   note containing quotes was appended to `--prompt`, and cmd.exe misread the quotes and parentheses. Pass extra notes
   with `dispatch --note` or, for text with quotes, parentheses or newlines, `--note-file`; the prompt carries only the
   spec pointer. `tests/pipeline.test.sh` covers pointer-only launch lines and `--note-file`.
+- **Never message a finished dispatch:** a `status` (or any) `orca orchestration` message sent to a dispatch whose
+  session has already finished reaches no one and makes Orca start a follow-up worker (two appeared in plan
+  plugin-flow-5). Send lead messages only to the run of a live task lead (`--to run:<id>`), and put the context a
+  session needs into its start prompt (the dispatch spec, `--note` or `--note-file`), not into a later message.
