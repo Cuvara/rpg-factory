@@ -1044,23 +1044,29 @@ out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --inline-only --no-reuse --no-wait); r
   && good '--inline-only takes a test slot (busy slot: exit 3 with --no-wait) and no full-run lock' || no '--inline-only test slot' "$out"
 rm -rf "$SL/1"
 # Exit rule of an affected run with a base: a change that reaches no check (0 passed, 0 failed, every skip not affected)
-# exits 0 and says so in one line after the summary; it writes no suite PASS record. A skip for another reason, a run
-# without a base and --only-suites alone keep the old rule (0 passes exit 1); a run that reaches a suite exits on it.
+# exits 6 (NOT_RUN: no evidence, never a pass) and says so in two lines after the summary; the result record's exit is 6
+# and it writes no suite PASS record. A skip for another reason, a run without a base and --only-suites alone keep the
+# old rule (0 passes exit 1); a run that reaches a suite exits on it.
 NONE_LINE='run-all: nothing the change reaches: no check ran (not affected: 2)'
-none_after_summary() { # out: the nothing-reached line appears once, after the summary line
-  local s n
+NOTRUN_LINE='run-all: exit 6 = NOT_RUN: no evidence; run without --base (or with --only-suites) for a verdict'
+none_after_summary() { # out: the nothing-reached line appears once, after the summary line, the NOT_RUN line right after it
+  local s n r
   s=$(grep -n '^run-all: [0-9]* checks, ' <<<"$1" | tail -1 | cut -d: -f1)
   n=$(grep -nxF "$NONE_LINE" <<<"$1" | cut -d: -f1)
-  [ -n "$s" ] && [ -n "$n" ] && [ "$(grep -cxF "$NONE_LINE" <<<"$1")" = 1 ] && [ "$n" -gt "$s" ]
+  r=$(grep -nxF "$NOTRUN_LINE" <<<"$1" | cut -d: -f1)
+  [ -n "$s" ] && [ -n "$n" ] && [ -n "$r" ] && [ "$(grep -cxF "$NONE_LINE" <<<"$1")" = 1 ] \
+    && [ "$(grep -cxF "$NOTRUN_LINE" <<<"$1")" = 1 ] && [ "$n" -gt "$s" ] && [ "$r" = $((n + 1)) ]
 }
 no_suite_record() { [ "$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')" = 0 ]; }
 for j in 1 3; do
   reset_cache
   out=$(SELECT=none cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
-  [ "$rc" = 0 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && none_after_summary "$out" \
+  printed=$(last_result)
+  [ "$rc" = 6 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && none_after_summary "$out" \
     && grep -qx 'run-all: 2 checks, 0 passed, 0 failed, 2 skipped (2 not affected by the change)' <<<"$out" && no_suite_record \
-    && good "--affected --base reaching no check exits 0 and prints the nothing-reached line after the summary (-j $j)" \
-    || no "--affected reaching nothing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"
+    && grep -qx 'exit: 6' <<<"$printed" \
+    && good "--affected --base reaching no check exits 6 (NOT_RUN, record exit 6), nothing-reached and NOT_RUN lines after the summary (-j $j)" \
+    || no "--affected reaching nothing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"$'\n'"$printed"
   reset_cache
   out=$(WITH_SKIP=1 SELECT=none cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
   [ "$rc" = 1 ] && grep -qx 'counts 0 0 3' <<<"$out" && grep -q '^SKIP  tool check (tool not on PATH)' <<<"$out" \
