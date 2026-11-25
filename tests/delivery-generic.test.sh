@@ -31,7 +31,23 @@ def expect(name, args, pattern='', registry='none', rc=0):
     p=run(args,registry); check(name, p.returncode == rc and pattern in p.stdout+p.stderr, p.stdout+p.stderr); return p
 reg=json.loads((root/'registry.json').read_text(encoding='utf-8'))['pipeline']
 defaults=json.loads((root/'skills/delivery/pipeline-defaults.json').read_text(encoding='utf-8'))
-check('defaults drift', all(reg.get(k)==v for k,v in defaults['pipeline'].items()) and 'exclusive_resources' not in defaults['pipeline'])
+import copy
+def without_subagent_type(block):
+    # the one intended difference: the defaults name a built-in Claude Code subagent type, the RPG registry its plugin agent
+    block=copy.deepcopy(block)
+    ((block.get('subagents') or {}).get('models') or {}).get('claude', {}).pop('agent', None)
+    return block
+reg_cmp, defaults_cmp = without_subagent_type(reg), without_subagent_type(defaults['pipeline'])
+check('defaults drift', all(reg_cmp.get(k)==v for k,v in defaults_cmp.items()) and 'exclusive_resources' not in defaults['pipeline'])
+def subagent_type(block):
+    return (((block.get('subagents') or {}).get('models') or {}).get('claude') or {}).get('agent')
+check('defaults subagent type is the built-in Explore', subagent_type(defaults['pipeline'])=='Explore', str(subagent_type(defaults['pipeline'])))
+check('RPG registry keeps rpg-factory:factory-explorer', subagent_type(reg)=='rpg-factory:factory-explorer', str(subagent_type(reg)))
+sys.path.insert(0, str(root/'scripts/lib'))
+import subagent_policy
+for label, block in (('defaults', defaults), ('RPG registry', {'pipeline': reg})):
+    errs=subagent_policy.check(block)
+    check('subagent policy check '+label, errs==[], str(errs))
 KEYS={'description','tiers','agents','review_pairing','default_implementer','lead_agent','verdict_states','no_worktree_markers','agent_routing','qa_prefer','qa_tiers','available_agents','models','subagents'}
 check('defaults key set', set(defaults['pipeline'])==KEYS, str(sorted(set(defaults['pipeline'])^KEYS)))
 dm=(root/'skills/delivery/references/delivery.md').read_text(encoding='utf-8')
@@ -67,6 +83,15 @@ for registry in ('none', tmp/'missing.json'):
     expect('qa verdict '+str(registry), ['verdict',pf,'--task','integration:plain','--phase','qa','--sha',sha,'--by','claude','--state','PASS'], 'PASS', registry)
     git('switch', '-q', 'feat/core/generic')
     expect('gate '+str(registry), ['gate',pf,'--no-run-checks'], 'READY_FOR_PR', registry)
+# the subagent type a dispatch names: the built-in Explore under the defaults, the plugin agent only under the RPG registry
+git('switch', '-q', 'feat/core/generic-one')
+for label,registry,want in (('defaults','none','subagent_type Explore'),('RPG registry',root/'registry.json','subagent_type rpg-factory:factory-explorer')):
+    plan['id']='genericsub'+('none' if registry=='none' else 'rpg'); write()
+    for phase in ('lead','implement'):
+        p=run(['dispatch',pf,'--task','one','--phase',phase,'--runner','agent','--orca-unavailable','test'],registry); out=prompt_text(p)
+        ok=p.returncode==0 and want in out and (registry!='none' or 'rpg-factory:' not in out)
+        check('dispatch '+phase+' subagent type '+label, ok, f'rc={p.returncode} '+out)
+git('switch', '-q', 'feat/core/generic')
 # next-session commands carry --registry none under the defaults (a task lead or status run would otherwise load the RPG registry)
 plan['id']='genericcarry'; plan['topic']='feat/core/carry'; plan['no_worktree_markers']=[]; write()
 git('branch', 'feat/core/carry'); git('switch', '-q', 'feat/core/carry')
