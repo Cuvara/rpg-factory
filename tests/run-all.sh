@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # run-all.sh — every local validation for the plugin. Read-only against the workspace.
-# Prints one line per check and a final count; exits non-zero if anything failed.
+# Prints one line per check and a final count. Exits 0 when at least one check passed and none failed; exits 1 when
+# anything failed or nothing passed, except one shape: an affected run with a base (--affected or --base resolved one,
+# --inline-only, --workspace-only --base) where no check ran and every skip is a not-affected skip prints
+# 'run-all: nothing the change reaches: no check ran (not affected: N)' after the summary and exits 0.
 # Dead parallel workers fail with buffered output; added branch/worktree config sections warn, other mutations fail.
 # A WARN is counted: the summary reads "..., S skipped, W warned" only when W > 0; the exit code ignores it. RETRY lines
 # a passing suite printed (a flaky step it retried) are shown under its PASS line; they are no failure.
@@ -21,6 +24,9 @@
 #                   blocks: scripts/checks/skill-citations.py, scripts/factory-context.sh, and in the live checks
 #                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
 #                   like a suite by that script path, else it counts as not affected.
+#                   When the change reaches no check at all (0 passed, 0 failed, every skip not affected) the run
+#                   exits 0 with the 'nothing the change reaches' line; a skip for another reason (a missing tool) or
+#                   no base keeps the rule that 0 passes exit 1. Such a run publishes no suite PASS record.
 #                   Suites with a case map receive --case A,B for only the affected cases (shown in results).
 #                   An explicit --only-suites name runs all its cases unless --only-cases gives it a subset. Case
 #                   subsets never publish suite PASS records (a full-suite PASS record still satisfies one).
@@ -1671,4 +1677,11 @@ echo "----"
 echo "wall time: $(( $(date +%s) - t_start ))s (-j $jobs)"
 runall_slowest
 runall_summary
+# An affected run with a base that reaches no check (every skip not affected) passes: nothing ran because nothing is
+# reached, not because a check was lost. Any other run with 0 passes, or any failure, exits 1. The status reaches
+# runall_cleanup (runall_rc), so the result record's exit matches; no suite ran, so no suite PASS record exists.
+if [ -n "$AFF" ] && [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ] && [ "$naff" -gt 0 ] && [ "$skip" -eq "$naff" ]; then
+  echo "run-all: nothing the change reaches: no check ran (not affected: $naff)"
+  exit 0
+fi
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
