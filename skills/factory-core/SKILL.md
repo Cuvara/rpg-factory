@@ -67,8 +67,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    evidence. Evidence is bound to the tree it ran on: after any further edit, `--status` shows it
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
-11. **Review + QA (M, task lead).** Delivery.md section 10 steps 4-6 own the flow. The registry adds the review input: the lead's
-    checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist).
+11. **Verify session: review, then QA (M, task lead).** One fresh session per candidate; delivery.md section 10 steps 4-6
+    own the flow. The registry adds the review input: the lead's checklist and every `routing.tech` review file
+    (e.g. `unity-dots` ECS checklist).
 12. **Gate, PR, cleanup, report (M, run lead).** Delivery.md section 10 steps 7-9 and section 8 own the gate, PR and cleanup.
     The registry adds the final report (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
     The run report's limitations and follow-ups go to the backlog (in this plugin `docs/plans/backlog.md`, one topic each)
