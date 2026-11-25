@@ -26,11 +26,12 @@ check as `NOT_RUN` with the exact command and reason.
 ## Registry repos and the plugin checkout (delivery.md section 10)
 
 Pipeline settings are the registry `pipeline` block (`registry/core.json`): tier thresholds, agents, review pairing,
-exclusive resources, QA tiers and model policy. `plan.json` `repos.<key>` names a registry repo (`server`, `client`,
-`netcode`, `dots`, `uitoolkit`, `skills`, `contracts`); work on this plugin names its own checkout:
-`"plugin": {"path": "<this checkout>"}` (`.claude/CLAUDE.md`, "Developing this plugin"). `run-checks.py --repo <key>
---paths <files> --status` regrades the fast checks the gate reads. The snapshot of delivery.md section 2 is
-`factory-context.sh`.
+exclusive resources, QA tiers and model policy. Its `pipeline.subagents.models.claude.agent` names
+`rpg-factory:factory-explorer`, the read-only scout of delivery.md section 8 "In-session subagents". `plan.json`
+`repos.<key>` names a registry repo (`server`, `client`, `netcode`, `dots`, `uitoolkit`, `skills`, `contracts`); work
+on this plugin names its own checkout: `"plugin": {"path": "<this checkout>"}` (`.claude/CLAUDE.md`, "Developing this
+plugin"). `run-checks.py --repo <key> --paths <files> --status` regrades the fast checks the gate reads. The snapshot
+of delivery.md section 2 is `factory-context.sh`.
 
 ## Human gates, git safety and releases (delivery.md sections 7, 8 and 9)
 

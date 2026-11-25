@@ -274,11 +274,11 @@ review and race the task lead's commits. Registry `pipeline.subagents` holds thi
 | review | read | read files for the reviewer | 3 | - |
 | QA | none | - | 0 | QA reads and runs the checks itself |
 
-Default model: `claude-sonnet-5-5` via the `rpg-factory:factory-explorer` agent (Codex: the `pipeline.subagents`
-codex model), inside `pipeline.models.scope`. Use one only when the answer needs many files or an open search, with a
-brief of at most 200 words (objective, paths, return `path:line`). It never edits, writes to git, uses Orca,
-dispatches, records a verdict or starts a subagent; its result is never a verdict. A reviewer never uses one of the
-other model (`codex:codex-rescue` in a Claude review). The session report names the subagents used.
+Default model: `claude-sonnet-5-5` as the subagent type in registry `pipeline.subagents.models.claude.agent` (generic
+default `Explore`; Codex: its codex model), inside `pipeline.models.scope`. Use one only when the answer needs many
+files or an open search, with a brief of at most 200 words (objective, paths, return `path:line`). It never edits,
+writes to git, uses Orca, dispatches, records a verdict or starts a subagent; its result is never a verdict. A
+reviewer never uses the other model's subagent. The session report names the subagents used.
 
 ## 9. Not authorized by this policy
 
