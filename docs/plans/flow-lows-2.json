@@ -89,6 +89,33 @@
         "parallel-work.md carries the follow-up worker lesson with its reason",
         "the named suites pass"
       ]
+    },
+    {
+      "id": "ci-fix",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two CI failures of PR 153 caused by tasks plan-lows and orca-lows",
+      "objective": "Added by the run lead after CI failed on PR 153 (strictly necessary: the PR cannot merge). (1) tests/delivery-generic.test.sh 'delivery.md size cap' fails: skills/delivery/references/delivery.md is 33282 bytes, over the 32768-byte cap (task plan-lows added the orca-wait worktree wait text). Bring it under the cap by tightening wording in the sections this plan touched or nearby redundant prose, without losing any rule; never raise the cap. Keep tests/parallel-policy.test.sh and tests/skills-lint.sh green. (2) tests/affected.test.sh case 'a pipeline script runs every case of the pipeline suite without a base' expects `affected_cases(['scripts/lib/pipeline_route.py'], 'tests/pipeline.test.sh') == 'ALL'`; since task plan-lows mapped every pipeline case group to pipeline_route.py symbols, a no-base change returns the explicit full group list. Accept 'ALL' or the full list, as the factory-pipeline.py half of the same check does, and keep the meaning (every case runs). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "tests/affected.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [
+        "plan-lows",
+        "guard-reach"
+      ],
+      "checks": [
+        "tests/delivery-generic.test.sh",
+        "tests/affected.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "delivery.md is at most 32768 bytes and keeps every rule",
+        "the affected.test.sh pipeline case accepts the full list",
+        "the named suites pass"
+      ]
     }
   ]
 }
