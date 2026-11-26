@@ -253,7 +253,7 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         prints the `git merge` it needs and records <dependent>__sync.json, which status shows until the dependent's
         HEAD contains the SHA (a message is only a nudge). --send also runs `orca orchestration send --type status` to
         the dependent's lead (task orca_run, else its Orca worktree). Exit 0, 1 when a send failed, 2 usage.
-  nudge <plan.json> [--task ID] [--idle SECONDS] [--send]
+  nudge <plan.json> [--task ID] [--idle SECONDS] [--stall SECONDS] [--orca-run RUN_ID]... [--send]
         finds start prompts that stayed unsubmitted in a task session's terminal. Per task with a task worktree it lists
         the Orca terminals of that worktree (`orca terminal list --json`, read-only) and reads each screen (`orca
         terminal read --screen --json`). A terminal is STUCK only when its screen still shows `Read your task spec at
@@ -269,6 +269,17 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         sent again: `nudged, still stuck: relaunch the session`. Without --send nothing is written. Orca missing or
         unreachable: a note, exit 0. Exit 1 when a send failed, 2 usage. status shows a `stuck?:` note on a task whose
         last nudge record shows it still stuck and which made no progress since.
+        It then checks the Orca workers of the task leads' Runs (task `orca_run` of the listed tasks, plus --orca-run,
+        repeatable; none: `nudge: no Orca Run named ...: stalled workers not checked`) for STALLED sessions, read-only.
+        Per Run `orca orchestration worker-list --full`; a settled or released worker is skipped. Per running worker
+        `orca orchestration worker-show --dispatch <id> --full --json` and the last output of its agent terminal
+        (agentTerminalHandle in `orca terminal list` of its worktree). A worker whose observation.agentWait is set is
+        `ok  waiting on a human`; a terminal silent for less than --stall seconds (default 900) is `ok  active`; missing
+        data is `ok ... (no opinion)`. Otherwise one row `<run>  <dispatch>  idle <n>s  STALLED  <reason>`: `no turn
+        start` (the last dispatch_input effect is `turn_unobserved`, or lastError says the turn start was not observed)
+        or `turn ended without worker_done`, then a `re-dispatch:` line (read the terminal, `worker-stop`, dispatch a
+        fresh session with the same phase, `worker-release`). --send never sends anything for a STALLED row and nothing
+        is written for it; a STALLED row does not change the exit code.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -5968,6 +5979,8 @@ def cmd_nudge(a, reg):
     tasks = [find_task(plan, a.task)] if a.task else list(plan.get("tasks", []))
     if a.idle < 0:
         die("--idle must be 0 or more seconds")
+    if a.stall < 0:
+        die("--stall must be 0 or more seconds")
     why = "orca is not on PATH" if shutil.which("orca") is None else (
         None if orca_cmd.orca_reachable() else "the Orca runtime is not reachable")
     if why:
@@ -6059,7 +6072,88 @@ def cmd_nudge(a, reg):
                     rc = 1
         if changed:
             fstate.write_json(nudge_file(plan, tid), {"plan": plan.get("id"), "task": tid, "nudges": nudges}, indent=2)
+    stalled_workers(orca_runs({"tasks": tasks}, a.orca_run), a.stall)
     return rc
+
+
+NUDGE_TURN_UNOBSERVED = re.compile(r"turn[ _-]?start[ _-]?(?:was[ _-]?)?(?:not[ _-]?observed|unobserved)|turn_unobserved",
+                                   re.I)
+
+
+def worker_turn_unobserved(worker):
+    """Whether a worker-show `worker` record says its turn never started: the last dispatch_input effect has state
+    `turn_unobserved` (a later dispatch_input state such as `accepted` clears it), or lastError says the turn start was
+    not observed and no dispatch_input effect has another state."""
+    effects = worker.get("effects") if isinstance(worker.get("effects"), list) else []
+    states = [str(e.get("state") or "") for e in effects if isinstance(e, dict) and e.get("kind") == "dispatch_input"]
+    last = states[-1] if states else None
+    if last == "turn_unobserved":
+        return True
+    err = worker.get("lastError")
+    text = json.dumps(err) if isinstance(err, (dict, list)) else str(err or "")
+    return last is None and bool(NUDGE_TURN_UNOBSERVED.search(text))
+
+
+def stalled_workers(runs, stall):
+    """Print one row per running (not settled, not released) worker of each Orca Run: STALLED when its agent terminal
+    has been silent for at least `stall` seconds and no human prompt holds it, with the re-dispatch advice. Read-only:
+    worker-list, worker-show and terminal list only; nothing is sent or written for a STALLED row."""
+    if not runs:
+        print("nudge: no Orca Run named (task orca_run or --orca-run): stalled workers not checked")
+        return
+    terminals = {}  # worktree path -> terminal rows (or None when the list failed), one list call per worktree
+    for run in runs:
+        workers, why, _ = orca_workers(run)
+        if workers is None:
+            print(f"{run}: worker-list failed ({why}): stalled workers not checked (no opinion)")
+            continue
+        for w in workers:
+            if worker_settled(w) or worker_released(w):
+                continue
+            did = str(w.get("dispatchId") or "?")
+            head = f"{run}  {did}"
+            show, why = orca_json(["orca", "orchestration", "worker-show", "--dispatch", did, "--full", "--json"])
+            if show is None:
+                print(f"{head}  idle ?s  ok  worker-show failed ({why}) (no opinion)")
+                continue
+            worker = show.get("worker") if isinstance(show.get("worker"), dict) else {}
+            obs = show.get("observation") if isinstance(show.get("observation"), dict) else {}
+            if obs.get("agentWait") is not None:
+                print(f"{head}  idle ?s  ok  waiting on a human")
+                continue
+            handle = str(w.get("agentTerminalHandle") or worker.get("agentTerminalHandle") or "")
+            wid = str(worker.get("worktreeId") or "")
+            path = wid.partition("::")[2] if "::" in wid else (wid or _worker_checkout(w))
+            if not handle or not path:
+                print(f"{head}  idle ?s  ok  no agent terminal or worktree (no opinion)")
+                continue
+            if norm_wt(path) not in terminals:
+                res, _ = orca_json(orca_cmd.terminal_list(path))
+                rows = (res or {}).get("terminals")
+                terminals[norm_wt(path)] = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+            rows = terminals[norm_wt(path)]
+            if rows is None:
+                print(f"{head}  idle ?s  ok  terminal list failed (no opinion)")
+                continue
+            row = next((r for r in rows if str(r.get("handle") or "") == handle), None)
+            last = (row or {}).get("lastOutputAt")
+            try:
+                idle = (int(time.time() - float(last) / 1000) if isinstance(last, (int, float, str))
+                        and not isinstance(last, bool) else None)
+            except ValueError:
+                idle = None
+            if idle is None:
+                print(f"{head}  idle ?s  ok  no lastOutputAt for {handle} (no opinion)")
+                continue
+            if idle < stall:
+                print(f"{head}  idle {idle}s  ok  active ({idle}s < {stall}s)")
+                continue
+            reason = "no turn start" if worker_turn_unobserved(worker) else "turn ended without worker_done"
+            print(f"{head}  idle {idle}s  STALLED  {reason}")
+            print(f"  re-dispatch: check `{orca_cmd.quote(['orca', 'terminal', 'read', '--terminal', handle])}`, then "
+                  f"`{orca_cmd.quote(['orca', 'orchestration', 'worker-stop', '--dispatch', did])}` and dispatch a fresh "
+                  f"session (factory-pipeline.py dispatch ... --phase <same phase>); release it with "
+                  f"`{orca_cmd.quote(['orca', 'orchestration', 'worker-release', '--dispatch', did])}`")
 
 
 def cmd_agents(a, reg):
@@ -6172,6 +6266,8 @@ def main():
     nu.add_argument("plan")
     nu.add_argument("--task")
     nu.add_argument("--idle", type=int, default=120, metavar="SECONDS")
+    nu.add_argument("--stall", type=int, default=900, metavar="SECONDS")
+    nu.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
     nu.add_argument("--send", action="store_true")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")

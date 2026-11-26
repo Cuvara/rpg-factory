@@ -5210,7 +5210,9 @@ case_start
 echo "-- nudge (a start prompt that stayed unsubmitted in its Orca terminal)"
 # a fake `orca` first on PATH: `status --json` is reachable unless FAKE_ORCA_REACHABLE=false, `terminal list` prints the
 # $FAKE_ORCA_TERMS file whatever worktree is asked for (the verb must filter by worktreePath itself), `terminal read`
-# prints $FAKE_ORCA_SCREENS/<handle>.json (exit 1 when there is none), `terminal send` succeeds unless FAKE_ORCA_SEND=fail;
+# prints $FAKE_ORCA_SCREENS/<handle>.json (exit 1 when there is none), `terminal send` succeeds unless FAKE_ORCA_SEND=fail,
+# `orchestration worker-list` prints the $FAKE_ORCA_WORKERS file (exit 1 when unset), `orchestration worker-show` prints
+# $FAKE_ORCA_SHOWS/<dispatch>.json (exit 1 when there is none);
 # every call is logged to $FAKE_ORCA_LOG with a carriage return argument shown as <CR>. On Windows the fake is a .cmd shim
 # (cmd.exe drops a bare CR argument, and the verb refuses to send through a batch shim), so the send assertions below
 # depend on $RPGF_WINDOWS.
@@ -5236,13 +5238,23 @@ if a[:2] == ["terminal", "send"]:
     if os.environ.get("FAKE_ORCA_SEND") == "fail":
         print("error: send failed", file=sys.stderr); sys.exit(1)
     print(json.dumps({"ok": True, "result": {"send": {"handle": a[a.index("--terminal") + 1], "accepted": True}}})); sys.exit(0)
+if a[:2] == ["orchestration", "worker-list"]:
+    path = os.environ.get("FAKE_ORCA_WORKERS", "")
+    if not path or not os.path.exists(path):
+        print("error: run not found", file=sys.stderr); sys.exit(1)
+    print(open(path, encoding="utf-8").read()); sys.exit(0)
+if a[:2] == ["orchestration", "worker-show"]:
+    path = os.path.join(os.environ.get("FAKE_ORCA_SHOWS", ""), a[a.index("--dispatch") + 1] + ".json")
+    if not os.path.exists(path):
+        print("error: dispatch not found", file=sys.stderr); sys.exit(1)
+    print(open(path, encoding="utf-8").read()); sys.exit(0)
 print("error: unexpected call", file=sys.stderr); sys.exit(1)
 PY
 NPY=$(python3 -c 'import sys; print(sys.executable)')
 if [ -n "$RPGF_WINDOWS" ]; then printf '@"%s" "%%~dp0fake_orca.py" %%*\r\n' "$NPY" > "$NB/orca.cmd"
 else printf '#!/bin/sh\nexec "%s" "$(dirname "$0")/fake_orca.py" "$@"\n' "$NPY" > "$NB/orca"; chmod +x "$NB/orca"; fi
 export FAKE_ORCA_LOG="$TMP/nudge-orca.log" FAKE_ORCA_TERMS="$TMP/nd-terms.json" FAKE_ORCA_SCREENS="$TMP/nd-screens"
-unset FAKE_ORCA_REACHABLE FAKE_ORCA_SEND
+unset FAKE_ORCA_REACHABLE FAKE_ORCA_SEND FAKE_ORCA_WORKERS FAKE_ORCA_SHOWS
 npath="$(path_entry "$NB"):$PATH"
 noorca=""; IFS=: read -ra parts <<<"$PATH"
 for d in "${parts[@]}"; do [ -e "$d/orca" ] || [ -e "$d/orca.exe" ] || [ -e "$d/orca.cmd" ] || noorca="$noorca${noorca:+:}$d"; done
@@ -5572,6 +5584,73 @@ nok "a transcript pointer above the composer rules is ignored without activity" 
 nok "a short rule leaves an unruled composer pointer STUCK" "^wr  term_region_short  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-region-short-implement-0123456789abcdef\.md\)$"
 nno "the echoed and transcript pointers are never STUCK" "^wr  term_region_(echo|unruled|transcript)  .* STUCK"
 nchk "composer region cases send nothing without --send" nsends 0
+
+# 10. STALLED workers of a task lead's Orca Run: a running worker whose agent terminal is silent for --stall seconds (and
+# no human prompt holds it) is STALLED with re-dispatch advice; read-only, --send never touches it, exit code unchanged
+nok "without a Run the stalled-worker check is skipped with a note" "^nudge: no Orca Run named \(task orca_run or --orca-run\): stalled workers not checked$"
+mkdir -p "$TMP/nd-shows"; export FAKE_ORCA_WORKERS="$TMP/nd-workers.json" FAKE_ORCA_SHOWS="$TMP/nd-shows"
+WST="$TMP/nd-stall"
+# wrow <dispatch> <workerState> <dispatchStatus> <stage detail>: one full worker-list row of Run run_S
+wrow() { jq -nc --arg d "$1" --arg ws "$2" --arg ds "$3" --arg sd "$4" '{dispatchId:$d,taskId:"t",runId:"run_S",workerState:$ws,
+  dispatchStatus:$ds,agentTerminalHandle:("term_"+$d),terminalState:"active",resource:{releaseState:"not_requested"},
+  projection:{stage:{detail:$sd}}}'; }
+{ wrow ctx_noturn ready dispatched input_accepted; wrow ctx_ended ready dispatched input_accepted
+  wrow ctx_active ready dispatched input_accepted; wrow ctx_settled succeeded completed settled
+  wrow ctx_wait ready dispatched input_accepted; wrow ctx_lasterr ready dispatched input_accepted
+  wrow ctx_noshow ready dispatched input_accepted; } | jq -s '{ok:true,result:{workers:.,page:{hasMore:false}}}' > "$FAKE_ORCA_WORKERS"
+# wshow <dispatch> <dispatch_input states (comma list, may be empty)> <lastError|-> <agentWait json>: worker-show --full
+wshow() { jq -nc --arg d "$1" --arg st "$2" --arg le "$3" --arg w "$WST" --argjson aw "$4" '{ok:true,result:{
+  worker:{dispatchId:$d,state:"ready",worktreeId:("wt1::"+$w),agentTerminalHandle:("term_"+$d),
+    effects:([{kind:"terminal",role:"agent",action:"created",id:("term_"+$d)}]
+      + [($st | split(",")[] | select(. != "")) | {kind:"dispatch_input",role:"agent",id:("term_"+$d),state:.}]),
+    lastError:(if $le == "-" then null else $le end)},
+  observation:{status:"live",exactWorker:true,agentWait:$aw}}}' > "$TMP/nd-shows/$1.json"; }
+wshow ctx_noturn turn_unobserved - null; wshow ctx_ended accepted - null; wshow ctx_active accepted - null
+wshow ctx_settled accepted - null; wshow ctx_wait accepted - '{"evidence":"hook","prompt":"Allow?"}'
+wshow ctx_lasterr "" "turn start was not observed within 60000 ms" null
+{ jq -c '.result.terminals[]' "$TMP/nd-terms.json"
+  for d in ctx_noturn ctx_ended ctx_settled ctx_wait ctx_lasterr ctx_noshow; do trow "term_$d" "$WST" 1200; done
+  trow term_ctx_active "$WST" 30; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.new"
+mv "$TMP/nd-terms.new" "$TMP/nd-terms.json"
+ADVICE_NT="^  re-dispatch: check \`orca terminal read --terminal term_ctx_noturn\`, then \`orca orchestration worker-stop --dispatch ctx_noturn\` and dispatch a fresh session \(factory-pipeline\.py dispatch \.\.\. --phase <same phase>\); release it with \`orca orchestration worker-release --dispatch ctx_noturn\`$"
+nrun "$ND" --task cm --orca-run run_S
+nrc "stalled workers: exit 0 (a STALLED row is not an error)" 0
+nok "a running worker with turn_unobserved and an idle terminal is STALLED: no turn start" "^run_S  ctx_noturn  idle [0-9]+s  STALLED  no turn start$"
+nok "the STALLED row is followed by the re-dispatch advice" "$ADVICE_NT"
+nok "a running worker with an accepted input and an idle terminal is STALLED: turn ended without worker_done" "^run_S  ctx_ended  idle [0-9]+s  STALLED  turn ended without worker_done$"
+nok "a lastError that says the turn start was not observed is no turn start" "^run_S  ctx_lasterr  idle [0-9]+s  STALLED  no turn start$"
+nok "a recently active worker is ok" "^run_S  ctx_active  idle [0-9]+s  ok  active \([0-9]+s < 900s\)$"
+nok "a worker waiting on a human is ok" "^run_S  ctx_wait  idle \?s  ok  waiting on a human$"
+nok "a failing worker-show is no opinion" "^run_S  ctx_noshow  idle \?s  ok  worker-show failed .*\(no opinion\)$"
+nno "a settled worker is skipped" "ctx_settled"
+nnoshow_settled() { ! grep -q "worker-show --dispatch ctx_settled" "$FAKE_ORCA_LOG"; }
+nchk "a settled worker is not even shown" nnoshow_settled
+nchk "worker-list is asked for full rows of the named Run" grep -q -- "^orchestration worker-list --run run_S --limit 100 --full --json$" "$FAKE_ORCA_LOG"
+nonly_stall_reads() { [ -s "$FAKE_ORCA_LOG" ] && ! grep -qvE '^(status --json|terminal list --worktree path:[^ ]+ --limit 100 --json|terminal read --terminal [a-z_]+ --screen --json|orchestration worker-list --run run_S --limit 100 --full --json|orchestration worker-show --dispatch ctx_[a-z]+ --full --json)$' "$FAKE_ORCA_LOG"; }
+nchk "the stalled check runs only read-only orca calls" nonly_stall_reads
+nrun "$ND" --task cm --orca-run run_S --stall 5000
+nok "--stall raises the threshold: 1200 s of silence is active" "^run_S  ctx_noturn  idle [0-9]+s  ok  active \([0-9]+s < 5000s\)$"
+nno "and nothing is STALLED" "STALLED"
+nrun "$ND" --task cm --orca-run run_S --stall 0
+nok "--stall 0: the active worker is STALLED too" "^run_S  ctx_active  idle [0-9]+s  STALLED  turn ended without worker_done$"
+nrun "$ND" --task cm --orca-run run_S --stall -1
+nrc "a negative --stall is a usage error" 2
+nrun "$ND" --task cm --orca-run run_S --stall abc
+nrc "a non-numeric --stall is a usage error" 2
+nsnap() { ls "$NREC"; cat "$NREC"/*__nudge.json 2>/dev/null; }
+nsnap > "$TMP/nd-snap.before"
+nrun "$ND" --task cm --orca-run run_S --send
+nrc "--send with STALLED rows exits 0" 0
+nok "--send still lists the STALLED row" "^run_S  ctx_noturn  idle [0-9]+s  STALLED  no turn start$"
+nchk "--send sends nothing for a STALLED row" nsends 0
+nchk "--send runs only read-only calls for STALLED rows (no worker-stop, release or message)" nonly_stall_reads
+nsame_snap() { nsnap | cmp -s - "$TMP/nd-snap.before"; }
+nchk "--send writes nothing for a STALLED row" nsame_snap
+rm -f "$FAKE_ORCA_WORKERS"
+nrun "$ND" --task cm --orca-run run_S
+nrc "a failing worker-list exits 0" 0
+nok "a failing worker-list is no opinion" "^run_S: worker-list failed \(.*\): stalled workers not checked \(no opinion\)$"
+unset FAKE_ORCA_WORKERS FAKE_ORCA_SHOWS
 
 for t in gw wr cm rp vd im ld; do git -C "$S" worktree remove --force "$TMP/nd-$t" 2>/dev/null; git -C "$S" branch -q -D "feat/core/nd-$t" 2>/dev/null; done
 git -C "$S" branch -q -D feat/core/nd-im--sb 2>/dev/null
