@@ -4975,6 +4975,8 @@ echo "-- nudge (a start prompt that stayed unsubmitted in its Orca terminal)"
 NB="$TMP/nudgebin"; mkdir -p "$NB" "$TMP/nd-screens"
 cat > "$NB/fake_orca.py" <<'PY'
 import json, os, sys
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 a = sys.argv[1:]
 with open(os.environ["FAKE_ORCA_LOG"], "a", encoding="utf-8", newline="\n") as fh:
     fh.write(" ".join(x.replace("\r", "<CR>") for x in a) + "\n")
