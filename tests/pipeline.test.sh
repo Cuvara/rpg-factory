@@ -3311,6 +3311,12 @@ SCOPED_WHY="The command runs only the suites the task checks name [(]--within[)]
 expect_spec "task QA spec with check suites: --affected --base <base> --within <check suites> -j 1" "$SCOPED_FORM" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
 expect_spec "task QA spec with check suites: says the other affected suites are left to CI" "$SCOPED_WHY" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
 expect_spec "verify spec with check suites: the same scoped command" "$SCOPED_FORM" dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+# a released verify session left its run-all alive, holding a test slot for hours: the verify spec makes the session stop
+# the run it started, by its PID, never by pattern, and confirm its slot is free before any verdict or report
+expect_spec "verify spec: stop the run-all you started by its PID before any verdict or report" 'Before you record any verdict or report, stop every tests/run-all\.sh run you started, by the PID you started it with: `kill <pid>` \(Windows Git Bash: `taskkill //PID <winpid> //T //F`' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "verify spec: never stop a run by pattern" 'never by pattern \(no `pkill -f`, no `taskkill /IM`\)' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "verify spec: confirm the slot is free under the resolved slot directory or by status" 'confirm your test slot is free: no directory under [^ ]*run-all-slots whose `checkout` file names this checkout, or `[^`]* status [^`]*plugin-scoped\.json[^`]*` prints no `Slots:` line for this checkout' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "verify spec: a slot still held is NOT_RUN or BLOCKED, never PASS" 'A slot still held means QA NOT_RUN or BLOCKED naming the slot and its PID, never PASS\.' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
 refute_spec "task QA spec with check suites: no safe-form explanation, no --only-suites, no -j 2" "No check suites|--only-suites| -j 2$" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
 expect "task QA with check suites: the plain print prompt names the same command" 0 "tests/run-all\.sh --affected --base [^ ]+ --within tests/x\.test\.sh,tests/y\.test\.sh -j 1" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner print
 # the integration QA names the workspace checks the change reaches, against the plan's base (the repo base branch)
@@ -4956,6 +4962,71 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
 git -C "$S" worktree remove --force "$TMP/slot-unrelated"
 git -C "$S" branch -q -D codex/feat/core/demo-gw--qa codex/feat/core/demo-gw-slot-lineage slot-unrelated-br
+# a slot left by a verify dispatch: a live holder in a task worktree of the plan (gw's worktree or its child
+# <task branch>--*) after that task's verify reported (a qa verdict newer than the slot's start) or its Orca worker in
+# that checkout was released is flagged LEFT BY VERIFY with the stop command for that PID only (taskkill with a Windows
+# PID, else kill); a verdict older than the slot's start, a dead holder or a slot outside task worktrees is not flagged;
+# status never runs the command (fake slots and a fake process table only)
+rm -rf "$SLOTS"; mkdir -p "$SLOTS"
+git -C "$S" worktree add -q "$TMP/slot-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-gw-verify" -b feat/core/demo-gw--verify "$SG" 2>/dev/null
+python3 -B "$P" verdict "$G" --task gw --phase qa --sha "$SG" --by codex --state PASS >/dev/null || echo "verdict failed: gw qa"
+LATER="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+RELEASED="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"))')"
+# lslot <n> <pid> <winpid|-> <checkout> <started>
+lslot() { mkdir -p "$SLOTS/$1"; printf '%s\n' "$2" > "$SLOTS/$1/pid"; [ "$3" = - ] || printf '%s\n' "$3" > "$SLOTS/$1/winpid"
+  printf '%s\n' "$4" > "$SLOTS/$1/checkout"; printf '%s\n' "$5" > "$SLOTS/$1/started"; }
+lslot 21 7101 7102 "$(wtp "$TMP/slot-gw")" 2026-11-11T05:00:00Z        # older than the qa verdict, Windows PID: taskkill
+lslot 22 7103 - "$(wtp "$TMP/slot-gw-verify")" 2026-11-11T05:00:00Z    # the task's child worktree, no Windows PID: kill
+lslot 23 7104 7104 "$(wtp "$TMP/slot-gw")" "$LATER"                   # started after the verdict: not flagged
+lslot 24 7105 7105 "$(wtp "$S")" 2026-11-11T05:00:00Z                  # the integration checkout: not a task worktree
+lslot 25 7106 7106 "$(wtp "$TMP/slot-gw")" 2026-11-11T05:00:00Z       # holder gone: not flagged
+jq -n '[7101,7102,7103,7104,7105] | map({pid:.,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T05:00:00"})' > "$TMP/proc-left.json"
+LEFTP="$TMP/proc-left.json"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "status flags a live slot in the task worktree after the task's qa verdict, with taskkill for its Windows PID" 0 "^Slots: LEFT BY VERIFY slot 21 held by PID 7101 \(Windows PID 7102\) in .*slot-gw since 2026-11-11T05:00:00Z \(alive\): task gw: verify reported (qa|review) [A-Z_]+( \(subtask [^)]*\))? at ${SG:0:10} \([^)]*\) after the run started; stop that PID only: taskkill //PID 7102 //T //F \(status never runs it\)$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "status flags a slot in the task's child worktree, kill <pid> without a Windows PID" 0 "^Slots: LEFT BY VERIFY slot 22 held by PID 7103 in .*slot-gw-verify since 2026-11-11T05:00:00Z \((alive|liveness unknown)\): task gw: verify reported (qa|review) .*; stop that PID only: kill 7103 \(status never runs it\)$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "the stop command is first in Next" 0 "^Next: taskkill //PID 7102 //T //F$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "the task row names the left slot and its stop command" 0 "note: test slot 21 \(PID 7101\) in .*slot-gw left by the verify session \(verify reported (qa|review) .*\): stop that PID only: taskkill //PID 7102 //T //F$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "a flagged slot keeps its plain Slots: line" 0 "^Slots: slot 21 held by PID 7101 \(Windows PID 7102\) in .*slot-gw since 2026-11-11T05:00:00Z \(alive\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a slot started after the task's last verdict is not flagged" "LEFT BY VERIFY slot 23 |kill 7104" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a slot outside the task worktrees (integration checkout) is not flagged" "LEFT BY VERIFY slot 24 |kill 7105" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a slot whose holder is gone is not flagged" "LEFT BY VERIFY slot 25 |kill 7106" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "cleanup prints no LEFT BY VERIFY line and no stop command" "LEFT BY VERIFY|taskkill //PID|kill 710" cleanup "$G"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$LEFTP" python3 -B "$P" status --json "$G" > "$TMP/so-left.json" 2> "$TMP/se-left.txt"; rc=$?
+if [ $rc = 0 ] && grep -q "^Slots: LEFT BY VERIFY slot 21 held by PID 7101 .*taskkill //PID 7102 //T //F" "$TMP/se-left.txt" \
+   && jq -e '.next[0] == "taskkill //PID 7102 //T //F" and (.slots | map(.slot) | sort) == ["21", "22", "23", "24", "25"]
+     and all(.slots[]; has("left_by") | not)' "$TMP/so-left.json" >/dev/null && python3 - "$ROOT" "$TMP/so-left.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+out = json.load(open(sys.argv[2], encoding="utf-8"))
+assert not m.schema_errors(out, schema, schema), m.schema_errors(out, schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status --json: the LEFT BY VERIFY line on stderr, the stop command first in next, schema-valid"
+else fail=$((fail + 1)); echo "FAIL  status --json LEFT BY VERIFY (rc $rc)"; grep "LEFT BY" "$TMP/se-left.txt" | head -3; jq -c '.next' "$TMP/so-left.json" 2>/dev/null; fi
+# released: slot 23 started after the verdict; an Orca worker of gw's Run in that checkout released after the slot's
+# start flags it; a worker released in another checkout, or released before the start, does not
+GOL=$(plan gate-orca-left "$(sed 's/"id":"gw","repo":"srv"/"id":"gw","repo":"srv","orca_run":"run:run_L"/' "$G")")
+# lw <dispatch> <checkout> <releaseCompletedAt>: a settled, released full worker-list row of Run run_L
+lw() { jq -nc --arg d "$1" --arg p "$2" --arg c "$3" '{dispatchId:$d,runId:"run_L",workerState:"succeeded",
+  dispatchStatus:"completed",terminalState:"released",resource:{ownershipState:"released",releaseState:"released",
+  worktreeId:("repo-id::" + $p),releaseRequestedAt:$c,releaseCompletedAt:$c},
+  projection:{stage:{detail:"settled"},workspace:{id:("repo-id::" + $p)},resource:{state:"released"}}}'; }
+jq -n --argjson a "$(lw ctx_vfy "$(wtp "$TMP/slot-gw")" "$RELEASED")" --argjson b "$(lw ctx_other "$(wtp "$S")" "$RELEASED")" \
+  '{ok:true,result:{workers:[$a,$b],page:{hasMore:false,nextCursor:null}}}' > "$TMP/workers-left.json"
+FAKE_ORCA_JSON="$TMP/workers-left.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "a worker of the task's Run released in the slot's checkout after its start flags the slot" 0 "^Slots: LEFT BY VERIFY slot 23 held by PID 7104 in .*slot-gw since $LATER \(alive\): task gw: its Orca worker ctx_vfy was released \($RELEASED\) after the run started; stop that PID only: taskkill //PID 7104 //T //F \(status never runs it\)$" status "$GOL"
+FAKE_ORCA_JSON="$TMP/workers-left.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a worker released in another checkout flags no slot there" "LEFT BY VERIFY slot 24 |ctx_other" status "$GOL"
+jq -n --argjson a "$(lw ctx_vfy "$(wtp "$TMP/slot-gw")" "2026-11-11 04:00:00")" \
+  '{ok:true,result:{workers:[$a],page:{hasMore:false,nextCursor:null}}}' > "$TMP/workers-left-old.json"
+FAKE_ORCA_JSON="$TMP/workers-left-old.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a worker released before the slot's start flags nothing" "LEFT BY VERIFY slot 23 " status "$GOL"
+: > "$FAKE_ORCA_LOG"
+FAKE_ORCA_JSON="$TMP/workers-left.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" PATH="$fpath" python3 -B "$P" status "$GOL" >/dev/null 2>&1
+if [ "$(grep -c 'worker-list' "$FAKE_ORCA_LOG")" = 1 ]
+then pass=$((pass + 1)); echo "PASS  the released-worker check reuses the one worker-list call of status"
+else fail=$((fail + 1)); echo "FAIL  status called worker-list more than once"; cat "$FAKE_ORCA_LOG"; fi
+git -C "$S" worktree remove --force "$TMP/slot-gw"; git -C "$S" worktree remove --force "$TMP/slot-gw-verify"
+git -C "$S" branch -q -D feat/core/demo-gw feat/core/demo-gw--verify
 rm -rf "$SLOTS"
 
 case_end settled-workers
