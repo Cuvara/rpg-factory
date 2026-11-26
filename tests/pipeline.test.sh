@@ -5300,6 +5300,35 @@ nok "a verify spec with a task-branch commit after it is ok (task-level rule)" "
 nchk "ld: nothing is sent" nsends 0
 nchk "ld: nothing is recorded" norecord ld
 
+# 9. only the composer region counts on ruled screens; activity clears submitted pointers on unruled screens
+RA=$(mkspec region-echo); RB=$(mkspec region-unruled); RC=$(mkspec region-composer)
+RD=$(mkspec region-transcript); RE=$(mkspec region-short)
+screen term_region_echo "  === TASK ===" "  Read your task spec at" "  $RA and follow it." \
+  "  Read 1 file, ran 1 shell command" "● Working" "✻ Waiting for 1 shell..." \
+  "────────────────────────────────────────────────────────────" "❯ " \
+  "────────────────────────────────────────────────────────────" "  ? for shortcuts"
+screen term_region_unruled "  === TASK ===" "  Read your task spec at" "  $RB and follow it." \
+  "  Read 1 file, ran 1 shell command" "● Working" "✻ Waiting for 1 shell..." "❯ " "  ? for shortcuts"
+screen term_region_composer "Transcript text" "────────────────────────────────────────────────────────────" \
+  "❯ Read your task spec at $RC and follow it." "────────────────────────────────────────────────────────────"
+screen term_region_transcript "  Read your task spec at $RD and follow it." \
+  "────────────────────────────────────────────────────────────" "❯ " "────────────────────────────────────────────────────────────"
+screen term_region_short "──────────" "> Read your task spec at $RE and follow it."
+{ jq -c '.result.terminals[]' "$TMP/nd-terms.json"
+  trow term_region_echo "$WWR" 600; trow term_region_unruled "$WWR" 600
+  trow term_region_composer "$WWR" 600; trow term_region_transcript "$WWR" 600
+  trow term_region_short "$WWR" 600; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.new"
+mv "$TMP/nd-terms.new" "$TMP/nd-terms.json"
+nrun "$ND" --task wr
+nrc "composer region cases exit 0" 0
+nok "the issue screen with an echoed pointer and empty composer is ok" "^wr  term_region_echo  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "activity after an unruled echoed pointer clears it" "^wr  term_region_unruled  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "a pointer between composer rules is STUCK" "^wr  term_region_composer  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-region-composer-implement-0123456789abcdef\.md\)$"
+nok "a transcript pointer above the composer rules is ignored without activity" "^wr  term_region_transcript  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "a short rule leaves an unruled composer pointer STUCK" "^wr  term_region_short  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-region-short-implement-0123456789abcdef\.md\)$"
+nno "the echoed and transcript pointers are never STUCK" "^wr  term_region_(echo|unruled|transcript)  .* STUCK"
+nchk "composer region cases send nothing without --send" nsends 0
+
 for t in gw wr cm rp vd im ld; do git -C "$S" worktree remove --force "$TMP/nd-$t" 2>/dev/null; git -C "$S" branch -q -D "feat/core/nd-$t" 2>/dev/null; done
 git -C "$S" branch -q -D feat/core/nd-im--sb 2>/dev/null
 unset FAKE_ORCA_LOG FAKE_ORCA_TERMS FAKE_ORCA_SCREENS
