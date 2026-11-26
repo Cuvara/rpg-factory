@@ -2587,6 +2587,7 @@ if section == 'tier':
     write('docs/guide.md', 12)  # 2 changed lines, uncommitted
     out = tier('docs/guide.md')
     assert out.startswith('Tier: XS ') and '2 changed line(s)' in out and 'above XS' not in out, out
+    assert '  changed lines: 2 (git diff --numstat HEAD plus untracked, 1 file(s))' in out.splitlines(), out
     assert '"tier": "XS"' in cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md', 'changelog.d/x.md')
     # one path that is not prose is never XS: the S rule takes it
     out = tier('docs/guide.md', 'code.py')
@@ -2601,7 +2602,26 @@ if section == 'tier':
     assert out.startswith('Tier: S ') and '4 files > 3' in out, out
     assert m.pr.above_xs(rule, ['a.md', 'skills/x/'], 40) == []
     assert m.pr.above_xs(rule, ['a.md'], 41) == ['41 changed lines > 40']
-    print('tier: XS printed only for prose within the thresholds')
+    # the plain form (a routing snapshot) measures the changed lines too: a committed prose-only change of 50 lines on
+    # the branch, measured against the merge-base of the snapshot's base, is above XS
+    write('docs/plain.md', 50); git('add', '--', 'docs/plain.md'); git('commit', '-qm', 'plain')
+    def snap(name, path, base):
+        ctx = {'repos': [{'repo': 'fixture', 'path': path, 'branch_diff_base': base, 'touched': ['docs'],
+                          'files': [{'path': 'docs/plain.md', 'source': 'branch'}], 'contracts': [], 'generated_hits': []}]}
+        f = work / (name + '.json'); f.write_text(json.dumps(ctx)); return f
+    out = cli('tier', '--context-json', snap('ctx-base', str(repo), 'main'))
+    assert out.startswith('Tier: S ') and 'above XS: 50 changed lines > 40' in out, out
+    assert '  changed lines: 50 (git diff --numstat $(git merge-base main HEAD) plus untracked, 1 file(s))' in out.splitlines(), out
+    o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-json', str(repo), 'main')))
+    assert o['facts']['changed_lines'] == 50 and 'merge-base main HEAD' in o['facts']['lines_basis'], o['facts']
+    # no base: against HEAD (the change is committed, 0 lines); no checkout: not measured
+    out = cli('tier', '--context-json', snap('ctx-head', str(repo), None))
+    assert out.startswith('Tier: XS ') and '  changed lines: 0 (git diff --numstat HEAD plus untracked, 1 file(s))' in out.splitlines(), out
+    out = cli('tier', '--context-json', snap('ctx-none', str(work / 'missing'), 'main'))
+    assert out.startswith('Tier: XS ') and '  changed lines: not measured (no checkout)' in out.splitlines(), out
+    o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-none-json', str(work / 'missing'), 'main')))
+    assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    print('tier: XS printed only for prose within the thresholds; the plain form measures changed lines')
 
 if section == 'validate':
     assert errors() == [], errors()
@@ -3523,10 +3543,13 @@ expect "worker-start: --orca-run names the Run when the plan records none" 0 "^o
 refute "worker-start: no Run known, no --run" "^orca orchestration worker-start .* --run " dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca
 # base health hint: print only, for a repo with a GitHub remote
 refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+refute_spec "base health: no line in the lead spec without a remote" "Base health:" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote add origin https://github.com/x/y.git
 expect "base health hint: a GitHub remote prints the gh command" 0 'base health: run `gh run list --branch [^ ]+ --limit 1`' dispatch "$OK" --task gw --phase lead --runner orca
+expect_spec "base health: the lead spec carries the hint for the task lead" '^Base health: run `gh run list --branch [^ ]+ --limit 1` before starting \(print only; a red base is known_failing, not this task.s failure\)\.$' dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote set-url origin https://example.com/x/y.git
 refute "base health hint: none for a non-GitHub remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+refute_spec "base health: no line in the lead spec for a non-GitHub remote" "Base health:" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote remove origin
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
 for ph in "--task gw --phase lead" "--task gw --phase implement" "--task gw --phase review --sha abc1234" "--task gw --phase qa --sha abc1234"; do

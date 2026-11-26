@@ -12,7 +12,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
         pipeline.tiers.XS): every file prose (*.md, changelog.d/, skills/ directories), within max_files and
-        max_changed_lines; `above XS:` names why not.
+        max_changed_lines; `above XS:` names why not. The changed lines are those of the snapshot's files in each repo
+        with a checkout: `git diff --numstat` against the merge-base of the snapshot's base (factory-context.sh
+        --base) and HEAD, else against HEAD, plus the lines of untracked ones; without a checkout they are not
+        measured (count 0). `changed lines:` (--json: facts changed_lines, lines_basis) says what was measured.
   tier --plan <plan.json> --repo KEY --paths FILE... [--json]
         the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
         from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts. With a
@@ -473,7 +476,7 @@ def git_blob(repo, head, path):
 
 def tier_of(ctx, pipe, lines=None):
     """lines: the changed-line count of the change when known (tier --plan with a checkout), else None (counts as 0)."""
-    repos = [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
+    repos = tier_repos(ctx)
     modules = sorted({m for r in repos for m in r.get("touched", [])})
     files = sum(1 for r in repos for f in r.get("files", []) if f.get("source") in ("given", "branch"))
     # XS judges every file of the change, uncommitted ones included: one path that is not prose is above XS
@@ -537,7 +540,7 @@ def plain_context(key, paths):
 
 def cmd_tier(a, reg):
     pipe = settings(reg)
-    lines = None  # the changed-line count, known only for tier --plan with a checkout
+    lines = basis = None  # tier --plan: the changed lines of the given paths against HEAD (0 without a checkout)
     if a.plan:
         if not a.repo or not a.paths:
             die("tier --plan needs --repo <plan repo key> and --paths <files>")
@@ -545,11 +548,14 @@ def cmd_tier(a, reg):
         plan["_path"] = a.plan
         info = repo_info(plan, reg, a.repo)
         lines = changed_lines(info["path"], a.paths)
+        checkout = bool(info["path"]) and os.path.isdir(info["path"])
+        basis = lines_basis(["HEAD"] if checkout else None, len(set(a.paths)))
         if not info["registry"]:
             if not info["path"]:
                 die(f"repo `{a.repo}` is neither a registry repo nor in plan.repos with a path")
             out = tier_of(plain_context(a.repo, a.paths), pipe, lines)
             out["basis"] = "paths (repo not in the registry)"
+            out["facts"]["lines_basis"] = basis
             return print_tier(a, out)
         a.rest = ["--repo", info["registry"], "--paths", *a.paths, *a.rest]
     elif a.repo or a.paths:
@@ -563,7 +569,11 @@ def cmd_tier(a, reg):
         if r.returncode != 0:
             die("factory-context.sh failed: " + (r.stderr or r.stdout).strip()[:400], 1)
         ctx = json.loads(r.stdout)
-    return print_tier(a, tier_of(ctx, pipe, lines))
+    if basis is None:  # the plain form: the changed lines of the snapshot's files in each repo checkout
+        lines, basis = snapshot_lines(ctx)
+    out = tier_of(ctx, pipe, lines)
+    out["facts"]["lines_basis"] = basis
+    return print_tier(a, out)
 
 
 def numstat_lines(out):
@@ -575,21 +585,64 @@ def numstat_lines(out):
     return n
 
 
-def changed_lines(repo_path, paths):
-    """Changed lines of a working change in `paths` (tier --plan): `git diff --numstat HEAD` plus the lines of the
-    untracked given files. 0 when unknown (no checkout, git fails)."""
+def diff_lines(repo_path, paths, ref="HEAD"):
+    """Changed lines of `paths` in a checkout: `git diff --numstat <ref>` (the working tree against `ref`) plus the lines
+    of the untracked ones. 0 when unknown (no checkout, git fails)."""
     if not repo_path or not paths or not os.path.isdir(repo_path):
         return 0
-    out, rc = git(repo_path, "diff", "--numstat", "--no-renames", "HEAD", "--", *paths)
-    n = numstat_lines(out) if rc == 0 else 0
-    untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *paths)
-    for f in (untracked or "").splitlines() if rc == 0 else []:
-        try:
-            with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
-                n += sum(1 for _ in fh)
-        except OSError:
-            pass
+    n = 0
+    for i in range(0, len(paths), 200):  # chunks keep the command line short
+        chunk = list(paths[i:i + 200])
+        out, rc = git(repo_path, "diff", "--numstat", "--no-renames", ref, "--", *chunk)
+        n += numstat_lines(out) if rc == 0 else 0
+        untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *chunk)
+        for f in (untracked or "").splitlines() if rc == 0 else []:
+            try:
+                with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
+                    n += sum(1 for _ in fh)
+            except OSError:
+                pass
     return n
+
+
+def changed_lines(repo_path, paths):
+    """Changed lines of a working change in `paths` (tier --plan): diff_lines against HEAD."""
+    return diff_lines(repo_path, paths, "HEAD")
+
+
+def lines_basis(refs, nfiles):
+    """What a tier measured as changed lines: the diff refs and the number of files, or `not measured` (refs None)."""
+    if refs is None:
+        return "not measured (no checkout)"
+    return f"git diff --numstat {', '.join(refs)} plus untracked, {nfiles} file(s)"
+
+
+def tier_repos(ctx):
+    """The repo entries of a routing snapshot that tier_of judges: touched ones and those with given files."""
+    return [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
+
+
+def snapshot_lines(ctx):
+    """(lines, basis) of a routing snapshot (plain tier): for every judged repo with a checkout (`path` is a directory),
+    the changed lines of its files against the merge-base of its `branch_diff_base` and HEAD (factory-context.sh
+    --base), else against HEAD, plus untracked ones. lines is None when no repo has a checkout."""
+    total, refs, nfiles = None, [], 0
+    for r in tier_repos(ctx):
+        path = r.get("path")
+        files = sorted({f.get("path") for f in r.get("files", []) if f.get("path")})
+        if not path or not os.path.isdir(path):
+            continue
+        ref, label = "HEAD", "HEAD"
+        base = r.get("branch_diff_base")
+        if base:
+            mb, rc = git(path, "merge-base", base, "HEAD")
+            if rc == 0 and mb:
+                ref, label = mb.split()[0], f"$(git merge-base {base} HEAD)"
+        total = (total or 0) + diff_lines(path, files, ref)
+        nfiles += len(files)
+        if label not in refs:
+            refs.append(label)
+    return total, lines_basis(refs if total is not None else None, nfiles)
 
 
 def print_tier(a, out):
@@ -602,6 +655,9 @@ def print_tier(a, out):
               + f"contracts: {', '.join(f['contracts']) or 'none'}, generated: {', '.join(f['generated']) or 'none'})")
         if out.get("basis"):
             print(f"  basis: {out['basis']}; modules: {', '.join(f['modules'])}")
+        if f.get("lines_basis"):
+            measured = f"{f['changed_lines']} (" if "changed_lines" in f and not f["lines_basis"].startswith("not ") else ""
+            print(f"  changed lines: {measured}{f['lines_basis']}{')' if measured else ''}")
         for t, why in out["above"].items():
             if why:
                 print(f"  above {t}: " + "; ".join(why))
@@ -2291,9 +2347,9 @@ def with_session_lines(a, prompt, reg=None):
     return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
 
 
-def base_health_hint(info, spec):
-    """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
-    git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
+def base_health_cmd(info, spec):
+    """The base health command (`gh run list --branch <base> --limit 1`), or None: only for a repo with a GitHub remote
+    (local git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
     if not info.get("path"):
         return None
     out, rc = git(info["path"], "remote", "-v")
@@ -2301,9 +2357,20 @@ def base_health_hint(info, spec):
         return None
     sha = re.compile(r"^[0-9a-fA-F]{7,40}$")
     branch = next((b for b in (spec.get("base"), info.get("base")) if b and not sha.match(b)), None)
-    if not branch:
-        return None
-    return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
+    return f"gh run list --branch {branch} --limit 1" if branch else None
+
+
+def base_health_hint(info, spec):
+    """The lead dispatch's one-line base health hint (stderr), or None (see base_health_cmd)."""
+    cmd = base_health_cmd(info, spec)
+    return f"factory-pipeline: base health: run `{cmd}` before starting" if cmd else None
+
+
+def base_health_line(info, spec):
+    """The lead spec's base health line (the stderr hint never reaches the task lead); '' when there is none."""
+    cmd = base_health_cmd(info, spec)
+    return (f"\nBase health: run `{cmd}` before starting (print only; a red base is known_failing, not this task's "
+            "failure).") if cmd else ""
 
 
 def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None,
@@ -2381,6 +2448,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
+            + base_health_line(info, spec)
             + known_failing_block(plan)
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
