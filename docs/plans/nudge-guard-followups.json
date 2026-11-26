@@ -1,9 +1,9 @@
 {
   "schema": "rpg-factory.pipeline-plan/1",
   "id": "nudge-guard-followups",
-  "title": "nudge: subtask progress does not hide a stuck implementer; guard follow-ups from #60",
+  "title": "nudge: subtask progress and transcript echoes do not mislead it; guard follow-ups from #60",
   "topic": "feat/delivery/nudge-guard-followups",
-  "goal": "Close issues #152 and #60. (1) `factory-pipeline.py nudge` reported a stuck implementer start prompt as ok because a sibling subtask's commit on the same task branch counted as task progress (plan none-affected-notrun, about 58 minutes lost). (2) The process and git guard misses `cmd //c` (the Git Bash form), several kill forms, flags the recommended own-PID pattern, and some quoted-text negative tests run where the old guard never checked processes, so they prove nothing.",
+  "goal": "Close issues #152 and #60. (1) `factory-pipeline.py nudge` reported a stuck implementer start prompt as ok because a sibling subtask's commit on the same task branch counted as task progress (plan none-affected-notrun, about 58 minutes lost). (2) The process and git guard misses `cmd //c` (the Git Bash form), several kill forms, flags the recommended own-PID pattern, and some quoted-text negative tests run where the old guard never checked processes, so they prove nothing. (3) Issue #156: nudge read a submitted start prompt that Claude Code echoes, indented, in the transcript as an unsubmitted composer pointer and reported a running verify session as STUCK.",
   "tier": "M",
   "deliver": "pr",
   "repos": {
@@ -65,6 +65,32 @@
         "the two own-PID examples of #60 item 3 get no advisory; a kill fed by a name query still does",
         "several quoted-text negative process cases run in the $SERVER working directory",
         "every existing git-guard and installed-safety case passes"
+      ]
+    },
+    {
+      "id": "nudge-composer-region",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Issue #156 (read it: `gh issue view 156`). In scripts/factory-pipeline.py `nudge_spec()` (PR #148 composer rule: a pointer counts when its screen-line prefix is whitespace or one of NUDGE_COMPOSER_MARKERS) a submitted prompt that Claude Code echoes in the transcript, indented by two spaces, also matches, so a session waiting on its own background shell was reported STUCK. Change the rule so only a pointer in the composer counts: when the screen has a horizontal rule line (a line made of box-drawing `─` / `━` / `═`, at least 20 wide), only text below the last-but-one such rule (the composer box between the last two rules, or below the last rule if there is only one) counts; when the screen has no rule line, keep today's rule. In addition, any of these lines after the pointer means the prompt was submitted and the terminal is not stuck: a line starting (after whitespace) with `●`, `✻`, `⎿`, or matching `Ran \\d+ shell command`, `Read \\d+ file`. Keep the wrapped-pointer handling (the pointer split across lines, PR #148 bisect over newline, space and empty joins). Tests in tests/pipeline.test.sh with the existing fake orca: the issue's screen shape (indented `=== TASK ===` echo with the pointer, activity lines, an empty `❯` composer between two rules) is not STUCK; a pointer inside the composer box between the two rules with no activity after it is STUCK; an unruled screen keeps the PR #148 cases. Changelog fragment changelog.d/nudge-composer-region.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/nudge-composer-region.md"
+      ],
+      "exclusions": [
+        "scripts/lib/rpgf_guard/",
+        "tests/git-guard.test.sh"
+      ],
+      "deps": [
+        "nudge-subtask-progress"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "the #156 screen (submitted prompt echoed in the transcript, empty composer) is not STUCK",
+        "an unsubmitted pointer in the composer box with no activity after it is STUCK",
+        "every existing pipeline nudge case passes, including section 8 of nudge-subtask-progress"
       ]
     }
   ]
