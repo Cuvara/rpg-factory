@@ -20,7 +20,9 @@
 #                   validate) run alone. Ends with the wall time.
 #   --affected      run only the suites the change touches (tests/affected.py: files changed since
 #                   merge-base(REF|origin/main|main) plus untracked); the cheap inline checks (JSON parse,
-#                   executable bits, manifest and wording greps, resolver and fixture checks) always run.
+#                   executable bits, suite registration, manifest and wording greps, resolver and fixture checks)
+#                   always run. Suite registration: every tests/*.test.sh has a run line here or a SUITE_EXEMPT entry
+#                   (with its reason); an exemption for a missing or registered file fails too.
 #                   For iteration and task QA; the full run (no --affected, no --only-suites) is integration
 #                   QA's gate before a PR (once per batch, not each task's) and runs for --release.
 #                   With --affected or --only-suites, a check that runs a script outside a suite line (the live
@@ -44,16 +46,16 @@
 #                   cases: it is the task's explicit check. The suites and gated scripts the change selects outside L do not
 #                   run (they count as not affected, CI runs them) and one line before the checks names them:
 #                   'left to CI: N suites (a, b)' ('left to CI: no base ...' without a base: only L runs). The inline checks
-#                   (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest and wording greps, resolver and
-#                   fixture checks) keep the --affected rule. The repo-wide enforcement lines (English-only, Portable-paths and
+#                   (JSON parse, bash -n, py_compile, jq compile, executable bits, suite registration, manifest and wording
+#                   greps, resolver and fixture checks) keep the --affected rule. The repo-wide enforcement lines (English-only, Portable-paths and
 #                   Workspace readers, scripts/checks/english-only.py, portable-paths.py and workspace-readers.sh: seconds each,
 #                   reached by every change that touches what they scan) run too whenever the change reaches them, so a breach
 #                   fails task QA; without a base they do not run (only L does).
 #                   A targeted run (no full-run lock or record, takes a test slot).
 #                   Conflicts (exit 2) with --only-suites, --only-cases, --inline-only, --release, --workspace-only,
 #                   --list-suites; exit 2 without --affected.
-#   --inline-only   run only the inline checks (JSON parse, bash -n, py_compile, jq compile, executable bits, manifest
-#                   and wording greps, resolver and fixture checks): exactly --affected with an empty changed list,
+#   --inline-only   run only the inline checks (JSON parse, bash -n, py_compile, jq compile, executable bits, suite
+#                   registration, manifest and wording greps, resolver and fixture checks): exactly --affected with an empty changed list,
 #                   so every suite and gated script counts as not affected and affected.py is never asked. A targeted
 #                   run (no full-run lock or record, takes a test slot). For a PR that selects no suite (scripts/ci-plan.py).
 #                   Conflicts (exit 2) with --affected, --base, --only-suites, --within, --release, --workspace-only,
@@ -70,7 +72,7 @@
 #   --checkout DIR  checkout to inspect with --last-result (default: this checkout); requires --last-result.
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
-#                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
+#                   --list-suites (no run line runs it, e.g. tests/orca-wait.test.sh) exits 2, naming each one;
 #                   so does a release-only suite (tests/installed-safety.sh) without --release.
 #   --only-cases C  (also --only-cases=C) give the one --only-suites suite the comma-separated case subset C: the suite
 #                   gets --case C as --affected passes it (results show "(cases C)", no suite PASS record). ALL or an
@@ -117,6 +119,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; }
 cd "$ROOT" || exit 1
 RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stand-in plans set RUNALL_SUITES_FROM)
 RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-suites omits them, --only-suites rejects them without it
+# tests/*.test.sh files with no run line on purpose (the suite registration inline check), one reason per entry:
+SUITE_EXEMPT="tests/orca-wait.test.sh"   # run nested by tests/parallel-policy.test.sh (case-map orca-wait)
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
 list_only=false; workspace_only=false; inline_only=false; base_given=false; affected_given=false
 only_cases=""; only_cases_given=false; within=""; within_given=false; ws_scoped=false
@@ -564,6 +568,29 @@ list_runnable() { # file: list_suites without the release-only suites unless --r
     $release || ! release_only "$s" || continue
     printf '%s\n' "$s"
   done <<<"$listed"
+}
+# suite_registration <run-all file>: the suite registration inline check, from the current directory. Every
+# tests/*.test.sh must be named on a run line of <file> (list_suites: one python3 pass, no process per file) or in
+# $SUITE_EXEMPT; an exemption whose file is missing or that also has a run line fails too. One PASS line when all hold,
+# one FAIL line per offender. run-all.sh checks itself; tests/run-all-parallel.test.sh calls it on a temp tree.
+suite_registration() {
+  local listed f e n=0 nbad=0 workspace_only=false RUNALL_SUITES_FROM=""
+  listed=$(list_suites "$1") || { bad "suite registration: cannot list the run lines of $1"; return 0; }
+  listed=$'\n'"${listed//$'\r'/}"$'\n'
+  for f in tests/*.test.sh; do
+    [ -e "$f" ] || continue
+    n=$((n + 1))
+    case "$listed" in *$'\n'"$f"$'\n'*) continue ;; esac
+    case " $SUITE_EXEMPT " in *" $f "*) continue ;; esac
+    nbad=$((nbad + 1)); bad "suite registration: $f has no run line in tests/run-all.sh and no SUITE_EXEMPT entry"
+  done
+  for e in $SUITE_EXEMPT; do
+    if [ ! -e "$e" ]; then nbad=$((nbad + 1)); bad "suite registration: SUITE_EXEMPT entry $e does not exist"
+    else case "$listed" in *$'\n'"$e"$'\n'*)
+      nbad=$((nbad + 1)); bad "suite registration: SUITE_EXEMPT entry $e also has a run line in tests/run-all.sh (drop the exemption)" ;; esac
+    fi
+  done
+  [ "$nbad" -gt 0 ] || ok "suite registration: $n tests/*.test.sh files each have a run line or a SUITE_EXEMPT entry"
 }
 # affected_select <suite...>: one affected.py `cases` call (the import graph is built once per run, before any job
 # forks) answers suite_selected for every candidate - its lines are exactly the selected suites - and gives each
@@ -1304,6 +1331,9 @@ for f in "${exec_files[@]}"; do
   else bad "executable: $f" "git mode=${mode:-untracked}"; fi
 done
 
+# ---- suite registration (every tests/*.test.sh has a run line below or a SUITE_EXEMPT entry with its reason)
+suite_registration "$RUNALL_SELF"
+
 # ---- manifest consistency
 name=$(jq -r .name .claude-plugin/plugin.json)
 mname=$(jq -r '.plugins[0].name' .claude-plugin/marketplace.json)
@@ -1407,6 +1437,8 @@ run "Figma connector environment check (fixture Unity projects, no network)" env
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
 run "artifact contract, lifecycle, trace and approval fixtures" tests/artifacts.test.sh
+run "artifact quality checker (review identity, immutable reviews, --domain/--kind selection, trace rows)" env -u TMPDIR tests/artifact-quality.test.sh
+run "authoring to engineering handoff end to end (lifecycle, invalidation)" env -u TMPDIR tests/handoff-e2e.test.sh
 run "run-checks targets the invoking worktree, writes no pyc, guards the canonical checkout" tests/worktree-target.test.sh
 run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
@@ -1414,6 +1446,7 @@ run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
 run "delivery pipeline (tier, plan, dispatch, verdicts, gate)" env -u TMPDIR tests/pipeline.test.sh
 run "generic delivery (pipeline on a plain repo, no registry)" env -u TMPDIR tests/delivery-generic.test.sh
+run "factory workflow (scripts/factory-workflow.py: plan, status, dispatch, report, Agent-tool runner pins)" env -u TMPDIR tests/workflow.test.sh
 run "run-all --affected suite selection" tests/affected.test.sh
 run "CI matrix plan (scripts/ci-plan.py: affected suites, fail-safe full, Windows list)" env -u TMPDIR tests/ci-plan.test.sh
 run "run-all -j scheduler (order, counts, concurrency cap, live lane, run1 alone)" tests/run-all-parallel.test.sh
@@ -1433,6 +1466,8 @@ run "engineering routing contract unchanged (golden, stand-in workspace)" env -u
 run "repos without a remote do not crash status or the git guard" env -u TMPDIR tests/registry-nulls.test.sh
   run "domain and artifact-kind routing (stand-in workspace)" env -u TMPDIR tests/domains-routing.test.sh
   run "Game Design domain: routing, feature-state ownership, standalone (no game-ai-workflows)" env -u TMPDIR tests/domains.test.sh
+run "domain foundation (context --kind/--domain resolve each domain lead, plugin copy)" env -u TMPDIR tests/domains-foundation.test.sh
+run "asset manifest checker (license, delivery path inside the repo)" env -u TMPDIR tests/asset-manifest.test.sh
 run "Game Design production workflow" tests/design-workflow.test.sh
 run "dogfood write grader (offline, recorded transcripts)" tests/dogfood-grader.test.sh
 run "UI/UX production workflow" tests/ui-workflow.test.sh

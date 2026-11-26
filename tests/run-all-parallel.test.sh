@@ -5,6 +5,7 @@
 # overlap each other, a block's lines are counted, a run1 suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
 # Killed workers cannot hang the queue; shared config classification permits only whole added branch/worktree sections.
 # A shared-config WARN is counted in the summary (copy removed; kept on FAIL); a passing suite's RETRY lines show under its PASS line.
+# The suite registration inline check (suite_registration) fails an unregistered tests/*.test.sh and a stale exemption.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -381,18 +382,53 @@ out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
 miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
-    scripts/checks/netcode-headless.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
+    scripts/checks/netcode-headless.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py \
+    tests/workflow.test.sh tests/handoff-e2e.test.sh tests/artifact-quality.test.sh tests/asset-manifest.test.sh tests/domains-foundation.test.sh; do
   grep -qx "$s" <<<"$real" || miss+=" $s"; done
-for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
+for s in tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
 rel=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites --release)
 [ "$(grep -vx 'tests/installed-safety.sh' <<<"$rel")" = "$real" ] && grep -qx tests/installed-safety.sh <<<"$rel" || miss+=" release:installed-safety"
 [ "$rc" = 0 ] && [ -z "$miss" ] && [ "$(sort <<<"$real" | uniq -d)" = "" ] \
   && good "--list-suites on run-all.sh: suites and gated scripts, no orphan or syntax-check path ($(wc -l <<<"$real") names)" \
   || no "--list-suites (run-all.sh) wrong:$miss" "$real"
-out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/handoff-e2e.test.sh,tests/git-guard.test.sh,tests/orca-wait.test.sh 2>&1); rc=$?
-[ "$rc" = 2 ] && grep -q "unknown suite 'tests/handoff-e2e.test.sh'" <<<"$out" && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
+out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/git-guard.test.sh,tests/orca-wait.test.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
   && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
   && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
+# a scripts/factory-workflow.py change selects the now registered tests/workflow.test.sh (tests/affected.py import closure)
+printf 'scripts/factory-workflow.py\n' > "$TMP/wf-changed.txt"
+out=$(cd "$ROOT" && python3 -B tests/affected.py select "$TMP/wf-changed.txt" tests/workflow.test.sh 2>&1); rc=$?
+[ "$rc" = 0 ] && good 'affected.py selects tests/workflow.test.sh for a scripts/factory-workflow.py change' \
+  || no "affected.py select workflow.test.sh for scripts/factory-workflow.py (rc=$rc)" "$out"
+# suite registration (inline check): every tests/*.test.sh has a run line or a SUITE_EXEMPT entry; an exemption for a
+# missing or registered file fails. suite_registration runs against a temp tree with a stand-in run-all file.
+mkdir -p "$TMP/reg/tests"
+printf '%s\n' 'run "a" env -u TMPDIR tests/a.test.sh' 'if [ -f tests/b.test.sh ]; then run "b" tests/b.test.sh; fi' > "$TMP/reg/plan.sh"
+for s in a b exempt zz-unregistered; do printf '#!/usr/bin/env bash\n' > "$TMP/reg/tests/$s.test.sh"; done
+cat > "$TMP/reg-check.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+cd "$REG" || exit 1
+echo '== unregistered'; SUITE_EXEMPT="tests/exempt.test.sh"; suite_registration "$REG/plan.sh"
+rm -f tests/zz-unregistered.test.sh
+echo '== clean'; suite_registration "$REG/plan.sh"
+echo '== bad exemptions'; SUITE_EXEMPT="tests/exempt.test.sh tests/a.test.sh tests/gone.test.sh"; suite_registration "$REG/plan.sh"
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" REG="$TMP/reg" env -u RUNALL_SUITES_FROM bash "$TMP/reg-check.sh" 2>&1); rc=$?
+sect() { sed -n "/^== $1\$/,/^== /{/^== /d;p;}" <<<"$out"; }
+s1=$(sect unregistered); s2=$(sect clean); s3=$(sect 'bad exemptions')
+[ "$rc" = 0 ] && [ "$(grep -c '^FAIL' <<<"$s1")" = 1 ] \
+  && grep -qx 'FAIL  suite registration: tests/zz-unregistered.test.sh has no run line in tests/run-all.sh and no SUITE_EXEMPT entry' <<<"$s1" \
+  && ! grep -q '^PASS' <<<"$s1" && ! grep -q 'exempt.test.sh\|tests/a.test.sh\|tests/b.test.sh' <<<"$s1" \
+  && good 'suite registration fails an unregistered tests/*.test.sh by name and passes run lines and exemptions' \
+  || no "suite registration: unregistered file (rc=$rc)" "$out"
+[ "$rc" = 0 ] && grep -qx 'PASS  suite registration: 3 tests/\*.test.sh files each have a run line or a SUITE_EXEMPT entry' <<<"$s2" \
+  && ! grep -q '^FAIL' <<<"$s2" && good 'suite registration passes when every suite has a run line or an exemption' \
+  || no "suite registration: clean tree (rc=$rc)" "$out"
+[ "$rc" = 0 ] && [ "$(grep -c '^FAIL' <<<"$s3")" = 2 ] && ! grep -q '^PASS' <<<"$s3" \
+  && grep -qx 'FAIL  suite registration: SUITE_EXEMPT entry tests/a.test.sh also has a run line in tests/run-all.sh (drop the exemption)' <<<"$s3" \
+  && grep -qx 'FAIL  suite registration: SUITE_EXEMPT entry tests/gone.test.sh does not exist' <<<"$s3" \
+  && good 'suite registration fails an exemption that is registered or names no file' \
+  || no "suite registration: bad exemptions (rc=$rc)" "$out"
 # a listed suite that is absent from the tree (a run line behind `if [ -f ... ]`) is not listed for run-all's own
 # run lines and is rejected by --only-suites; a stand-in list (RUNALL_SUITES_FROM) keeps every name it lists
 printf '%s\n' 'run "present" tests/git-guard.test.sh' 'if [ -f tests/zz-absent.test.sh ]; then run "absent" tests/zz-absent.test.sh; fi' \
