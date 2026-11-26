@@ -247,9 +247,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         <a spec file of this plan>` on a composer line, alone or after a composer marker (`>`, `|` and the like; an
         echoed command that carries the pointer is no pointer; a wrapped pointer is joined), its last output is older
         than --idle seconds (default 120) and the task made no progress since the spec file was written (no new commit
-        on the task branch, no new lead report, no new review or QA verdict). One row per terminal: task, handle, idle
-        seconds, ok or STUCK, reason, and for a STUCK one the exact send command. --send runs `orca terminal send --terminal H --text <CR>` once per
-        STUCK terminal and writes <task>__nudge.json (handle, time, spec path); a spec that was already nudged is never
+        on the task branch, no new lead report, no new review or QA verdict). An implement spec
+        (`<task>-implement-<digest>.md`) counts only its own subtask's progress (a review or QA verdict of the subtask
+        whose implementer record names that spec, or a commit on its child branch); an unmapped one counts none.
+        One row per terminal: task, handle, idle seconds, ok or STUCK, reason, and for a STUCK one the exact send
+        command. --send runs `orca terminal send --terminal H --text <CR>` once per STUCK terminal and writes <task>__nudge.json (handle, time, spec path); a spec that was already nudged is never
         sent again: `nudged, still stuck: relaunch the session`. Without --send nothing is written. Orca missing or
         unreachable: a note, exit 0. Exit 1 when a send failed, 2 usage. status shows a `stuck?:` note on a task whose
         last nudge record shows it still stuck and which made no progress since.
@@ -1862,6 +1864,7 @@ def orca_prompt(a, prompt, plan=None, note=None):
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     path = os.path.abspath(os.path.join(root, "specs", f"{task}-{phase}-{digest}.md"))
     fstate.write_text(path, prompt)
+    a._spec_path = path  # dispatch --phase implement records it, so nudge maps the spec to its subtask
     return f"Read your task spec at {path} and follow it."
 
 
@@ -2856,11 +2859,13 @@ def cmd_dispatch(a, reg):
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
         # an ad hoc --paths session of its own model (no subtask id) is a slice: the task's record keeps its implementer
         if a.runner != "print" and (sub or not (a.paths and a.agent)):
-            pr.record(plan, task["id"], sid, "implementer",
-                      {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
-                       "paths": paths or task["paths"],
-                       "start": start,
-                       "timestamp": now_utc()})
+            rec = {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
+                   "paths": paths or task["paths"],
+                   "start": start,
+                   "timestamp": now_utc()}
+            if a.runner == "orca" and getattr(a, "_spec_path", None):
+                rec["spec"] = a._spec_path  # the implement spec this session got: nudge maps it to the subtask
+            pr.record(plan, task["id"], sid, "implementer", rec)
         child_note(place)
         return 0
     if placement == "child":
@@ -5098,6 +5103,54 @@ def task_progress_since(plan, reg, task, ts):
     return None
 
 
+def implement_spec_name(task_id):
+    """The basename of an implement spec of task `task_id`, as orca_prompt writes it for --phase implement."""
+    return re.compile(re.escape(fstate.session_key(task_id)) + r"-implement-[0-9a-f]{16}[.]md")
+
+
+def implement_progress_since(plan, reg, task, spec, ts):
+    """The progress of the one subtask whose implement spec is `spec` after epoch seconds `ts`, or None: `subtask <sid>
+    verdict` (a review or QA verdict file of that subtask) or `subtask <sid> commit` (its child branch tip's committer
+    time). The subtask is the one whose `<task>@<sid>__implementer.model.json` record names `spec`; an implement spec
+    that maps to no subtask has no progress of its own (task commits, the lead report and sibling verdicts never count:
+    the lead commits subtask work and sibling implementers report). Read-only; a garbled or missing record maps nothing."""
+    vdir = verdict_dir(plan)
+    want = os.path.normcase(os.path.realpath(spec))
+    pre = f"{safe_name(task['id'])}{SUB_SEP}"
+    sid = None
+    for n in sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []:
+        if not (n.startswith(pre) and n.endswith(IMPL_TAIL) and len(n) > len(pre) + len(IMPL_TAIL)):
+            continue
+        rec = fstate.read_json(os.path.join(vdir, n))
+        got = rec.get("spec") if isinstance(rec, dict) else None
+        if isinstance(got, str) and got and os.path.normcase(os.path.realpath(got)) == want:
+            sid = n[len(pre):-len(IMPL_TAIL)]
+            break
+    if sid is None:
+        return None
+    stem = glob.escape(f"{safe_name(task['id'])}{SUB_SEP}{sid}")
+    for kind in ("review", "qa"):
+        for pattern in (f"{stem}__{kind}.json", f"{stem}__{kind}__*.json"):
+            for path in glob.glob(os.path.join(glob.escape(vdir), pattern)):
+                if path.endswith(".model.json"):
+                    continue
+                try:
+                    if os.path.getmtime(path) > ts:
+                        return f"subtask {sid} verdict"
+                except OSError:
+                    continue
+    info = repo_info(plan, reg, task["repo"])
+    if info["path"]:
+        child = child_branch(task_branch(plan, info, task), sid, "implement")
+        out, rc = git(info["path"], "log", "-1", "--format=%ct", f"refs/heads/{child}")
+        try:
+            if rc == 0 and out and int(out) > ts:
+                return f"subtask {sid} commit"
+        except ValueError:
+            pass
+    return None
+
+
 def nudge_notes(plan, reg, task):
     """The `stuck?:` note of a task whose latest nudge record entry still shows the unsubmitted start prompt and which
     made no progress since that check; [] otherwise. A missing or garbled record is no opinion, never an error."""
@@ -5719,7 +5772,11 @@ def cmd_nudge(a, reg):
             except OSError:
                 print(f"{head}  ok  spec file unreadable (no opinion)")
                 continue
-            progress = task_progress_since(plan, reg, t, since)
+            # an implement spec counts only its own subtask's progress: the lead commits subtask work and sibling
+            # implementers report, so task-level progress never proves this session started
+            progress = (implement_progress_since(plan, reg, t, spec, since)
+                        if implement_spec_name(tid).fullmatch(os.path.basename(spec))
+                        else task_progress_since(plan, reg, t, since))
             if progress:
                 print(f"{head}  ok  progress since the spec was written: {progress}")
                 continue
