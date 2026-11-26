@@ -245,7 +245,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         the Orca terminals of that worktree (`orca terminal list --json`, read-only) and reads each screen (`orca
         terminal read --screen --json`). A terminal is STUCK only when its screen still shows `Read your task spec at
         <a spec file of this plan>` on a composer line, alone or after a composer marker (`>`, `|` and the like; an
-        echoed command that carries the pointer is no pointer; a wrapped pointer is joined), its last output is older
+        echoed command that carries the pointer is no pointer; a wrapped pointer is joined). When horizontal rules are
+        present, the pointer must start in the composer region; activity after it indicates submission. Its last output is older
         than --idle seconds (default 120) and the task made no progress since the spec file was written (no new commit
         on the task branch, no new lead report, no new review or QA verdict). An implement spec
         (`<task>-implement-<digest>.md`) counts only its own subtask's progress (a review or QA verdict of the subtask
@@ -5655,6 +5656,13 @@ NUDGE_POINTER_JOINED = re.compile(r"Read your task spec at\s*(\S.*?\.md)")  # th
 # what a composer line may show before the prompt besides whitespace: > and | and the Unicode prompt and box marks
 # U+203A, U+276F, U+00BB, U+2502, U+2503
 NUDGE_COMPOSER_MARKERS = ">›❯»│┃|"
+NUDGE_RULE_CHARS = "─━═"
+NUDGE_ACTIVITY = re.compile(r"^[●✻⎿]|Ran \d+ shell command|Read \d+ file")
+
+
+def nudge_rule_line(line):
+    """Whether a stripped screen line is a horizontal composer rule."""
+    return len(line) >= 20 and all(c in NUDGE_RULE_CHARS for c in line)
 
 
 def nudge_spec(plan, tail):
@@ -5662,10 +5670,13 @@ def nudge_spec(plan, tail):
     lines; each is stripped (Orca indents a wrapped line). The pointer is searched in the lines joined by newline and by a
     space (it wraps after `at`) and, for a path that itself wraps, joined with nothing. A match counts only on a composer
     line: the text before `Read your task spec at` on the screen line where the match starts is empty or only composer
-    markers (whitespace and NUDGE_COMPOSER_MARKERS), so an echoed command that carries the pointer (`orca worker-start --spec
-    'Read your task spec at ...'`) is no pointer and the search goes on. The first counting match that names an existing
-    file inside <verdict dir>/specs/ wins."""
+    markers (whitespace and NUDGE_COMPOSER_MARKERS). When rules are present, the line must also be below the last-but-one
+    rule (or the sole rule). Activity on a line after the pointer's end indicates submission. An echoed command that
+    carries the pointer is no pointer; the search continues until a counting match names an existing file inside
+    <verdict dir>/specs/."""
     stripped = [str(ln).strip() for ln in tail]
+    rules = [i for i, ln in enumerate(stripped) if nudge_rule_line(ln)]
+    region_start = rules[-2 if len(rules) >= 2 else -1] + 1 if rules else 0
     specs_dir = os.path.normcase(os.path.realpath(os.path.join(verdict_dir(plan), "specs")))
     for sep, rx in (("\n", NUDGE_POINTER), (" ", NUDGE_POINTER), ("", NUDGE_POINTER_JOINED)):
         text = sep.join(stripped)
@@ -5676,8 +5687,10 @@ def nudge_spec(plan, tail):
         m = rx.search(text)
         while m:
             i = bisect.bisect_right(starts, m.start()) - 1
+            end = bisect.bisect_right(starts, m.end() - 1) - 1
             prefix = stripped[i][:m.start() - starts[i]]
-            if all(c.isspace() or c in NUDGE_COMPOSER_MARKERS for c in prefix):
+            if (i >= region_start and all(c.isspace() or c in NUDGE_COMPOSER_MARKERS for c in prefix)
+                    and not any(NUDGE_ACTIVITY.search(ln) for ln in stripped[end + 1:])):
                 path = m.group(1).strip()
                 real = os.path.normcase(os.path.realpath(path))
                 if real.startswith(specs_dir + os.sep) and os.path.isfile(path):
