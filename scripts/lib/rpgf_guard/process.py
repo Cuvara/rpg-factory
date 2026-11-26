@@ -2,7 +2,7 @@
 import re
 import shlex
 
-from .shell import expand, prog
+from .shell import expand, prog, segments, tokenize
 
 PROCESS_TERMINATION_RULE = (
     "Terminating processes by image name or command-line pattern kills unrelated user and agent processes. "
@@ -13,9 +13,9 @@ PROCESS_TERMINATION_RULE = (
 # arguments of grep / echo / git commit stay quiet).
 PROCESS_KILL_FALLBACK = re.compile(
     r"(?is)(?:^|[;&|\n])\s*(?:(?:\S*[/\\])?taskkill(?:\.exe)?\b(?:(?![;&|\n]).)*?/{1,2}(?:im|fi)\b"
-    r"|stop-process\b(?:(?![;&|\n]).)*?-(?:name|processname)\b|(?:pkill|killall)\b)")
-PROCESS_PREFILTER = ("kill", "terminat", "stop-process", "spps", "wmic", "remove-cim")  # cheap: skip parsing without these
-TERMINATORS = {"taskkill", "taskkill.exe", "stop-process", "spps", "kill", "pkill", "killall", "pskill", "remove-ciminstance"}
+    r"|stop-process\b(?:(?![;&|\n]).)*?-(?:name|processname)\b|(?:pkill|killall)\b|fuser\b(?:(?![;&|\n]).)*?\s-\w*k)")
+PROCESS_PREFILTER = ("kill", "terminat", "stop-process", "spps", "wmic", "remove-cim", "fuser")  # cheap: skip parsing without these
+TERMINATORS = {"taskkill", "taskkill.exe", "stop-process", "spps", "kill", "pkill", "killall", "killall5", "pskill", "remove-ciminstance"}
 CIM_QUERIES = {"get-ciminstance", "gcim", "get-wmiobject", "gwmi", "invoke-cimmethod", "icim"}
 GREP_LIKE = {"grep", "egrep", "fgrep", "rg", "awk", "findstr", "select-string", "sls"}
 START_PROCESS = {"start-process", "start", "saps"}
@@ -85,10 +85,48 @@ def _clean(argv):
     return [a for a in argv if a != ""]
 
 
-def process_findings(argvs):
+def _own_pid_targets(command, shell):
+    """Recognize unambiguously assigned own PIDs and direct PowerShell variable pipelines."""
+    tokens = tokenize(command, shell)
+    assignments = {}
+    for seg in segments(tokens, shell):
+        if shell == "bash" and seg and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[0]):
+            name, value = seg[0].split("=", 1)
+            assignments.setdefault(name, []).append(len(seg) == 1 and value == "$!")
+        elif shell == "powershell" and len(seg) >= 3 and seg[0].startswith("$") and seg[1] == "=":
+            name = seg[0][1:].lower()
+            assignments.setdefault(name, []).append(prog(seg[2]) in START_PROCESS and
+                                                   any(a.lower() == "-passthru" for a in seg[3:]))
+    own = {name for name, values in assignments.items() if values == [True]}
+    # A bare Stop-Process is safe only if every such occurrence is directly piped from an own variable.
+    bare_stops = [i for i, t in enumerate(tokens) if prog(t) in {"stop-process", "spps"}
+                  and (i + 1 == len(tokens) or tokens[i + 1] in {";", "|", "&", "\n"})]
+    safe_pipe = bool(bare_stops) and all(i >= 2 and tokens[i - 1] == "|" and
+                                         tokens[i - 2].lower().lstrip("$") in own and
+                                         tokens[i - 2].startswith("$") for i in bare_stops)
+    return own, safe_pipe
+
+
+def _own_terminator(p, args, own, safe_pipe):
+    if p == "kill":
+        targets = args
+    elif p in {"stop-process", "spps"}:
+        if not args:
+            return safe_pipe
+        targets = args[1:] if args[0] in {"-id", "-pid"} else args
+    else:
+        return False
+    suffix = r"(?:\.id)?" if p in {"stop-process", "spps"} else ""
+    return bool(targets) and all(re.fullmatch(r"\$([a-z_][a-z0-9_]*)" + suffix, a) and
+                                 re.fullmatch(r"\$([a-z_][a-z0-9_]*)" + suffix, a).group(1) in own
+                                 for a in targets)
+
+
+def process_findings(argvs, own=None, safe_pipe=False, shell="bash"):
     """(direct, selector, terminator) over every argv. direct = a terminator that names its targets host-wide
     (image name / filter / pattern); selector = a process query by name or pattern; terminator = any kill."""
     direct = selector = terminator = False
+    own = own or set()
     greps = any(a and prog(a[0]) in GREP_LIKE for a in argvs)
     work = []
     for argv in argvs:  # a script block glued to the previous word (`ForEach-Object {$_.Kill`) starts a command
@@ -102,13 +140,19 @@ def process_findings(argvs):
             continue
         p = prog(argv[0])
         args = [a.lower() for a in argv[1:]]
+        if p in {"busybox", "busybox.exe"} and args and prog(args[0]) in {"pkill", "killall"}:
+            work.append(argv[1:])
+            continue
+        if p in {"pkill.exe", "killall.exe"}:
+            p = p[:-4]
         if p in START_PROCESS:
             for i, a in enumerate(argv[1:], 1):
                 if prog(a) in TERMINATORS or prog(a) == "wmic":
                     work.append([a] + [x for t in argv[i + 1:] for x in t.split(",")])
                     break
             continue
-        if p in TERMINATORS:
+        target_args = args if shell == "powershell" else argv[1:]
+        if p in TERMINATORS and not _own_terminator(p, target_args, own, safe_pipe):
             terminator = True
         if p in {"taskkill", "taskkill.exe"}:
             direct = direct or any(IMAGE_SELECTOR.match(a) for a in args)
@@ -116,8 +160,12 @@ def process_findings(argvs):
             direct = direct or any(PS_NAME_PARAM.match(a) for a in args)
         elif p == "kill":
             direct = direct or any(re.match(r"^-na(?:m(?:e)?)?$", a) for a in args) or "-1" in args[1:]
-        elif p in {"pkill", "killall", "pskill"}:
+        elif p in {"pkill", "killall", "killall5", "pskill"}:
             direct = True
+        elif p in {"fuser", "fuser.exe"} and any(re.match(r"^-[^-]*k", a) or a == "--kill" for a in args):
+            direct = True
+        elif p in {"%", "foreach-object"} and (args == ["kill"] or args == ["-membername", "kill"]):
+            terminator = True
         elif p.endswith((".kill", ".terminate")):
             terminator = True
         elif p == "wmic" and "process" in args:
@@ -140,6 +188,8 @@ def process_findings(argvs):
             selector = selector or greps or any(not a.startswith("-") and not re.match(r"^[aeuxfwol]+$|^\d+$", a) for a in args)
         elif p in {"pgrep", "pidof", "tasklist"} or "getprocessesbyname" in p:
             selector = True
+        elif p in {"lsof", "lsof.exe"} and any(re.match(r"^-[^-]*t", a) for a in args):
+            selector = True
     return direct, selector, terminator
 
 
@@ -147,14 +197,16 @@ def process_kill_hits(payload, registry):
     """Flag host-wide process termination: a terminator that selects by image / pattern, or a process query by
     name / pattern together with any terminator (`taskkill //PID $(powershell ... Win32_Process ...)`). It is
     host safety, not repo policy: it runs outside the workspace too. Works on parsed argv (quoted arguments of
-    grep / echo / git commit are data); raw text only when the command cannot be parsed. Never executes it."""
+    grep / echo / git commit are data); raw text only when the command cannot be parsed. EncodedCommand is
+    opaque and cannot be inspected. Never executes the command."""
     command = (payload.get("tool_input") or {}).get("command") or ""
     low = command.lower()
     if not any(w in low for w in PROCESS_PREFILTER):
         return []
     shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
     try:
-        direct, selector, terminator = process_findings(_process_argvs(command, shell))
+        own, safe_pipe = _own_pid_targets(command, shell)
+        direct, selector, terminator = process_findings(_process_argvs(command, shell), own, safe_pipe, shell)
         hit = direct or (selector and terminator)
     except Exception:
         hit = bool(PROCESS_KILL_FALLBACK.search(command))
