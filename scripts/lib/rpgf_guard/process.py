@@ -81,7 +81,8 @@ def _clean(argv):
         argv = argv[2:]  # `$ps = Get-CimInstance ...`, `foreach ($p in Get-CimInstance ...)`
     if argv:
         argv[0] = argv[0].lstrip("{")
-        argv[-1] = argv[-1].rstrip("}") if len(argv) > 1 or argv[0] else argv[-1]
+        if (len(argv) > 1 or argv[0]) and not re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", argv[-1]):
+            argv[-1] = argv[-1].rstrip("}")
     return [a for a in argv if a != ""]
 
 
@@ -97,6 +98,16 @@ def _own_pid_targets(command, shell):
             name = seg[0][1:].lower()
             assignments.setdefault(name, []).append(prog(seg[2]) in START_PROCESS and
                                                    any(a.lower() == "-passthru" for a in seg[3:]))
+        if shell == "bash":
+            for i, token in enumerate(seg):
+                if token in {"for", "select"} and i + 2 < len(seg) and seg[i + 2] == "in":
+                    assignments.setdefault(seg[i + 1], []).append(False)
+                elif token == "read":
+                    for name in seg[i + 1:]:
+                        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                            assignments.setdefault(name, []).append(False)
+        elif len(seg) >= 3 and seg[0].startswith("$") and seg[1].lower() == "in":
+            assignments.setdefault(seg[0][1:].lower(), []).append(False)
     own = {name for name, values in assignments.items() if values == [True]}
     # A bare Stop-Process is safe only if every such occurrence is directly piped from an own variable.
     bare_stops = [i for i, t in enumerate(tokens) if prog(t) in {"stop-process", "spps"}
@@ -109,17 +120,31 @@ def _own_pid_targets(command, shell):
 
 def _own_terminator(p, args, own, safe_pipe):
     if p == "kill":
-        targets = args
+        targets = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg in {"-s", "-n"}:
+                if i + 1 >= len(args):
+                    return False
+                i += 2
+                continue
+            if re.fullmatch(r"-(?:[0-9]+|(?:SIG)?(?:HUP|INT|QUIT|KILL|TERM|STOP|CONT|USR1|USR2))", arg):
+                i += 1
+                continue
+            targets.append(arg)
+            i += 1
     elif p in {"stop-process", "spps"}:
         if not args:
             return safe_pipe
-        targets = args[1:] if args[0] in {"-id", "-pid"} else args
+        args = [a for a in args if a not in {"-force", "-passthru", "-confirm:$false", "-whatif"}]
+        targets = args[1:] if args and args[0] in {"-id", "-pid"} else args
     else:
         return False
-    suffix = r"(?:\.id)?" if p in {"stop-process", "spps"} else ""
-    return bool(targets) and all(re.fullmatch(r"\$([a-z_][a-z0-9_]*)" + suffix, a) and
-                                 re.fullmatch(r"\$([a-z_][a-z0-9_]*)" + suffix, a).group(1) in own
-                                 for a in targets)
+    pattern = (r"\$([a-z_][a-z0-9_]*)(?:\.id)?" if p in {"stop-process", "spps"} else
+               r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
+    matches = [re.fullmatch(pattern, a) for a in targets]
+    return bool(matches) and all(m and next(g for g in m.groups() if g is not None) in own for m in matches)
 
 
 def process_findings(argvs, own=None, safe_pipe=False, shell="bash"):

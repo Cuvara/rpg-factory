@@ -236,9 +236,20 @@ check allow "$SERVER" 'kill 1234'
 check allow "$SERVER" 'kill $!'
 check allow "$SERVER" 'kill %1'
 check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -9 $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -TERM $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -s TERM $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -n 9 $pid'
+check allow "$SERVER" './run.sh & PID=$!; pgrep -f run.sh; kill ${PID}'
 check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id -Force -PassThru -Confirm:$false -WhatIf' "" PowerShell
 check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; $p | Stop-Process' "" PowerShell
 check high "$SERVER" './run.sh & pid=$!; kill $(pgrep -f run.sh)'
+check high "$SERVER" './run.sh & pid=$!; for pid in $(pgrep x); do kill $pid; done'
+check high "$SERVER" './run.sh & pid=$!; pgrep x | while read pid; do kill $pid; done'
+check high "$SERVER" './run.sh & pid=$!; select pid in $(pgrep x); do kill $pid; done'
+check high "$SERVER" './run.sh & PID=$!; pgrep x; kill $pid'
+check high "$SERVER" '$p = Start-Process x -PassThru; foreach ($p in Get-Process dotnet) { Stop-Process -Id $p.Id }' "" PowerShell
 check high "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet | Stop-Process' "" PowerShell
 
 # a query that selects processes by name/pattern + any terminator, whatever the separators (RV-B9 MAJOR-1)
