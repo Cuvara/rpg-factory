@@ -41,7 +41,7 @@
       "kind": "code",
       "grade": "standard",
       "grade_reason": "tier choice and lead prompts of every plan",
-      "objective": "Backlog topic workflow-slim-followups (docs/plans/backlog.md), in scripts/factory-pipeline.py. (1) The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines: make the --repo form measure changed lines the same way (same thresholds) when it has a checkout and a base, and say in its output what it measured. (2) The base health hint of `dispatch --phase lead` goes to stderr only, so the run lead sees it and the task lead does not: put it into the lead spec too (stderr unchanged). (3) changelog.d/base-health.md does not say the verify prompt carries known_failing too: correct it if that fragment still exists unreleased, else say so in a new fragment. Do not change the tier XS one-task rule (left in the backlog). Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh. Changelog fragment changelog.d/session-lows-tier.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "objective": "Backlog topic workflow-slim-followups (docs/plans/backlog.md), in scripts/factory-pipeline.py. (1) The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines: make the --repo form measure changed lines the same way (same thresholds) when it has a checkout and a base, and say in its output what it measured. (2) The base health hint of `dispatch --phase lead` goes to stderr only, so the run lead sees it and the task lead does not: put it into the lead spec too (stderr unchanged). (3) changelog.d/base-health.md does not say the verify prompt carries known_failing too: correct it if that fragment still exists unreleased, else say so in a new fragment. Do not change the tier XS one-task rule (left in the backlog). Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh. Changelog fragment changelog.d/session-lows-tier.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. (4) Added by the run lead (docs follow-up of task dispatch-health, in the already owned docs/pipeline-cli.md): its nudge section does not list the new `--stall` and `--orca-run` options (STALLED workers) and status does not describe the `Slots: LEFT BY VERIFY` line; document both from the code.",
       "paths": [
         "scripts/factory-pipeline.py",
         "tests/pipeline.test.sh",
@@ -59,7 +59,8 @@
         "tier --repo measures changed lines with the same thresholds and says what it measured",
         "the lead spec carries the base health hint",
         "the base-health changelog text is correct",
-        "the named suite passes"
+        "the named suite passes",
+        "docs/pipeline-cli.md documents nudge --stall/--orca-run and the LEFT BY VERIFY slot line"
       ]
     },
     {
