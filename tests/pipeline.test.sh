@@ -2587,6 +2587,7 @@ if section == 'tier':
     write('docs/guide.md', 12)  # 2 changed lines, uncommitted
     out = tier('docs/guide.md')
     assert out.startswith('Tier: XS ') and '2 changed line(s)' in out and 'above XS' not in out, out
+    assert '  changed lines: 2 (git diff --numstat HEAD plus untracked, 1 file(s))' in out.splitlines(), out
     assert '"tier": "XS"' in cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md', 'changelog.d/x.md')
     # one path that is not prose is never XS: the S rule takes it
     out = tier('docs/guide.md', 'code.py')
@@ -2601,7 +2602,36 @@ if section == 'tier':
     assert out.startswith('Tier: S ') and '4 files > 3' in out, out
     assert m.pr.above_xs(rule, ['a.md', 'skills/x/'], 40) == []
     assert m.pr.above_xs(rule, ['a.md'], 41) == ['41 changed lines > 40']
-    print('tier: XS printed only for prose within the thresholds')
+    # the plain form (a routing snapshot) measures the changed lines too: a committed prose-only change of 50 lines on
+    # the branch, measured against the merge-base of the snapshot's base, is above XS
+    write('docs/plain.md', 50); git('add', '--', 'docs/plain.md'); git('commit', '-qm', 'plain')
+    def snap(name, path, base):
+        ctx = {'repos': [{'repo': 'fixture', 'path': path, 'branch_diff_base': base, 'touched': ['docs'],
+                          'files': [{'path': 'docs/plain.md', 'source': 'branch'}], 'contracts': [], 'generated_hits': []}]}
+        f = work / (name + '.json'); f.write_text(json.dumps(ctx)); return f
+    out = cli('tier', '--context-json', snap('ctx-base', str(repo), 'main'))
+    assert out.startswith('Tier: S ') and 'above XS: 50 changed lines > 40' in out, out
+    assert '  changed lines: 50 (git diff --numstat $(git merge-base main HEAD) plus untracked, 1 file(s))' in out.splitlines(), out
+    o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-json', str(repo), 'main')))
+    assert o['facts']['changed_lines'] == 50 and 'merge-base main HEAD' in o['facts']['lines_basis'], o['facts']
+    # no base: against HEAD (the change is committed, 0 lines); no checkout: not measured
+    out = cli('tier', '--context-json', snap('ctx-head', str(repo), None))
+    assert out.startswith('Tier: XS ') and '  changed lines: 0 (git diff --numstat HEAD plus untracked, 1 file(s))' in out.splitlines(), out
+    out = cli('tier', '--context-json', snap('ctx-none', str(work / 'missing'), 'main'))
+    assert out.startswith('Tier: XS ') and '  changed lines: not measured (no checkout)' in out.splitlines(), out
+    o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-none-json', str(work / 'missing'), 'main')))
+    assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    # no branch_diff_base (factory-context.sh --paths leaves it null): the --base of the args, both spellings
+    for given in (['--base', 'main'], ['--base=main']):
+        out = cli('tier', '--context-json', snap('ctx-given', str(repo), None), '--', *given)
+        assert out.startswith('Tier: S ') and 'above XS: 50 changed lines > 40' in out, (given, out)
+        assert '  changed lines: 50 (git diff --numstat $(git merge-base main HEAD) plus untracked, 1 file(s))' in out.splitlines(), out
+    # tier --plan without a checkout measures nothing: no changed_lines fact, as in the plain form
+    plan['repos']['fixture']['path'] = str(work / 'missing'); save()
+    o = json.loads(cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md'))
+    assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    plan['repos']['fixture']['path'] = str(repo); save()
+    print('tier: XS printed only for prose within the thresholds; the plain form measures changed lines')
 
 if section == 'validate':
     assert errors() == [], errors()
@@ -3523,10 +3553,13 @@ expect "worker-start: --orca-run names the Run when the plan records none" 0 "^o
 refute "worker-start: no Run known, no --run" "^orca orchestration worker-start .* --run " dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca
 # base health hint: print only, for a repo with a GitHub remote
 refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+refute_spec "base health: no line in the lead spec without a remote" "Base health:" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote add origin https://github.com/x/y.git
 expect "base health hint: a GitHub remote prints the gh command" 0 'base health: run `gh run list --branch [^ ]+ --limit 1`' dispatch "$OK" --task gw --phase lead --runner orca
+expect_spec "base health: the lead spec carries the hint for the task lead" '^Base health: run `gh run list --branch [^ ]+ --limit 1` before starting \(print only; a red base is known_failing, not this task.s failure\)\.$' dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote set-url origin https://example.com/x/y.git
 refute "base health hint: none for a non-GitHub remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+refute_spec "base health: no line in the lead spec for a non-GitHub remote" "Base health:" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote remove origin
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
 for ph in "--task gw --phase lead" "--task gw --phase implement" "--task gw --phase review --sha abc1234" "--task gw --phase qa --sha abc1234"; do
@@ -4059,6 +4092,18 @@ X=$(ctx l '{"repos":[{"repo":"server","touched":["server.proto"],"files":[{"path
 expect "a contract: L" 0 "above M: contract wire-generated" tier --context-json "$X"
 X=$(ctx l2 '{"repos":[{"repo":"server","touched":["server.a"],"files":[{"path":"a","source":"given"}],"contracts":[],"generated_hits":[]},{"repo":"client","touched":["client.a"],"files":[{"path":"b","source":"given"}],"contracts":[],"generated_hits":[]}]}')
 expect "two repos: L" 0 "^Tier: L" tier --context-json "$X"
+# the plain form through factory-context.sh: --paths leaves branch_diff_base null, so the --base of the args is the base
+# of the changed-line count (a workspace of its own with the registry's root markers: the routing engine never falls
+# back to a real workspace, and the linear scenario's server repo stays untouched)
+WT="$TMP/ws-tier"; ST="$WT/rpg-mmo-server"
+mkdir -p "$ST/backend" "$WT/IndieRPGMMOAdventure/ProjectSettings"; touch "$WT/IndieRPGMMOAdventure/ProjectSettings/ProjectVersion.txt"
+git init -q -b develop "$ST"; echo team > "$ST/backend/TEAM.md"; gi "$ST" add -- backend/TEAM.md; gi "$ST" commit -qm base
+gi "$ST" switch -q --no-track -c feat/docs/plain; mkdir -p "$ST/docs"; seq 50 > "$ST/docs/plain.md"
+gi "$ST" add -- docs/plain.md; gi "$ST" commit -qm plain
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base: a committed prose change above max_changed_lines is above XS" 0 "above XS: 50 changed lines > 40" tier -- --repo server --paths docs/plain.md --base develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base: the output names the merge-base it measured against" 0 '^  changed lines: 50 \(git diff --numstat \$\(git merge-base develop HEAD\) plus untracked, 1 file\(s\)\)$' tier -- --repo server --paths docs/plain.md --base develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base=: the = spelling is the same base" 0 "above XS: 50 changed lines > 40" tier -- --repo server --paths docs/plain.md --base=develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths without --base: against HEAD, the committed change counts 0 lines" 0 '^  changed lines: 0 \(git diff --numstat HEAD plus untracked, 1 file\(s\)\)$' tier -- --repo server --paths docs/plain.md
 
 case_end tier
 fi
