@@ -121,5 +121,11 @@
         "the named suites pass"
       ]
     }
+  ],
+  "known_failing": [
+    {
+      "check": "registry paths exist in workspace",
+      "reason": "workspace state: the game-authoring checkout is on feat/design/economy, which has no assetgen/runs/ or ui/requirements/ (5 handoff contract paths); scripts/check-registry.sh fails the same way on main 7a98590"
+    }
   ]
 }
