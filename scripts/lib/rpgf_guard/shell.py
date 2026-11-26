@@ -234,7 +234,7 @@ def expand(command, depth=0, shell="bash"):
             continue
         if p in CMDS:
             for k, a in enumerate(argv[1:], 1):
-                if a.lower() in {"/c", "/k"}:
+                if a.lower() in {"/c", "/k", "//c", "//k"}:
                     yield from expand(" ".join(argv[k + 1:]), depth + 1)
                     break
             else:
