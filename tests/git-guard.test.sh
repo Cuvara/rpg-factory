@@ -203,6 +203,7 @@ check high "$SERVER" 'Get-Process dotnet | Stop-Process -Force' "" PowerShell
 check high "$SERVER" 'Get-Process dotnet | % Kill' "" PowerShell
 check high "$SERVER" 'Get-Process dotnet | ForEach-Object Kill' "" PowerShell
 check high "$SERVER" 'Get-Process dotnet | ForEach-Object -MemberName Kill' "" PowerShell
+check high "$SERVER" '(Get-Process dotnet).Kill()' "" PowerShell
 check high "$SERVER" 'Get-CimInstance Win32_Process | Where-Object {$_.Name -eq "dotnet.exe"} | ForEach-Object {$_.Terminate()}' "" PowerShell
 check high "$SERVER" 'Get-WmiObject Win32_Process -Filter "Name=dotnet.exe" | Invoke-CimMethod -MethodName Terminate' "" PowerShell
 check high "$SERVER" 'Get-CimInstance Win32_Process -Filter "Name=dotnet.exe" | Where-Object {$_.CommandLine -like "*--filter*"} | % { Stop-Process -Id $_.ProcessId -Force }' "" PowerShell
