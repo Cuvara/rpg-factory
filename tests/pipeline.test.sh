@@ -2621,6 +2621,16 @@ if section == 'tier':
     assert out.startswith('Tier: XS ') and '  changed lines: not measured (no checkout)' in out.splitlines(), out
     o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-none-json', str(work / 'missing'), 'main')))
     assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    # no branch_diff_base (factory-context.sh --paths leaves it null): the --base of the args, both spellings
+    for given in (['--base', 'main'], ['--base=main']):
+        out = cli('tier', '--context-json', snap('ctx-given', str(repo), None), '--', *given)
+        assert out.startswith('Tier: S ') and 'above XS: 50 changed lines > 40' in out, (given, out)
+        assert '  changed lines: 50 (git diff --numstat $(git merge-base main HEAD) plus untracked, 1 file(s))' in out.splitlines(), out
+    # tier --plan without a checkout measures nothing: no changed_lines fact, as in the plain form
+    plan['repos']['fixture']['path'] = str(work / 'missing'); save()
+    o = json.loads(cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md'))
+    assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    plan['repos']['fixture']['path'] = str(repo); save()
     print('tier: XS printed only for prose within the thresholds; the plain form measures changed lines')
 
 if section == 'validate':
@@ -4082,6 +4092,18 @@ X=$(ctx l '{"repos":[{"repo":"server","touched":["server.proto"],"files":[{"path
 expect "a contract: L" 0 "above M: contract wire-generated" tier --context-json "$X"
 X=$(ctx l2 '{"repos":[{"repo":"server","touched":["server.a"],"files":[{"path":"a","source":"given"}],"contracts":[],"generated_hits":[]},{"repo":"client","touched":["client.a"],"files":[{"path":"b","source":"given"}],"contracts":[],"generated_hits":[]}]}')
 expect "two repos: L" 0 "^Tier: L" tier --context-json "$X"
+# the plain form through factory-context.sh: --paths leaves branch_diff_base null, so the --base of the args is the base
+# of the changed-line count (a workspace of its own with the registry's root markers: the routing engine never falls
+# back to a real workspace, and the linear scenario's server repo stays untouched)
+WT="$TMP/ws-tier"; ST="$WT/rpg-mmo-server"
+mkdir -p "$ST/backend" "$WT/IndieRPGMMOAdventure/ProjectSettings"; touch "$WT/IndieRPGMMOAdventure/ProjectSettings/ProjectVersion.txt"
+git init -q -b develop "$ST"; echo team > "$ST/backend/TEAM.md"; gi "$ST" add -- backend/TEAM.md; gi "$ST" commit -qm base
+gi "$ST" switch -q --no-track -c feat/docs/plain; mkdir -p "$ST/docs"; seq 50 > "$ST/docs/plain.md"
+gi "$ST" add -- docs/plain.md; gi "$ST" commit -qm plain
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base: a committed prose change above max_changed_lines is above XS" 0 "above XS: 50 changed lines > 40" tier -- --repo server --paths docs/plain.md --base develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base: the output names the merge-base it measured against" 0 '^  changed lines: 50 \(git diff --numstat \$\(git merge-base develop HEAD\) plus untracked, 1 file\(s\)\)$' tier -- --repo server --paths docs/plain.md --base develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base=: the = spelling is the same base" 0 "above XS: 50 changed lines > 40" tier -- --repo server --paths docs/plain.md --base=develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths without --base: against HEAD, the committed change counts 0 lines" 0 '^  changed lines: 0 \(git diff --numstat HEAD plus untracked, 1 file\(s\)\)$' tier -- --repo server --paths docs/plain.md
 
 case_end tier
 fi

@@ -12,10 +12,13 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 - XS applies only when every path is prose (`pipeline_route.prose_path`, see "dispatch" below), no path is a contract
   or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). All forms
   measure changed lines against the same `max_changed_lines`: the plain `tier -- <factory-context.sh args>` and
-  `--context-json` forms, with a checkout, count `git diff --numstat` against the merge-base of `--base` (else `HEAD`)
-  over the snapshot's files plus the lines of untracked ones; `tier --plan` counts the changed lines of the checkout,
-  and the gate those of the committed diff. The output names what was measured: `changed lines: <n> (<basis>)`, or
-  `changed lines: not measured (no checkout)`; `--json` carries `changed_lines` and `lines_basis`.
+  `--context-json` forms, with a checkout, count `git diff --numstat` over the snapshot's files plus the lines of
+  untracked ones, against the merge-base with `HEAD` of the repo's `branch_diff_base` (the branch scan), else of the
+  `--base` of the args (`--paths` leaves `branch_diff_base` null, so `tier -- --repo <key> --paths <files> --base <b>`
+  counts the committed lines since `<b>` too), else against `HEAD`; `tier --plan` counts the changed lines of the
+  checkout, and the gate those of the committed diff. The output names what was measured:
+  `changed lines: <n> (<basis>)`, or `changed lines: not measured (no checkout)`; `--json` carries `lines_basis`, and
+  `changed_lines` only when something was measured.
   An XS task has no task lead, task worktree or implement session: the run lead itself edits and
   commits it on the plan `topic` branch, dispatches one cross-model review and runs the task tier command (delivery.md
   section 10 step 1).
@@ -285,10 +288,10 @@ factory-pipeline.py nudge plan.json [--task <id>] [--idle SECONDS] [--stall SECO
   `observation.agentWait` is set; `ok  active (<n>s < <stall>s)` when the terminal was silent for less than `--stall`
   seconds (default 900); `ok ... (no opinion)` when a call fails or data is missing (worker-show, terminal list, no
   agent terminal or worktree, no `lastOutputAt`). Otherwise `STALLED  no turn start` (its last dispatch input ended
-  `turn_unobserved`, or it has no dispatch input record and `lastError` says the turn start was not observed) or `STALLED  turn ended without
-  worker_done`, followed by a `re-dispatch:` line: read the terminal (`orca terminal read --terminal <handle>`),
-  `orca orchestration worker-stop --dispatch <id>`, dispatch a fresh session with the same phase, and release the old
-  one with `orca orchestration worker-release --dispatch <id>`.
+  `turn_unobserved`, or it has no dispatch input record and `lastError` says the turn start was not observed) or
+  `STALLED  turn ended without worker_done`, followed by a `re-dispatch:` line: read the terminal
+  (`orca terminal read --terminal <handle>`), `orca orchestration worker-stop --dispatch <id>`, dispatch a fresh
+  session with the same phase, and release the old one with `orca orchestration worker-release --dispatch <id>`.
 - `--send` never sends anything for a `STALLED` row and nothing is written for it; a `STALLED` row does not change the
   exit code.
 
@@ -466,7 +469,8 @@ quota, idle terminal, a 401), then dispatch the role again.
 - A slot left by a verify dispatch: a slot whose holder is alive (or cannot be checked) in a task worktree of the plan
   (the task branch's worktree or one of its children) where, at or after the slot's start, that task's verify
   reported (a `qa` verdict, or a `review` FAIL, of the task or a subtask) or a worker of the task's Orca Run in that
-  checkout was released (`releaseCompletedAt`). Status prints `Slots: LEFT BY VERIFY slot <n> held by PID <pid>
+  checkout was released (`releaseCompletedAt`, else the `releaseRequestedAt` of a released row; a release with
+  neither time flags nothing). Status prints `Slots: LEFT BY VERIFY slot <n> held by PID <pid>
   [(Windows PID <winpid>)] in <checkout> since <start> [(alive)|(liveness unknown)]: task <id>: <what reported or
   was released, when> after the run started; stop that PID only: <command> (status never runs it)`. The command is
   `kill <pid>`, or `taskkill //PID <winpid> //T //F` when the slot has a Windows PID. The task row gets a note

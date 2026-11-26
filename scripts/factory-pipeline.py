@@ -13,9 +13,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
         pipeline.tiers.XS): every file prose (*.md, changelog.d/, skills/ directories), within max_files and
         max_changed_lines; `above XS:` names why not. The changed lines are those of the snapshot's files in each repo
-        with a checkout: `git diff --numstat` against the merge-base of the snapshot's base (factory-context.sh
-        --base) and HEAD, else against HEAD, plus the lines of untracked ones; without a checkout they are not
-        measured (count 0). `changed lines:` (--json: facts changed_lines, lines_basis) says what was measured.
+        with a checkout: `git diff --numstat` against the merge-base with HEAD of the repo's branch_diff_base (the
+        branch scan), else of the `--base` of the args (`--paths` leaves branch_diff_base null), else against HEAD,
+        plus the lines of untracked ones; without a checkout they are not measured (count 0). `changed lines:`
+        (--json: facts lines_basis, and changed_lines when measured) says what was measured.
   tier --plan <plan.json> --repo KEY --paths FILE... [--json]
         the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
         from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts. With a
@@ -320,11 +321,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         whose holder is alive (or cannot be checked) in a task worktree of the plan (the task branch's worktree or one
         of its children) where, at or after the slot's start, that task's verify reported (a `qa` verdict or a
         `review` FAIL of the task or a subtask) or a worker of the task's Orca Run in that checkout was released
-        (releaseCompletedAt). It prints `Slots: LEFT BY VERIFY slot <n> held by PID <pid> ... in <checkout> since
-        <start>: task <id>: <what reported or was released, when> ...; stop that PID only: <command>` (`kill <pid>`,
-        or `taskkill //PID <winpid> //T //F` when the slot has a Windows PID; stderr with --json, a text line only:
-        the schema's slot entries take no extra field), a note on the task row and the command first in `next`;
-        status never runs it.
+        (releaseCompletedAt, else releaseRequestedAt of a released row). It prints `Slots: LEFT BY VERIFY slot <n>
+        held by PID <pid> ... in <checkout> since <start>: task <id>: <what reported or was released, when> ...; stop
+        that PID only: <command>` (`kill <pid>`, or `taskkill //PID <winpid> //T //F` when the slot has a Windows PID;
+        stderr with --json, a text line only: the schema's slot entries take no extra field), a note on the task row
+        and the command first in `next`; status never runs it.
         Stacked siblings (a dependency D and the tasks stacked on it, while one of their branches exists and one of
         them is not integrated) get the note `stacked siblings <ids> on D: sibling worktrees, not children of D's
         worktree; merge order <D branch>, then <dependent branch> ... into <topic> (dependency first, git merge
@@ -540,15 +541,15 @@ def plain_context(key, paths):
 
 def cmd_tier(a, reg):
     pipe = settings(reg)
-    lines = basis = None  # tier --plan: the changed lines of the given paths against HEAD (0 without a checkout)
+    lines = basis = None  # tier --plan: the changed lines of the given paths against HEAD (None without a checkout)
     if a.plan:
         if not a.repo or not a.paths:
             die("tier --plan needs --repo <plan repo key> and --paths <files>")
         plan = read_plan(a.plan, reg)
         plan["_path"] = a.plan
         info = repo_info(plan, reg, a.repo)
-        lines = changed_lines(info["path"], a.paths)
         checkout = bool(info["path"]) and os.path.isdir(info["path"])
+        lines = changed_lines(info["path"], a.paths) if checkout else None  # nothing measured: no changed_lines fact
         basis = lines_basis(["HEAD"] if checkout else None, len(set(a.paths)))
         if not info["registry"]:
             if not info["path"]:
@@ -570,7 +571,7 @@ def cmd_tier(a, reg):
             die("factory-context.sh failed: " + (r.stderr or r.stdout).strip()[:400], 1)
         ctx = json.loads(r.stdout)
     if basis is None:  # the plain form: the changed lines of the snapshot's files in each repo checkout
-        lines, basis = snapshot_lines(ctx)
+        lines, basis = snapshot_lines(ctx, rest_base(a.rest))
     out = tier_of(ctx, pipe, lines)
     out["facts"]["lines_basis"] = basis
     return print_tier(a, out)
@@ -622,10 +623,23 @@ def tier_repos(ctx):
     return [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
 
 
-def snapshot_lines(ctx):
+def rest_base(rest):
+    """The `--base B` or `--base=B` of the factory-context.sh args (the last one), or None."""
+    base = None
+    for i, x in enumerate(rest or []):
+        if x == "--base" and i + 1 < len(rest):
+            base = rest[i + 1]
+        elif x.startswith("--base="):
+            base = x.split("=", 1)[1]
+    return base or None
+
+
+def snapshot_lines(ctx, given_base=None):
     """(lines, basis) of a routing snapshot (plain tier): for every judged repo with a checkout (`path` is a directory),
-    the changed lines of its files against the merge-base of its `branch_diff_base` and HEAD (factory-context.sh
-    --base), else against HEAD, plus untracked ones. lines is None when no repo has a checkout."""
+    the changed lines of its files against the merge-base of a base and HEAD, plus untracked ones. The base is the
+    repo's `branch_diff_base` (the branch scan of factory-context.sh), else `given_base` (the `--base` of the args:
+    with --paths factory-context.sh leaves branch_diff_base null), else none: against HEAD. lines is None when no repo
+    has a checkout."""
     total, refs, nfiles = None, [], 0
     for r in tier_repos(ctx):
         path = r.get("path")
@@ -633,7 +647,7 @@ def snapshot_lines(ctx):
         if not path or not os.path.isdir(path):
             continue
         ref, label = "HEAD", "HEAD"
-        base = r.get("branch_diff_base")
+        base = r.get("branch_diff_base") or given_base
         if base:
             mb, rc = git(path, "merge-base", base, "HEAD")
             if rc == 0 and mb:
