@@ -90,6 +90,35 @@
         "the style lock accepts $USD/month in prose and still refuses a path variable",
         "the named suites pass"
       ]
+    },
+    {
+      "id": "workflow-suite",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one unregistered suite and a guard against the next one",
+      "objective": "Added by the run lead (strictly necessary: task defaults-lows found that tests/workflow.test.sh is not registered in tests/run-all.sh, so neither run-all, the --affected selection nor CI runs it, and the Codex runner pin it added never runs). (1) Register tests/workflow.test.sh in tests/run-all.sh like its neighbours, so --list-suites, --affected (tests/affected.py import closure of scripts/factory-workflow.py and scripts/lib) and scripts/ci-plan.py select it; it must pass on Linux and Windows CI (no host tools). (2) Add an inline run-all check (or a case in an existing suite) that fails when a tests/*.test.sh file is neither registered in run-all.sh nor in an explicit, commented exemption list, and report which other unregistered suites it found (register them too only when they pass and are meant to run; otherwise exempt them with the reason). Changelog fragment changelog.d/session-lows-suites.md. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "tests/run-all-parallel.test.sh",
+        "changelog.d/session-lows-suites.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "defaults-lows"
+      ],
+      "checks": [
+        "tests/workflow.test.sh",
+        "tests/affected.test.sh",
+        "tests/run-all-parallel.test.sh"
+      ],
+      "acceptance": [
+        "tests/workflow.test.sh is listed by run-all --list-suites and selected for a scripts/factory-workflow.py change",
+        "an unregistered tests/*.test.sh without an exemption fails a check",
+        "the named suites pass"
+      ]
     }
   ]
 }
