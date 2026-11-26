@@ -122,7 +122,32 @@ def tag_listing(args):
     return True
 
 
-def classify(sub, args, branch, patterns, cfg):
+def reset_moves_branch(args, cwd):
+    """Recognise a revision reset; pathspec and patch resets only update the index."""
+    words = []
+    i = 0
+    while i < len(args):
+        x = args[i]
+        if x == "--":
+            if i + 1 < len(args):
+                return False
+            break
+        if x == "--pathspec-from-file" or x.startswith("--pathspec-from-file="):
+            return False
+        if x == "--patch" or has_short_flag([x], "p"):
+            return False
+        if not x.startswith("-"):
+            words.append(x)
+        i += 1
+    if len(words) != 1:
+        return False
+    word = words[0]
+    if cwd is not None and os.path.exists(os.path.join(cwd, native_path(word))):
+        return False
+    return bool(re.search(r"[~^@:]", word) or re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]*", word))
+
+
+def classify(sub, args, branch, patterns, cfg, *, cwd=None):
     """List of (decision, reason) for one git invocation."""
     R = []
 
@@ -139,7 +164,7 @@ def classify(sub, args, branch, patterns, cfg):
     if sub == "reset":
         if a & {"--hard", "--merge", "--keep"}:
             ask("`git reset --hard/--merge/--keep` discards working-tree changes")
-        elif protected and any(not x.startswith("-") for x in args):
+        elif protected and reset_moves_branch(args, cwd):
             ask(f"`git reset <commit>` moves protected branch `{branch}`")
     elif sub == "clean" and (has_short_flag(args, "f") or "--force" in a):
         ask("`git clean -f` permanently deletes untracked files (user work, imported Unity samples)")
@@ -469,7 +494,7 @@ def evaluate(payload, registry):
                 parts = shlex.split(alias)
                 sub, args = parts[0], parts[1:] + args
         created = new_branch_from(sub, args)
-        for d, t in classify(sub, args, branch, patterns, cfg):
+        for d, t in classify(sub, args, branch, patterns, cfg, cwd=eff):
             reasons.append((d, f"[{where}] {t}"))
         if created and top:
             predicted_branch[top] = created
