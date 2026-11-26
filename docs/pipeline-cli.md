@@ -37,6 +37,10 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   reviewer is of the other model. It prints the waves (one subtask per wave in a no-worktree repo) and refuses
   `placement: child` in a no-worktree repo. It warns like `validate` on a missing `reason` or one model for 3 or more
   subtasks.
+- When the plan has no error, `validate` prints a `NOTE` line (`notes` in `--json`; never an error, the exit code is
+  unchanged) for each recorded review or QA verdict of a task (or `integration:<repo>` QA) whose fingerprint no longer
+  matches the plan: `recorded <phase> verdict of <id> is stale: the task's objective, paths, acceptance, checks or
+  agents changed since it was recorded; re-run review/QA (status shows it)`. It only reads the verdict records.
 - `validate` accepts tier XS (plan or task `tier`) only for a one-task plan whose owned paths are all prose, within
   `max_files` and, where the XS rule sets `contracts: false` / `generated: false`, no contract end or generated path;
   a non-prose path, a second task, a threshold exceeded, a contract or a generated path is an error.
@@ -79,8 +83,10 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   quotes appended to `--prompt` once broke a lead launch with `unknown option '-FilePath'`).
 - `dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca` prints the task-lead
   handoff. A new task worktree: `git worktree add --no-track -b <branch> <path> <base>` (beside the checkout that has
-  the plan `topic` checked out, else beside the repo checkout), the `orca worktree set` lineage line of delivery.md
-  section 4 "Orca visibility", then `orca agent launch --worktree path:<path>`. An existing task worktree, or the main
+  the plan `topic` checked out, else beside the repo checkout), then
+  `<pipeline> orca-wait --worktree <path> && orca worktree set ...` (the lineage line of delivery.md section 4
+  "Orca visibility", run only once Orca lists the new worktree: see "orca-wait"), then
+  `orca agent launch --worktree path:<path>`. An existing task worktree, or the main
   checkout of a no-worktree repo, gets only the launch (never a worktree create or a new top-level worker there);
   `--placement shared|child` gives the same result. Orca allows one worker level (maximum depth 1), so the task lead
   then creates its own Run (`orca orchestration run-create --objective <text>`), starts its sessions as workers of that
@@ -94,12 +100,12 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   dependency in the same repo is a candidate or reviewed and every other dependency is integrated; two in-flight
   dependencies, or a pending or implementing one, never stack. When `status` notes `stackable on <dep>@<sha>`,
   `--phase lead` prints `git worktree add --no-track -b <topic>-<id> <path> <dependency tip SHA>` for a sibling beside
-  the integration checkout (never a child of the dependency's worktree), `orca worktree set` with the integration
-  checkout (else the main checkout) as parent, then the launch; the lead prompt says to implement now and to run no
-  verify, review or QA dispatch before `status` clears it. It records the dependency SHA as the base (a SHA, never a
-  branch name) in `<task>__stack.json`, outside the task fingerprint, so recorded verdicts stay valid. A fresh
-  dispatch (no task branch yet) first removes a leftover `<task>__stack.json` and `<task>__sync.json`. Tier XS and
-  no-worktree tasks keep the unchanged handoff.
+  the integration checkout (never a child of the dependency's worktree), the `orca-wait`-chained `orca worktree set`
+  with the integration checkout (else the main checkout) as parent, then the launch; the lead prompt says to
+  implement now and to run no verify, review or QA dispatch before `status` clears it. It records the dependency SHA
+  as the base (a SHA, never a branch name) in `<task>__stack.json`, outside the task fingerprint, so recorded
+  verdicts stay valid. A fresh dispatch (no task branch yet) first removes a leftover `<task>__stack.json` and
+  `<task>__sync.json`. Tier XS and no-worktree tasks keep the unchanged handoff.
 - Topic start base (no stack): a dependency whose task branch tip is already on the topic counts as settled even when
   its recorded phase is still candidate or reviewed (its verdicts may be STALE after the plan changed), so a task
   whose dependencies are all merged into the topic is not stackable. `--phase lead` then prints `git worktree add
@@ -338,6 +344,25 @@ factory-pipeline.py nudge plan.json [--task <id>] [--idle SECONDS] [--send]
   lead's; a commit names `--phase review --sha <sha>`; after the review PASS the next step is the task tier command and
   the lead QA record at the `topic` HEAD (never an integration QA session); with that QA PASS it names the gate.
 
+## orca-wait
+
+`orca-wait --worktree PATH [--gone] [--timeout SECONDS] [--interval SECONDS]` (PATH may carry a `path:` prefix) is
+read-only: it polls `orca worktree list --json` every `--interval` seconds (default 2) until Orca lists PATH, or with
+`--gone` no longer lists it, and writes nothing. It is not `scripts/orca-wait.sh` (the run lead's Orca message waiter,
+`orca-wait.sh --run <id>`, below).
+
+- Exit 0 once the condition holds: `orca-wait: <path> is listed by Orca` (`is no longer listed` with `--gone`).
+- Exit 1 after `--timeout` seconds (default 60). Without `--gone`: the worktree stays hidden in Orca (an
+  `orca worktree set` now changes nothing); retry, or run `orca worktree set` by hand once `orca worktree list` shows
+  the path. With `--gone`: its branch is still in use by the worktree (`git branch -d` would fail with 'used by
+  worktree'); retry, or delete the branch by hand once `orca worktree list` no longer shows the path.
+- Exit 1 when `orca` is not on PATH or `orca worktree list --json` fails or prints no worktree list: it cannot tell,
+  so run the next command by hand once the list shows (or no longer shows) the path.
+- Exit 2 on a negative `--timeout` or `--interval`.
+- Callers: the `dispatch --phase lead` handoff chains it before `orca worktree set` (Orca lists a worktree it did not
+  create only after a while); `cleanup` prints `orca-wait --gone` per path it removes through `orca worktree rm`
+  before a repo's first `git branch -d` (`orca worktree rm` removes asynchronously).
+
 ## Orca commands
 
 The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca orchestration task-create`,
@@ -345,7 +370,8 @@ The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca 
 `orca orchestration worker-show`, `orca orchestration worker-read`, `orca orchestration worker-list`,
 `orca orchestration worker-release`, `orca agent launch`, `orca worktree list`, `orca worktree create`,
 `orca worktree rm`, `orca terminal list`, `orca terminal read`, `orca terminal send` (the last three: `nudge`).
-`scripts/orca-wait.sh` allows one waiter per Run through a lock file in the state dir.
+`scripts/orca-wait.sh` allows one waiter per Run through a lock file in the state dir (it waits for messages; the
+verb `orca-wait` above waits for a worktree record).
 
 `scripts/orca-wait.sh --run <id> [--timeout-ms N] [--types T] [--stall-poll-ms N] [--stall-ms N]` exits:
 
@@ -413,8 +439,9 @@ quota, idle terminal, a 401), then dispatch the role again.
   checkout, started, and `progress` with check, result, passed, failed, updated, age_seconds, or null before the
   first one), the entries `cleanup --json` has. Status never stops a holder: the user decides.
 - Worker listing requests `--full` and retries without it when Orca reports that flag as unknown, keeping the concise
-  form for later pages. Concise rows use `terminalState` for release and `state` for settledness; the Run line names
-  missing fields and the checks they prevent. Other Orca failures remain NOT_AVAILABLE.
+  form for later pages. Concise rows use `terminalState` for release and `state` for settledness (a row whose
+  `terminalState` is `released` counts as released even without a `state`); the Run line names missing fields and
+  the checks they prevent. Other Orca failures remain NOT_AVAILABLE.
 - Stacked notes on a task row: `stackable on <dep>@<sha>` (a pending task, ready: next is its `--phase lead`),
   `stacked on <dep>@<sha>`, `<dep> now at <sha> not in HEAD: merge it (never rebase), then continue` (next: the
   `git merge`), `sync: <dep> moved to <sha> (<at>)` (from the `sync` record, only for the current dependency, until
@@ -431,7 +458,10 @@ quota, idle terminal, a 401), then dispatch the role again.
   orca is NOT_AVAILABLE), with the commands to remove them (`orca orchestration worker-release` closes only that
   worker's terminal and keeps its output readable). A leftover task directory (empty or not) or an Orca
   record of a removed worktree is LEFTOVER, never CLEAN, with `git worktree prune`, then
-  `orca worktree rm --worktree path:<dir>` once the directory is free.
+  `orca worktree rm --worktree path:<dir>` once the directory is free. `orca worktree rm` removes asynchronously, so
+  before a repo's first `git branch -d` the commands carry one `<pipeline> orca-wait --gone --worktree <path>` per
+  path removed through `orca worktree rm` (merged children, leftover directories and records): a branch is deleted
+  only once its worktree record is gone ("orca-wait").
 - For such a leftover directory `cleanup` lists `BUSY?` candidates from a read-only process listing (Windows:
   PowerShell `Get-CimInstance Win32_Process`, 20 s timeout; elsewhere `ps`): processes whose command line names the
   directory and an orphaned `wsl.exe ... sleep infinity` whose parent is gone, each with PID, command and start time.

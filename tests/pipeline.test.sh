@@ -3,32 +3,32 @@
 # (ownership, cycles, cross-model review, the no-worktree rule for Unity projects, exclusive resources), dispatch
 # commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate, and run-all's --affected python3 guard
 # and suite timings (runall-preflight). Never touches the real workspace.
-# case-map: validate scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_validate
-# case-map: plan-edit scripts/factory-pipeline.py::cmd_plan_edit
-# case-map: subplan docs/schemas/pipeline-subplan.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
-# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::known_failing_block scripts/factory-pipeline.py::python_alias_line
-# case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::grade_paths scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::task_grades
-# case-map: child-dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
-# case-map: tier scripts/factory-pipeline.py::cmd_tier
-# case-map: verdict-gate scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
-# case-map: cleanup docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status
-# case-map: settled-workers docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::place_show_line
-# case-map: orca-first scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status
-# case-map: review-findings scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict
-# case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier
-# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_state
-# case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict
-# case-map: dogfood scripts/factory-cmd.py tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::*
-# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict
-# case-map: cleanup-merged scripts/factory-pipeline.py::cmd_cleanup
-# case-map: gate-merge tests/fixtures/assetgen/*.py scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::run_lead_file_blockers
-# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::subplan_models scripts/factory-pipeline.py::subtask_failures scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::validate_subplan scripts/factory-pipeline.py::verdict_dir
-# case-map: multiwave scripts/factory-pipeline.py::cleanup scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::own_start scripts/factory-pipeline.py::repo_info scripts/factory-pipeline.py::review_base scripts/factory-pipeline.py::scope_fingerprint scripts/factory-pipeline.py::stack_base scripts/factory-pipeline.py::stack_file scripts/factory-pipeline.py::stack_gate scripts/factory-pipeline.py::stack_groups scripts/factory-pipeline.py::stack_record scripts/factory-pipeline.py::stack_record_live scripts/factory-pipeline.py::stackable scripts/factory-pipeline.py::start_base scripts/factory-pipeline.py::status scripts/factory-pipeline.py::sync_file scripts/factory-pipeline.py::sync_record scripts/factory-pipeline.py::task_status scripts/factory-pipeline.py::uncovered_changes scripts/factory-pipeline.py::verdict_dir scripts/factory-pipeline.py::verdict_file scripts/factory-pipeline.py::verdict_of
-# case-map: qa-tiers tests/run-all.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::emit_lead_handoff scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::qa_body scripts/factory-pipeline.py::retry_checks scripts/factory-pipeline.py::runall_suites scripts/factory-pipeline.py::task_qa_warnings scripts/factory-pipeline.py::tier_command scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::verdict_file
-# case-map: tier-xs scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::implementer_of scripts/factory-pipeline.py::task_context scripts/factory-pipeline.py::validate
-# case-map: runall-preflight tests/run-all.sh scripts/factory-pipeline.py::*
-# case-map: nudge scripts/factory-pipeline.py::cmd_nudge scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status
-# case-map: cli-selftest scripts/factory-pipeline.py::*
+# case-map: validate scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_validate scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: plan-edit scripts/factory-pipeline.py::cmd_plan_edit scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: subplan docs/schemas/pipeline-subplan.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::known_failing_block scripts/factory-pipeline.py::python_alias_line scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: model-policy docs/schemas/pipeline-subplan.schema.json docs/schemas/pipeline-plan.schema.json scripts/lib/model_policy.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::grade_paths scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::task_grades scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: child-dispatch scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: tier scripts/factory-pipeline.py::cmd_tier scripts/lib/pipeline_route.py::above_xs
+# case-map: verdict-gate scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: cleanup docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: settled-workers docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::place_show_line scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: orca-first scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_planner scripts/factory-pipeline.py::cmd_status scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: review-findings scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: tier-plugin scripts/factory-pipeline.py::cmd_tier scripts/lib/pipeline_route.py::above_xs
+# case-map: status docs/schemas/pipeline-status.schema.json scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::lead_report_file scripts/factory-pipeline.py::lead_report_state scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: owned-case scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_verdict scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: dogfood scripts/factory-cmd.py tests/dogfood.sh tests/dogfood/* scripts/factory-pipeline.py::* scripts/lib/pipeline_route.py::*
+# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_subplan scripts/factory-pipeline.py::cmd_verdict scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: cleanup-merged scripts/factory-pipeline.py::cmd_cleanup scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: gate-merge tests/fixtures/assetgen/*.py scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::run_lead_file_blockers scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh scripts/checks/domains/assetgen.py scripts/factory-pipeline.py::cmd_agents scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::plan_models scripts/factory-pipeline.py::subplan_models scripts/factory-pipeline.py::subtask_failures scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::validate_subplan scripts/factory-pipeline.py::verdict_dir scripts/lib/pipeline_route.py::*
+# case-map: multiwave scripts/factory-pipeline.py::cleanup scripts/factory-pipeline.py::cmd_cleanup scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_sync scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::norm_wt scripts/factory-pipeline.py::own_start scripts/factory-pipeline.py::repo_info scripts/factory-pipeline.py::review_base scripts/factory-pipeline.py::scope_fingerprint scripts/factory-pipeline.py::stack_base scripts/factory-pipeline.py::stack_file scripts/factory-pipeline.py::stack_gate scripts/factory-pipeline.py::stack_groups scripts/factory-pipeline.py::stack_record scripts/factory-pipeline.py::stack_record_live scripts/factory-pipeline.py::stackable scripts/factory-pipeline.py::start_base scripts/factory-pipeline.py::status scripts/factory-pipeline.py::sync_file scripts/factory-pipeline.py::sync_record scripts/factory-pipeline.py::task_status scripts/factory-pipeline.py::uncovered_changes scripts/factory-pipeline.py::verdict_dir scripts/factory-pipeline.py::verdict_file scripts/factory-pipeline.py::verdict_of scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::_cache scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: qa-tiers tests/run-all.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::emit_lead_handoff scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::qa_body scripts/factory-pipeline.py::retry_checks scripts/factory-pipeline.py::runall_suites scripts/factory-pipeline.py::task_qa_warnings scripts/factory-pipeline.py::tier_command scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::verdict_file scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: tier-xs scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::implementer_of scripts/factory-pipeline.py::task_context scripts/factory-pipeline.py::validate scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: runall-preflight tests/run-all.sh scripts/factory-pipeline.py::* scripts/lib/pipeline_route.py::*
+# case-map: nudge scripts/factory-pipeline.py::cmd_nudge scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: cli-selftest scripts/factory-pipeline.py::* scripts/lib/pipeline_route.py::*
 # scripts/factory-pipeline.py has a symbol map (`path::name`, tests/affected.py): a change confined to one top-level
 # function selects only the groups that name it or a symbol that reaches it (a group names the `cmd_*` verb functions its
 # commands run, plus every function its embedded python calls directly on the module it loads with importlib; the helpers
@@ -37,9 +37,13 @@
 # change to main(), a helper main() runs before the dispatch (registry loading, argument parsing), a module-level
 # statement, an import, or a function that no group names or reaches falls back to every group, as does a new, deleted
 # or renamed function. When a verb or a directly called function is added to a group, name it here; when unsure, name `::*`.
+# scripts/lib/pipeline_route.py has a symbol map too: a group names every `pr.NAME` that the in-module reference closure
+# of its factory-pipeline.py symbols uses (plus what its embedded python calls on `m.pr` directly: multiwave, qa-tiers),
+# or `::*` when it exercises the file whole (dogfood, runall-preflight, cli-selftest; model-routing imports it directly).
+# The cli-selftest case "pipeline_route case map" recomputes that closure with ast and fails on a name the map misses.
 # The other files run in every case or in most of them (registry.json, the plan schema, model_policy.py, orca_cmd.py,
-# plan_paths.py: measured with sys.monitoring and an audit hook over a full run; pipeline_route.py and fstate.py in 17 of
-# 20), so they have no map: ALL is the safe fallback for them (and for any file not listed).
+# plan_paths.py: measured with sys.monitoring and an audit hook over a full run; fstate.py in 17 of 20), so they have no
+# map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
 CASES='validate plan-edit subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight nudge cli-selftest'
 usage() {
@@ -228,6 +232,66 @@ units:chain=validate,subplan' ]; then sok "--case subplan brings its prerequisit
   all=$(sel); rc=$?
   if [ "$rc" -eq 0 ] && [ "$(sed -n 's/^selected://p' <<<"$all")" = "$CASES" ]; then sok "no selector selects every case"
   else sno "no selector rc=$rc, selection: $(head -c 200 <<<"$all")"; fi
+  # the pipeline_route.py case map cannot drift: every group that names factory-pipeline.py symbols must name each
+  # `pr.NAME` their static in-module reference closure uses (ast.Name edges between top-level defs and assignments, a
+  # superset of tests/affected.py's scope-aware edges), or that group would not run for a change to that function
+  prmap=$(python3 -B - "$ROOT" "$self" <<'PRMAP' 2>&1
+import ast, re, sys
+root, suite = sys.argv[1], sys.argv[2]
+FP, PR = 'scripts/factory-pipeline.py', 'scripts/lib/pipeline_route.py'
+
+def tops_of(path):
+    found = {}
+    for node in ast.parse(open(f'{root}/{path}', encoding='utf-8').read()).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.setdefault(node.name, []).append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                for n in ast.walk(target):
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                        found.setdefault(n.id, []).append(node)
+    return found
+
+tops, pr_tops = tops_of(FP), tops_of(PR)
+edges, uses = {}, {}
+for name, nodes in tops.items():
+    walked = [n for node in nodes for n in ast.walk(node)]
+    edges[name] = {n.id for n in walked if isinstance(n, ast.Name) and n.id in tops}
+    uses[name] = {n.attr for n in walked if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                  and n.value.id == 'pr' and n.attr in pr_tops}
+
+def reach(starts):
+    seen, todo = set(), list(starts)
+    while todo:
+        name = todo.pop()
+        if name not in seen:
+            seen.add(name)
+            todo.extend(edges.get(name, ()))
+    return set().union(*(uses.get(n, set()) for n in seen))
+
+groups = {}
+for line in open(suite, encoding='utf-8'):
+    if line.strip() and not line.startswith('#'):
+        break
+    m = re.match(r'#\s*case-map:\s+(\S+)\s+(.*)', line)
+    if m:
+        groups.setdefault(m.group(1), []).extend(m.group(2).split())
+assert len(groups) > 20, f'read {len(groups)} case-map groups'
+assert 'route' in reach(['cmd_validate']), 'the closure lost cmd_validate -> verdict_of -> task_fingerprint -> pr.route'
+problems = []
+for group, patterns in groups.items():
+    fp = {p.split('::', 1)[1] for p in patterns if p.startswith(FP + '::')}
+    pr = {p.split('::', 1)[1] for p in patterns if p.startswith(PR + '::')}
+    problems += [f'{group}: {PR}::{n} is not a top-level name of it' for n in sorted(pr - set(pr_tops) - {'*'})]
+    if '*' in pr or not fp:
+        continue
+    want = set(pr_tops) if '*' in fp else reach(fp)
+    problems += [f'{group}: misses {PR}::{n}' for n in sorted(want - pr)]
+print('\n'.join(problems) if problems else f'OK {len(groups)} groups')
+PRMAP
+  ); rc=$?
+  if [ "$rc" -eq 0 ] && [[ $prmap == OK* ]]; then sok "pipeline_route case map names every pr.NAME the groups' factory-pipeline symbols reach ($prmap)"
+  else sno "pipeline_route case map rc=$rc: $(head -c 600 <<<"$prmap")"; fi
   total=$((spass + sfail)); echo "pipeline tests: $total run, $spass passed, $sfail failed"
   [ "$sfail" -eq 0 ]; exit
 fi
@@ -1501,10 +1565,15 @@ if case.startswith('stack-'):
                 assert len(hits) == 1, (hits, r.stdout)
                 return hits[0]
             i_add = find(lambda x: x[:2] == ['git', '-C'] and x[3:5] == ['worktree', 'add'])
-            i_set = find(lambda x: x[:3] == ['orca', 'worktree', 'set'])
+            # the set runs only once orca-wait saw Orca list the new worktree: `<pipeline> orca-wait ... && orca worktree set`
+            after = lambda x: x[x.index('&&') + 1:] if '&&' in x else []
+            i_set = find(lambda x: after(x)[:3] == ['orca', 'worktree', 'set'])
             i_launch = find(lambda x: x[:3] == ['orca', 'agent', 'launch'])
             assert i_add < i_set < i_launch, r.stdout
-            add, wset, launch = rows[i_add], rows[i_set], rows[i_launch]
+            add, wset, launch = rows[i_add], after(rows[i_set]), rows[i_launch]
+            wait = rows[i_set][:rows[i_set].index('&&')]
+            assert wait[:2] == ['python3', '-B'] and wait[2].replace('\\', '/').endswith('factory-pipeline.py'), wait
+            assert wait[-3:-1] == ['orca-wait', '--worktree'] and same_path(wait[-1], add[8]), (wait, add)
             assert add[5:8] == ['--no-track', '-b', 'topic-b'] and len(add) == 10 and add[-1] == a, add
             assert os.path.basename(add[8].replace('\\', '/').rstrip('/')) == 'topic-b', add
             assert same_path(arg_of(wset, '--worktree').removeprefix('path:'), add[8]), (wset, add)
@@ -1826,7 +1895,7 @@ else:
 print(case + ' assertions passed')
 MULTIWAVE
 cat > "$TMP/qa-tiers.py" <<'QA_TIERS'
-import argparse, contextlib, importlib.util, io, json, os, pathlib, re, subprocess, sys
+import argparse, contextlib, importlib.util, io, json, os, pathlib, re, shlex, subprocess, sys
 root, tmp = sys.argv[1:]
 spec = importlib.util.spec_from_file_location('qa_pipeline', root + '/scripts/factory-pipeline.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -1985,7 +2054,15 @@ with contextlib.redirect_stdout(handoff):
                         {'model': 'model', 'effort': 'high'})
 commands = handoff.getvalue().splitlines()
 assert len(commands) == 3 and 'worktree add --no-track -b topic-task' in commands[0]
-assert commands[1].startswith('orca worktree set ') and '--parent-worktree' in commands[1]
+# Orca lists a worktree it did not create only after a while: the set runs only once orca-wait saw it listed
+wait, _, setc = commands[1].partition(' && ')
+assert ' orca-wait --worktree ' in wait and 'topic-task' in wait and '--gone' not in wait, commands[1]
+assert setc.startswith('orca worktree set ') and '--parent-worktree' in setc, commands[1]
+assert m.orca_wait_command(dict(reg, _defaults=True), 'x').endswith(' --registry none orca-wait --worktree x')
+# compare argv tokens, not text: on Windows the script path is quoted
+wait_argv = shlex.split(m.orca_wait_command(reg, 'x', gone=True))
+assert wait_argv[-4:] == ['orca-wait', '--gone', '--worktree', 'x'], wait_argv
+assert wait_argv[-5].replace('\\', '/').endswith('/factory-pipeline.py'), wait_argv
 assert commands[2].startswith('orca agent launch ') and 'path:' in commands[2]
 assert 'worktree create' not in handoff.getvalue()
 # without a known suite list, an --only-suites suite path runs as run-all runs it (TMPDIR unset), attributed to its task
@@ -2785,6 +2862,38 @@ PY
 then pass=$((pass + 1)); echo "PASS  schema: known_failing items require a non-empty check and reason, no other key"
 else fail=$((fail + 1)); echo "FAIL  schema: known_failing shape"; fi
 
+# validate notes a recorded review/QA verdict that a later plan change made stale (as plan-edit does), read-only, never an
+# error: own plan id and state dir. The records carry the fingerprints of plan VS; VS2 changes task a's paths.
+VT='{"id":"a","repo":"server","objective":"o","paths":["backend/gateway/"],"acceptance":["a"],"checks":["bash tests/x.test.sh"]}'
+VHEAD=$(sed 's/"id":"demo"/"id":"vstale"/' <<<"$HEAD")
+VS=$(plan vstale "{$VHEAD,\"tasks\":[$VT]}")
+VS2=$(plan vstale2 "{$VHEAD,\"tasks\":[$(sed 's#backend/gateway/#backend/other/#' <<<"$VT")]}")
+if python3 -B - "$ROOT" "$VS" "$TMP/state-vstale" <<'PY'
+import importlib.util, json, os, sys
+root, plan_path, state = sys.argv[1:]
+os.environ['RPG_FACTORY_STATE_DIR'] = state
+spec = importlib.util.spec_from_file_location('vstale_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = m.load_registry(os.environ.get('RPG_FACTORY_PIPELINE_REGISTRY') or root + '/registry.json')
+plan = m.read_plan(plan_path, reg)
+plan['_path'] = plan_path
+for tid, phase in (('a', 'review'), ('integration:server', 'qa')):
+    path = m.verdict_file(plan, tid, phase)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as fh:
+        json.dump({'state': 'PASS', 'sha': '0' * 40, 'fingerprint': m.scope_fingerprint(plan, reg, tid)}, fh)
+PY
+then pass=$((pass + 1)); echo "PASS  validate stale note: review and integration QA records written for plan vstale"
+else fail=$((fail + 1)); echo "FAIL  validate stale note: could not write the records"; fi
+VSTALE='^NOTE  recorded review verdict of a is stale: the task.s objective, paths, acceptance, checks or agents changed since it was recorded; re-run review/QA \(status shows it\)$'
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale" expect "validate: an unchanged plan with recorded verdicts exits 0" 0 "^OK$" validate "$VS"
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale" refute "validate: an unchanged plan notes no stale verdict" "is stale" validate "$VS"
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale" expect "validate: changed task paths note the stale review verdict, exit 0" 0 "$VSTALE" validate "$VS2"
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale" expect "validate: changed task paths note the stale integration QA verdict" 0 "^NOTE  recorded qa verdict of integration:server is stale: " validate "$VS2"
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale" refute "validate: a stale verdict is no error" "^ERROR|INVALID" validate "$VS2"
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale" expect "validate --json: the stale note is in notes, exit 0" 0 '"recorded review verdict of a is stale: ' validate "$VS2" --json
+RPG_FACTORY_STATE_DIR="$TMP/state-vstale-none" refute "validate: no recorded verdict, no stale note" "is stale" validate "$VS2"
+
 case_end validate
 fi
 
@@ -3436,7 +3545,8 @@ def check(args, key="demo", note=""):
     lines = command.splitlines()
     if len(lines) == 3:
         assert 'worktree add --no-track -b' in lines[0], command
-        assert lines[1].startswith('orca worktree set ') and '--parent-worktree' in lines[1], command
+        assert ' orca-wait --worktree ' in lines[1] and ' && orca worktree set ' in lines[1], command
+        assert '--parent-worktree' in lines[1], command
         assert lines[2].startswith('orca agent launch '), command
     else:
         assert len(lines) == 1, repr(command)
@@ -3880,7 +3990,7 @@ for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "
 done
 git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/demo-gw
 expect "new task worktree without an integration checkout: git no-track" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
-expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
+expect "new task worktree uses main checkout as parent" 0 " orca-wait --worktree [^ ]*feat-core-demo-gw'? && orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 # topic checked out nowhere: the Orca parent falls back to the main checkout, loudly (stderr only; stdout is unchanged)
 out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>"$TMP/dd.err")
@@ -3910,7 +4020,7 @@ expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none i
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
-expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+expect "lead --placement shared uses integration parent" 0 " orca-wait --worktree [^ ]*'? && orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>"$TMP/dd.err")
 err=$(<"$TMP/dd.err")
 if ! grep -q "Orca parent:" <<<"$err" && grep -Eq -- "--parent-worktree '?path:[^' ]*demo-int'? " <<<"$out" && ! grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
@@ -4221,7 +4331,8 @@ if has_case settled-workers; then
 case_start
 echo "-- cleanup and status: settled Orca workers that are not released"
 # a fake `orca` first on PATH: worker-list prints $FAKE_ORCA_JSON (page 2 when --cursor is given), worktree list
-# prints $FAKE_ORCA_WT (when set), `error` exits 1,
+# prints $FAKE_ORCA_WT (when set; only from the $FAKE_ORCA_WT_FROM-th call and before the $FAKE_ORCA_WT_UNTIL-th, calls
+# counted in $FAKE_ORCA_WT.count, else an empty list), `error` exits 1,
 # `garbage` prints no JSON; every call is logged so the tests can prove only worker-list ran
 FB="$TMP/fakebin"; mkdir -p "$FB"
 cat > "$FB/fake_orca.py" <<'PY'
@@ -4233,6 +4344,11 @@ if sys.argv[1:3] == ["status", "--json"]:
     reachable = os.environ.get("FAKE_ORCA_REACHABLE", "true") == "true"
     print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
 if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
+    count = os.environ["FAKE_ORCA_WT"] + ".count"
+    n = (int(open(count).read() or 0) if os.path.exists(count) else 0) + 1
+    open(count, "w").write(str(n))
+    if not int(os.environ.get("FAKE_ORCA_WT_FROM") or 1) <= n < int(os.environ.get("FAKE_ORCA_WT_UNTIL") or n + 1):
+        print(json.dumps({"ok": True, "result": {"worktrees": []}})); sys.exit(0)
     print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] == ["repo", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_REPOS"):
     print(open(os.environ["FAKE_ORCA_REPOS"], encoding="utf-8").read()); sys.exit(0)
@@ -4361,12 +4477,15 @@ opath "and the run line is OK with one released worker" 0 "WORKERS OK  run run_T
 oref "status prints no release command for them" "worker-release --dispatch ctx_f_(abs|tcf)" status "$GO"
 # Older Orca rejects --full; retry the same page and keep concise rows on later pages.
 jq -n --argjson a "$(cw ctx_old succeeded retained)" '{ok:true,result:{workers:[$a],page:{hasMore:true,nextCursor:"c2"}}}' > "$FAKE_ORCA_JSON"
-jq -n '{ok:true,result:{workers:[{dispatchId:"ctx_missing",terminalState:null,state:null}],page:{hasMore:false}}}' > "$FAKE_ORCA_JSON.page2"
+# ctx_rel_nostate: released through terminalState, no state (concise row): released, never 'settledness not checked'
+jq -n '{ok:true,result:{workers:[{dispatchId:"ctx_missing",terminalState:null,state:null},
+  {dispatchId:"ctx_rel_nostate",terminalState:"released"}],page:{hasMore:false}}}' > "$FAKE_ORCA_JSON.page2"
 for mode in no_full no_full_json; do
   : > "$FAKE_ORCA_LOG"
   FAKE_ORCA_MODE=$mode opath "older Orca $mode: cleanup finds unreleased worker" 1 "UNRELEASED ctx_old" cleanup "$GO"
   FAKE_ORCA_MODE=$mode opath "older Orca $mode: status finds unreleased worker" 0 "UNRELEASED ctx_old" status "$GO"
   FAKE_ORCA_MODE=$mode opath "older Orca $mode: missing fields are named" 0 "1 worker.s. without terminalState, release not checked; 1 worker.s. without state, settledness not checked" status "$GO"
+  FAKE_ORCA_MODE=$mode opath "older Orca $mode: a row with terminalState released and no state counts as released" 0 "1 settled worker.s. not released, 1 released, 0 running" status "$GO"
   if grep -q -- "worker-list --run run_T --limit 100 --json --cursor c2" "$FAKE_ORCA_LOG" && ! grep -q -- "--full --json --cursor c2" "$FAKE_ORCA_LOG"; then
     pass=$((pass + 1)); echo "PASS  $mode retries without full for later pages"
   else fail=$((fail + 1)); echo "FAIL  $mode pagination fallback"; fi
@@ -4413,6 +4532,14 @@ jq -n --arg p "$(wtp "$TMP/srv-gw")" --arg c "$(wtp "$TMP/isolated-qa")" --arg o
 : > "$FAKE_ORCA_LOG"
 opath "Orca lineage: a child named isolated-qa is a child of its task" 1 "KEPT  srv: child of gw: leftover child worktree .*isolated-qa \(feat/core/demo-gw-isolated\): merged, then remove it" cleanup "$G"
 opath "Orca lineage: the merged child gets its orca worktree rm command" 1 "^  orca worktree rm --worktree '?path:[^ ]*isolated-qa'?$" cleanup "$G"
+PATH="$fpath" python3 -B "$P" cleanup "$G" > "$TMP/cleanup-child-wait.txt" 2>&1
+wait_at=$(grep -nE "^  python3 -B [^ ]*factory-pipeline.py'? orca-wait --gone --worktree '?[^ ]*isolated-qa'?$" "$TMP/cleanup-child-wait.txt" | head -1 | cut -d: -f1)
+br_at=$(grep -nE "^  git -C .* branch -d " "$TMP/cleanup-child-wait.txt" | head -1 | cut -d: -f1)
+rm_at=$(grep -nE "^  orca worktree rm --worktree '?path:[^ ]*isolated-qa'?$" "$TMP/cleanup-child-wait.txt" | head -1 | cut -d: -f1)
+if [ -n "$wait_at" ] && [ -n "$br_at" ] && [ "$rm_at" -lt "$wait_at" ] && [ "$wait_at" -lt "$br_at" ]
+then pass=$((pass + 1)); echo "PASS  cleanup: the removed child's orca-wait --gone comes before the first git branch -d"
+else fail=$((fail + 1)); echo "FAIL  cleanup child wait order (rm $rm_at, wait $wait_at, branch -d $br_at)"; sed 's/^/      /' "$TMP/cleanup-child-wait.txt" | head -12; fi
+opath "Orca lineage: the child note says its branch goes only once the worktree record is gone" 1 "KEPT  srv: child of gw: leftover child worktree .*isolated-qa.*its branch is deleted only once the worktree record is gone" cleanup "$G"
 if PATH="$fpath" python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.tasks[] | select(.id == "gw") | (.children | length) == 1 and .children[0].branch == "feat/core/demo-gw-isolated"' >/dev/null
 then pass=$((pass + 1)); echo "PASS  Orca lineage: status lists the isolated-qa child"
 else fail=$((fail + 1)); echo "FAIL  Orca lineage: status children"; fi
@@ -4429,6 +4556,35 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
 git -C "$S" branch -q -D feat/core/demo-gw-isolated feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+echo "-- orca-wait: Orca lists a worktree it did not create only after a while, and removes one asynchronously"
+export FAKE_ORCA_WT="$TMP/orca-wt-wait.json"
+OW="$TMP/ow-task"
+jq -n --arg p "$OW" '{ok:true,result:{worktrees:[{id:"r::ow",path:$p,parentWorktreeId:null}]}}' > "$FAKE_ORCA_WT"
+# owait <name> <rc> <pattern> <list calls|-> [VAR=value...] -- <orca-wait args...>: one orca-wait run with the fake orca
+# first on PATH (a later PATH= replaces it), its exit code, output and number of `worktree list` calls
+owait() {
+  local n="$1" want="$2" pat="$3" calls="$4" out rc got envs=(); shift 4
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done; shift
+  rm -f "$FAKE_ORCA_WT.count"
+  out=$(env PATH="$fpath" ${envs[@]+"${envs[@]}"} python3 -B "$P" orca-wait "$@" 2>&1); rc=$?
+  got=$(cat "$FAKE_ORCA_WT.count" 2>/dev/null || echo 0)
+  if [ "$rc" = "$want" ] && has_ere "$out" "$pat" && { [ "$calls" = - ] || [ "$got" = "$calls" ]; }; then pass=$((pass + 1)); echo "PASS  $n"
+  else fail=$((fail + 1)); echo "FAIL  $n (rc=$rc, want $want, list calls $got, want $calls)"; sed 's/^/      /' <<<"$out" | head -5; fi
+}
+: > "$FAKE_ORCA_LOG"
+owait "orca-wait: a listed worktree passes on the first list call" 0 "^orca-wait: [^ ]*ow-task is listed by Orca$" 1 -- --worktree "$OW" --interval 0
+owait "orca-wait: retries until Orca lists the worktree (third call)" 0 "^orca-wait: [^ ]*ow-task is listed by Orca$" 3 FAKE_ORCA_WT_FROM=3 -- --worktree "path:$OW" --interval 0 --timeout 60
+owait "orca-wait: never listed: exit 1 after the timeout, the worktree stays hidden, set it by hand once listed" 1 "Orca does not list [^ ]*ow-task after 0 s: the worktree stays hidden in Orca.*retry this command, or run .orca worktree set. by hand once .orca worktree list. shows the path" 1 FAKE_ORCA_WT_FROM=99 -- --worktree "$OW" --interval 0 --timeout 0
+owait "orca-wait --gone: retries until the worktree record is gone (third call)" 0 "^orca-wait: [^ ]*ow-task is no longer listed by Orca$" 3 FAKE_ORCA_WT_UNTIL=3 -- --gone --worktree "$OW" --interval 0 --timeout 60
+owait "orca-wait --gone: the record stays: exit 1, the branch is still in use, delete it by hand once gone" 1 "Orca still lists [^ ]*ow-task after 0 s: its branch is still in use by the worktree.*delete the branch by hand once .orca worktree list. no longer shows the path" 1 -- --gone --worktree "$OW" --interval 0 --timeout 0
+owait "orca-wait: another worktree listed is not this one" 1 "Orca does not list [^ ]*ow-task-2 after 0 s" 1 -- --worktree "$OW-2" --interval 0 --timeout 0
+if ! grep -qvE "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && grep -q "^worktree list" "$FAKE_ORCA_LOG"
+then pass=$((pass + 1)); echo "PASS  orca-wait only reads Orca (worktree list)"
+else fail=$((fail + 1)); echo "FAIL  orca-wait orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
+owait "orca-wait: orca failing: exit 1 with a clear line, nothing else to tell" 1 "orca-wait: .orca worktree list --json. failed.*run the next command by hand" - FAKE_ORCA_MODE=error -- --worktree "$OW" --interval 0
+owait "orca-wait: orca missing: exit 1, not on PATH" 1 "orca-wait: orca is not on PATH: cannot tell" - PATH="$noorca" -- --worktree "$OW" --interval 0
+owait "orca-wait: a negative timeout is a usage error" 2 "--timeout and --interval must be 0 or more seconds" 0 -- --worktree "$OW" --timeout -1
+unset FAKE_ORCA_WT
 echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
 # kill, taskkill and Stop-Process match as whole words only (a hyphen counts as a word character, ERE has no portable
 # \b): a checkout path containing 'skill' (the status and cleanup "next:" lines print the script path) must not trip it.
@@ -4524,6 +4680,20 @@ then pass=$((pass + 1)); echo "PASS  cleanup --json lists the busy candidates (P
 else fail=$((fail + 1)); echo "FAIL  cleanup --json processes"; head -c 1500 "$TMP/cleanup-busy.json"; fi
 echo x > "$LD/file.txt"
 opath "a non-empty leftover task directory is LEFTOVER too" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw" cleanup "$G"
+# `orca worktree rm` removes asynchronously (a `git branch -d` right after it failed with 'used by worktree'): the
+# integrated task branch of the removed directory is deleted only after an orca-wait --gone on that directory
+git -C "$S" branch -q feat/core/demo-gw "$SG"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE=none python3 -B "$P" cleanup "$G" > "$TMP/cleanup-wait.txt" 2>&1
+rm_at=$(grep -nE "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw'?$" "$TMP/cleanup-wait.txt" | head -1 | cut -d: -f1)
+wait_at=$(grep -nE "^  python3 -B [^ ]*factory-pipeline.py'? orca-wait --gone --worktree '?[^ ]*feat-core-demo-gw'?$" "$TMP/cleanup-wait.txt" | head -1 | cut -d: -f1)
+br_at=$(grep -nE "^  git -C .* branch -d feat/core/demo-gw$" "$TMP/cleanup-wait.txt" | head -1 | cut -d: -f1)
+if [ -n "$rm_at" ] && [ -n "$wait_at" ] && [ -n "$br_at" ] && [ "$rm_at" -lt "$wait_at" ] && [ "$wait_at" -lt "$br_at" ] \
+   && [ "$(grep -cE "^  python3 .* orca-wait --gone " "$TMP/cleanup-wait.txt")" = 1 ]
+then pass=$((pass + 1)); echo "PASS  cleanup: orca worktree rm, then one orca-wait --gone, then git branch -d"
+else fail=$((fail + 1)); echo "FAIL  cleanup wait order (rm $rm_at, wait $wait_at, branch -d $br_at)"; sed 's/^/      /' "$TMP/cleanup-wait.txt" | head -12; fi
+opath "cleanup: the leftover note says the branch goes only once the worktree record is gone" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw.*its branch is deleted only once the worktree record is gone \(.orca-wait --gone.\)" cleanup "$G"
+git -C "$S" branch -q -D feat/core/demo-gw
+oref "cleanup: no branch to delete, no orca-wait command" "^  python3 .* orca-wait " cleanup "$G"
 oref "cleanup output never kills a process" "$NOKILL" cleanup "$G"
 # a stale Orca record of a removed task worktree (directory gone): LEFTOVER with the same commands
 rm -rf "$LD"
@@ -4552,7 +4722,8 @@ else fail=$((fail + 1)); echo "FAIL  orca write call"; sed 's/^/      /' "$FAKE_
 : > "$FAKE_ORCA_LOG"
 opath "fake orca: git creates the task worktree" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw" dispatch "$G" --task gw --phase lead --runner orca
 oref "fake orca: a new task worktree under the integration checkout has no --no-parent" "--no-parent" dispatch "$G" --task gw --phase lead --runner orca
-opath "fake orca: orca worktree set names the integration checkout as parent, printed (not run)" 0 "^orca worktree set --worktree '?path:[^' ]*feat-core-demo-gw'? --parent-worktree '?path:[^' ]*rpg-mmo-server'? --display-name " dispatch "$G" --task gw --phase lead --runner orca
+opath "fake orca: orca worktree set names the integration checkout as parent, printed (not run)" 0 " && orca worktree set --worktree '?path:[^' ]*feat-core-demo-gw'? --parent-worktree '?path:[^' ]*rpg-mmo-server'? --display-name " dispatch "$G" --task gw --phase lead --runner orca
+opath "fake orca: orca worktree set runs only after orca-wait sees the new worktree" 0 "^python3 -B [^ ]*factory-pipeline.py'? orca-wait --worktree '?[^' ]*feat-core-demo-gw'? && orca worktree set " dispatch "$G" --task gw --phase lead --runner orca
 opath "fake orca: shared placement launches the lead" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$G" --task gw --phase lead --placement shared --runner orca
 if ! grep -q "worktree create" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  fake orca: dispatch --phase lead only prints the worktree create"
 else fail=$((fail + 1)); echo "FAIL  fake orca: dispatch ran orca worktree create"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi

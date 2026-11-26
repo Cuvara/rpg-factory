@@ -158,8 +158,8 @@ EXTRA = {
     # the portable-paths enforce line is global too: any tracked file may hold a machine-specific user path
     "scripts/checks/portable-paths.py": ["*"],
     "tests/portable-paths.test.sh": ["scripts/checks/portable-paths.py"],
-    # the workspace readers guard scans only scripts/ and tests/ (jq and Python readers of the workspace): a change under
-    # either selects its run line; a docs-only change does not
+    # the workspace readers guard greps only scripts/ and tests/ under its ROOT (run-all passes '.'); hooks and registry
+    # select it through GLOBAL; skills, docs, commands and evals are not read, so they do not select it
     "scripts/checks/workspace-readers.sh": ["scripts/*", "tests/*"],
     # the netcode evidence prune case sources prune_evidence from the script through a computed path
     "tests/run-all-parallel.test.sh": ["scripts/checks/netcode-headless.sh"],

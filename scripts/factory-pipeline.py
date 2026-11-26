@@ -93,8 +93,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         which the task lead has not) with branch and HEAD; never push, merge or remove the worktree. Orca forbids
         nested workers, so --runner orca prints a handoff, not a worker-start:
         `git worktree add --no-track -b <branch> <path> <base>` for a new task worktree, followed by
-        `orca worktree set` with its parent, then `orca agent launch --worktree path:<dir> --prompt ...`;
-        existing worktrees use only the launch command. A stacked task's handoff is the same three lines: the worktree
+        `<pipeline> orca-wait --worktree <path> && orca worktree set ...` with its parent (Orca lists a worktree it did
+        not create only after a while, and a set before that changes nothing), then
+        `orca agent launch --worktree path:<dir> --prompt ...`; existing worktrees use only the launch command.
+        A stacked task's handoff is the same three lines: the worktree
         add cuts <topic>-<id> from the dependency's full tip SHA, the new worktree is a sibling beside the integration
         checkout (never a child of the dependency's worktree, never a `<dep branch>--*` name) and `orca worktree set`
         names the integration checkout as parent, else the main checkout; its lead prompt says to implement now, in
@@ -108,6 +110,12 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         A tier XS task starts no task lead: it prints the run lead's own steps (edit on plan.topic, commit with explicit
         paths, `dispatch --phase review --sha <sha>`, the task tier command, the `tier XS: lead ran task suites` QA
         verdict, gate); `--phase implement` on it is a usage error. Its review and QA read the topic checkout.
+  orca-wait --worktree PATH [--gone] [--timeout SECONDS] [--interval SECONDS]
+        polls the read-only `orca worktree list --json` every --interval seconds (default 2) until PATH is listed
+        (with --gone: no longer listed); exit 0 once it holds. Exit 1 after --timeout seconds (default 60) with what to
+        do (the worktree stays hidden in Orca, or its branch is still in use: retry, or run the next command by hand once
+        `orca worktree list` shows, or no longer shows, the path), and exit 1 when orca is not on PATH or the list
+        fails. The lead handoff chains it before `orca worktree set`; cleanup prints it before `git branch -d`.
   dispatch <plan.json> --task ID --phase lead --placement shared|child ...
         Both placements create a task worktree beside the integration checkout (or the repo checkout if absent).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
@@ -268,7 +276,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         no orca or a failing call is a NOT_AVAILABLE line, never an error. With --json the "Workers:" lines go to
         stderr (stdout stays the status schema). The worker-list call asks for --full rows (the concise row lacks the
         resource); on an unknown --full flag it retries without it for the remaining pages. Concise rows use only
-        terminalState for release and state for settledness; missing fields are noted as checks that could not run.
+        terminalState for release and state for settledness (a row released through terminalState needs no state);
+        missing fields are noted as checks that could not run.
         Full rows also use resource release/ownership state, releaseCompletedAt, and projection resource state.
         Lineage-only children must have the topic or a <topic>-* branch (also with an Orca prefix);
         foreign and detached siblings are excluded.
@@ -298,7 +307,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         lists local and origin branch deletion for plan branches contained in main. Otherwise prints removal commands and
         `orca orchestration worker-release --dispatch <id>` per unreleased worker, names each leftover child worktree
         as "child of <task>" (`orca worktree rm` once merged), names the rest, and reminds to
-        release every worker session. The same concise worker fallback and plan-branch lineage filter as status apply.
+        release every worker session. `orca worktree rm` removes asynchronously: before the first `git branch -d` of a
+        repo it prints one `<pipeline> orca-wait --gone --worktree <path>` per path it removes through
+        `orca worktree rm` (a branch is deleted only once its worktree record is gone). The same concise worker
+        fallback and plan-branch lineage filter as status apply.
         Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
         A task worktree git lists as prunable (its directory is gone), a leftover task directory (empty or not, named
         <topic>-<id> with / as -, no longer a git worktree) and an Orca record of such a removed worktree are
@@ -799,24 +811,29 @@ def session_model(a, agent, role):
 
 # ---------------------------------------------------------------- plan
 
-def read_json_file(path, what):
-    """A JSON object from a file; utf-8-sig, since PowerShell's `Out-File`/`Set-Content` write a UTF-8 BOM."""
+def read_json_file(path, what, raw=False):
+    """A JSON object from a file; utf-8-sig, since PowerShell's `Out-File`/`Set-Content` write a UTF-8 BOM. With
+    raw=True, (object, the bytes read): a caller that writes the file elsewhere writes exactly what it parsed."""
     try:
-        with open(path, encoding="utf-8-sig") as fh:
-            doc = json.load(fh)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        doc = json.loads(data.decode("utf-8-sig"))
     except (OSError, ValueError) as e:
         die(f"cannot read {what} {path}: {e}")
     if not isinstance(doc, dict):
         die(f"{what} must be a JSON object")
-    return doc
+    return (doc, data) if raw else doc
 
 
-def read_plan(path, reg):
-    plan = read_json_file(path, "plan")
+def read_plan(path, reg, what="plan", raw=False):
+    """A plan (read_json_file) whose no_worktree_markers replace the registry's for this run; `what` names the file in
+    a read error (plan-edit: "edited copy")."""
+    got = read_json_file(path, what, raw)
+    plan = got[0] if raw else got
     markers = plan.get("no_worktree_markers")
     if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
         reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
-    return plan
+    return got
 
 
 def repo_info(plan, reg, key):
@@ -1202,6 +1219,8 @@ def cmd_validate(a, reg):
     out.pop("order")
     out["models"] = plan_models(plan, reg, out["errors"])
     out["model_scope_widen"] = plan.get("model_scope_widen", [])
+    if not out["errors"]:
+        out["notes"].extend(stale_verdict_notes(plan, reg))
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -1226,6 +1245,21 @@ def cmd_validate(a, reg):
     return 1 if out["errors"] else 0
 
 
+def stale_verdict_notes(plan, reg):
+    """One note per recorded review or QA verdict (a task's, or integration:<repo> QA) whose fingerprint no longer
+    matches the plan: its objective, paths, acceptance, checks or agents changed since. Read-only; no record, none."""
+    tasks = [t for t in plan.get("tasks") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)]
+    phases = [(t["id"], phase) for t in tasks for phase in ("review", "qa")]
+    repos = dict.fromkeys(t.get("repo") for t in tasks if isinstance(t.get("repo"), str))
+    phases += [(f"integration:{key}", "qa") for key in repos]
+    notes = []
+    for tid, phase in phases:
+        if verdict_of(plan, reg, tid, phase)[1]:
+            notes.append(f"recorded {phase} verdict of {tid} is stale: the task's objective, paths, acceptance, checks "
+                         "or agents changed since it was recorded; re-run review/QA (status shows it)")
+    return notes
+
+
 def plan_task_changes(old, new):
     """Task-level difference of two plans: (added ids, removed ids, {id: [changed keys among paths/acceptance/deps]})."""
     def by_id(plan):
@@ -1247,7 +1281,8 @@ def cmd_plan_edit(a, reg):
     plan_path = a.plan
     plan_old = read_json_file(plan_path, "plan")
     copy_path = a.from_file
-    plan = read_json_file(copy_path, "edited copy")  # exit 2: missing, unreadable, not JSON
+    # exit 2: missing, unreadable, not JSON. Read once: the bytes validated are the bytes written to the plan
+    plan, data = read_plan(copy_path, reg, "edited copy", raw=True)
     if plan.get("id") != plan_old.get("id"):
         die(f"the edited copy has id {json.dumps(plan.get('id'))} but the plan has id {json.dumps(plan_old.get('id'))}: "
             "a plan edit never changes the plan id")
@@ -1259,9 +1294,6 @@ def cmd_plan_edit(a, reg):
         top, rc = git(plan_dir, "rev-parse", "--show-toplevel")
         if rc != 0 or not top:
             die(f"--commit: {plan_path} is not inside a git checkout")
-    markers = plan.get("no_worktree_markers")
-    if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
-        reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
     plan["_path"] = plan_path  # the copy is read as if it were the plan: relative repos.*.path resolve the same
     out = validate(plan, reg)
     out.pop("order", None)
@@ -1275,8 +1307,6 @@ def cmd_plan_edit(a, reg):
     if out["errors"]:
         print(f"INVALID ({len(out['errors'])} error(s)): {plan_path} not replaced" + (", nothing committed" if a.commit else ""))
         return 1
-    with open(copy_path, "rb") as fh:
-        data = fh.read()
     fd, tmp = tempfile.mkstemp(prefix=".plan-edit-", suffix=".tmp", dir=plan_dir)
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -2094,9 +2124,11 @@ def emit_lead_handoff(reg, agent, prompt, place, branch, m):
         if show:  # Orca hides a worktree it did not create when the repo's external worktree visibility is hide
             print(show)
         print(orca_cmd.quote(["git", "-C", checkout, "worktree", "add", "--no-track", "-b", branch, path, place["base"]]))
-        print(orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
-                              f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
-                              "--workspace-status", "in-progress"]))
+        # Orca lists a worktree it did not create only after a while; a set before that changes nothing
+        print(orca_wait_command(reg, path) + " && "
+              + orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
+                                f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
+                                "--workspace-status", "in-progress"]))
         place = {"worktree": f"path:{path}"}
     argv = ["orca", "agent", "launch", "--agent", entry["orca_agent"], "--worktree", place["worktree"], "--prompt", prompt,
             *flags, "--json"]
@@ -4210,7 +4242,8 @@ def orca_sessions(runs):
         for w in workers:
             if concise:
                 missing_release += not bool(w.get("terminalState"))
-                missing_state += not bool(w.get("state"))
+                # a row released through terminalState is released whatever its state: no settledness to check
+                missing_state += not w.get("state") and w.get("terminalState") != "released"
                 if not w.get("terminalState") or (w.get("terminalState") != "released" and not w.get("state")):
                     continue
             res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
@@ -4271,6 +4304,44 @@ def orca_worktree_paths():
     if not isinstance(rows, list):
         return None
     return {norm_wt(w["path"]) for w in rows if isinstance(w, dict) and w.get("path")}
+
+
+def orca_wait_command(reg, path, gone=False):
+    """The printed `<pipeline> orca-wait [--gone] --worktree <path>` command (pipeline_argv keeps `--registry none`)."""
+    return orca_cmd.quote(pipeline_argv(reg) + ["orca-wait"] + (["--gone"] if gone else []) + ["--worktree", path])
+
+
+def cmd_orca_wait(a, reg):
+    """Poll the read-only `orca worktree list --json` until the worktree is listed (--gone: no longer listed). Exit 0
+    once it holds, 1 after the timeout or when orca is not on PATH or the list fails; nothing is written."""
+    if a.timeout < 0 or a.interval < 0:
+        die("--timeout and --interval must be 0 or more seconds")
+    path = a.worktree[len("path:"):] if a.worktree.startswith("path:") else a.worktree
+    want = norm_wt(path)
+    deadline = time.monotonic() + a.timeout
+    while True:
+        paths = orca_worktree_paths()
+        if paths is None:
+            why = ("orca is not on PATH" if not shutil.which("orca")
+                   else "`orca worktree list --json` failed or printed no worktree list")
+            print(f"factory-pipeline: orca-wait: {why}: cannot tell whether Orca lists {path}; run the next command by "
+                  "hand once `orca worktree list` " + ("no longer shows" if a.gone else "shows") + " the path",
+                  file=sys.stderr)
+            return 1
+        if (want in paths) != a.gone:
+            print(f"orca-wait: {path} is " + ("no longer listed" if a.gone else "listed") + " by Orca")
+            return 0
+        if time.monotonic() >= deadline:
+            if a.gone:
+                print(f"factory-pipeline: orca-wait: Orca still lists {path} after {a.timeout:g} s: its branch is still "
+                      "in use by the worktree (`git branch -d` would fail with 'used by worktree'); retry this command, "
+                      "or delete the branch by hand once `orca worktree list` no longer shows the path", file=sys.stderr)
+            else:
+                print(f"factory-pipeline: orca-wait: Orca does not list {path} after {a.timeout:g} s: the worktree stays "
+                      "hidden in Orca (an `orca worktree set` now changes nothing); retry this command, or run "
+                      "`orca worktree set` by hand once `orca worktree list` shows the path", file=sys.stderr)
+            return 1
+        time.sleep(min(a.interval, max(0.0, deadline - time.monotonic())))
 
 
 def orca_worktree_ids():
@@ -4551,6 +4622,9 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
     left, commands, kept, leftovers, users = [], [], [], [], []
     orca_paths = []  # the Orca records, read once and only when a task worktree path is no git worktree any more
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
+        # paths this repo removes through `orca worktree rm`, which deletes asynchronously: their branches are deleted
+        # only after an orca-wait --gone per path (printed once, before the repo's first `git branch -d`)
+        orca_removed = []
         info = repo_info(plan, reg, key)
         if not info["path"] or not os.path.isdir(info["path"]):
             left.append(info["path"] or key)
@@ -4599,6 +4673,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     kept.append(f"{key}: child of {owner[0]}: {child_note_text(c, owner[1])}")
                     if c["merged"]:
                         commands.append(orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{wt['path']}"]))
+                        orca_removed.append(wt["path"])
                 continue
             branch = str(wt.get("branch", ""))
             if not own_extra(branch) and not (merged and branch == topic):
@@ -4642,7 +4717,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     what = (f"directory {d} (no git worktree any more" + (", with an Orca record" if record else "") + ")"
                             if on_disk else f"Orca record of the removed task worktree {d}")
                     kept.append(f"{key}: LEFTOVER {what}: `git worktree prune`, then `orca worktree rm` once the "
-                                f"directory is free (check it is the old task worktree first); {BUSY_NOTE}")
+                                f"directory is free (check it is the old task worktree first); its branch is deleted only "
+                                f"once the worktree record is gone (`orca-wait --gone`); {BUSY_NOTE}")
+                    if rm not in commands:
+                        orca_removed.append(d)
                     commands.extend(c for c in (prune, rm) if c not in commands)
                     # a directory the removal may fail on: name the processes that may hold it (read-only; the user decides)
                     procs = busy_processes(d)
@@ -4662,6 +4740,8 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                 if home and all(norm_wt(home) != norm_wt(t["path"]) for t in trees):
                     kept.append(f"{key}: branch {br} is checked out in the main checkout {home} - not deleted")
                 else:
+                    commands.extend(orca_wait_command(reg, p, gone=True) for p in orca_removed)
+                    orca_removed = []  # waited for once, before this repo's first branch deletion
                     commands.append(orca_cmd.quote(["git", "-C", command_repo, "branch", "-d", br]))
             else:
                 left.append(br)
@@ -4876,7 +4956,8 @@ def children_of(repo, trees, parent_branch, parent_path=None, lineage=None):
 def child_note_text(c, parent_branch):
     return (f"leftover child worktree {c['path']} ({c['branch'] or 'detached'}): "
             + ("merged" if c["merged"] else f"merge it into {parent_branch}") + ", then remove it at once: "
-            + orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{c['path']}"]))
+            + orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{c['path']}"])
+            + "; its branch is deleted only once the worktree record is gone (`orca-wait --gone`)")
 
 
 def changed_since(path, sha, head, paths):
@@ -5871,6 +5952,11 @@ def main():
     c.add_argument("--json", action="store_true")
     c.add_argument("--after-merge", action="store_true")
     c.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
+    ow = sub.add_parser("orca-wait", parents=[common])
+    ow.add_argument("--worktree", required=True, metavar="PATH")
+    ow.add_argument("--gone", action="store_true")
+    ow.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS")
+    ow.add_argument("--interval", type=float, default=2.0, metavar="SECONDS")
     g = sub.add_parser("gate", parents=[common])
     g.add_argument("plan")
     g.add_argument("--allow-same-model", action="store_true")
@@ -5891,7 +5977,8 @@ def main():
     try:
         return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner,
                 "dispatch": cmd_dispatch, "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup,
-                "status": cmd_status, "report": cmd_report, "sync": cmd_sync, "nudge": cmd_nudge}[a.cmd](a, reg)
+                "status": cmd_status, "report": cmd_report, "sync": cmd_sync, "nudge": cmd_nudge,
+                "orca-wait": cmd_orca_wait}[a.cmd](a, reg)
     finally:
         _GIT_MEMO_ON = False
         _GIT_MEMO.clear()
