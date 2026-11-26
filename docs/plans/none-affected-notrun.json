@@ -1,0 +1,74 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "none-affected-notrun",
+  "title": "run-all: a run that reaches no check is NOT_RUN, not a pass",
+  "topic": "feat/delivery/none-affected-notrun",
+  "goal": "Close issue #149 properly. PR #150 made an affected run with a base that reaches no check (0 passed, 0 failed, every skip not affected) exit 0 with the line 'run-all: nothing the change reaches: no check ran (not affected: N)'. A QA session that sees exit 0 records PASS although no check ran, and a mapping that tests/affected.py misses would also read as success. That breaks the rule that an absent check is NOT_RUN, not a pass. The run gets an exit code of its own, and integration QA treats it as NOT_RUN and runs the workspace checks without a base for evidence before any verdict.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "notrun-exit",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "(1) tests/run-all.sh: the shape PR #150 added (AFF set, 0 passed, 0 failed, naff > 0, skip == naff) keeps printing 'run-all: nothing the change reaches: no check ran (not affected: N)' but exits 6 instead of 0, with a second line 'run-all: exit 6 = NOT_RUN: no evidence; run without --base (or with --only-suites) for a verdict'. Codes 0-5 keep their meaning; the result record's exit matches (6); no suite PASS record is written. Update the header comment lines that state the exit rule (lines 3-6 and the --affected paragraph) and list exit 6 beside the other codes. (2) tests/run-all-parallel.test.sh: the 'nothing the change reaches' cases (around line 1049) expect exit 6 and the NOT_RUN line; the other cases there are unchanged. (3) scripts/factory-pipeline.py: the integration QA policy text in the dispatch spec (the `ci+workspace` branch near `policy = (\"Integration QA: ...`) adds: exit 6 from the tier command means no workspace check was reached, which is NOT_RUN and never PASS; then run `tests/run-all.sh --workspace-only` without --base and grade that run. Update the matching help text near the `--workspace-only --base <plan base>` mention in the module docstring. (4) tests/pipeline.test.sh: assert the integration QA spec of a ci+workspace plan names exit 6 as NOT_RUN and the no-base fallback command (near the existing tier_command asserts around line 1938-1961).",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/none-affected-notrun.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "docs/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "an --affected run with a base that reaches no check exits 6 and prints the 'nothing the change reaches' line and the NOT_RUN line",
+        "a 0-pass run with any other skip, a run without a base, a passing affected run (0) and a failing one (1) keep their exit codes",
+        "the integration QA spec of a ci+workspace plan says exit 6 is NOT_RUN, never PASS, and names `tests/run-all.sh --workspace-only` without --base as the run to grade",
+        "every existing run-all-parallel and pipeline case passes"
+      ]
+    },
+    {
+      "id": "notrun-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Every place that names the integration QA command `tests/run-all.sh --workspace-only --base <plan base>` says, in one short clause, that exit 6 ('nothing the change reaches') is NOT_RUN, never a pass, and that integration QA then runs `tests/run-all.sh --workspace-only` without a base: skills/delivery/references/delivery.md (section 10 QA tiers table row 'Integration QA'), skills/factory-core/references/parallel-work.md ('Integration QA is scoped too' bullet), docs/pipeline-cli.md (the integration QA paragraph near `--task integration:<repo> --phase qa`) and .claude/CLAUDE.md (the QA rule and the Commands block line). Add a CLAUDE.md operating lesson with its reason: a run that checked nothing reported success (PR #150) and would have let a QA session record PASS with no evidence; a run that reaches nothing exits 6 = NOT_RUN.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/references/parallel-work.md",
+        "docs/pipeline-cli.md",
+        ".claude/CLAUDE.md",
+        "changelog.d/none-affected-notrun-docs.md"
+      ],
+      "exclusions": [
+        "scripts/",
+        "tests/"
+      ],
+      "deps": [
+        "notrun-exit"
+      ],
+      "checks": [
+        "tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "the four files describe exit 6 as NOT_RUN and the no-base fallback as the code implements it",
+        "CLAUDE.md has the lesson with its reason",
+        "tests/parallel-policy.test.sh and tests/skills-lint.sh pass"
+      ]
+    }
+  ]
+}

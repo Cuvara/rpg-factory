@@ -2032,6 +2032,14 @@ assert 'QA tier command:\ntests/run-all.sh --workspace-only\n' in \
 assert 'QA tier command:\ntests/run-all.sh --workspace-only --base main\n' in \
     m.qa_body('x', lone, integration=True, runall=listed, tiers={}, plan_base='main') + '\n'
 assert '--workspace-only --base <plan base>' in m.qa_body('x', lone, integration=True, runall=listed, tiers={}, plan_base='main')
+# exit 6 (no workspace check reached) is NOT_RUN, never PASS; the fallback is --workspace-only without --base
+ws_body = m.qa_body('x', lone, integration=True, runall=listed, tiers={}, plan_base='main')
+assert ('Exit 6 from the tier command means no workspace check was reached: that is NOT_RUN, never PASS; then run '
+        '`tests/run-all.sh --workspace-only` without --base and grade that run.') in ws_body, ws_body
+assert 'Exit 6' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'}, plan_base='main')
+assert 'Exit 6' not in m.qa_body('x', lone, base='main', runall=listed)
+assert ('exit 6 from that command means no workspace check was reached: NOT_RUN,\n        never PASS; then run '
+        '`tests/run-all.sh --workspace-only` without --base and grade that run.') in m.__doc__
 assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'tests/run-all.sh --workspace-only --base' not in m.qa_body('x', lone, integration=True, runall=listed,
                                                                    tiers={'integration': 'full'}, plan_base='main')
@@ -3308,6 +3316,7 @@ expect "task QA with check suites: the plain print prompt names the same command
 # the integration QA names the workspace checks the change reaches, against the plan's base (the repo base branch)
 expect_spec "integration QA spec: --workspace-only --base <plan base>" "^tests/run-all\.sh --workspace-only --base develop$" dispatch "$SCOPED" --task integration:plugin --phase qa --sha abc1234 --runner orca
 refute_spec "integration QA spec: never a bare --workspace-only or a task-scoped form" "^tests/run-all\.sh --workspace-only$|--within" dispatch "$SCOPED" --task integration:plugin --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA spec: exit 6 is NOT_RUN, never PASS, and the no-base fallback is graded" "Exit 6 from the tier command means no workspace check was reached: that is NOT_RUN, never PASS; then run \`tests/run-all\.sh --workspace-only\` without --base and grade that run\." dispatch "$SCOPED" --task integration:plugin --phase qa --sha abc1234 --runner orca
 rm "$T/tests/run-all.sh"; rmdir "$T/tests"
 # the run lead's RPG_FACTORY_WORKSPACE reaches the implement, verify and QA specs (a worker may not inherit it);
 # unset or empty, no such line

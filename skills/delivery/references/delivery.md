@@ -101,8 +101,8 @@ each subtask with its commit, and the verify verdict (state, SHA, model).
   (`<parent>`: the integration checkout, else - and for the integration checkout itself - the main checkout; a task
   lead's child: the task worktree). Every printed worktree creation chains it after
   `factory-pipeline.py orca-wait --worktree <dir> &&` (read-only; not the message waiter `scripts/orca-wait.sh`):
-  Orca lists a worktree it did not create late, and an earlier set does nothing (exit 1: still hidden; retry, or
-  set by hand once `orca worktree list` shows it). If `orca repo list --json` shows
+  Orca lists a foreign worktree late and an earlier set does nothing (exit 1: retry, or
+  set it once `orca worktree list` shows it). If `orca repo list --json` shows
   `externalWorktreeVisibility` `hide`, first run `orca repo set --repo path:<repo> --external-worktree-visibility show`
   (printed too) before the worktree add: lineage alone leaves it hidden.
 
@@ -212,9 +212,9 @@ A task is done when integrated with its review and QA recorded; the run, when th
 `deliver: pr`: at READY_FOR_PR). Then:
 
 1. **Worktrees.** The run lead removes each task worktree its run created once the task is integrated and clean:
-   `git worktree remove <path>` (never `--force`), or `orca worktree rm`, which removes asynchronously:
-   `factory-pipeline.py orca-wait --gone --worktree <path>` and `git worktree prune` before deleting its branch (else
-   `git branch -d` fails: 'used by worktree'). Unintegrated work is reported, not removed. Never remove the main
+   `git worktree remove <path>` (never `--force`), or `orca worktree rm` (asynchronous: run
+   `factory-pipeline.py orca-wait --gone --worktree <path>` and `git worktree prune` before `git branch -d`, which
+   else fails 'used by worktree'). Unintegrated work is reported, not removed. Never remove the main
    checkout, the integration checkout before its PR is open, another coordinator's worktree, or one in use ("Session
    lifecycle" below).
 2. **Task branches.** A task branch whose commits are in the integration branch goes with its worktree
@@ -368,7 +368,7 @@ run-checks fast tier). Re-verify flags: `docs/pipeline-cli.md`, "verdict".
 | Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>` with the same `--within` scope; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task tier command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a task lead's own QA verdict counts for tier S only | as verify |
 | Tier XS (step 1) | the task tier command, after the cross-model review PASS; no QA session | the run lead: `verdict --phase qa --state PASS --by <lead model> --note 'tier XS: lead ran task suites'` | as verify |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only --base <plan base>` (what CI cannot run: only the live-workspace suites and checks the change reaches; all of them without a base and in `--release`; suite reuse); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | CI in the background; the next task starts |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only --base <plan base>` (what CI cannot run: only the live-workspace suites and checks the change reaches; all of them without a base and in `--release`; suite reuse; exit 6, nothing the change reaches, is NOT_RUN, never a pass: then rerun it without `--base` and grade that run); after the PR opens, `gh pr checks <pr> --watch`: CI green (ci-ok) is the merge gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | CI in the background; the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` | the release session | release only |
 
 - **Test-run slots.** A targeted run (`--affected`, `--within` or `--only-suites`) takes one of a few machine-wide slots,
