@@ -10,9 +10,16 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 - `tier -- --repo <key> --paths <files>` prints XS, S, M or L and the flow. An S task is still a one-task `plan.json`
   with its own task lead (the task worktree, or the main checkout of a no-worktree repo).
 - XS applies only when every path is prose (`pipeline_route.prose_path`, see "dispatch" below), no path is a contract
-  or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). This plain
-  form counts files, not changed lines: `tier --plan` counts the changed lines of the checkout, and the gate those of
-  the committed diff. An XS task has no task lead, task worktree or implement session: the run lead itself edits and
+  or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). All forms
+  measure changed lines against the same `max_changed_lines`: the plain `tier -- <factory-context.sh args>` and
+  `--context-json` forms, with a checkout, count `git diff --numstat` over the snapshot's files plus the lines of
+  untracked ones, against the merge-base with `HEAD` of the repo's `branch_diff_base` (the branch scan), else of the
+  `--base` of the args (`--paths` leaves `branch_diff_base` null, so `tier -- --repo <key> --paths <files> --base <b>`
+  counts the committed lines since `<b>` too), else against `HEAD`; `tier --plan` counts the changed lines of the
+  checkout, and the gate those of the committed diff. The output names what was measured:
+  `changed lines: <n> (<basis>)`, or `changed lines: not measured (no checkout)`; `--json` carries `lines_basis`, and
+  `changed_lines` only when something was measured.
+  An XS task has no task lead, task worktree or implement session: the run lead itself edits and
   commits it on the plan `topic` branch, dispatches one cross-model review and runs the task tier command (delivery.md
   section 10 step 1).
 - `tier --plan plan.json --repo <key> --paths <files>` is the form for `--registry none` and for repos the plan names
@@ -96,6 +103,11 @@ section 8: edit a copy, never the plan, then let the verb check it and replace t
   integration branch when it exists, because that branch carries the earlier waves. `repos.<key>.base` stays the
   comparison base of `status` and the gate: never point it at the topic (then `base..head` counts nothing and
   integrated tasks show as pending).
+- Base health (advisory, print only): for a repo with a GitHub remote (read from the local `git remote -v`, never a
+  network command) and a base branch name (a SHA base falls back to the repo's base branch), `--phase lead` prints
+  ``factory-pipeline: base health: run `gh run list --branch <branch> --limit 1` before starting`` on stderr, and the
+  lead spec carries the same advice on a `Base health:` line, so the task lead sees it too, not only the run lead.
+  Dispatch never runs `gh` itself.
 - Stacked task (the rule: delivery.md section 4 "Stacked dependents"): a task stacks when its one in-flight
   dependency in the same repo is a candidate or reviewed and every other dependency is integrated; two in-flight
   dependencies, or a pending or implementing one, never stack. When `status` notes `stackable on <dep>@<sha>`,
@@ -246,7 +258,7 @@ factory-pipeline.py sync plan.json --task <id> [--send]
 ## nudge
 
 ```
-factory-pipeline.py nudge plan.json [--task <id>] [--idle SECONDS] [--send]
+factory-pipeline.py nudge plan.json [--task <id>] [--idle SECONDS] [--stall SECONDS] [--orca-run RUN_ID]... [--send]
 ```
 
 - Finds a start prompt that stayed unsubmitted in a task session's terminal (an Orca session whose prompt was typed
@@ -265,7 +277,23 @@ factory-pipeline.py nudge plan.json [--task <id>] [--idle SECONDS] [--send]
 - An `orca` that resolves to a `.cmd` or `.bat` shim is not sent to (the CR argument is dropped) and counts as a
   failed send; the row prints the command to run by hand.
 - Orca missing or unreachable prints a note and exits 0. Exit 1 when a send failed, 2 on usage (an `integration:`
-  task, a negative `--idle`, an unknown task).
+  task, a negative `--idle` or `--stall`, an unknown task).
+- STALLED workers (read-only): `nudge` then checks the running workers of the task leads' Orca Runs: each listed
+  task's `orca_run` plus `--orca-run RUN_ID` (repeatable). With no Run named it prints
+  `nudge: no Orca Run named (task orca_run or --orca-run): stalled workers not checked`. Per Run it calls
+  `orca orchestration worker-list --full` and skips settled or released workers; per running worker
+  `orca orchestration worker-show --dispatch <id> --full --json` and the last output of its agent terminal
+  (`agentTerminalHandle` in `orca terminal list` of its worktree).
+- One row per running worker, `<run>  <dispatch>  idle <n>s  ...`: `ok  waiting on a human` when
+  `observation.agentWait` is set; `ok  active (<n>s < <stall>s)` when the terminal was silent for less than `--stall`
+  seconds (default 900); `ok ... (no opinion)` when a call fails or data is missing (worker-show, terminal list, no
+  agent terminal or worktree, no `lastOutputAt`). Otherwise `STALLED  no turn start` (its last dispatch input ended
+  `turn_unobserved`, or it has no dispatch input record and `lastError` says the turn start was not observed) or
+  `STALLED  turn ended without worker_done`, followed by a `re-dispatch:` line: read the terminal
+  (`orca terminal read --terminal <handle>`), `orca orchestration worker-stop --dispatch <id>`, dispatch a fresh
+  session with the same phase, and release the old one with `orca orchestration worker-release --dispatch <id>`.
+- `--send` never sends anything for a `STALLED` row and nothing is written for it; a `STALLED` row does not change the
+  exit code.
 
 ## Fallback reviews
 
@@ -438,6 +466,17 @@ quota, idle terminal, a 401), then dispatch the role again.
   `--json` these lines go to stderr and the `slots` field carries the same holders (slot, pid, winpid, alive,
   checkout, started, and `progress` with check, result, passed, failed, updated, age_seconds, or null before the
   first one), the entries `cleanup --json` has. Status never stops a holder: the user decides.
+- A slot left by a verify dispatch: a slot whose holder is alive (or cannot be checked) in a task worktree of the plan
+  (the task branch's worktree or one of its children) where, at or after the slot's start, that task's verify
+  reported (a `qa` verdict, or a `review` FAIL, of the task or a subtask) or a worker of the task's Orca Run in that
+  checkout was released (`releaseCompletedAt`, else the `releaseRequestedAt` of a released row; a release with
+  neither time flags nothing). Status prints `Slots: LEFT BY VERIFY slot <n> held by PID <pid>
+  [(Windows PID <winpid>)] in <checkout> since <start> [(alive)|(liveness unknown)]: task <id>: <what reported or
+  was released, when> after the run started; stop that PID only: <command> (status never runs it)`. The command is
+  `kill <pid>`, or `taskkill //PID <winpid> //T //F` when the slot has a Windows PID. The task row gets a note
+  (`test slot <n> (PID <pid>) in <checkout> left by the verify session (...)`) and the command comes first in `next`.
+  Status stays read-only and reuses its one `worker-list` call. With `--json` the line goes to stderr only: the
+  schema's slot entries take no extra field.
 - Worker listing requests `--full` and retries without it when Orca reports that flag as unknown, keeping the concise
   form for later pages. Concise rows use `terminalState` for release and `state` for settledness (a row whose
   `terminalState` is `released` counts as released even without a `state`); the Run line names missing fields and

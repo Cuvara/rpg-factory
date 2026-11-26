@@ -12,7 +12,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
         pipeline.tiers.XS): every file prose (*.md, changelog.d/, skills/ directories), within max_files and
-        max_changed_lines; `above XS:` names why not.
+        max_changed_lines; `above XS:` names why not. The changed lines are those of the snapshot's files in each repo
+        with a checkout: `git diff --numstat` against the merge-base with HEAD of the repo's branch_diff_base (the
+        branch scan), else of the `--base` of the args (`--paths` leaves branch_diff_base null), else against HEAD,
+        plus the lines of untracked ones; without a checkout they are not measured (count 0). `changed lines:`
+        (--json: facts lines_basis, and changed_lines when measured) says what was measured.
   tier --plan <plan.json> --repo KEY --paths FILE... [--json]
         the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
         from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts. With a
@@ -166,6 +170,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         not computed (<reason>)` when there is no selection) and, when N > --suite-warn N (default 40), a warning to
         narrow the task paths or its checks. Advisory: the prompt and the exit code are unchanged; --suite-warn
         below 1 is a usage error (exit 2).
+        The verify spec ends with VERIFY_RUN_STOP: before any verdict or report the session stops every
+        tests/run-all.sh run it started by that PID (`kill <pid>`; Windows Git Bash `taskkill //PID <winpid> //T //F`),
+        never by pattern, then confirms no slot under `<persistent state dir>/locks/run-all-slots/` (the resolved path
+        is printed) names its checkout, or `status <plan>` prints no `Slots:` line for it; a slot still held is QA
+        NOT_RUN or BLOCKED with the slot and PID, never PASS.
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
@@ -248,7 +257,7 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         prints the `git merge` it needs and records <dependent>__sync.json, which status shows until the dependent's
         HEAD contains the SHA (a message is only a nudge). --send also runs `orca orchestration send --type status` to
         the dependent's lead (task orca_run, else its Orca worktree). Exit 0, 1 when a send failed, 2 usage.
-  nudge <plan.json> [--task ID] [--idle SECONDS] [--send]
+  nudge <plan.json> [--task ID] [--idle SECONDS] [--stall SECONDS] [--orca-run RUN_ID]... [--send]
         finds start prompts that stayed unsubmitted in a task session's terminal. Per task with a task worktree it lists
         the Orca terminals of that worktree (`orca terminal list --json`, read-only) and reads each screen (`orca
         terminal read --screen --json`). A terminal is STUCK only when its screen still shows `Read your task spec at
@@ -264,6 +273,17 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         sent again: `nudged, still stuck: relaunch the session`. Without --send nothing is written. Orca missing or
         unreachable: a note, exit 0. Exit 1 when a send failed, 2 usage. status shows a `stuck?:` note on a task whose
         last nudge record shows it still stuck and which made no progress since.
+        It then checks the Orca workers of the task leads' Runs (task `orca_run` of the listed tasks, plus --orca-run,
+        repeatable; none: `nudge: no Orca Run named ...: stalled workers not checked`) for STALLED sessions, read-only.
+        Per Run `orca orchestration worker-list --full`; a settled or released worker is skipped. Per running worker
+        `orca orchestration worker-show --dispatch <id> --full --json` and the last output of its agent terminal
+        (agentTerminalHandle in `orca terminal list` of its worktree). A worker whose observation.agentWait is set is
+        `ok  waiting on a human`; a terminal silent for less than --stall seconds (default 900) is `ok  active`; missing
+        data is `ok ... (no opinion)`. Otherwise one row `<run>  <dispatch>  idle <n>s  STALLED  <reason>`: `no turn
+        start` (the last dispatch_input effect is `turn_unobserved`, or lastError says the turn start was not observed)
+        or `turn ended without worker_done`, then a `re-dispatch:` line (read the terminal, `worker-stop`, dispatch a
+        fresh session with the same phase, `worker-release`). --send never sends anything for a STALLED row and nothing
+        is written for it; a STALLED row does not change the exit code.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -297,7 +317,15 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
         PID is alive and the slot's last progress (stderr with --json, where `slots` also carries them: slot, pid,
         winpid, alive, checkout, started and progress, null before the first one, the same entries as cleanup --json);
-        status never stops the process and prints no command that would.
+        status never stops the process. It prints a stop command only for a slot left by a verify dispatch: a slot
+        whose holder is alive (or cannot be checked) in a task worktree of the plan (the task branch's worktree or one
+        of its children) where, at or after the slot's start, that task's verify reported (a `qa` verdict or a
+        `review` FAIL of the task or a subtask) or a worker of the task's Orca Run in that checkout was released
+        (releaseCompletedAt, else releaseRequestedAt of a released row). It prints `Slots: LEFT BY VERIFY slot <n>
+        held by PID <pid> ... in <checkout> since <start>: task <id>: <what reported or was released, when> ...; stop
+        that PID only: <command>` (`kill <pid>`, or `taskkill //PID <winpid> //T //F` when the slot has a Windows PID;
+        stderr with --json, a text line only: the schema's slot entries take no extra field), a note on the task row
+        and the command first in `next`; status never runs it.
         Stacked siblings (a dependency D and the tasks stacked on it, while one of their branches exists and one of
         them is not integrated) get the note `stacked siblings <ids> on D: sibling worktrees, not children of D's
         worktree; merge order <D branch>, then <dependent branch> ... into <topic> (dependency first, git merge
@@ -449,7 +477,7 @@ def git_blob(repo, head, path):
 
 def tier_of(ctx, pipe, lines=None):
     """lines: the changed-line count of the change when known (tier --plan with a checkout), else None (counts as 0)."""
-    repos = [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
+    repos = tier_repos(ctx)
     modules = sorted({m for r in repos for m in r.get("touched", [])})
     files = sum(1 for r in repos for f in r.get("files", []) if f.get("source") in ("given", "branch"))
     # XS judges every file of the change, uncommitted ones included: one path that is not prose is above XS
@@ -513,19 +541,22 @@ def plain_context(key, paths):
 
 def cmd_tier(a, reg):
     pipe = settings(reg)
-    lines = None  # the changed-line count, known only for tier --plan with a checkout
+    lines = basis = None  # tier --plan: the changed lines of the given paths against HEAD (None without a checkout)
     if a.plan:
         if not a.repo or not a.paths:
             die("tier --plan needs --repo <plan repo key> and --paths <files>")
         plan = read_plan(a.plan, reg)
         plan["_path"] = a.plan
         info = repo_info(plan, reg, a.repo)
-        lines = changed_lines(info["path"], a.paths)
+        checkout = bool(info["path"]) and os.path.isdir(info["path"])
+        lines = changed_lines(info["path"], a.paths) if checkout else None  # nothing measured: no changed_lines fact
+        basis = lines_basis(["HEAD"] if checkout else None, len(set(a.paths)))
         if not info["registry"]:
             if not info["path"]:
                 die(f"repo `{a.repo}` is neither a registry repo nor in plan.repos with a path")
             out = tier_of(plain_context(a.repo, a.paths), pipe, lines)
             out["basis"] = "paths (repo not in the registry)"
+            out["facts"]["lines_basis"] = basis
             return print_tier(a, out)
         a.rest = ["--repo", info["registry"], "--paths", *a.paths, *a.rest]
     elif a.repo or a.paths:
@@ -539,7 +570,11 @@ def cmd_tier(a, reg):
         if r.returncode != 0:
             die("factory-context.sh failed: " + (r.stderr or r.stdout).strip()[:400], 1)
         ctx = json.loads(r.stdout)
-    return print_tier(a, tier_of(ctx, pipe, lines))
+    if basis is None:  # the plain form: the changed lines of the snapshot's files in each repo checkout
+        lines, basis = snapshot_lines(ctx, rest_base(a.rest))
+    out = tier_of(ctx, pipe, lines)
+    out["facts"]["lines_basis"] = basis
+    return print_tier(a, out)
 
 
 def numstat_lines(out):
@@ -551,21 +586,77 @@ def numstat_lines(out):
     return n
 
 
-def changed_lines(repo_path, paths):
-    """Changed lines of a working change in `paths` (tier --plan): `git diff --numstat HEAD` plus the lines of the
-    untracked given files. 0 when unknown (no checkout, git fails)."""
+def diff_lines(repo_path, paths, ref="HEAD"):
+    """Changed lines of `paths` in a checkout: `git diff --numstat <ref>` (the working tree against `ref`) plus the lines
+    of the untracked ones. 0 when unknown (no checkout, git fails)."""
     if not repo_path or not paths or not os.path.isdir(repo_path):
         return 0
-    out, rc = git(repo_path, "diff", "--numstat", "--no-renames", "HEAD", "--", *paths)
-    n = numstat_lines(out) if rc == 0 else 0
-    untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *paths)
-    for f in (untracked or "").splitlines() if rc == 0 else []:
-        try:
-            with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
-                n += sum(1 for _ in fh)
-        except OSError:
-            pass
+    n = 0
+    for i in range(0, len(paths), 200):  # chunks keep the command line short
+        chunk = list(paths[i:i + 200])
+        out, rc = git(repo_path, "diff", "--numstat", "--no-renames", ref, "--", *chunk)
+        n += numstat_lines(out) if rc == 0 else 0
+        untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *chunk)
+        for f in (untracked or "").splitlines() if rc == 0 else []:
+            try:
+                with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
+                    n += sum(1 for _ in fh)
+            except OSError:
+                pass
     return n
+
+
+def changed_lines(repo_path, paths):
+    """Changed lines of a working change in `paths` (tier --plan): diff_lines against HEAD."""
+    return diff_lines(repo_path, paths, "HEAD")
+
+
+def lines_basis(refs, nfiles):
+    """What a tier measured as changed lines: the diff refs and the number of files, or `not measured` (refs None)."""
+    if refs is None:
+        return "not measured (no checkout)"
+    return f"git diff --numstat {', '.join(refs)} plus untracked, {nfiles} file(s)"
+
+
+def tier_repos(ctx):
+    """The repo entries of a routing snapshot that tier_of judges: touched ones and those with given files."""
+    return [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
+
+
+def rest_base(rest):
+    """The `--base B` or `--base=B` of the factory-context.sh args (the last one), or None."""
+    base = None
+    for i, x in enumerate(rest or []):
+        if x == "--base" and i + 1 < len(rest):
+            base = rest[i + 1]
+        elif x.startswith("--base="):
+            base = x.split("=", 1)[1]
+    return base or None
+
+
+def snapshot_lines(ctx, given_base=None):
+    """(lines, basis) of a routing snapshot (plain tier): for every judged repo with a checkout (`path` is a directory),
+    the changed lines of its files against the merge-base of a base and HEAD, plus untracked ones. The base is the
+    repo's `branch_diff_base` (the branch scan of factory-context.sh), else `given_base` (the `--base` of the args:
+    with --paths factory-context.sh leaves branch_diff_base null), else none: against HEAD. lines is None when no repo
+    has a checkout."""
+    total, refs, nfiles = None, [], 0
+    for r in tier_repos(ctx):
+        path = r.get("path")
+        files = sorted({f.get("path") for f in r.get("files", []) if f.get("path")})
+        if not path or not os.path.isdir(path):
+            continue
+        ref, label = "HEAD", "HEAD"
+        base = r.get("branch_diff_base") or given_base
+        if base:
+            mb, rc = git(path, "merge-base", base, "HEAD")
+            if rc == 0 and mb:
+                ref, label = mb.split()[0], f"$(git merge-base {base} HEAD)"
+        total = (total or 0) + diff_lines(path, files, ref)
+        nfiles += len(files)
+        if label not in refs:
+            refs.append(label)
+    return total, lines_basis(refs if total is not None else None, nfiles)
 
 
 def print_tier(a, out):
@@ -578,6 +669,9 @@ def print_tier(a, out):
               + f"contracts: {', '.join(f['contracts']) or 'none'}, generated: {', '.join(f['generated']) or 'none'})")
         if out.get("basis"):
             print(f"  basis: {out['basis']}; modules: {', '.join(f['modules'])}")
+        if f.get("lines_basis"):
+            measured = f"{f['changed_lines']} (" if "changed_lines" in f and not f["lines_basis"].startswith("not ") else ""
+            print(f"  changed lines: {measured}{f['lines_basis']}{')' if measured else ''}")
         for t, why in out["above"].items():
             if why:
                 print(f"  above {t}: " + "; ".join(why))
@@ -2267,9 +2361,9 @@ def with_session_lines(a, prompt, reg=None):
     return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
 
 
-def base_health_hint(info, spec):
-    """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
-    git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
+def base_health_cmd(info, spec):
+    """The base health command (`gh run list --branch <base> --limit 1`), or None: only for a repo with a GitHub remote
+    (local git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
     if not info.get("path"):
         return None
     out, rc = git(info["path"], "remote", "-v")
@@ -2277,9 +2371,20 @@ def base_health_hint(info, spec):
         return None
     sha = re.compile(r"^[0-9a-fA-F]{7,40}$")
     branch = next((b for b in (spec.get("base"), info.get("base")) if b and not sha.match(b)), None)
-    if not branch:
-        return None
-    return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
+    return f"gh run list --branch {branch} --limit 1" if branch else None
+
+
+def base_health_hint(info, spec):
+    """The lead dispatch's one-line base health hint (stderr), or None (see base_health_cmd)."""
+    cmd = base_health_cmd(info, spec)
+    return f"factory-pipeline: base health: run `{cmd}` before starting" if cmd else None
+
+
+def base_health_line(info, spec):
+    """The lead spec's base health line (the stderr hint never reaches the task lead); '' when there is none."""
+    cmd = base_health_cmd(info, spec)
+    return (f"\nBase health: run `{cmd}` before starting (print only; a red base is known_failing, not this task's "
+            "failure).") if cmd else ""
 
 
 def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None,
@@ -2357,6 +2462,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
+            + base_health_line(info, spec)
             + known_failing_block(plan)
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
@@ -2624,6 +2730,22 @@ def xs_lead_steps(a, reg, pipe, plan, task, info, base):
 
 SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something "
                  "the spec does not cover.")
+# a released verify session left its tests/run-all.sh alive and held a machine-wide test slot for hours (plans
+# owner-policy, plan-edit): the verify spec ends with this rule; {slots} is the resolved slot directory, {status} the
+# status command of the plan
+VERIFY_RUN_STOP = ("Before you record any verdict or report, stop every tests/run-all.sh run you started, by the PID "
+                   "you started it with: `kill <pid>` (Windows Git Bash: `taskkill //PID <winpid> //T //F` with the "
+                   "run's Windows PID); never by pattern (no `pkill -f`, no `taskkill /IM`): other sessions' runs "
+                   "share this machine. Then confirm your test slot is free: no directory under {slots} whose "
+                   "`checkout` file names this checkout, or `{status}` prints no `Slots:` line for this checkout. A "
+                   "slot still held means QA NOT_RUN or BLOCKED naming the slot and its PID, never PASS.")
+
+
+def verify_run_stop(reg, plan_path):
+    """The VERIFY_RUN_STOP rule with the resolved test slot directory and this plan's status command."""
+    return VERIFY_RUN_STOP.format(
+        slots=os.path.join(fstate.persistent(), "locks", "run-all-slots"),
+        status=orca_cmd.quote(pipeline_argv(reg) + ["status", os.path.abspath(plan_path)]))
 
 
 def cmd_dispatch(a, reg):
@@ -2986,6 +3108,7 @@ def cmd_dispatch(a, reg):
                              failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
                              tiers=pipe.get("qa_tiers")) + "\n" + cases
                    + known_failing_block(plan))
+        prompt += ("" if prompt.endswith("\n") else "\n") + verify_run_stop(reg, a.plan)
         prompt = with_test_env(prompt)
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
@@ -4234,12 +4357,15 @@ def worker_no_terminal(w):
     return isinstance(proj, dict) and proj.get("state") == "absent"
 
 
-def orca_sessions(runs):
+def orca_sessions(runs, rows=None):
     """Per Run: settled workers that are not released, with the release command; NOT_AVAILABLE when orca cannot say.
-    Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here."""
+    Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here. `rows`
+    (a dict), when given, receives each listed Run's worker rows ({run: [row]}) so a caller needs no second call."""
     out = []
     for run in runs:
         workers, why, concise = orca_workers(run)
+        if rows is not None and workers is not None:
+            rows[run] = workers
         if workers is None:
             out.append({"run": run, "state": "NOT_AVAILABLE", "reason": why, "unreleased": [], "released": 0, "running": 0})
             continue
@@ -4566,6 +4692,121 @@ def slot_lines(holders):
             + {True: " (alive)", False: " (not running)", None: " (liveness unknown)"}[h["alive"]]
             + slot_progress_text(h.get("progress"))
             + ": the user decides, the run never stops it" for h in holders]
+
+
+def _utc_time(value):
+    """A timestamp as an aware UTC datetime, or None: an ISO form with `T` or a space, with or without `Z`, an offset or
+    fractional seconds (a naive one is UTC, as Orca's releaseCompletedAt `2026-11-26 06:07:45` is), or epoch ms."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if re.fullmatch(r"\d{12,14}", text):  # epoch milliseconds (Orca's observedAt form)
+        try:
+            return datetime.fromtimestamp(int(text) / 1000, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = text.replace(" ", "T", 1)
+    if text[-1:] in ("Z", "z"):
+        text = text[:-1] + "+00:00"
+    try:
+        when = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
+
+
+def _worker_checkout(w):
+    """The checkout an Orca worker ran in: the path part (after `::`) of resource.worktreeId or projection.workspace.id."""
+    res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
+    proj = w.get("projection") if isinstance(w.get("projection"), dict) else {}
+    ws = proj.get("workspace") if isinstance(proj.get("workspace"), dict) else {}
+    wid = str(res.get("worktreeId") or ws.get("id") or "")
+    return wid.partition("::")[2] if "::" in wid else wid
+
+
+def slot_stop_command(h):
+    """The command that stops only this slot's holder: `taskkill //PID <winpid> //T //F` (Windows Git Bash) when the slot
+    has a Windows PID, else `kill <pid>`; None without a usable PID. Printed for the user, never run."""
+    if str(h.get("winpid") or "").isdigit():
+        return orca_cmd.quote(["taskkill", "//PID", h["winpid"], "//T", "//F"])
+    if str(h.get("pid") or "").isdigit():
+        return orca_cmd.quote(["kill", h["pid"]])
+    return None
+
+
+def verify_reports(plan, task_id):
+    """[(at, text)] of the records that say a task's verify session reported: the current `qa` verdict of the task or of
+    one of its subtasks (<task>@<id>__qa.json), and such a `review` verdict that is FAIL; `at` is the record's
+    timestamp (an aware datetime). Read-only."""
+    files = [verdict_file(plan, task_id, "qa"), verdict_file(plan, task_id, "review")]
+    prefix = safe_name(task_id) + SUB_SEP
+    try:
+        files += sorted(os.path.join(verdict_dir(plan), n) for n in os.listdir(verdict_dir(plan))
+                        if n.startswith(prefix) and n.endswith(("__qa.json", "__review.json")))
+    except OSError:
+        pass
+    out = []
+    for f in files:
+        rec = fstate.read_json(f)
+        if not isinstance(rec, dict) or rec.get("task") != task_id or rec.get("phase") not in ("qa", "review"):
+            continue
+        if rec["phase"] == "review" and rec.get("state") != "FAIL":
+            continue
+        at = _utc_time(rec.get("timestamp"))
+        if at:
+            sub = f" (subtask {rec['subtask']})" if rec.get("subtask") else ""
+            out.append((at, f"verify reported {rec['phase']} {rec.get('state')}{sub} at "
+                            f"{str(rec.get('sha') or '?')[:10]} ({rec.get('timestamp')})"))
+    return out
+
+
+def verify_slot_leftovers(plan, rows, slots, run_rows, extra_runs=None):
+    """Held test slots a verify dispatch left behind. A slot whose holder is alive (True) or cannot be checked (None) in a
+    task worktree of the plan (the task branch's worktree or one of its children, as the status rows name them; tier XS
+    has none) is left by verify when, at or after the slot's `started`, that task's verify reported (verify_reports) or
+    a worker of an Orca Run of the task (its orca_run, or extra_runs) running in that checkout had its terminal released
+    (releaseCompletedAt, else releaseRequestedAt of a released row; one without a time flags nothing). `run_rows` are
+    the worker rows orca_sessions already listed: no orca call here. A slot without a parsable start or a usable PID is
+    never flagged. [{slot, task, reason, at, stop}] (slot: the slot_holders entry). Read-only: never stops anything."""
+    out = []
+    for h in slots:
+        start, stop = _utc_time(h.get("started")), slot_stop_command(h)
+        if h.get("alive") is False or not start or not stop:
+            continue
+        where = _canon(h.get("checkout"))
+        for t in plan.get("tasks", []):
+            row = rows.get(t.get("id")) if isinstance(t, dict) else None
+            if not row or pr.xs_plan(plan, t):
+                continue
+            homes = [_canon(p) for p in [row.get("worktree")] + [c.get("path") for c in row.get("children") or []] if p]
+            if not any(where == p or where.startswith(p + "/") for p in homes):
+                continue
+            events = [e for e in verify_reports(plan, t["id"]) if e[0] >= start]
+            for run in dict.fromkeys(r for r in map(run_id, [t.get("orca_run")] + list(extra_runs or [])) if r):
+                for w in run_rows.get(run) or []:
+                    res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
+                    at = _utc_time(res.get("releaseCompletedAt") or res.get("releaseRequestedAt"))
+                    path = _canon(_worker_checkout(w))
+                    if worker_released(w) and at and at >= start and path and (where == path or where.startswith(path + "/")):
+                        events.append((at, f"its Orca worker {w.get('dispatchId') or '?'} was released "
+                                           f"({res.get('releaseCompletedAt') or res.get('releaseRequestedAt')})"))
+            if events:
+                at, reason = min(events, key=lambda e: e[0])
+                out.append({"slot": h, "task": t["id"], "reason": reason,
+                            "at": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "stop": stop})
+            break  # a checkout belongs to one task
+    return out
+
+
+def left_slot_lines(left):
+    """The `Slots: LEFT BY VERIFY ...` text of verify_slot_leftovers, with the stop command for that PID only."""
+    return [f"LEFT BY VERIFY slot {e['slot']['slot']} held by PID {e['slot']['pid']}"
+            + (f" (Windows PID {e['slot']['winpid']})" if e["slot"]["winpid"] and e["slot"]["winpid"] != e["slot"]["pid"]
+               else "")
+            + f" in {e['slot']['checkout']} since {e['slot']['started']}"
+            + {True: " (alive)", None: " (liveness unknown)"}.get(e["slot"]["alive"], "")
+            + f": task {e['task']}: {e['reason']} after the run started; stop that PID only: {e['stop']}"
+            + " (status never runs it)" for e in left]
 
 
 def _names_dir(cmd, form):
@@ -5505,8 +5746,18 @@ def status(plan, reg, orca_run=None):
     open_waves =[n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
     nxt = [f"{me} gate {pf}"] if tasks and not blocked and all(r["phase"] == "qa" for r in rows.values()) else []
     # settled Orca workers of the task leads' Runs that still own a terminal: release them now, not at task end
-    workers = orca_sessions(orca_runs(plan, orca_run))
+    run_rows = {}
+    workers = orca_sessions(orca_runs(plan, orca_run), run_rows)
     nxt = [u["command"] for s in workers for u in s["unreleased"]] + nxt
+    # a test slot still held after the task's verify reported or its session was released: the run outlived the
+    # session; name the stop command for that PID only, first in `next` (status never runs it)
+    slots = slot_holders(plan, reg)
+    left = verify_slot_leftovers(plan, rows, slots, run_rows, orca_run)
+    for e in left:
+        rows[e["task"]]["notes"].append(f"test slot {e['slot']['slot']} (PID {e['slot']['pid']}) in "
+                                        f"{e['slot']['checkout']} left by the verify session ({e['reason']}): stop "
+                                        f"that PID only: {e['stop']}")
+    nxt = list(dict.fromkeys(e["stop"] for e in left)) + nxt
     # what each task lead reported (a durable `report` record), and whether the work is ready for the PR gate: a run lead
     # polling status sees completion without messages; --orca-run adds the 'task done' messages of older leads
     runs = orca_runs(plan, orca_run)
@@ -5534,7 +5785,7 @@ def status(plan, reg, orca_run=None):
                                            "children", "next", "notes", "lead_report", "ready_for_pr")})
     return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
             "waves": v["waves"], "tasks": out_rows, "integration_children": int_children, "ready_wave": open_waves[0] if open_waves else None,
-            "ready": ready, "next": nxt, "_workers": workers, "_slots": slot_holders(plan, reg)}
+            "ready": ready, "next": nxt, "_workers": workers, "_slots": slots, "_left": left}
 
 
 def cmd_status(a, reg):
@@ -5563,6 +5814,8 @@ def cmd_status(a, reg):
                                      "text": model_policy.widening_text(e)} for e in widenings]
     workers = out.pop("_workers", [])
     slots = out.pop("_slots", [])
+    # the schema's slot entries allow no extra field: a slot left by a verify dispatch is a text line only
+    left = out.pop("_left", [])
     if a.json:
         out["slots"] = slots  # the held test slots with their progress, as cleanup --json has them (read-only)
         print(json.dumps(out, indent=2))
@@ -5570,7 +5823,7 @@ def cmd_status(a, reg):
         # slots keep their text lines there too
         for line in session_lines(workers):
             print("Workers: " + line, file=sys.stderr)
-        for line in slot_lines(slots):
+        for line in slot_lines(slots) + left_slot_lines(left):
             print("Slots: " + line, file=sys.stderr)
         return 0 if out["valid"] else 1
     print(f"Pipeline {out['plan']} on {out['topic']}" + ("" if out["valid"] else "  INVALID"))
@@ -5591,7 +5844,7 @@ def cmd_status(a, reg):
         print("Every wave is integrated.")
     for line in session_lines(workers):
         print("Workers: " + line)
-    for line in slot_lines(slots):
+    for line in slot_lines(slots) + left_slot_lines(left):
         print("Slots: " + line)
     for c in out["next"]:
         print("Next: " + c)
@@ -5808,6 +6061,8 @@ def cmd_nudge(a, reg):
     tasks = [find_task(plan, a.task)] if a.task else list(plan.get("tasks", []))
     if a.idle < 0:
         die("--idle must be 0 or more seconds")
+    if a.stall < 0:
+        die("--stall must be 0 or more seconds")
     why = "orca is not on PATH" if shutil.which("orca") is None else (
         None if orca_cmd.orca_reachable() else "the Orca runtime is not reachable")
     if why:
@@ -5899,7 +6154,88 @@ def cmd_nudge(a, reg):
                     rc = 1
         if changed:
             fstate.write_json(nudge_file(plan, tid), {"plan": plan.get("id"), "task": tid, "nudges": nudges}, indent=2)
+    stalled_workers(orca_runs({"tasks": tasks}, a.orca_run), a.stall)
     return rc
+
+
+NUDGE_TURN_UNOBSERVED = re.compile(r"turn[ _-]?start[ _-]?(?:was[ _-]?)?(?:not[ _-]?observed|unobserved)|turn_unobserved",
+                                   re.I)
+
+
+def worker_turn_unobserved(worker):
+    """Whether a worker-show `worker` record says its turn never started: the last dispatch_input effect has state
+    `turn_unobserved` (a later dispatch_input state such as `accepted` clears it), or lastError says the turn start was
+    not observed and no dispatch_input effect has another state."""
+    effects = worker.get("effects") if isinstance(worker.get("effects"), list) else []
+    states = [str(e.get("state") or "") for e in effects if isinstance(e, dict) and e.get("kind") == "dispatch_input"]
+    last = states[-1] if states else None
+    if last == "turn_unobserved":
+        return True
+    err = worker.get("lastError")
+    text = json.dumps(err) if isinstance(err, (dict, list)) else str(err or "")
+    return last is None and bool(NUDGE_TURN_UNOBSERVED.search(text))
+
+
+def stalled_workers(runs, stall):
+    """Print one row per running (not settled, not released) worker of each Orca Run: STALLED when its agent terminal
+    has been silent for at least `stall` seconds and no human prompt holds it, with the re-dispatch advice. Read-only:
+    worker-list, worker-show and terminal list only; nothing is sent or written for a STALLED row."""
+    if not runs:
+        print("nudge: no Orca Run named (task orca_run or --orca-run): stalled workers not checked")
+        return
+    terminals = {}  # worktree path -> terminal rows (or None when the list failed), one list call per worktree
+    for run in runs:
+        workers, why, _ = orca_workers(run)
+        if workers is None:
+            print(f"{run}: worker-list failed ({why}): stalled workers not checked (no opinion)")
+            continue
+        for w in workers:
+            if worker_settled(w) or worker_released(w):
+                continue
+            did = str(w.get("dispatchId") or "?")
+            head = f"{run}  {did}"
+            show, why = orca_json(["orca", "orchestration", "worker-show", "--dispatch", did, "--full", "--json"])
+            if show is None:
+                print(f"{head}  idle ?s  ok  worker-show failed ({why}) (no opinion)")
+                continue
+            worker = show.get("worker") if isinstance(show.get("worker"), dict) else {}
+            obs = show.get("observation") if isinstance(show.get("observation"), dict) else {}
+            if obs.get("agentWait") is not None:
+                print(f"{head}  idle ?s  ok  waiting on a human")
+                continue
+            handle = str(w.get("agentTerminalHandle") or worker.get("agentTerminalHandle") or "")
+            wid = str(worker.get("worktreeId") or "")
+            path = wid.partition("::")[2] if "::" in wid else (wid or _worker_checkout(w))
+            if not handle or not path:
+                print(f"{head}  idle ?s  ok  no agent terminal or worktree (no opinion)")
+                continue
+            if norm_wt(path) not in terminals:
+                res, _ = orca_json(orca_cmd.terminal_list(path))
+                rows = (res or {}).get("terminals")
+                terminals[norm_wt(path)] = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+            rows = terminals[norm_wt(path)]
+            if rows is None:
+                print(f"{head}  idle ?s  ok  terminal list failed (no opinion)")
+                continue
+            row = next((r for r in rows if str(r.get("handle") or "") == handle), None)
+            last = (row or {}).get("lastOutputAt")
+            try:
+                idle = (int(time.time() - float(last) / 1000) if isinstance(last, (int, float, str))
+                        and not isinstance(last, bool) else None)
+            except ValueError:
+                idle = None
+            if idle is None:
+                print(f"{head}  idle ?s  ok  no lastOutputAt for {handle} (no opinion)")
+                continue
+            if idle < stall:
+                print(f"{head}  idle {idle}s  ok  active ({idle}s < {stall}s)")
+                continue
+            reason = "no turn start" if worker_turn_unobserved(worker) else "turn ended without worker_done"
+            print(f"{head}  idle {idle}s  STALLED  {reason}")
+            print(f"  re-dispatch: check `{orca_cmd.quote(['orca', 'terminal', 'read', '--terminal', handle])}`, then "
+                  f"`{orca_cmd.quote(['orca', 'orchestration', 'worker-stop', '--dispatch', did])}` and dispatch a fresh "
+                  f"session (factory-pipeline.py dispatch ... --phase <same phase>); release it with "
+                  f"`{orca_cmd.quote(['orca', 'orchestration', 'worker-release', '--dispatch', did])}`")
 
 
 def cmd_agents(a, reg):
@@ -6012,6 +6348,8 @@ def main():
     nu.add_argument("plan")
     nu.add_argument("--task")
     nu.add_argument("--idle", type=int, default=120, metavar="SECONDS")
+    nu.add_argument("--stall", type=int, default=900, metavar="SECONDS")
+    nu.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
     nu.add_argument("--send", action="store_true")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")

@@ -1,0 +1,131 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "session-lows",
+  "title": "Dispatch health (slot left by a verify run, silent workers), tier and base-hint lows, default runner and style lock lows",
+  "topic": "session-lows",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "dispatch-health",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "test slots and stalled workers of every plan run through Orca",
+      "objective": "Backlog topics policy-followups-leftovers, plan-edit-followups and path-audit-followups (docs/plans/backlog.md), in scripts/factory-pipeline.py. (1) Released verify sessions left their tests/run-all.sh alive, holding a machine-wide test slot for hours (plans owner-policy and plan-edit). Make the verify spec that `dispatch --phase verify` writes require the session to stop the test run it started (by its own PID, never by pattern) and confirm its slot is free before it records a verdict or reports, and make `status <plan>` flag a test-slot holder whose checkout is a task worktree of the plan whose verify dispatch has already reported or been released (name the slot, PID and the stop command; read-only, never kill). (2) An Orca worker can start with an empty prompt and idle, or end its turn without sending worker_done (path-audit: about 4.5 hours). `factory-pipeline.py nudge` already finds a start prompt left unsubmitted; extend it (or status) to list a dispatch with no turn start or an ended turn without worker_done after a bounded time as STALLED with the re-dispatch advice, read-only unless --send applies to the unsubmitted case only. Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh with fake orca stubs and fake slot directories only. Changelog fragment changelog.d/session-lows-dispatch.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/session-lows-dispatch.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "the verify spec requires stopping the session's own test run and a free slot before the verdict",
+        "status names a test-slot holder left by a reported or released verify dispatch, with the stop command, without killing it",
+        "a dispatch with no turn start or an ended turn without worker_done is listed as STALLED with re-dispatch advice",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "tier-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "tier choice and lead prompts of every plan",
+      "objective": "Backlog topic workflow-slim-followups (docs/plans/backlog.md), in scripts/factory-pipeline.py. (1) The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines: make the --repo form measure changed lines the same way (same thresholds) when it has a checkout and a base, and say in its output what it measured. (2) The base health hint of `dispatch --phase lead` goes to stderr only, so the run lead sees it and the task lead does not: put it into the lead spec too (stderr unchanged). (3) changelog.d/base-health.md does not say the verify prompt carries known_failing too: correct it if that fragment still exists unreleased, else say so in a new fragment. Do not change the tier XS one-task rule (left in the backlog). Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh. Changelog fragment changelog.d/session-lows-tier.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. (4) Added by the run lead (docs follow-up of task dispatch-health, in the already owned docs/pipeline-cli.md): its nudge section does not list the new `--stall` and `--orca-run` options (STALLED workers) and status does not describe the `Slots: LEFT BY VERIFY` line; document both from the code.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/session-lows-tier.md",
+        "docs/pipeline-cli.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "dispatch-health"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "tier --repo measures changed lines with the same thresholds and says what it measured",
+        "the lead spec carries the base health hint",
+        "the base-health changelog text is correct",
+        "the named suite passes",
+        "docs/pipeline-cli.md documents nudge --stall/--orca-run and the LEFT BY VERIFY slot line"
+      ]
+    },
+    {
+      "id": "defaults-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one default value and one style lock pattern",
+      "objective": "Backlog topic qa-reach-followups-2 (docs/plans/backlog.md). (1) skills/delivery/pipeline-defaults.json and registry/core.json name the Codex plugin runner `codex:codex-rescue` (`pipeline.agents.codex.agent_runner`), read by scripts/lib/orca_cmd.py: find with evidence (the installed Codex Claude Code plugin's agent list, its docs, how dispatch uses the value) whether that name is right; fix both and rebuild registry.json (python3 -B scripts/build-registry.py) if it is not, else pin the reason with a test and report it. (2) The asset-gen style lock (scripts/assetgen/stylelock.py) still refuses a dollar word directly before a slash in prose (`$USD/month`): accept it in prose while still refusing a real `$NAME/` or `${NAME}/` path variable, with cases in tests/assetgen.test.sh. Read the current code first: some of this may already be fixed; report what was. Changelog fragment changelog.d/session-lows-defaults.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "skills/delivery/pipeline-defaults.json",
+        "registry/core.json",
+        "registry.json",
+        "scripts/lib/orca_cmd.py",
+        "scripts/assetgen/stylelock.py",
+        "tests/assetgen.test.sh",
+        "tests/workflow.test.sh",
+        "changelog.d/session-lows-defaults.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/workflow.test.sh"
+      ],
+      "acceptance": [
+        "the default Codex runner name is right, or a test pins why it is",
+        "the style lock accepts $USD/month in prose and still refuses a path variable",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "workflow-suite",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one unregistered suite and a guard against the next one",
+      "objective": "Added by the run lead (strictly necessary: task defaults-lows found that tests/workflow.test.sh is not registered in tests/run-all.sh, so neither run-all, the --affected selection nor CI runs it, and the Codex runner pin it added never runs). (1) Register tests/workflow.test.sh in tests/run-all.sh like its neighbours, so --list-suites, --affected (tests/affected.py import closure of scripts/factory-workflow.py and scripts/lib) and scripts/ci-plan.py select it; it must pass on Linux and Windows CI (no host tools). (2) Add an inline run-all check (or a case in an existing suite) that fails when a tests/*.test.sh file is neither registered in run-all.sh nor in an explicit, commented exemption list, and report which other unregistered suites it found (register them too only when they pass and are meant to run; otherwise exempt them with the reason). Changelog fragment changelog.d/session-lows-suites.md. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "tests/run-all-parallel.test.sh",
+        "changelog.d/session-lows-suites.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "defaults-lows"
+      ],
+      "checks": [
+        "tests/workflow.test.sh",
+        "tests/affected.test.sh",
+        "tests/run-all-parallel.test.sh"
+      ],
+      "acceptance": [
+        "tests/workflow.test.sh is listed by run-all --list-suites and selected for a scripts/factory-workflow.py change",
+        "an unregistered tests/*.test.sh without an exemption fails a check",
+        "the named suites pass"
+      ]
+    }
+  ],
+  "known_failing": [
+    {
+      "check": "registry paths exist in workspace",
+      "reason": "workspace state: the game-authoring checkout is on feat/design/economy, which has no assetgen/runs/ or ui/requirements/ (5 handoff contract paths); scripts/check-registry.sh fails the same way on main 7a98590"
+    }
+  ]
+}

@@ -61,9 +61,6 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 
 - Tier XS is accepted only for a one-task plan. A small prose follow-up found mid-run (final-pointers) had to become
   a full task with a task lead. Consider an XS task inside a multi-task plan, reviewed and gated like the one-task form.
-- The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines.
-- The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
-  `changelog.d/base-health.md` does not say the verify prompt carries `known_failing` too.
 
 ### plugin-flow-5-followups
 
@@ -79,38 +76,31 @@ From plans policy-followups and owner-policy (`docs/plans/policy-followups/repor
 
 - Codex "Hooks need review" trust prompt: documented in `docs/codex.md`; `agents` detection still cannot see it.
 
-- A released verify session left its `tests/run-all.sh` alive, holding a test slot (plan owner-policy); a verify
-  session must stop its own run before it reports.
-
-### plan-edit-followups
-
-From plan plan-edit (`docs/plans/plan-edit/report.md`):
-
-- Released verify sessions leave their `tests/run-all.sh` alive, holding test slots for hours (plans owner-policy and
-  plan-edit); a verify session must stop its own run before it reports.
-- Orca `worker-start` with a Claude worker left the prompt typed but unsubmitted (`turn_start_unobserved`) in every
-  start of plan plan-edit; the task lead had to send Enter. Detect it in the task lead's spec or the dispatch text.
-
 ### path-audit-followups
 
 Lows and findings from plan path-audit (`docs/plans/path-audit/report.md`):
 
-- An Orca Codex worker can start with an empty prompt and idle with no escalation (task citation-drift: about 4.5
-  hours), and a Claude implementer ended its turn without sending `worker_done`. Same class as agent-runtime-quirks:
-  the task lead should time out a dispatch that shows no turn start and re-dispatch it. `factory-pipeline.py nudge`
-  (plan runtime-quirks) now finds a start prompt left unsubmitted; an empty prompt and a turn ended without
-  `worker_done` remain open.
 - In Git Bash, `git -C` with the Git Bash drive spelling of the workspace failed for one worker while the drive-letter
   spelling worked (not reproduced).
 
-### qa-reach-followups-2
+### session-lows-followups
 
-From plan qa-reach-followups (`docs/plans/qa-reach-followups/report.md`):
+Review nits from plan session-lows (`docs/plans/session-lows/report.md`):
 
-- The generic defaults name the Codex plugin runner `codex:codex-rescue` (`pipeline.agents.codex.agent_runner`).
-- A dollar word directly before a slash in prose (`$USD/month`) is still refused by the style lock.
+- The `nudge` usage text overstates when `lastError` counts as no turn start; the released-worker leg of the
+  LEFT BY VERIFY slot check could flag a non-verify worker released in the same checkout.
+- The `tier_of` docstring still says changed lines are known only for `tier --plan`; a `--base` whose merge-base
+  fails falls back to HEAD silently.
+- The integration workspace check `registry paths exist in workspace` fails while the `game-authoring` checkout is
+  on a branch without `assetgen/runs/` and `ui/requirements/` (seen in plan session-lows, also on main): decide
+  whether empty handoff directories belong in the authoring repo or the check should skip absent ones.
 
 ## Covered
+
+- **session-lows** (a verify run left holding its test slot, stalled and silent workers, plain `tier` line count,
+  the base health line in the lead spec, the Codex runner name, the style lock dollar word, five suites run-all never
+  ran): shipped in plan session-lows (`changelog.d/session-lows-dispatch.md`, `changelog.d/session-lows-tier.md`,
+  `changelog.d/session-lows-defaults.md`, `changelog.d/session-lows-suites.md`).
 
 - **flow-lows-2** (Orca lineage wait, cleanup order, concise worker rows, plan-edit and validate lows, the
   `pipeline_route.py` case map, the follow-up worker lesson, the reader guard selection; `plan_branch` was already

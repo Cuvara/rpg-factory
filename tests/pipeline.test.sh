@@ -2587,6 +2587,7 @@ if section == 'tier':
     write('docs/guide.md', 12)  # 2 changed lines, uncommitted
     out = tier('docs/guide.md')
     assert out.startswith('Tier: XS ') and '2 changed line(s)' in out and 'above XS' not in out, out
+    assert '  changed lines: 2 (git diff --numstat HEAD plus untracked, 1 file(s))' in out.splitlines(), out
     assert '"tier": "XS"' in cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md', 'changelog.d/x.md')
     # one path that is not prose is never XS: the S rule takes it
     out = tier('docs/guide.md', 'code.py')
@@ -2601,7 +2602,36 @@ if section == 'tier':
     assert out.startswith('Tier: S ') and '4 files > 3' in out, out
     assert m.pr.above_xs(rule, ['a.md', 'skills/x/'], 40) == []
     assert m.pr.above_xs(rule, ['a.md'], 41) == ['41 changed lines > 40']
-    print('tier: XS printed only for prose within the thresholds')
+    # the plain form (a routing snapshot) measures the changed lines too: a committed prose-only change of 50 lines on
+    # the branch, measured against the merge-base of the snapshot's base, is above XS
+    write('docs/plain.md', 50); git('add', '--', 'docs/plain.md'); git('commit', '-qm', 'plain')
+    def snap(name, path, base):
+        ctx = {'repos': [{'repo': 'fixture', 'path': path, 'branch_diff_base': base, 'touched': ['docs'],
+                          'files': [{'path': 'docs/plain.md', 'source': 'branch'}], 'contracts': [], 'generated_hits': []}]}
+        f = work / (name + '.json'); f.write_text(json.dumps(ctx)); return f
+    out = cli('tier', '--context-json', snap('ctx-base', str(repo), 'main'))
+    assert out.startswith('Tier: S ') and 'above XS: 50 changed lines > 40' in out, out
+    assert '  changed lines: 50 (git diff --numstat $(git merge-base main HEAD) plus untracked, 1 file(s))' in out.splitlines(), out
+    o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-json', str(repo), 'main')))
+    assert o['facts']['changed_lines'] == 50 and 'merge-base main HEAD' in o['facts']['lines_basis'], o['facts']
+    # no base: against HEAD (the change is committed, 0 lines); no checkout: not measured
+    out = cli('tier', '--context-json', snap('ctx-head', str(repo), None))
+    assert out.startswith('Tier: XS ') and '  changed lines: 0 (git diff --numstat HEAD plus untracked, 1 file(s))' in out.splitlines(), out
+    out = cli('tier', '--context-json', snap('ctx-none', str(work / 'missing'), 'main'))
+    assert out.startswith('Tier: XS ') and '  changed lines: not measured (no checkout)' in out.splitlines(), out
+    o = json.loads(cli('tier', '--json', '--context-json', snap('ctx-none-json', str(work / 'missing'), 'main')))
+    assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    # no branch_diff_base (factory-context.sh --paths leaves it null): the --base of the args, both spellings
+    for given in (['--base', 'main'], ['--base=main']):
+        out = cli('tier', '--context-json', snap('ctx-given', str(repo), None), '--', *given)
+        assert out.startswith('Tier: S ') and 'above XS: 50 changed lines > 40' in out, (given, out)
+        assert '  changed lines: 50 (git diff --numstat $(git merge-base main HEAD) plus untracked, 1 file(s))' in out.splitlines(), out
+    # tier --plan without a checkout measures nothing: no changed_lines fact, as in the plain form
+    plan['repos']['fixture']['path'] = str(work / 'missing'); save()
+    o = json.loads(cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md'))
+    assert 'changed_lines' not in o['facts'] and o['facts']['lines_basis'] == 'not measured (no checkout)', o['facts']
+    plan['repos']['fixture']['path'] = str(repo); save()
+    print('tier: XS printed only for prose within the thresholds; the plain form measures changed lines')
 
 if section == 'validate':
     assert errors() == [], errors()
@@ -3311,6 +3341,12 @@ SCOPED_WHY="The command runs only the suites the task checks name [(]--within[)]
 expect_spec "task QA spec with check suites: --affected --base <base> --within <check suites> -j 1" "$SCOPED_FORM" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
 expect_spec "task QA spec with check suites: says the other affected suites are left to CI" "$SCOPED_WHY" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
 expect_spec "verify spec with check suites: the same scoped command" "$SCOPED_FORM" dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+# a released verify session left its run-all alive, holding a test slot for hours: the verify spec makes the session stop
+# the run it started, by its PID, never by pattern, and confirm its slot is free before any verdict or report
+expect_spec "verify spec: stop the run-all you started by its PID before any verdict or report" 'Before you record any verdict or report, stop every tests/run-all\.sh run you started, by the PID you started it with: `kill <pid>` \(Windows Git Bash: `taskkill //PID <winpid> //T //F`' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "verify spec: never stop a run by pattern" 'never by pattern \(no `pkill -f`, no `taskkill /IM`\)' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "verify spec: confirm the slot is free under the resolved slot directory or by status" 'confirm your test slot is free: no directory under [^ ]*run-all-slots whose `checkout` file names this checkout, or `[^`]* status [^`]*plugin-scoped\.json[^`]*` prints no `Slots:` line for this checkout' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
+expect_spec "verify spec: a slot still held is NOT_RUN or BLOCKED, never PASS" 'A slot still held means QA NOT_RUN or BLOCKED naming the slot and its PID, never PASS\.' dispatch "$SCOPED" --task t --phase verify --sha abc1234 --runner orca
 refute_spec "task QA spec with check suites: no safe-form explanation, no --only-suites, no -j 2" "No check suites|--only-suites| -j 2$" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner orca
 expect "task QA with check suites: the plain print prompt names the same command" 0 "tests/run-all\.sh --affected --base [^ ]+ --within tests/x\.test\.sh,tests/y\.test\.sh -j 1" dispatch "$SCOPED" --task t --phase qa --sha abc1234 --runner print
 # the integration QA names the workspace checks the change reaches, against the plan's base (the repo base branch)
@@ -3517,10 +3553,13 @@ expect "worker-start: --orca-run names the Run when the plan records none" 0 "^o
 refute "worker-start: no Run known, no --run" "^orca orchestration worker-start .* --run " dispatch "$KFP" --task gw --phase qa --sha abc1234 --runner orca
 # base health hint: print only, for a repo with a GitHub remote
 refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+refute_spec "base health: no line in the lead spec without a remote" "Base health:" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote add origin https://github.com/x/y.git
 expect "base health hint: a GitHub remote prints the gh command" 0 'base health: run `gh run list --branch [^ ]+ --limit 1`' dispatch "$OK" --task gw --phase lead --runner orca
+expect_spec "base health: the lead spec carries the hint for the task lead" '^Base health: run `gh run list --branch [^ ]+ --limit 1` before starting \(print only; a red base is known_failing, not this task.s failure\)\.$' dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote set-url origin https://example.com/x/y.git
 refute "base health hint: none for a non-GitHub remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+refute_spec "base health: no line in the lead spec for a non-GitHub remote" "Base health:" dispatch "$OK" --task gw --phase lead --runner orca
 git -C "$S" remote remove origin
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
 for ph in "--task gw --phase lead" "--task gw --phase implement" "--task gw --phase review --sha abc1234" "--task gw --phase qa --sha abc1234"; do
@@ -4053,6 +4092,18 @@ X=$(ctx l '{"repos":[{"repo":"server","touched":["server.proto"],"files":[{"path
 expect "a contract: L" 0 "above M: contract wire-generated" tier --context-json "$X"
 X=$(ctx l2 '{"repos":[{"repo":"server","touched":["server.a"],"files":[{"path":"a","source":"given"}],"contracts":[],"generated_hits":[]},{"repo":"client","touched":["client.a"],"files":[{"path":"b","source":"given"}],"contracts":[],"generated_hits":[]}]}')
 expect "two repos: L" 0 "^Tier: L" tier --context-json "$X"
+# the plain form through factory-context.sh: --paths leaves branch_diff_base null, so the --base of the args is the base
+# of the changed-line count (a workspace of its own with the registry's root markers: the routing engine never falls
+# back to a real workspace, and the linear scenario's server repo stays untouched)
+WT="$TMP/ws-tier"; ST="$WT/rpg-mmo-server"
+mkdir -p "$ST/backend" "$WT/IndieRPGMMOAdventure/ProjectSettings"; touch "$WT/IndieRPGMMOAdventure/ProjectSettings/ProjectVersion.txt"
+git init -q -b develop "$ST"; echo team > "$ST/backend/TEAM.md"; gi "$ST" add -- backend/TEAM.md; gi "$ST" commit -qm base
+gi "$ST" switch -q --no-track -c feat/docs/plain; mkdir -p "$ST/docs"; seq 50 > "$ST/docs/plain.md"
+gi "$ST" add -- docs/plain.md; gi "$ST" commit -qm plain
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base: a committed prose change above max_changed_lines is above XS" 0 "above XS: 50 changed lines > 40" tier -- --repo server --paths docs/plain.md --base develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base: the output names the merge-base it measured against" 0 '^  changed lines: 50 \(git diff --numstat \$\(git merge-base develop HEAD\) plus untracked, 1 file\(s\)\)$' tier -- --repo server --paths docs/plain.md --base develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths --base=: the = spelling is the same base" 0 "above XS: 50 changed lines > 40" tier -- --repo server --paths docs/plain.md --base=develop
+RPG_FACTORY_WORKSPACE="$WT" expect "tier -- --paths without --base: against HEAD, the committed change counts 0 lines" 0 '^  changed lines: 0 \(git diff --numstat HEAD plus untracked, 1 file\(s\)\)$' tier -- --repo server --paths docs/plain.md
 
 case_end tier
 fi
@@ -4956,6 +5007,71 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
 git -C "$S" worktree remove --force "$TMP/slot-unrelated"
 git -C "$S" branch -q -D codex/feat/core/demo-gw--qa codex/feat/core/demo-gw-slot-lineage slot-unrelated-br
+# a slot left by a verify dispatch: a live holder in a task worktree of the plan (gw's worktree or its child
+# <task branch>--*) after that task's verify reported (a qa verdict newer than the slot's start) or its Orca worker in
+# that checkout was released is flagged LEFT BY VERIFY with the stop command for that PID only (taskkill with a Windows
+# PID, else kill); a verdict older than the slot's start, a dead holder or a slot outside task worktrees is not flagged;
+# status never runs the command (fake slots and a fake process table only)
+rm -rf "$SLOTS"; mkdir -p "$SLOTS"
+git -C "$S" worktree add -q "$TMP/slot-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-gw-verify" -b feat/core/demo-gw--verify "$SG" 2>/dev/null
+python3 -B "$P" verdict "$G" --task gw --phase qa --sha "$SG" --by codex --state PASS >/dev/null || echo "verdict failed: gw qa"
+LATER="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+RELEASED="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"))')"
+# lslot <n> <pid> <winpid|-> <checkout> <started>
+lslot() { mkdir -p "$SLOTS/$1"; printf '%s\n' "$2" > "$SLOTS/$1/pid"; [ "$3" = - ] || printf '%s\n' "$3" > "$SLOTS/$1/winpid"
+  printf '%s\n' "$4" > "$SLOTS/$1/checkout"; printf '%s\n' "$5" > "$SLOTS/$1/started"; }
+lslot 21 7101 7102 "$(wtp "$TMP/slot-gw")" 2026-11-11T05:00:00Z        # older than the qa verdict, Windows PID: taskkill
+lslot 22 7103 - "$(wtp "$TMP/slot-gw-verify")" 2026-11-11T05:00:00Z    # the task's child worktree, no Windows PID: kill
+lslot 23 7104 7104 "$(wtp "$TMP/slot-gw")" "$LATER"                   # started after the verdict: not flagged
+lslot 24 7105 7105 "$(wtp "$S")" 2026-11-11T05:00:00Z                  # the integration checkout: not a task worktree
+lslot 25 7106 7106 "$(wtp "$TMP/slot-gw")" 2026-11-11T05:00:00Z       # holder gone: not flagged
+jq -n '[7101,7102,7103,7104,7105] | map({pid:.,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T05:00:00"})' > "$TMP/proc-left.json"
+LEFTP="$TMP/proc-left.json"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "status flags a live slot in the task worktree after the task's qa verdict, with taskkill for its Windows PID" 0 "^Slots: LEFT BY VERIFY slot 21 held by PID 7101 \(Windows PID 7102\) in .*slot-gw since 2026-11-11T05:00:00Z \(alive\): task gw: verify reported (qa|review) [A-Z_]+( \(subtask [^)]*\))? at ${SG:0:10} \([^)]*\) after the run started; stop that PID only: taskkill //PID 7102 //T //F \(status never runs it\)$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "status flags a slot in the task's child worktree, kill <pid> without a Windows PID" 0 "^Slots: LEFT BY VERIFY slot 22 held by PID 7103 in .*slot-gw-verify since 2026-11-11T05:00:00Z \((alive|liveness unknown)\): task gw: verify reported (qa|review) .*; stop that PID only: kill 7103 \(status never runs it\)$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "the stop command is first in Next" 0 "^Next: taskkill //PID 7102 //T //F$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "the task row names the left slot and its stop command" 0 "note: test slot 21 \(PID 7101\) in .*slot-gw left by the verify session \(verify reported (qa|review) .*\): stop that PID only: taskkill //PID 7102 //T //F$" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "a flagged slot keeps its plain Slots: line" 0 "^Slots: slot 21 held by PID 7101 \(Windows PID 7102\) in .*slot-gw since 2026-11-11T05:00:00Z \(alive\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a slot started after the task's last verdict is not flagged" "LEFT BY VERIFY slot 23 |kill 7104" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a slot outside the task worktrees (integration checkout) is not flagged" "LEFT BY VERIFY slot 24 |kill 7105" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a slot whose holder is gone is not flagged" "LEFT BY VERIFY slot 25 |kill 7106" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "cleanup prints no LEFT BY VERIFY line and no stop command" "LEFT BY VERIFY|taskkill //PID|kill 710" cleanup "$G"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$LEFTP" python3 -B "$P" status --json "$G" > "$TMP/so-left.json" 2> "$TMP/se-left.txt"; rc=$?
+if [ $rc = 0 ] && grep -q "^Slots: LEFT BY VERIFY slot 21 held by PID 7101 .*taskkill //PID 7102 //T //F" "$TMP/se-left.txt" \
+   && jq -e '.next[0] == "taskkill //PID 7102 //T //F" and (.slots | map(.slot) | sort) == ["21", "22", "23", "24", "25"]
+     and all(.slots[]; has("left_by") | not)' "$TMP/so-left.json" >/dev/null && python3 - "$ROOT" "$TMP/so-left.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+out = json.load(open(sys.argv[2], encoding="utf-8"))
+assert not m.schema_errors(out, schema, schema), m.schema_errors(out, schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status --json: the LEFT BY VERIFY line on stderr, the stop command first in next, schema-valid"
+else fail=$((fail + 1)); echo "FAIL  status --json LEFT BY VERIFY (rc $rc)"; grep "LEFT BY" "$TMP/se-left.txt" | head -3; jq -c '.next' "$TMP/so-left.json" 2>/dev/null; fi
+# released: slot 23 started after the verdict; an Orca worker of gw's Run in that checkout released after the slot's
+# start flags it; a worker released in another checkout, or released before the start, does not
+GOL=$(plan gate-orca-left "$(sed 's/"id":"gw","repo":"srv"/"id":"gw","repo":"srv","orca_run":"run:run_L"/' "$G")")
+# lw <dispatch> <checkout> <releaseCompletedAt>: a settled, released full worker-list row of Run run_L
+lw() { jq -nc --arg d "$1" --arg p "$2" --arg c "$3" '{dispatchId:$d,runId:"run_L",workerState:"succeeded",
+  dispatchStatus:"completed",terminalState:"released",resource:{ownershipState:"released",releaseState:"released",
+  worktreeId:("repo-id::" + $p),releaseRequestedAt:$c,releaseCompletedAt:$c},
+  projection:{stage:{detail:"settled"},workspace:{id:("repo-id::" + $p)},resource:{state:"released"}}}'; }
+jq -n --argjson a "$(lw ctx_vfy "$(wtp "$TMP/slot-gw")" "$RELEASED")" --argjson b "$(lw ctx_other "$(wtp "$S")" "$RELEASED")" \
+  '{ok:true,result:{workers:[$a,$b],page:{hasMore:false,nextCursor:null}}}' > "$TMP/workers-left.json"
+FAKE_ORCA_JSON="$TMP/workers-left.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" opath "a worker of the task's Run released in the slot's checkout after its start flags the slot" 0 "^Slots: LEFT BY VERIFY slot 23 held by PID 7104 in .*slot-gw since $LATER \(alive\): task gw: its Orca worker ctx_vfy was released \($RELEASED\) after the run started; stop that PID only: taskkill //PID 7104 //T //F \(status never runs it\)$" status "$GOL"
+FAKE_ORCA_JSON="$TMP/workers-left.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a worker released in another checkout flags no slot there" "LEFT BY VERIFY slot 24 |ctx_other" status "$GOL"
+jq -n --argjson a "$(lw ctx_vfy "$(wtp "$TMP/slot-gw")" "2026-11-11 04:00:00")" \
+  '{ok:true,result:{workers:[$a],page:{hasMore:false,nextCursor:null}}}' > "$TMP/workers-left-old.json"
+FAKE_ORCA_JSON="$TMP/workers-left-old.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" oref "a worker released before the slot's start flags nothing" "LEFT BY VERIFY slot 23 " status "$GOL"
+: > "$FAKE_ORCA_LOG"
+FAKE_ORCA_JSON="$TMP/workers-left.json" RPG_FACTORY_PROCESS_TABLE="$LEFTP" PATH="$fpath" python3 -B "$P" status "$GOL" >/dev/null 2>&1
+if [ "$(grep -c 'worker-list' "$FAKE_ORCA_LOG")" = 1 ]
+then pass=$((pass + 1)); echo "PASS  the released-worker check reuses the one worker-list call of status"
+else fail=$((fail + 1)); echo "FAIL  status called worker-list more than once"; cat "$FAKE_ORCA_LOG"; fi
+git -C "$S" worktree remove --force "$TMP/slot-gw"; git -C "$S" worktree remove --force "$TMP/slot-gw-verify"
+git -C "$S" branch -q -D feat/core/demo-gw feat/core/demo-gw--verify
 rm -rf "$SLOTS"
 
 case_end settled-workers
@@ -5139,7 +5255,9 @@ case_start
 echo "-- nudge (a start prompt that stayed unsubmitted in its Orca terminal)"
 # a fake `orca` first on PATH: `status --json` is reachable unless FAKE_ORCA_REACHABLE=false, `terminal list` prints the
 # $FAKE_ORCA_TERMS file whatever worktree is asked for (the verb must filter by worktreePath itself), `terminal read`
-# prints $FAKE_ORCA_SCREENS/<handle>.json (exit 1 when there is none), `terminal send` succeeds unless FAKE_ORCA_SEND=fail;
+# prints $FAKE_ORCA_SCREENS/<handle>.json (exit 1 when there is none), `terminal send` succeeds unless FAKE_ORCA_SEND=fail,
+# `orchestration worker-list` prints the $FAKE_ORCA_WORKERS file (exit 1 when unset), `orchestration worker-show` prints
+# $FAKE_ORCA_SHOWS/<dispatch>.json (exit 1 when there is none);
 # every call is logged to $FAKE_ORCA_LOG with a carriage return argument shown as <CR>. On Windows the fake is a .cmd shim
 # (cmd.exe drops a bare CR argument, and the verb refuses to send through a batch shim), so the send assertions below
 # depend on $RPGF_WINDOWS.
@@ -5165,13 +5283,23 @@ if a[:2] == ["terminal", "send"]:
     if os.environ.get("FAKE_ORCA_SEND") == "fail":
         print("error: send failed", file=sys.stderr); sys.exit(1)
     print(json.dumps({"ok": True, "result": {"send": {"handle": a[a.index("--terminal") + 1], "accepted": True}}})); sys.exit(0)
+if a[:2] == ["orchestration", "worker-list"]:
+    path = os.environ.get("FAKE_ORCA_WORKERS", "")
+    if not path or not os.path.exists(path):
+        print("error: run not found", file=sys.stderr); sys.exit(1)
+    print(open(path, encoding="utf-8").read()); sys.exit(0)
+if a[:2] == ["orchestration", "worker-show"]:
+    path = os.path.join(os.environ.get("FAKE_ORCA_SHOWS", ""), a[a.index("--dispatch") + 1] + ".json")
+    if not os.path.exists(path):
+        print("error: dispatch not found", file=sys.stderr); sys.exit(1)
+    print(open(path, encoding="utf-8").read()); sys.exit(0)
 print("error: unexpected call", file=sys.stderr); sys.exit(1)
 PY
 NPY=$(python3 -c 'import sys; print(sys.executable)')
 if [ -n "$RPGF_WINDOWS" ]; then printf '@"%s" "%%~dp0fake_orca.py" %%*\r\n' "$NPY" > "$NB/orca.cmd"
 else printf '#!/bin/sh\nexec "%s" "$(dirname "$0")/fake_orca.py" "$@"\n' "$NPY" > "$NB/orca"; chmod +x "$NB/orca"; fi
 export FAKE_ORCA_LOG="$TMP/nudge-orca.log" FAKE_ORCA_TERMS="$TMP/nd-terms.json" FAKE_ORCA_SCREENS="$TMP/nd-screens"
-unset FAKE_ORCA_REACHABLE FAKE_ORCA_SEND
+unset FAKE_ORCA_REACHABLE FAKE_ORCA_SEND FAKE_ORCA_WORKERS FAKE_ORCA_SHOWS
 npath="$(path_entry "$NB"):$PATH"
 noorca=""; IFS=: read -ra parts <<<"$PATH"
 for d in "${parts[@]}"; do [ -e "$d/orca" ] || [ -e "$d/orca.exe" ] || [ -e "$d/orca.cmd" ] || noorca="$noorca${noorca:+:}$d"; done
@@ -5501,6 +5629,73 @@ nok "a transcript pointer above the composer rules is ignored without activity" 
 nok "a short rule leaves an unruled composer pointer STUCK" "^wr  term_region_short  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-region-short-implement-0123456789abcdef\.md\)$"
 nno "the echoed and transcript pointers are never STUCK" "^wr  term_region_(echo|unruled|transcript)  .* STUCK"
 nchk "composer region cases send nothing without --send" nsends 0
+
+# 10. STALLED workers of a task lead's Orca Run: a running worker whose agent terminal is silent for --stall seconds (and
+# no human prompt holds it) is STALLED with re-dispatch advice; read-only, --send never touches it, exit code unchanged
+nok "without a Run the stalled-worker check is skipped with a note" "^nudge: no Orca Run named \(task orca_run or --orca-run\): stalled workers not checked$"
+mkdir -p "$TMP/nd-shows"; export FAKE_ORCA_WORKERS="$TMP/nd-workers.json" FAKE_ORCA_SHOWS="$TMP/nd-shows"
+WST="$TMP/nd-stall"
+# wrow <dispatch> <workerState> <dispatchStatus> <stage detail>: one full worker-list row of Run run_S
+wrow() { jq -nc --arg d "$1" --arg ws "$2" --arg ds "$3" --arg sd "$4" '{dispatchId:$d,taskId:"t",runId:"run_S",workerState:$ws,
+  dispatchStatus:$ds,agentTerminalHandle:("term_"+$d),terminalState:"active",resource:{releaseState:"not_requested"},
+  projection:{stage:{detail:$sd}}}'; }
+{ wrow ctx_noturn ready dispatched input_accepted; wrow ctx_ended ready dispatched input_accepted
+  wrow ctx_active ready dispatched input_accepted; wrow ctx_settled succeeded completed settled
+  wrow ctx_wait ready dispatched input_accepted; wrow ctx_lasterr ready dispatched input_accepted
+  wrow ctx_noshow ready dispatched input_accepted; } | jq -s '{ok:true,result:{workers:.,page:{hasMore:false}}}' > "$FAKE_ORCA_WORKERS"
+# wshow <dispatch> <dispatch_input states (comma list, may be empty)> <lastError|-> <agentWait json>: worker-show --full
+wshow() { jq -nc --arg d "$1" --arg st "$2" --arg le "$3" --arg w "$WST" --argjson aw "$4" '{ok:true,result:{
+  worker:{dispatchId:$d,state:"ready",worktreeId:("wt1::"+$w),agentTerminalHandle:("term_"+$d),
+    effects:([{kind:"terminal",role:"agent",action:"created",id:("term_"+$d)}]
+      + [($st | split(",")[] | select(. != "")) | {kind:"dispatch_input",role:"agent",id:("term_"+$d),state:.}]),
+    lastError:(if $le == "-" then null else $le end)},
+  observation:{status:"live",exactWorker:true,agentWait:$aw}}}' > "$TMP/nd-shows/$1.json"; }
+wshow ctx_noturn turn_unobserved - null; wshow ctx_ended accepted - null; wshow ctx_active accepted - null
+wshow ctx_settled accepted - null; wshow ctx_wait accepted - '{"evidence":"hook","prompt":"Allow?"}'
+wshow ctx_lasterr "" "turn start was not observed within 60000 ms" null
+{ jq -c '.result.terminals[]' "$TMP/nd-terms.json"
+  for d in ctx_noturn ctx_ended ctx_settled ctx_wait ctx_lasterr ctx_noshow; do trow "term_$d" "$WST" 1200; done
+  trow term_ctx_active "$WST" 30; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.new"
+mv "$TMP/nd-terms.new" "$TMP/nd-terms.json"
+ADVICE_NT="^  re-dispatch: check \`orca terminal read --terminal term_ctx_noturn\`, then \`orca orchestration worker-stop --dispatch ctx_noturn\` and dispatch a fresh session \(factory-pipeline\.py dispatch \.\.\. --phase <same phase>\); release it with \`orca orchestration worker-release --dispatch ctx_noturn\`$"
+nrun "$ND" --task cm --orca-run run_S
+nrc "stalled workers: exit 0 (a STALLED row is not an error)" 0
+nok "a running worker with turn_unobserved and an idle terminal is STALLED: no turn start" "^run_S  ctx_noturn  idle [0-9]+s  STALLED  no turn start$"
+nok "the STALLED row is followed by the re-dispatch advice" "$ADVICE_NT"
+nok "a running worker with an accepted input and an idle terminal is STALLED: turn ended without worker_done" "^run_S  ctx_ended  idle [0-9]+s  STALLED  turn ended without worker_done$"
+nok "a lastError that says the turn start was not observed is no turn start" "^run_S  ctx_lasterr  idle [0-9]+s  STALLED  no turn start$"
+nok "a recently active worker is ok" "^run_S  ctx_active  idle [0-9]+s  ok  active \([0-9]+s < 900s\)$"
+nok "a worker waiting on a human is ok" "^run_S  ctx_wait  idle \?s  ok  waiting on a human$"
+nok "a failing worker-show is no opinion" "^run_S  ctx_noshow  idle \?s  ok  worker-show failed .*\(no opinion\)$"
+nno "a settled worker is skipped" "ctx_settled"
+nnoshow_settled() { ! grep -q "worker-show --dispatch ctx_settled" "$FAKE_ORCA_LOG"; }
+nchk "a settled worker is not even shown" nnoshow_settled
+nchk "worker-list is asked for full rows of the named Run" grep -q -- "^orchestration worker-list --run run_S --limit 100 --full --json$" "$FAKE_ORCA_LOG"
+nonly_stall_reads() { [ -s "$FAKE_ORCA_LOG" ] && ! grep -qvE '^(status --json|terminal list --worktree path:[^ ]+ --limit 100 --json|terminal read --terminal [a-z_]+ --screen --json|orchestration worker-list --run run_S --limit 100 --full --json|orchestration worker-show --dispatch ctx_[a-z]+ --full --json)$' "$FAKE_ORCA_LOG"; }
+nchk "the stalled check runs only read-only orca calls" nonly_stall_reads
+nrun "$ND" --task cm --orca-run run_S --stall 5000
+nok "--stall raises the threshold: 1200 s of silence is active" "^run_S  ctx_noturn  idle [0-9]+s  ok  active \([0-9]+s < 5000s\)$"
+nno "and nothing is STALLED" "STALLED"
+nrun "$ND" --task cm --orca-run run_S --stall 0
+nok "--stall 0: the active worker is STALLED too" "^run_S  ctx_active  idle [0-9]+s  STALLED  turn ended without worker_done$"
+nrun "$ND" --task cm --orca-run run_S --stall -1
+nrc "a negative --stall is a usage error" 2
+nrun "$ND" --task cm --orca-run run_S --stall abc
+nrc "a non-numeric --stall is a usage error" 2
+nsnap() { ls "$NREC"; cat "$NREC"/*__nudge.json 2>/dev/null; }
+nsnap > "$TMP/nd-snap.before"
+nrun "$ND" --task cm --orca-run run_S --send
+nrc "--send with STALLED rows exits 0" 0
+nok "--send still lists the STALLED row" "^run_S  ctx_noturn  idle [0-9]+s  STALLED  no turn start$"
+nchk "--send sends nothing for a STALLED row" nsends 0
+nchk "--send runs only read-only calls for STALLED rows (no worker-stop, release or message)" nonly_stall_reads
+nsame_snap() { nsnap | cmp -s - "$TMP/nd-snap.before"; }
+nchk "--send writes nothing for a STALLED row" nsame_snap
+rm -f "$FAKE_ORCA_WORKERS"
+nrun "$ND" --task cm --orca-run run_S
+nrc "a failing worker-list exits 0" 0
+nok "a failing worker-list is no opinion" "^run_S: worker-list failed \(.*\): stalled workers not checked \(no opinion\)$"
+unset FAKE_ORCA_WORKERS FAKE_ORCA_SHOWS
 
 for t in gw wr cm rp vd im ld; do git -C "$S" worktree remove --force "$TMP/nd-$t" 2>/dev/null; git -C "$S" branch -q -D "feat/core/nd-$t" 2>/dev/null; done
 git -C "$S" branch -q -D feat/core/nd-im--sb 2>/dev/null
