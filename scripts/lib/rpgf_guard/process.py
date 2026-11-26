@@ -2,7 +2,7 @@
 import re
 import shlex
 
-from .shell import expand, prog, segments, tokenize
+from .shell import expand, prog, segments, substitution_text, tokenize
 
 PROCESS_TERMINATION_RULE = (
     "Terminating processes by image name or command-line pattern kills unrelated user and agent processes. "
@@ -69,7 +69,7 @@ def _process_argvs(command, shell, depth=0):
             if i < len(argv) and depth < 3:
                 argvs += _process_argvs(shlex.join(argv[i:]), "bash", depth + 1)
     if depth < 3:
-        for inner in _substitutions(command, shell):
+        for inner in _substitutions(substitution_text(command) if shell == "bash" else command, shell):
             argvs += _process_argvs(inner, shell, depth + 1)
     return argvs
 
@@ -88,12 +88,18 @@ def _clean(argv):
 
 def _own_pid_targets(command, shell):
     """Recognize unambiguously assigned own PIDs and direct PowerShell variable pipelines."""
+    # Reassignments inside a nested bash -c are not tracked in the outer command.
     tokens = tokenize(command, shell)
     assignments = {}
     for seg in segments(tokens, shell):
         if shell == "bash" and seg and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[0]):
             name, value = seg[0].split("=", 1)
             assignments.setdefault(name, []).append(len(seg) == 1 and value == "$!")
+        elif shell == "bash" and seg and seg[0] in {"export", "declare", "local", "typeset", "readonly"}:
+            for word in seg[1:]:
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
+                    name, value = word.split("=", 1)
+                    assignments.setdefault(name, []).append(value == "$!")
         elif shell == "powershell" and len(seg) >= 3 and seg[0].startswith("$") and seg[1] == "=":
             name = seg[0][1:].lower()
             assignments.setdefault(name, []).append(prog(seg[2]) in START_PROCESS and
@@ -124,6 +130,9 @@ def _own_terminator(p, args, own, safe_pipe):
         i = 0
         while i < len(args):
             arg = args[i]
+            if arg == "--":
+                targets.extend(args[i + 1:])
+                break
             if arg in {"-s", "-n"}:
                 if i + 1 >= len(args):
                     return False
@@ -189,10 +198,12 @@ def process_findings(argvs, own=None, safe_pipe=False, shell="bash"):
             direct = True
         elif p in {"fuser", "fuser.exe"} and any(re.match(r"^-[^-]*k", a) or a == "--kill" for a in args):
             direct = True
-        elif p in {"%", "foreach-object"} and (args == ["kill"] or args == ["-membername", "kill"]):
+        elif p in {"%", "foreach-object", "foreach"} and (args == ["kill"] or args == ["-membername", "kill"]):
             terminator = True
         elif p.endswith((".kill", ".terminate")):
-            terminator = True
+            match = re.fullmatch(r"\$([a-z_][a-z0-9_]*)\.(?:kill|terminate)", p)
+            if shell != "powershell" or not match or match.group(1) not in own:
+                terminator = True
         elif p == "wmic" and "process" in args:
             rest = args[args.index("process") + 1:]
             where = " ".join(rest[rest.index("where") + 1:]) if "where" in rest else ""
@@ -234,5 +245,5 @@ def process_kill_hits(payload, registry):
         direct, selector, terminator = process_findings(_process_argvs(command, shell), own, safe_pipe, shell)
         hit = direct or (selector and terminator)
     except Exception:
-        hit = bool(PROCESS_KILL_FALLBACK.search(command))
+        hit = bool(PROCESS_KILL_FALLBACK.search(substitution_text(command) if shell == "bash" else command))
     return [("deny", PROCESS_TERMINATION_RULE)] if hit else []
