@@ -251,6 +251,19 @@ check high "$SERVER" './run.sh & pid=$!; select pid in $(pgrep x); do kill $pid;
 check high "$SERVER" './run.sh & PID=$!; pgrep x; kill $pid'
 check high "$SERVER" '$p = Start-Process x -PassThru; foreach ($p in Get-Process dotnet) { Stop-Process -Id $p.Id }' "" PowerShell
 check high "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet | Stop-Process' "" PowerShell
+# #158: a declaration builtin rebinding the PID variable to a non-own value voids the own-PID exemption
+check high "$SERVER" './run.sh & pid=$!; export pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; declare pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; declare -x pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; local pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; typeset pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; readonly pid=$(pgrep -f dotnet); kill $pid'
+# Documented limitation: a rebinding inside a nested `bash -c` (pid=$!; bash -c "pid=...; kill \$pid") is not seen.
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -- $pid'
+check allow "$SERVER" './run.sh & export pid=$!; pgrep -f run.sh; kill $pid'
+check high "$SERVER" 'Get-Process dotnet | foreach Kill' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | foreach -MemberName Kill' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; $p.Kill()' "" PowerShell
 
 # a query that selects processes by name/pattern + any terminator, whatever the separators (RV-B9 MAJOR-1)
 check high "$SERVER" 'taskkill //F //PID $(powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='"'"'bash.exe'"'"'\" | Where-Object { $_.CommandLine -like '"'"'*run.sh*'"'"' } | % { $_.ProcessId }") //T'
@@ -315,6 +328,36 @@ check allow "$SERVER" 'echo "step 1; pkill is forbidden"'
 check allow "$SERVER" 'echo "do not run taskkill /F /IM dotnet.exe"'
 check allow "$SERVER" 'echo "busybox killall and fuser -k"'
 check allow "$SERVER" "grep -n 'ForEach-Object -MemberName Kill' f"
+# #158: a quoted heredoc (<<'EOF', <<"EOF") is never expanded, so kill commands named in its body are data
+hd_body='Never run `busybox killall|pkill` or `fuser -k` on the host.'
+check allow "$SERVER" "cat > body.md <<'EOF'
+$hd_body
+EOF"
+check allow "$SERVER" "cat <<'EOF' > body.md
+$hd_body
+EOF"
+check allow "$SERVER" "cat > body.md <<\"EOF\"
+$hd_body
+EOF"
+check allow "$SERVER" "tee body.md <<'EOF'
+$hd_body
+EOF"
+check allow "$TMP" "gh pr create --title t --body-file - <<'EOF'
+$hd_body
+EOF"   # in \$TMP: gh pr create has its own human-gate advisory inside the workspace
+# a heredoc fed to a shell is commands; an unquoted heredoc body expands \$(...) and backticks
+check high "$SERVER" "cat <<'EOF' | sh
+pkill -f dotnet
+EOF"
+check high "$SERVER" "bash <<'EOF'
+pkill x
+EOF"
+check high "$SERVER" "cat > f <<EOF
+\$(pgrep -f dotnet | xargs kill)
+EOF"
+check high "$SERVER" "cat > f <<EOF
+pids: \`pgrep -f dotnet | xargs kill\`
+EOF"
 check allow "$FEATURE" 'git commit -m "fix: flag pkill.exe and killall5"'
 check allow "$TMP" 'git commit -m "fix(guard): flag a; killall"'
 check allow "$TMP" "jq -r '.a | killall' f"
@@ -503,6 +546,21 @@ check warn "$SERVER" "git revert HEAD"
 check warn "$SERVER" "git am patch.mbox"
 check warn "$SERVER" "git pull --rebase"
 check warn "$SERVER" "git reset HEAD~3"
+# #155: a path-only reset updates the index and never moves the protected branch; a revision reset does
+mkdir -p "$SERVER/docs/plans" && touch "$SERVER/docs/plans/x.json"
+check allow "$SERVER" "git reset -q docs/plans/x.json"
+check allow "$SERVER" "git reset docs/plans/x.json"
+check allow "$SERVER" "git reset -- docs/plans/x.json other.txt"
+check allow "$SERVER" "git reset HEAD -- docs/plans/x.json"      # HEAD as the rev of a path reset moves nothing
+check allow "$SERVER" "git reset -p docs/plans/x.json"
+check allow "$SERVER" "git reset -q"
+check allow "$SERVER" "git reset -q docs/plans/x.json" "" PowerShell
+check warn "$SERVER" "git reset HEAD~1"
+check warn "$SERVER" "git reset origin/main"
+check warn "$SERVER" "git reset --soft HEAD~2"
+check warn "$SERVER" "git reset --mixed abc1234"
+check warn "$SERVER" "git reset @{u}"
+check warn "$SERVER" "git reset --hard origin/main"
 check warn "$SERVER" "git checkout -B develop origin/develop"
 check warn "$SERVER" "git switch -C develop origin/develop"
 check warn "$SERVER" "git branch -f develop HEAD~2"
