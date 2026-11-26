@@ -48,6 +48,14 @@ Sonnet 5.5 implemented, Claude Opus 5.5 led and reviewed (SAME_MODEL), and verif
 | ci-fix | review PASS, QA PASS | 897d200 | `--affected --base 1573104 --within tests/delivery-generic.test.sh,tests/affected.test.sh,tests/parallel-policy.test.sh -j 1`: 421 passed, 0 failed |
 | integration:plugin | QA by the run lead | a7565ad | first run: 7 passed, 1 failed (orca-commands: the new lesson cited a bare `orca orchestration`); run lead fix a7565ad cites `orca orchestration send`; rerun `--workspace-only --base origin/main`: 8 of 19 checks run, 8 passed, 0 failed (616 s); `--only-suites tests/parallel-policy.test.sh,tests/skills-lint.sh -j 1`: 399 passed, 0 failed; after ci-fix (8691187): 8 passed, 0 failed (391 s) |
 
+## Merge of main (PR 154)
+
+PR 154 (plan none-affected-notrun) merged into `main` first and conflicted in the integration QA row of `delivery.md`.
+The run lead merged `main` (`295293a`), kept both sides and tightened two orca-wait sentences to stay under the
+32768-byte cap (32765). Every verdict was re-recorded at `295293a` after `--affected --base 112d273 --within
+tests/pipeline.test.sh,tests/affected.test.sh -j 1` (431 passed, 0 failed), delivery-generic, parallel-policy and
+skills-lint (400 passed, 0 failed) and integration QA `--workspace-only --base faf2745` (8 passed, 0 failed).
+
 ## Limitations
 
 - The run lead fixed one word in `parallel-work.md` after integration QA (commit a7565ad), outside a task session.
