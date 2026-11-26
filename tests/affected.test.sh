@@ -19,6 +19,7 @@ sel 1 "an unrelated script skips the suite" tests/pipeline.test.sh scripts/chang
 sel 0 "registry change runs everything" tests/changelog.test.sh registry/core.json
 sel 0 "library reaches its importer suite" tests/pipeline.test.sh scripts/lib/plan_paths.py
 sel 1 "library skips unrelated suite" tests/changelog.test.sh scripts/lib/plan_paths.py
+sel 0 "a scripts/factory-workflow.py change selects the registered workflow suite" tests/workflow.test.sh scripts/factory-workflow.py
 # gitguard.py uses the plugin's static sys.path/spec_from_file_location idiom: it selects its importer suite, not every
 # suite; the "dynamic stays global" property is covered by the computed/importlib/bytes modules of the fixture below
 sel 0 "a static-idiom library selects its importer suite" tests/git-guard.test.sh scripts/lib/gitguard.py
