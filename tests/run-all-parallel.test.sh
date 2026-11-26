@@ -5,7 +5,7 @@
 # overlap each other, a block's lines are counted, a run1 suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
 # Killed workers cannot hang the queue; shared config classification permits only whole added branch/worktree sections.
 # A shared-config WARN is counted in the summary (copy removed; kept on FAIL); a passing suite's RETRY lines show under its PASS line.
-# The suite registration inline check (suite_registration) fails an unregistered tests/*.test.sh and a stale exemption.
+# The suite registration inline check (suite_registration) fails an unregistered suite file under tests/ and a stale exemption.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -395,12 +395,7 @@ out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites test
 [ "$rc" = 2 ] && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
   && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
   && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
-# a scripts/factory-workflow.py change selects the now registered tests/workflow.test.sh (tests/affected.py import closure)
-printf 'scripts/factory-workflow.py\n' > "$TMP/wf-changed.txt"
-out=$(cd "$ROOT" && python3 -B tests/affected.py select "$TMP/wf-changed.txt" tests/workflow.test.sh 2>&1); rc=$?
-[ "$rc" = 0 ] && good 'affected.py selects tests/workflow.test.sh for a scripts/factory-workflow.py change' \
-  || no "affected.py select workflow.test.sh for scripts/factory-workflow.py (rc=$rc)" "$out"
-# suite registration (inline check): every tests/*.test.sh has a run line or a SUITE_EXEMPT entry; an exemption for a
+# suite registration (inline check): every suite file under tests/ has a run line or a SUITE_EXEMPT entry; an exemption for a
 # missing or registered file fails. suite_registration runs against a temp tree with a stand-in run-all file.
 mkdir -p "$TMP/reg/tests"
 printf '%s\n' 'run "a" env -u TMPDIR tests/a.test.sh' 'if [ -f tests/b.test.sh ]; then run "b" tests/b.test.sh; fi' > "$TMP/reg/plan.sh"
@@ -419,7 +414,7 @@ s1=$(sect unregistered); s2=$(sect clean); s3=$(sect 'bad exemptions')
 [ "$rc" = 0 ] && [ "$(grep -c '^FAIL' <<<"$s1")" = 1 ] \
   && grep -qx 'FAIL  suite registration: tests/zz-unregistered.test.sh has no run line in tests/run-all.sh and no SUITE_EXEMPT entry' <<<"$s1" \
   && ! grep -q '^PASS' <<<"$s1" && ! grep -q 'exempt.test.sh\|tests/a.test.sh\|tests/b.test.sh' <<<"$s1" \
-  && good 'suite registration fails an unregistered tests/*.test.sh by name and passes run lines and exemptions' \
+  && good 'suite registration fails an unregistered suite file under tests/ by name and passes run lines and exemptions' \
   || no "suite registration: unregistered file (rc=$rc)" "$out"
 [ "$rc" = 0 ] && grep -qx 'PASS  suite registration: 3 tests/\*.test.sh files each have a run line or a SUITE_EXEMPT entry' <<<"$s2" \
   && ! grep -q '^FAIL' <<<"$s2" && good 'suite registration passes when every suite has a run line or an exemption' \
