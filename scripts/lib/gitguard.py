@@ -24,7 +24,7 @@ Wrappers peeled: VAR=x, env, command, builtin, exec, sudo, doas, timeout, nohup,
 stdbuf, ionice, setsid, xargs, find -exec/-execdir, and leading shell reserved words ({ ! if then
 else elif do while until, `name()` / `function name` headers; PowerShell script-block braces).
 Nested: bash|sh|zsh|dash -c, a heredoc fed to a shell (`bash <<EOF`, `cat <<EOF | sh`), eval,
-cmd(.exe) /c|/k, powershell|pwsh -c|-Command, PowerShell `&` call operator. On Windows, git-bash
+cmd(.exe) /c|/k|//c|//k, powershell|pwsh -c|-Command, PowerShell `&` call operator. On Windows, git-bash
 paths (/c/..., /mnt/c/...) are mapped to drive paths before they are resolved.
 
 Git run by a script file or a program is invisible to text analysis (documented limitation).

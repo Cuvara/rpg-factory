@@ -200,17 +200,31 @@ check high "$SERVER" 'taskkill /IM powershell.exe /F'
 check high "$SERVER" 'Stop-Process -Name dotnet -Force' "" PowerShell
 check high "$SERVER" 'Stop-Process -ProcessName powershell' "" PowerShell
 check high "$SERVER" 'Get-Process dotnet | Stop-Process -Force' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | % Kill' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | ForEach-Object Kill' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | ForEach-Object -MemberName Kill' "" PowerShell
+check high "$SERVER" '(Get-Process dotnet).Kill()' "" PowerShell
 check high "$SERVER" 'Get-CimInstance Win32_Process | Where-Object {$_.Name -eq "dotnet.exe"} | ForEach-Object {$_.Terminate()}' "" PowerShell
 check high "$SERVER" 'Get-WmiObject Win32_Process -Filter "Name=dotnet.exe" | Invoke-CimMethod -MethodName Terminate' "" PowerShell
 check high "$SERVER" 'Get-CimInstance Win32_Process -Filter "Name=dotnet.exe" | Where-Object {$_.CommandLine -like "*--filter*"} | % { Stop-Process -Id $_.ProcessId -Force }' "" PowerShell
 check high "$SERVER" 'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { $_.CommandLine -like '*--filter*' } | % { Stop-Process -Id $_.ProcessId -Force }"'
 check high "$SERVER" 'pkill -f dotnet'
+check high "$SERVER" 'pkill.exe dotnet'
 check high "$SERVER" 'killall powershell'
+check high "$SERVER" 'busybox killall dotnet'
+check high "$SERVER" 'busybox pkill -f run.sh'
+check high "$SERVER" 'killall5 -9'
+check high "$SERVER" 'fuser -k 8080/tcp'
+check high "$SERVER" 'kill $(lsof -t -i:8080)'
+check high "$SERVER" 'kill -9 $(lsof -ti:8080)'
+check high "$SERVER" 'kill $(pgrep run.sh)'
 check high "$SERVER" 'kill $(pgrep -f dotnet)'
 check high "$SERVER" 'pgrep -f dotnet | xargs kill'
 check high "$SERVER" 'wmic process where "name like dotnet" delete'
 check high "$SERVER" 'wmic process where "name like dotnet" call terminate'
 check high "$SERVER" 'bash -c "taskkill //F //IM dotnet.exe"'
+check high "$SERVER" 'cmd //c "taskkill /F /IM dotnet.exe"'
+check high "$SERVER" 'cmd.exe //k "taskkill /F /IM dotnet.exe"'
 check high "$SERVER" 'powershell -NoProfile -Command "Stop-Process -Name dotnet -Force"' "" PowerShell
 check high "$SERVER" "bash <<'KILL_EOF'
 taskkill /F /IM dotnet.exe
@@ -221,6 +235,22 @@ check allow "$SERVER" 'Stop-Process -Id 1234' "" PowerShell
 check allow "$SERVER" 'kill 1234'
 check allow "$SERVER" 'kill $!'
 check allow "$SERVER" 'kill %1'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -9 $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -TERM $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -s TERM $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -n 9 $pid'
+check allow "$SERVER" './run.sh & PID=$!; pgrep -f run.sh; kill ${PID}'
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id -Force -PassThru -Confirm:$false -WhatIf' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; $p | Stop-Process' "" PowerShell
+check high "$SERVER" './run.sh & pid=$!; kill $(pgrep -f run.sh)'
+check high "$SERVER" './run.sh & pid=$!; for pid in $(pgrep x); do kill $pid; done'
+check high "$SERVER" './run.sh & pid=$!; pgrep x | while read pid; do kill $pid; done'
+check high "$SERVER" './run.sh & pid=$!; select pid in $(pgrep x); do kill $pid; done'
+check high "$SERVER" './run.sh & PID=$!; pgrep x; kill $pid'
+check high "$SERVER" '$p = Start-Process x -PassThru; foreach ($p in Get-Process dotnet) { Stop-Process -Id $p.Id }' "" PowerShell
+check high "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet | Stop-Process' "" PowerShell
 
 # a query that selects processes by name/pattern + any terminator, whatever the separators (RV-B9 MAJOR-1)
 check high "$SERVER" 'taskkill //F //PID $(powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='"'"'bash.exe'"'"'\" | Where-Object { $_.CommandLine -like '"'"'*run.sh*'"'"' } | % { $_.ProcessId }") //T'
@@ -278,11 +308,14 @@ check allow "$TMP" 'ps aux'
 check allow "$TMP" 'Get-Process -Id 1234 | Stop-Process' "" PowerShell
 check allow "$TMP" '$p | Stop-Process' "" PowerShell
 check allow "$TMP" 'wmic process where processid=1234 delete'
-check allow "$TMP" "grep -E 'foo|pkill' file"
-check allow "$TMP" 'rg "taskkill|pkill|killall" scripts/'
-check allow "$TMP" "grep -rnE 'Stop-Process|taskkill /IM' ."
-check allow "$TMP" 'echo "step 1; pkill is forbidden"'
-check allow "$TMP" 'echo "do not run taskkill /F /IM dotnet.exe"'
+check allow "$SERVER" "grep -E 'foo|pkill' file"
+check allow "$SERVER" 'rg "taskkill|pkill|killall" scripts/'
+check allow "$SERVER" "grep -rnE 'Stop-Process|taskkill /IM' ."
+check allow "$SERVER" 'echo "step 1; pkill is forbidden"'
+check allow "$SERVER" 'echo "do not run taskkill /F /IM dotnet.exe"'
+check allow "$SERVER" 'echo "busybox killall and fuser -k"'
+check allow "$SERVER" "grep -n 'ForEach-Object -MemberName Kill' f"
+check allow "$FEATURE" 'git commit -m "fix: flag pkill.exe and killall5"'
 check allow "$TMP" 'git commit -m "fix(guard): flag a; killall"'
 check allow "$TMP" "jq -r '.a | killall' f"
 check allow "$TMP" "python scripts/x.py --pattern 'a|killall'"
@@ -448,6 +481,7 @@ check allow "$SERVER" "xargs git tag -l < /dev/null"
 check allow "$SERVER" "echo f | xargs git log --oneline"
 check warn "$SERVER" 'find . -name x -exec git checkout -- {} \;'
 check warn "$SERVER" "cmd.exe /c git reset --hard"
+check warn "$SERVER" 'cmd //c "git push --force origin main"'
 check warn "$SERVER" 'powershell.exe -c "git reset --hard"'
 check warn "$SERVER" "powershell.exe -EncodedCommand ZwBpAHQA"
 check warn "$SERVER" 'G=git; $G reset --hard'

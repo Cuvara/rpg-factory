@@ -27,7 +27,7 @@
 # case-map: qa-tiers tests/run-all.sh scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::emit_lead_handoff scripts/factory-pipeline.py::gate scripts/factory-pipeline.py::qa_body scripts/factory-pipeline.py::retry_checks scripts/factory-pipeline.py::runall_suites scripts/factory-pipeline.py::task_qa_warnings scripts/factory-pipeline.py::tier_command scripts/factory-pipeline.py::validate scripts/factory-pipeline.py::verdict_file scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
 # case-map: tier-xs scripts/factory-pipeline.py::cmd_dispatch scripts/factory-pipeline.py::cmd_gate scripts/factory-pipeline.py::cmd_status scripts/factory-pipeline.py::cmd_tier scripts/factory-pipeline.py::cmd_validate scripts/factory-pipeline.py::cmd_verdict scripts/factory-pipeline.py::implementer_of scripts/factory-pipeline.py::task_context scripts/factory-pipeline.py::validate scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::choose scripts/lib/pipeline_route.py::failed_suite_ok scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mark scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::prose_path scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::record scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::small_task scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
 # case-map: runall-preflight tests/run-all.sh scripts/factory-pipeline.py::* scripts/lib/pipeline_route.py::*
-# case-map: nudge scripts/factory-pipeline.py::cmd_nudge scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
+# case-map: nudge scripts/factory-pipeline.py::cmd_nudge scripts/factory-pipeline.py::implement_progress_since scripts/factory-pipeline.py::cmd_report scripts/factory-pipeline.py::cmd_status scripts/lib/pipeline_route.py::SUITE_CHECK scripts/lib/pipeline_route.py::above_xs scripts/lib/pipeline_route.py::available scripts/lib/pipeline_route.py::full_run scripts/lib/pipeline_route.py::mentions_runall scripts/lib/pipeline_route.py::names_test_suite scripts/lib/pipeline_route.py::paired scripts/lib/pipeline_route.py::planned scripts/lib/pipeline_route.py::qa_checks scripts/lib/pipeline_route.py::qa_warnings scripts/lib/pipeline_route.py::recorded scripts/lib/pipeline_route.py::roles scripts/lib/pipeline_route.py::route scripts/lib/pipeline_route.py::warnings scripts/lib/pipeline_route.py::xs_plan
 # case-map: cli-selftest scripts/factory-pipeline.py::* scripts/lib/pipeline_route.py::*
 # scripts/factory-pipeline.py has a symbol map (`path::name`, tests/affected.py): a change confined to one top-level
 # function selects only the groups that name it or a symbol that reaches it (a group names the `cmd_*` verb functions its
@@ -5146,6 +5146,8 @@ echo "-- nudge (a start prompt that stayed unsubmitted in its Orca terminal)"
 NB="$TMP/nudgebin"; mkdir -p "$NB" "$TMP/nd-screens"
 cat > "$NB/fake_orca.py" <<'PY'
 import json, os, sys
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 a = sys.argv[1:]
 with open(os.environ["FAKE_ORCA_LOG"], "a", encoding="utf-8", newline="\n") as fh:
     fh.write(" ".join(x.replace("\r", "<CR>") for x in a) + "\n")
@@ -5173,18 +5175,21 @@ unset FAKE_ORCA_REACHABLE FAKE_ORCA_SEND
 npath="$(path_entry "$NB"):$PATH"
 noorca=""; IFS=: read -ra parts <<<"$PATH"
 for d in "${parts[@]}"; do [ -e "$d/orca" ] || [ -e "$d/orca.exe" ] || [ -e "$d/orca.cmd" ] || noorca="$noorca${noorca:+:}$d"; done
-# one plan, five tasks with a real task worktree each: gw (the main scenario), wr (wrapped pointers), cm, rp and vd (a
-# commit, a lead report or a verdict after the spec was written)
-for t in gw wr cm rp vd; do git -C "$S" worktree add -q "$TMP/nd-$t" -b "feat/core/nd-$t" develop 2>/dev/null; done
+# one plan, seven tasks with a real task worktree each: gw (the main scenario), wr (wrapped pointers), cm, rp and vd (a
+# commit, a lead report or a verdict after the spec was written), im and ld (implement versus lead specs, section 8)
+for t in gw wr cm rp vd im ld; do git -C "$S" worktree add -q "$TMP/nd-$t" -b "feat/core/nd-$t" develop 2>/dev/null; done
 nwt() { git -C "$1" rev-parse --show-toplevel; }
 WGW=$(nwt "$TMP/nd-gw"); WWR=$(nwt "$TMP/nd-wr"); WCM=$(nwt "$TMP/nd-cm"); WRP=$(nwt "$TMP/nd-rp"); WVD=$(nwt "$TMP/nd-vd")
+WIM=$(nwt "$TMP/nd-im"); WLD=$(nwt "$TMP/nd-ld")
 ND=$(plan nd "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"nd\",\"title\":\"Nudge\",\"topic\":\"feat/core/nd\",
  \"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"}},\"tasks\":[
  {\"id\":\"gw\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-gw/\"],\"acceptance\":[\"a\"]},
  {\"id\":\"wr\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-wr/\"],\"acceptance\":[\"a\"]},
  {\"id\":\"cm\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-cm/\"],\"acceptance\":[\"a\"]},
  {\"id\":\"rp\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-rp/\"],\"acceptance\":[\"a\"]},
- {\"id\":\"vd\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-vd/\"],\"acceptance\":[\"a\"]}]}")
+ {\"id\":\"vd\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-vd/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"im\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-im/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"ld\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"nd-ld/\"],\"acceptance\":[\"a\"]}]}")
 NREC="$RPG_FACTORY_STATE_DIR/pipeline/nd"; NSP="$NREC/specs"; mkdir -p "$NSP"
 T0=$(date +%s)
 # mkspec <name>: a spec file of this plan whose mtime is T0 (the moment the session was started)
@@ -5376,7 +5381,129 @@ nok "orca unreachable: a note" "^nudge: Orca is not available \(the Orca runtime
 nchk "orca unreachable: only the status probe ran" test "$(tr -d '\r' < "$FAKE_ORCA_LOG")" = "status --json"
 nchk "orca unreachable: no new record" nrecords 1
 
-for t in gw wr cm rp vd; do git -C "$S" worktree remove --force "$TMP/nd-$t" 2>/dev/null; git -C "$S" branch -q -D "feat/core/nd-$t" 2>/dev/null; done
+# 8. an implement spec (`<task>-implement-<16 hex>.md`) is cleared only by progress of its own subtask: the subtask
+# whose implementer record (`<task>@<sid>__implementer.model.json`, written by dispatch) names the spec. Task-level
+# progress (the lead commits sibling work, the lead reports, sibling verdicts) proves nothing about this session. Other
+# specs (lead, verify) keep the task-level rule.
+# mkspec2 <basename>: a spec file of this plan named exactly <basename>, mtime T0
+mkspec2() { local f="$NSP/$1"; printf 'spec %s\n' "$1" > "$f"; touch -d "@$T0" "$f"; echo "$f"; }
+IA=$(mkspec2 im-implement-aaaaaaaaaaaaaaaa.md); IB=$(mkspec2 im-implement-bbbbbbbbbbbbbbbb.md)
+IC=$(mkspec2 im-implement-cccccccccccccccc.md)
+LL=$(mkspec2 ld-lead-dddddddddddddddd.md); LV=$(mkspec2 ld-verify-eeeeeeeeeeeeeeee.md)
+# the implementer records of subtasks sa and sb name specs A and B; spec C has no record
+jq -n --arg s "$IA" '{agent:"claude",spec:$s}' > "$NREC/im@sa__implementer.model.json"
+jq -n --arg s "$IB" '{agent:"claude",spec:$s}' > "$NREC/im@sb__implementer.model.json"
+touch -d "@$T0" "$NREC/im@sa__implementer.model.json" "$NREC/im@sb__implementer.model.json"
+# the task lead commits (a sibling subtask's work) on the task branch after both specs were written
+GIT_COMMITTER_DATE="$((T0 + 100)) +0000" gi "$TMP/nd-im" commit -q --allow-empty -m "feat: im sibling work"
+screen term_impl_a "Claude Code" "" "> Read your task spec at $IA and follow it."
+screen term_impl_b "Working on the task..." "> "
+screen term_impl_c "> Read your task spec at $IC and follow it."
+screen term_lead "> Read your task spec at $LL and follow it."
+screen term_verify "> Read your task spec at $LV and follow it."
+{ jq -c '.result.terminals[]' "$TMP/nd-terms.json"
+  trow term_impl_a "$WIM" 600; trow term_impl_b "$WIM" 600; trow term_impl_c "$WIM" 600
+  trow term_lead "$WLD" 600; trow term_verify "$WLD" 600; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.new"
+mv "$TMP/nd-terms.new" "$TMP/nd-terms.json"
+nsends_to() { [ "$(grep -cE "^terminal send --terminal $1 " "$FAKE_ORCA_LOG")" = "$2" ]; }
+nrun "$ND" --task im
+nrc "im without --send exits 0" 0
+nok "an idle implement terminal still showing its pointer is STUCK despite a task-branch commit after its spec" "^im  term_impl_a  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*im-implement-aaaaaaaaaaaaaaaa\.md\)$"
+nok "the sibling implement terminal whose pointer is gone is ok" "^im  term_impl_b  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "an implement spec no implementer record names stays STUCK despite the commit" "^im  term_impl_c  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*im-implement-cccccccccccccccc\.md\)$"
+nno "the task-branch commit is no progress for an implement spec" "^im  .*progress since the spec was written"
+nchk "im without --send: nothing is sent" nsends 0
+nchk "im without --send: nothing is recorded" norecord im
+if [ -z "$RPGF_WINDOWS" ]; then
+  nrun "$ND" --task im --send
+  nrc "im --send exits 0" 0
+  nok "im --send sends the CR to the stuck implement terminal" "^  sent CR to term_impl_a$"
+  nchk "exactly one send to term_impl_a" nsends_to term_impl_a 1
+  nchk "the terminal without a pointer gets no send" nnosent term_impl_b
+  nchk "the unrecorded implement spec's terminal is sent too: two sends in all" nsends 2
+  nrec_im() { nrec '.plan == "nd" and .task == "im" and (.nudges | length) == 2
+    and any(.nudges[]; .handle == "term_impl_a" and (.spec | endswith("im-implement-aaaaaaaaaaaaaaaa.md")) and .still_stuck == false)' im; }
+  nchk "the im nudge record names term_impl_a and spec A" nrec_im
+else
+  nrun "$ND" --task im --send
+  nrc "Windows: im --send through a batch shim exits 1" 1
+  nok "Windows: the batch shim is named for term_impl_a" "^  send FAILED \(term_impl_a\): orca resolves to a batch shim, which drops the CR argument: run the send command above by hand$"
+  nchk "Windows: im: no terminal send is run" nsends 0
+  nchk "Windows: im: nothing is recorded" norecord im
+  # the record `nudge --send` writes on Linux, written by hand (contract shape) so the later cases run here too
+  jq -n --arg a "$IA" --arg c "$IC" '{plan:"nd",task:"im",nudges:[
+    {spec:$a,handle:"term_impl_a",at:"2026-01-01T00:00:00Z",checked_at:"2026-01-01T00:00:00Z",still_stuck:false},
+    {spec:$c,handle:"term_impl_c",at:"2026-01-01T00:00:00Z",checked_at:"2026-01-01T00:00:00Z",still_stuck:false}]}' > "$NREC/im__nudge.json"
+fi
+nrun "$ND" --task im --send
+nok "a second --send: term_impl_a is nudged, still stuck" "^im  term_impl_a  idle [0-9]+s  STUCK  nudged, still stuck: relaunch the session \(nudged at [0-9TZ:-]+\)$"
+nchk "a second --send sends nothing" nsends 0
+# a commit on the sibling subtask's branch clears the sibling's own spec, never spec A
+screen term_impl_b "> Read your task spec at $IB and follow it."
+nrun "$ND" --task im
+nok "before its subtask commit, the sibling implement terminal showing spec B is STUCK" "^im  term_impl_b  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*im-implement-bbbbbbbbbbbbbbbb\.md\)$"
+SBC=$(GIT_COMMITTER_DATE="$((T0 + 100)) +0000" gi "$S" commit-tree -p develop -m "feat: im sb" "develop^{tree}")
+git -C "$S" branch -q feat/core/nd-im--sb "$SBC"
+nrun "$ND" --task im
+nok "a commit on the subtask branch <task branch>--sb after spec B is progress of sb" "^im  term_impl_b  idle [0-9]+s  ok  progress since the spec was written: subtask sb commit$"
+nok "the sibling's subtask commit does not clear spec A" "^im  term_impl_a  idle [0-9]+s  STUCK  "
+# a newer verdict of sibling sb, a task-level verdict and a lead report do not clear spec A either
+printf '{}\n' > "$NREC/im@sb__review.json"; touch -d "@$((T0 + 100))" "$NREC/im@sb__review.json"
+nrun "$ND" --task im
+nok "a newer sibling verdict (im@sb__review.json) alone does not clear spec A" "^im  term_impl_a  idle [0-9]+s  STUCK  "
+printf '{}\n' > "$NREC/im__qa.json"; printf '{}\n' > "$NREC/im__lead-report.json"
+touch -d "@$((T0 + 100))" "$NREC/im__qa.json" "$NREC/im__lead-report.json"
+nrun "$ND" --task im
+nok "a newer task verdict and lead report do not clear spec A" "^im  term_impl_a  idle [0-9]+s  STUCK  "
+nno "and no progress is reported for spec A" "^im  term_impl_a  .*progress since the spec was written"
+nok "the unrecorded spec C stays STUCK under every kind of task progress" "^im  term_impl_c  idle [0-9]+s  STUCK  "
+# the subtask's own verdict clears spec A
+printf '{}\n' > "$NREC/im@sa__review.json"; touch -d "@$((T0 + 100))" "$NREC/im@sa__review.json"
+nrun "$ND" --task im --send
+nok "a verdict of the spec's own subtask after the spec is progress: ok" "^im  term_impl_a  idle [0-9]+s  ok  progress since the spec was written: subtask sa verdict$"
+nchk "the progressed implement terminal gets no send" nnosent term_impl_a
+# lead and verify specs keep the task-level rule
+nrun "$ND" --task ld
+nok "ld: before any progress the lead terminal is STUCK" "^ld  term_lead  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*ld-lead-dddddddddddddddd\.md\)$"
+nok "ld: before any progress the verify terminal is STUCK" "^ld  term_verify  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*ld-verify-eeeeeeeeeeeeeeee\.md\)$"
+GIT_COMMITTER_DATE="$((T0 + 100)) +0000" gi "$TMP/nd-ld" commit -q --allow-empty -m "feat: ld"
+nrun "$ND" --task ld --send
+nok "a lead spec with a task-branch commit after it is ok (task-level rule)" "^ld  term_lead  idle [0-9]+s  ok  progress since the spec was written: commit$"
+nok "a verify spec with a task-branch commit after it is ok (task-level rule)" "^ld  term_verify  idle [0-9]+s  ok  progress since the spec was written: commit$"
+nchk "ld: nothing is sent" nsends 0
+nchk "ld: nothing is recorded" norecord ld
+
+# 9. only the composer region counts on ruled screens; activity clears submitted pointers on unruled screens
+RA=$(mkspec region-echo); RB=$(mkspec region-unruled); RC=$(mkspec region-composer)
+RD=$(mkspec region-transcript); RE=$(mkspec region-short)
+screen term_region_echo "  === TASK ===" "  Read your task spec at" "  $RA and follow it." \
+  "  Read 1 file, ran 1 shell command" "● Working" "✻ Waiting for 1 shell..." \
+  "────────────────────────────────────────────────────────────" "❯ " \
+  "────────────────────────────────────────────────────────────" "  ? for shortcuts"
+screen term_region_unruled "  === TASK ===" "  Read your task spec at" "  $RB and follow it." \
+  "  Read 1 file, ran 1 shell command" "● Working" "✻ Waiting for 1 shell..." "❯ " "  ? for shortcuts"
+screen term_region_composer "Transcript text" "────────────────────────────────────────────────────────────" \
+  "❯ Read your task spec at $RC and follow it." "────────────────────────────────────────────────────────────"
+screen term_region_transcript "  Read your task spec at $RD and follow it." \
+  "────────────────────────────────────────────────────────────" "❯ " "────────────────────────────────────────────────────────────"
+screen term_region_short "──────────" "> Read your task spec at $RE and follow it."
+{ jq -c '.result.terminals[]' "$TMP/nd-terms.json"
+  trow term_region_echo "$WWR" 600; trow term_region_unruled "$WWR" 600
+  trow term_region_composer "$WWR" 600; trow term_region_transcript "$WWR" 600
+  trow term_region_short "$WWR" 600; } | jq -s '{ok:true,result:{terminals:.}}' > "$TMP/nd-terms.new"
+mv "$TMP/nd-terms.new" "$TMP/nd-terms.json"
+nrun "$ND" --task wr
+nrc "composer region cases exit 0" 0
+nok "the issue screen with an echoed pointer and empty composer is ok" "^wr  term_region_echo  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "activity after an unruled echoed pointer clears it" "^wr  term_region_unruled  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "a pointer between composer rules is STUCK" "^wr  term_region_composer  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-region-composer-implement-0123456789abcdef\.md\)$"
+nok "a transcript pointer above the composer rules is ignored without activity" "^wr  term_region_transcript  idle [0-9]+s  ok  no start-prompt pointer on screen$"
+nok "a short rule leaves an unruled composer pointer STUCK" "^wr  term_region_short  idle [0-9]+s  STUCK  start prompt not submitted \(spec .*nd-region-short-implement-0123456789abcdef\.md\)$"
+nno "the echoed and transcript pointers are never STUCK" "^wr  term_region_(echo|unruled|transcript)  .* STUCK"
+nchk "composer region cases send nothing without --send" nsends 0
+
+for t in gw wr cm rp vd im ld; do git -C "$S" worktree remove --force "$TMP/nd-$t" 2>/dev/null; git -C "$S" branch -q -D "feat/core/nd-$t" 2>/dev/null; done
+git -C "$S" branch -q -D feat/core/nd-im--sb 2>/dev/null
 unset FAKE_ORCA_LOG FAKE_ORCA_TERMS FAKE_ORCA_SCREENS
 case_end nudge
 fi
