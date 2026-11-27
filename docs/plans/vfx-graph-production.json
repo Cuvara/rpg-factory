@@ -443,7 +443,7 @@
       "kind": "fix",
       "grade": "heavy",
       "grade_reason": "a merge of 802 main commits into the topic with 14 conflicting files across skills, tests and scripts; a wrong resolution silently drops one side",
-      "objective": "PR #161 (feat/skills/vfx-graph into main) conflicts with main: main gained 802 commits since the topic's base 3272444 (up to 1ecb2e8, PR #160 session-lows). In the task worktree, merge origin/main into the task branch and resolve the 14 conflicting files (README.md, docs/architecture/overview.md, scripts/README.md, scripts/factory-cmd.py, skills/asset-gen/SKILL.md, skills/factory-core/SKILL.md, skills/factory-core/references/parallel-work.md, skills/factory-core/references/skill-contract.md, tests/affected.py, tests/assetgen.test.sh, tests/commands.test.sh, tests/dogfood.sh, tests/pipeline.test.sh, tests/routing.test.sh) so that both sides survive: every change main made and every change of this plan. Never take one side wholesale; read both diffs against the merge base for each file. Then rebuild registry.json with scripts/build-registry.py, refresh counts and golden fixtures that both sides moved (skill-touchpoints.py vfx-graph must stay OK; README and overview counts must count the skills and verbs of both sides), and run the affected tier with base origin/main. Commit the merge as one merge commit, fixes after it as normal commits. A changelog fragment is needed only if behaviour changes beyond the merge.",
+      "objective": "PR #161 (feat/skills/vfx-graph into main) conflicts with main: main gained 802 commits since the topic's base 3272444 (up to 1ecb2e8, PR #160 session-lows). In the task worktree, merge origin/main into the task branch and resolve the 14 conflicting files (README.md, docs/architecture/overview.md, scripts/README.md, scripts/factory-cmd.py, skills/asset-gen/SKILL.md, skills/factory-core/SKILL.md, skills/factory-core/references/parallel-work.md, skills/factory-core/references/skill-contract.md, tests/affected.py, tests/assetgen.test.sh, tests/commands.test.sh, tests/dogfood.sh, tests/pipeline.test.sh, tests/routing.test.sh) so that both sides survive: every change main made and every change of this plan. Never take one side wholesale; read both diffs against the merge base for each file. Then rebuild registry.json with scripts/build-registry.py, refresh counts and golden fixtures that both sides moved (skill-touchpoints.py vfx-graph must stay OK; README and overview counts must count the skills and verbs of both sides), and run the affected tier with base origin/main. Commit the merge as one merge commit, fixes after it as normal commits. A changelog fragment is needed only if behaviour changes beyond the merge. Scope added by the run lead on 2026-11-27 after verify fc669a6: fix the three semantic merge conflicts it found - the vfx-graph skill order collides with main's comfy-desktop-setup (pick a free order), scripts/lib/context.py is over the 500-line budget after the merge (move a cohesive part into scripts/lib/routing_engine.py), and scripts/vfx/vfx_plan.py must read the workspace through scripts/lib/workspace.py as main's guard requires.",
       "paths": [
         "README.md",
         "docs/architecture/overview.md",
@@ -461,7 +461,12 @@
         "tests/routing.test.sh",
         "registry.json",
         "tests/fixtures/routing-golden.json",
-        "changelog.d/vfx-merge-main.md"
+        "changelog.d/vfx-merge-main.md",
+        "registry/domains/vfx.json",
+        "scripts/lib/context.py",
+        "scripts/lib/routing_engine.py",
+        "scripts/vfx/vfx_plan.py",
+        "tests/vfx-production.test.sh"
       ],
       "exclusions": [],
       "deps": [
