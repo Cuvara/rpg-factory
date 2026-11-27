@@ -137,4 +137,5 @@ Each is a verified failure recorded in UnityVFX `Documentation~/AUTHORING.md`, s
 - Unity-MCP CLI on PATH: the registry dev tool `unity-mcp-cli` of the `unity-package` leg. `setup-sandbox.py` and
   `vfxcli.py` call it on the open path; without it the verbs exit 3 and the Sandbox steps stay `NOT_RUN` with the
   command they would run.
-- No other tool; the `vfx` lead's scripts never launch Unity.
+- The Sandbox's Unity-MCP plugin (dev tool `unity-mcp`) is what `unity-mcp-cli` talks to; no other tool, and the `vfx`
+  lead's scripts never launch Unity.
