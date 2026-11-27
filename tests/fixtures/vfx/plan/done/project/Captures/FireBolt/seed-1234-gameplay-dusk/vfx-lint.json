@@ -1,0 +1,16 @@
+{
+  "schema": "rpg-factory.vfx-lint/1",
+  "recipe_sha256": "62d14bb79ec51512d27bc2e2ad9f65646851b8bca4d76c63c6804c58a37be9f5",
+  "rules": [
+    {
+      "id": "recipe-schema",
+      "state": "PASS",
+      "evidence": "cuvara.vfx-recipe/1, vfx_graph 17.6"
+    },
+    {
+      "id": "timing-sum",
+      "state": "PASS",
+      "evidence": "1.0 s"
+    }
+  ]
+}

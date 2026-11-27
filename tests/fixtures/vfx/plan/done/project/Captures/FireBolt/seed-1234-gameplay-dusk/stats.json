@@ -1,0 +1,45 @@
+{
+  "schema": "cuvara.vfx-capture/1",
+  "effect": "Assets/Effects/FireBolt/FireBolt.vfx",
+  "recipe_sha256": "62d14bb79ec51512d27bc2e2ad9f65646851b8bca4d76c63c6804c58a37be9f5",
+  "seed": 1234,
+  "delta_time": 0.016667,
+  "camera": "gameplay",
+  "lighting": "dusk",
+  "unity": "6000.6.9f1",
+  "vfx_graph": "17.6.0",
+  "duration_seconds": 1.0,
+  "alive": {
+    "peak": 300,
+    "samples": [
+      {
+        "t": 0.0,
+        "count": 0
+      },
+      {
+        "t": 0.5,
+        "count": 300
+      }
+    ]
+  },
+  "bounds": null,
+  "systems": [
+    {
+      "name": "Bolt",
+      "capacity": 512,
+      "peak": 300
+    }
+  ],
+  "frames": [],
+  "contact_sheet": {
+    "file": "contact-sheet.png",
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "columns": 4
+  },
+  "resolution": [
+    512,
+    512
+  ],
+  "probe_interval": 0.05,
+  "settle_frames": 2
+}
