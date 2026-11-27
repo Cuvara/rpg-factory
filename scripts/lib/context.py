@@ -29,7 +29,6 @@ Usage (via factory-context.sh):
   --toolchain probe tool versions (slow on WSL: dotnet.exe ~5 s)
   --submodules scan uncommitted work inside submodules (the client's com.gdk.* cost ~9 s)
 """
-import functools
 import glob
 import json
 import os
@@ -41,6 +40,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 import devtools  # noqa: E402
+import routing_engine  # noqa: E402
 import workspace  # noqa: E402
 from workspace import native_abs  # noqa: E402,F401  (public: run-checks.py imports it from here)
 from pluginroot import plugin_root
@@ -49,7 +49,6 @@ from snapshot_render import (  # noqa: E402,F401 (public context helpers remain 
 )
 PLUGIN_ROOT = plugin_root()
 REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "registry.json")
-RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 
 
 GIT_TIMEOUT = 60  # seconds per git call; tests patch it down
@@ -283,20 +282,8 @@ def repo_state(key, d, rep, args, reg, ws=None):
             "committed_paths": committed, "submodules_scanned": args["submodules"]}
 
 
-@functools.lru_cache(maxsize=None)
-def _resolve_program():
-    # Nothing path-sized goes through argv (Windows limit: 32767 characters): stdin binds the inputs, the registry is a file.
-    with open(RESOLVE, encoding="utf-8") as fh:
-        return ". as {files: $files, subst: $subst, tools: $tools} | $__reg[0] | " + fh.read()
-
-
 def resolve(reg, key, files, subst, tools):
-    r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--slurpfile", "__reg", REGISTRY, _resolve_program()],
-                       input=json.dumps({"files": files, "subst": subst, "tools": tools}),
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if r.returncode != 0:
-        die(f"routing engine failed: {r.stderr.strip()}")
-    return json.loads(r.stdout)
+    return routing_engine.resolve(REGISTRY, key, files, subst, tools)
 
 
 def apply_override(state, lead):
