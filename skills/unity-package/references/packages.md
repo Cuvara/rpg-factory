@@ -148,13 +148,16 @@ the design commit until the run lead integrates).
 | Repo / integration | `UnityVFX/` (registry key `unityvfx`), release branch **`main`**; no remote yet (target `Cuvara/UnityVFX`). CI on push main/develop, PR into `main` |
 | State | untagged, unpublished, no client pin: pin-bump does not apply until the owner tags (`factory-status.py` reports it untagged and unpinned) |
 | Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py UnityVFX` / `factory-status.py`; `unity: "6000.6"`; Sandbox editor, VFX Graph and Unity-MCP versions: registry facts |
-| Modules | `unityvfx.runtime`, `unityvfx.editor`, `unityvfx.sandbox`, `unityvfx.tests`, `unityvfx.package`, fallback `unityvfx.root` |
+| Modules | `unityvfx.runtime`, `unityvfx.editor`, `unityvfx.effects` (`Effects/`: one folder per shipped effect, recipe is the source of truth), `unityvfx.library` (`Library/`: pieces shared by effects and the capture stage, today `Library/Grid`), `unityvfx.samples` (`Samples~/`: Showcase, linked into the Sandbox at `Sandbox~/Assets/Showcase`), `unityvfx.sandbox`, `unityvfx.tests`, `unityvfx.package`, fallback `unityvfx.root` |
 
 Assemblies: `Runtime/Cuvara.VFX`, `Editor/Cuvara.VFX.Editor`, `Editor/Bridge/Unity.Testing.VisualEffectGraph.Editor`
 (the bridge: VFX Graph internals are reached through that friend assembly name, which is in VFX Graph's
 `InternalsVisibleTo` list - `Documentation~/DESIGN.md` "VFX Graph internals"; known issue
 `vfx-graph-internal-api`), tests `Tests/Editor/Cuvara.VFX.Editor.Tests` (EditMode),
 `Tests/Runtime/Cuvara.VFX.Tests` (PlayMode); fixture `Tests/Fixtures/BurstQuads/`.
+
+Authoring an effect, recipe, `.vfx` graph, capture or Showcase scene: load `rpg-factory:vfx-graph`; this
+file only maps the package.
 
 Sandbox: `Sandbox~/` is the package's own Unity project (URP, VFX Graph, Unity-MCP). Open it
 only through `python Tools~/setup-sandbox.py --open` and pass the open path it prints, never `Sandbox~`

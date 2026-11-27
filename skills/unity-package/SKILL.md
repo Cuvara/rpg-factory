@@ -28,7 +28,7 @@ Task: $ARGUMENTS
 | `Netcode/` (netcode) | `netcode.protocol`, `netcode.codec`, `netcode.runtime`, `netcode.samples`, `netcode.tests`, `netcode.package` |
 | `UnityDots/` (unitydots) | `unitydots.runtime`, `unitydots.editor`, `unitydots.samples`, `unitydots.tests`, `unitydots.package` |
 | `UIToolkit/` (uitoolkit) | `uitoolkit.runtime`, `uitoolkit.editor`, `uitoolkit.codegen-cli`, `uitoolkit.samples`, `uitoolkit.tests`, `uitoolkit.package` |
-| `UnityVFX/` (unityvfx) | `unityvfx.runtime`, `unityvfx.editor`, `unityvfx.sandbox`, `unityvfx.tests`, `unityvfx.package`, fallback `unityvfx.root`; untagged and unpinned (no pin-bump yet) |
+| `UnityVFX/` (unityvfx) | `unityvfx.runtime`, `unityvfx.editor`, `unityvfx.effects`, `unityvfx.library`, `unityvfx.samples`, `unityvfx.sandbox`, `unityvfx.tests`, `unityvfx.package`, fallback `unityvfx.root`; untagged and unpinned (no pin-bump yet) |
 
 Hand-offs: `wire-contract` drives `netcode.protocol` (Wire.cs, `WireProtocolVersion`);
 `pin-bump` after a tag; `client-integration` for client call sites. None of the four repos
@@ -42,6 +42,8 @@ has a CLAUDE.md: read the package's `README.md` and the `Documentation~` pages n
    their local `develop` has no upstream. UnityVFX: `main`, no remote yet. Branch from the integration branch.
 2. **Read before edit:** the package map in `references/packages.md` (asmdefs, gates, docs,
    generated files) for the repo you touch.
+   A UnityVFX effect, recipe, `.vfx` graph, `Sandbox~` capture or `Samples~/Showcase` change also loads
+   `rpg-factory:vfx-graph` (recipe format, verbs, capture, review checklist).
 3. **Implement.** Every new Unity-visible file *and folder* gets a `.meta`. A new optional
    dependency means a new gated assembly (`defineConstraints` + `versionDefines`), never a
    reference from the core assembly (UnityDots `Documentation~/RELEASE.md` §2).
