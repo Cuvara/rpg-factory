@@ -20,3 +20,6 @@ tests/hook-perf.test.sh
 tests/new-skill.test.sh
 tests/install-status.test.sh
 tests/session-state.test.sh
+
+# VFX production helpers: run vfx_style.py, vfx_plan.py and the adapter as subprocesses over fixture files (path forms, newline handling and the capture mirror differ on Windows)
+tests/vfx-production.test.sh

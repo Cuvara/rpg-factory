@@ -16,7 +16,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `factory-context.sh` - live snapshot and routing (lead, legs, checks, gates); read-only. `tests/routing.test.sh`, `tests/domains.test.sh`
 - `factory-status.py` - pending cross-repo work derived from git (rollout, READY_TO_TAG, pin drift, STALE). `tests/factory-status.test.sh`
 - `run-checks.py` - runs and grades registry checks, writes evidence; `--status` regrades. `tests/run-checks.test.sh`
-- `factory-cmd.py` - entry point behind the slash commands (`status`, `route`, `check`, `doctor`, `ui*`, `assetgen`). `tests/commands.test.sh`, `tests/ui-commands.test.sh`
+- `factory-cmd.py` - entry point behind the slash commands (`status`, `route`, `check`, `doctor`, `ui*`, `assetgen`, `vfx-plan`, `vfx-lint`; commands `/rpg-factory:vfx-plan`, `/rpg-factory:vfx-lint`). `tests/commands.test.sh`, `tests/ui-commands.test.sh`, `tests/vfx-production.test.sh`
 - `assetgen/assetgen.py` - asset-gen engine: list, show, resolve, render, lint, review-cmd (prints the Codex command), qa, manifest; writes only into the given run directory. `tests/assetgen.test.sh`
 - `factory-workflow.py` - plan, status, dispatch and report registry-routed artifact workflows. `tests/workflow.test.sh`
 - `orca-wait.sh` - the run lead's single waiter for one Orca Run: loops `orca orchestration check --wait` for worker_done, escalation or question, acks heartbeats, prints the first real message (left unacked for the caller); one instance per Run through a lock under the state dir. `tests/orca-wait.test.sh`
@@ -73,7 +73,9 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   binding and required QA checks, shared with `checks/domains/assetgen.py`).
   `tests/assetgen.test.sh`
 - `adapters/` - optional domain tool adapters (`art2d/provider.py`, `art3d/blender-stats.py` run inside Blender,
-  `vfx/unity.py`). `tests/art2d-workflow.test.sh`, `tests/art3d-workflow.test.sh`, `tests/vfx-workflow.test.sh`
+  `vfx/unity.py`, `vfx/vfxgraph.py` VFX Graph text adapter). `tests/art2d-workflow.test.sh`, `tests/art3d-workflow.test.sh`, `tests/vfx-workflow.test.sh`
+- `vfx/` - VFX production helpers: `vfx_plan.py` (read-only VFX plan: PLAN, NOT_VFX, NEEDS_CONTEXT, five steps), `vfx_style.py` (`show` and `lint` of a vfx-style profile), `vfx_lint_rules.py` (the lint rules; each grades PASS, FAIL or NOT_AVAILABLE), data in `vfx/data/`.
+  Verbs `factory-cmd.py vfx-plan` and `vfx-lint` (commands `/rpg-factory:vfx-plan`, `/rpg-factory:vfx-lint`) call them; read-only, `--json`. `tests/vfx-production.test.sh`
 
 ## Commands
 
@@ -143,6 +145,13 @@ tests/ui-commands.test.sh                  # UI plan: schema, intents, skills pe
 env -u TMPDIR tests/ui-skill-routing.test.sh  # UI plan golden matrix, selection, path-scoped routing.tech
 env -u TMPDIR tests/ui-figma-env.test.sh   # figma_env.py on fixture Unity projects
 tests/ui-skills.test.sh                    # UI skills content, docs, snapshot Next line for UI paths
+
+# VFX plan and lint (read-only)
+python3 -B scripts/factory-cmd.py vfx-plan [--json] [--effect ID] [--project DIR] [--style FILE] <request>   # VFX plan (exit 3 = NEEDS_CONTEXT)
+python3 -B scripts/factory-cmd.py vfx-lint [--json] --style FILE --recipe FILE [--inspect F] [--stats F] [--spec F]  # offline VFX lint (exit 1 = a FAIL)
+python3 -B scripts/vfx/vfx_plan.py [--json] [--effect ID] [--root AUTHORING] [--project DIR] [<request>]   # the plan engine behind vfx-plan
+python3 -B scripts/vfx/vfx_style.py show --style FILE | lint --style FILE --recipe FILE                   # vfx-style profile show and lint rules
+tests/vfx-production.test.sh               # vfx-style schema, lint rules, plan, VFX Graph adapter (no network, no Unity)
 
 tests/dogfood.sh [--installed]      # real headless Claude sessions; spends tokens, not in run-all
 tests/dogfood-codex.sh [--dry-run]  # real `codex exec` sessions in a throwaway CODEX_HOME; spends tokens, not in run-all
