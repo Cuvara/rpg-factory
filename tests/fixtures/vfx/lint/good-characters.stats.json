@@ -1,0 +1,170 @@
+{
+ "schema": "cuvara.vfx-capture/1",
+ "effect": "Assets/VFX/FireBurst/FireBurst.vfx",
+ "recipe_sha256": "90e40473da6c49fe17e07e05c61757033988975b8ac3d845e78e75d26a57fb02",
+ "seed": 1234,
+ "delta_time": 0.016667,
+ "camera": "gameplay",
+ "lighting": "dusk",
+ "unity": "6000.6.0f1",
+ "vfx_graph": "17.6.0",
+ "duration_seconds": 0.95,
+ "alive": {
+  "peak": 120,
+  "samples": [
+   {
+    "t": 0.0,
+    "count": 0
+   },
+   {
+    "t": 0.125,
+    "count": 120
+   },
+   {
+    "t": 0.5,
+    "count": 96
+   },
+   {
+    "t": 0.875,
+    "count": 12
+   }
+  ]
+ },
+ "bounds": {
+  "center": [
+   0.0,
+   1.6,
+   0.0
+  ],
+  "size": [
+   3.2,
+   2.8,
+   3.2
+  ]
+ },
+ "systems": [
+  {
+   "name": "System (1)",
+   "capacity": 256,
+   "peak": 120
+  }
+ ],
+ "frames": [
+  {
+   "t": 0.0,
+   "file": "frame-0.00.png",
+   "sha256": "eb41d53b462be8cb4b767dea3b6b411ce9ad17ec788a2d7fd25cd061e6d10318",
+   "mean_luminance": 0.08,
+   "max_luminance": 0.93
+  },
+  {
+   "t": 0.125,
+   "file": "frame-0.12.png",
+   "sha256": "881f00e0d7f2fc1d454572ed07602e553426bc3716ba5ad3826fafcdc08df559",
+   "mean_luminance": 0.08,
+   "max_luminance": 0.93
+  },
+  {
+   "t": 0.5,
+   "file": "frame-0.50.png",
+   "sha256": "ed11700c2cdcf67cab90ce0cd3aee1d2649ca5d50d6f47c4db5837a1cbcbda74",
+   "mean_luminance": 0.08,
+   "max_luminance": 0.93
+  },
+  {
+   "t": 0.875,
+   "file": "frame-0.88.png",
+   "sha256": "cd2d47e660699c94cb98fb8389e88b8ed65de964be66829f464fad87d4cfdcb3",
+   "mean_luminance": 0.08,
+   "max_luminance": 0.93
+  }
+ ],
+ "contact_sheet": {
+  "file": "contact-sheet.png",
+  "sha256": "ca601c2706acfb24b852464fef376da215ad391c377b990524f830a958ea6f20",
+  "columns": 4
+ },
+ "resolution": [
+  512,
+  512
+ ],
+ "probe_interval": 0.05,
+ "settle_frames": 62,
+ "characters": {
+  "character": "placeholder",
+  "placed": "placeholder",
+  "source_socket": "hand_r",
+  "target_socket": "chest",
+  "target_count": 2,
+  "target_spacing": 2.5,
+  "caster": {
+   "position": [
+    0,
+    0,
+    0
+   ],
+   "socket": [
+    0.4,
+    1.3,
+    0
+   ],
+   "socket_found": true,
+   "in_frame": true
+  },
+  "targets": [
+   {
+    "position": [
+     0,
+     0,
+     6
+    ],
+    "socket": [
+     0,
+     1.4,
+     6
+    ],
+    "socket_found": true,
+    "in_frame": true
+   },
+   {
+    "position": [
+     2.5,
+     0,
+     6
+    ],
+    "socket": [
+     2.5,
+     1.4,
+     6
+    ],
+    "socket_found": false,
+    "in_frame": true
+   }
+  ]
+ },
+ "binders": [
+  {
+   "name": "FireBurst/ChainLightningBinder",
+   "added": true,
+   "hop_count": 2,
+   "graph_hop_count": 2,
+   "source": [
+    0.4,
+    1.3,
+    0
+   ],
+   "targets": [
+    [
+     0,
+     1.4,
+     6
+    ],
+    [
+     2.5,
+     1.4,
+     6
+    ]
+   ]
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.vfx-plan-rules/1",
- "note": "Rules of scripts/vfx/vfx_plan.py. vfx_signals are Python regexes matched case-insensitively against the request text with URLs removed; a request with none of them (and no --effect) is NOT_VFX. effect_id_patterns name the effect id inside the request text (group id, a kebab-case recipe id); --effect wins. Authoring paths come from the registry first (module ids under registry, the contract's source path for gen-runs) and fall back to the defaults here; the vfx-style module is not registered yet, so its default is the place the vfx-style schema names. Step states: DONE, IN_PROGRESS, TODO, NEEDS_APPROVAL, STALE, FAIL, BLOCKED (meanings in states). lead_domain resolves a step's lead skill through registry domains.<d>.lead; lead_skill is the fallback when the domain is not registered.",
+ "note": "Rules of scripts/vfx/vfx_plan.py. vfx_signals are Python regexes matched case-insensitively against the request text with URLs removed; a request with none of them (and no --effect) is NOT_VFX. effect_id_patterns name the effect id inside the request text (group id, a kebab-case recipe id); --effect wins. Authoring paths come from the registry first (module ids under registry, the contract's source path for gen-runs) and fall back to the defaults here. The vfx-style module (authoring.vfx-style) is registered; its default is the place the vfx-style schema names. Step states: DONE, IN_PROGRESS, TODO, NEEDS_APPROVAL, STALE, FAIL, BLOCKED (meanings in states). lead_domain resolves a step's lead skill through registry domains.<d>.lead; lead_skill is the fallback when the domain is not registered.",
  "vfx_signals": [
   "\\bvfx\\b",
   "\\bvfx ?graph\\b",
@@ -15,6 +15,8 @@
   "com\\.cuvara\\.vfx",
   "\\bvfx-(style|spec|asset|direction|lint|capture)\\b",
   "\\b(spell|hit|impact|explosion|fire|frost|ice|lightning|magic|aura|trail|muzzle|smoke|spark|heal|buff|debuff|portal|shield) (effect|fx)s?\\b",
+  "\\b(fire|flame|frost|ice|lightning|magic|arcane|smoke|spark|ember|poison|holy|shadow) (burst|blast|bolt|nova|ring|slash|swirl|puff|flash|wave|beam|orb|strike|storm|splash|trail|cloud|bloom)s?\\b",
+  "\\b(burst|blast|bolt|nova|swirl|puff|flash|cloud|storm)s? of (fire|flame|frost|ice|lightning|magic|smoke|sparks?|embers?)\\b",
   "\\beffects? (recipe|graph|capture|texture|budget|style)s?\\b",
   "\\bfx\\b",
   "\\b(make|create|build|author|design|add|capture|lint|plan|deliver|record)\\b.{0,40}\\b(effect|fx)s?\\b"
