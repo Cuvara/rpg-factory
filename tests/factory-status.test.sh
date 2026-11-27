@@ -155,6 +155,54 @@ expect "S13 evidence of a check no longer in the registry -> STALE" \
   'any(.evidence.server[]; .check == "server.gone/x" and .state == "STALE" and (.detail | test("no longer declared")))' "$s"
 rm -f "$EV/server.gone__x.json"
 
+# S15: an untagged, unpinned package repo (UnityVFX before the owner tags it), with and without
+# repos.unityvfx in the registry: listed explicitly, never READY_TO_TAG/READY, never a pin step, no crash.
+mkdir -p "$TMP/plug-with" "$TMP/plug-without"
+jq 'del(.repos.unityvfx)' "$ROOT/registry.json" > "$TMP/plug-without/registry.json"
+jq '.repos.unityvfx = {"path": "UnityVFX", "remote": "https://github.com/Cuvara/UnityVFX.git", "default_branch": "main", "protected_branches": ["main"]}' \
+  "$ROOT/registry.json" > "$TMP/plug-with/registry.json"
+vfx_run() { local out err rc; err="$TMP/vfx-err"; out=$(CLAUDE_PLUGIN_ROOT="$TMP/plug-$1" python3 -B "$ROOT/scripts/factory-status.py" "${@:2}" 2>"$err"); rc=$?
+  ! grep -q Traceback "$err" || rc="traceback"; printf '%s\n%s' "$rc" "$out"; }
+for v in with without; do
+  r=$(vfx_run "$v" --json); rc=$(head -1 <<<"$r"); s=$(tail -n +2 <<<"$r")
+  [ "$rc" = 0 ] && { pass=$((pass + 1)); echo "PASS  S15 no UnityVFX checkout ($v registry entry): exit 0, no traceback"; } || { fail=$((fail + 1)); echo "FAIL  S15 no UnityVFX ($v): exit $rc"; }
+  expect "S15 no UnityVFX checkout ($v registry entry): reported absent" 'any(.packages[]; .repo == "unityvfx" and .package == "com.cuvara.vfx" and .state == "absent")' "$s"
+done
+V="$WS/UnityVFX"; mkdir -p "$V"
+echo '{"name":"com.cuvara.vfx","version":"0.1.0"}' > "$V/package.json"; printf "# Changelog\n## [0.1.0] - 2026-11-01\n" > "$V/CHANGELOG.md"
+git -C "$V" init -q -b main; gc "$V" add -A; gc "$V" commit -qm init; echo "// x" > "$V/a.cs"; gc "$V" add -A; gc "$V" commit -qm second
+printf '{"dependencies":{"com.cuvara.netcode":"https://github.com/Cuvara/Netcode.git#v1.1.0"}}\n' > "$C/Packages/manifest.json"
+gc "$C" add Packages/manifest.json; gc "$C" commit -qm "fixture: manifest without com.cuvara.vfx"
+for v in with without; do
+  r=$(vfx_run "$v" --json); rc=$(head -1 <<<"$r"); s=$(tail -n +2 <<<"$r")
+  [ "$rc" = 0 ] && { pass=$((pass + 1)); echo "PASS  S15 untagged UnityVFX ($v registry entry): exit 0, no traceback"; } || { fail=$((fail + 1)); echo "FAIL  S15 untagged UnityVFX ($v): exit $rc"; }
+  expect "S15 untagged UnityVFX ($v registry entry): --json state untagged, no tag, not pinned, no pending" \
+    'any(.packages[]; .repo == "unityvfx" and .state == "untagged" and .latest_tag == null and .client_pin == null and .client_pin_state == "not pinned" and .package_json == "0.1.0") and ([.pending[] | select(.repo == "unityvfx" or (.what | test("vfx")))] | length == 0)' "$s"
+  r=$(vfx_run "$v"); rc=$(head -1 <<<"$r"); text=$(tail -n +2 <<<"$r")
+  if [ "$rc" = 0 ] && grep -qE '^- unityvfx: untagged \(latest none: no tag, .*client: not pinned\)$' <<<"$text"; then pass=$((pass + 1)); echo "PASS  S15 untagged UnityVFX ($v registry entry): text says no tag and not pinned"
+  else fail=$((fail + 1)); echo "FAIL  S15 text ($v, rc=$rc): $(grep -m1 'unityvfx' <<<"$text")"; fi
+done
+r=$(vfx_run with --strict); s_rc=$(head -1 <<<"$r"); r=$(CLAUDE_PLUGIN_ROOT="$TMP/plug-with" python3 -B "$ROOT/scripts/factory-status.py" --strict --json 2>/dev/null)
+want=$(jq -r 'if (.pending | length) > 0 then 1 else 0 end' <<<"$r")
+[ "$s_rc" = "$want" ] && { pass=$((pass + 1)); echo "PASS  S15 --strict exit follows the pending list as for the other packages ($s_rc)"; } || { fail=$((fail + 1)); echo "FAIL  S15 --strict exit $s_rc, want $want"; }
+out=$(python3 -B "$ROOT/scripts/checks/pin-plan.py" com.cuvara.vfx v0.1.0 2>&1); rc=$?
+if [ $rc -eq 1 ] && grep -q "BLOCKED: tag v0.1.0 not found: UnityVFX/ has no release tag" <<<"$out" && grep -q "BLOCKED: the client does not pin com.cuvara.vfx" <<<"$out" \
+   && ! grep -qE '^(manifest|lock|CHANGELOG) ' <<<"$out" && ! grep -q Traceback <<<"$out"; then pass=$((pass + 1)); echo "PASS  S15 pin-plan com.cuvara.vfx: no pin step, names the missing tag and the missing pin"
+else fail=$((fail + 1)); echo "FAIL  S15 pin-plan com.cuvara.vfx (rc=$rc): $out"; fi
+out=$(python3 -B "$ROOT/scripts/checks/pin-plan.py" com.cuvara.vfx v0.1.0 --json 2>&1); rc=$?
+expect "S15 pin-plan --json: not pinned, no manifest/lock step" '.pinned == false and (has("manifest") | not) and (has("lock") | not) and (.problems | length == 2)' "$out"
+out=$(python3 -B "$ROOT/scripts/checks/package-ready.py" "$V" 2>&1); rc=$?
+if [ $rc -eq 1 ] && grep -q "NOT READY: no release tag v\* exists yet: v0.1.0 would be the first release of com.cuvara.vfx" <<<"$out" \
+   && ! grep -q "^READY" <<<"$out" && ! grep -q Traceback <<<"$out"; then pass=$((pass + 1)); echo "PASS  S15 package-ready UnityVFX: NOT READY, reason names the missing tag (first release)"
+else fail=$((fail + 1)); echo "FAIL  S15 package-ready UnityVFX (rc=$rc): $out"; fi
+out=$(python3 -B "$ROOT/scripts/checks/package-ready.py" "$V" --first-release 2>&1); rc=$?
+if [ $rc -eq 1 ] && ! grep -q "first release of" <<<"$out" && grep -q "NOT READY: no git remote" <<<"$out" && ! grep -q "^READY" <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  S15 package-ready --first-release: the tag reason is waived, a repo without a remote is still NOT READY"
+else fail=$((fail + 1)); echo "FAIL  S15 package-ready --first-release (rc=$rc): $out"; fi
+rm "$V/CHANGELOG.md"; gc "$V" commit -qam "drop changelog"
+out=$(python3 -B "$ROOT/scripts/checks/package-ready.py" "$V" --json 2>&1); rc=$?
+expect "S15 package-ready without CHANGELOG.md: NOT READY with a reason, no crash (exit $rc)" '.ready == false and .first_release == true and any(.reasons[]; test("CHANGELOG.md is missing"))' "$out"
+
 # exit codes
 python3 -B "$ROOT/scripts/factory-status.py" >/dev/null; rc=$?
 [ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  default exit 0 (informational)"; } || { fail=$((fail + 1)); echo "FAIL  exit $rc"; }

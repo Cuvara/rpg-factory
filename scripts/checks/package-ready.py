@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Read-only release-readiness check for a com.cuvara.* package repo (Netcode, UnityDots, UIToolkit).
+"""Read-only release-readiness check for a com.cuvara.* package repo (Netcode, UnityDots, UIToolkit, UnityVFX).
 
-Usage: package-ready.py <package-repo-dir> [--json]
+Usage: package-ready.py <package-repo-dir> [--json] [--first-release]
 
 "Ready to tag vX.Y.Z" requires (from each repo's release.yml / release-reminder.yml / RELEASE.md):
   - package.json version X.Y.Z, and no existing tag vX.Y.Z (else it is already released)
@@ -9,7 +9,9 @@ Usage: package-ready.py <package-repo-dir> [--json]
     CI validate greps '[X.Y.Z]')
   - the repo's own .github/scripts/check_metas.py passes (every Unity-visible file has a .meta)
   - a clean working tree and the release branch checked out (Netcode: develop; UnityDots,
-    UIToolkit: main - per their release docs/workflows)
+    UIToolkit, UnityVFX: main - per their release docs/workflows), and a remote to push the tag to
+  - a previous release tag v*: a repo with none (first release, e.g. UnityVFX before the owner
+    tags it) is NOT READY unless --first-release says the owner decided to publish it now
 Never creates a tag: prints the command the lead would run.
 Exit 0 = ready; 1 = not ready (reasons printed); 2 = not a package repo, or git failed or timed out
 (readiness unknown - never reported as ready).
@@ -20,7 +22,8 @@ import re
 import subprocess
 import sys
 
-RELEASE_BRANCH = {"com.cuvara.netcode": "develop", "com.cuvara.dots": "main", "com.cuvara.uitoolkit": "main"}
+RELEASE_BRANCH = {"com.cuvara.netcode": "develop", "com.cuvara.dots": "main", "com.cuvara.uitoolkit": "main",
+                  "com.cuvara.vfx": "main"}
 
 
 GIT_TIMEOUT = 120  # a cold index over WSL /mnt/c can take well over 30 s for `git status`
@@ -68,8 +71,19 @@ def check():
     facts["tag_exists"] = rc == 0
     if rc == 0:
         reasons.append(f"tag {tag} already exists - package.json has not been bumped since the last release")
+    previous = [t for t in git(repo, "tag", "-l", "v[0-9]*", "--sort=-v:refname")[1].split() if t != tag]
+    facts["previous_tag"] = previous[0] if previous else None
+    if not previous and rc != 0:
+        facts["first_release"] = True
+        if "--first-release" not in sys.argv:
+            reasons.append(f"no release tag v* exists yet: {tag} would be the first release of {name} - publishing it is the "
+                           "owner's decision; rerun with --first-release once the owner has decided")
 
-    raw = open(os.path.join(repo, "CHANGELOG.md"), "rb").read().decode("utf-8", errors="replace")
+    try:
+        raw = open(os.path.join(repo, "CHANGELOG.md"), "rb").read().decode("utf-8", errors="replace")
+    except OSError:
+        raw = ""
+        reasons.append("CHANGELOG.md is missing (release notes are extracted from it)")
     m = re.search(r"^## \[" + re.escape(ver) + r"\](.*)$", raw, re.M)
     facts["changelog_section"] = bool(m)
     if not m:
@@ -90,6 +104,8 @@ def check():
     facts["dirty_paths"] = len(dirty.splitlines()) if dirty else 0
     if dirty:
         reasons.append(f"{facts['dirty_paths']} uncommitted path(s) - a tag must point at committed, pushed work")
+    if not git(repo, "remote")[1]:
+        reasons.append("no git remote - a tag must point at pushed work, and there is nowhere to push it")
     rc, ahead = git(repo, "rev-list", "--count", "@{u}..HEAD")
     if rc == 0 and ahead != "0":
         reasons.append(f"{ahead} commit(s) not pushed")
@@ -106,7 +122,7 @@ def check():
     if as_json:
         print(json.dumps(facts, indent=2))
     else:
-        for k in ("package", "version", "branch", "tag_exists", "changelog_section", "check_metas", "dirty_paths"):
+        for k in ("package", "version", "branch", "tag_exists", "previous_tag", "changelog_section", "check_metas", "dirty_paths"):
             print(f"{k:18} {facts.get(k)}")
         if facts.get("changelog_not_utf8"):
             print("note               CHANGELOG.md is not valid UTF-8 (read with replacement)")
