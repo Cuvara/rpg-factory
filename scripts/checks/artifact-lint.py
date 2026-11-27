@@ -22,7 +22,9 @@ def resolve_ref(schema, ref):
     return value
 
 
-# Draft 2020-12 keywords schema_errors() enforces (jsonschema.Draft202012Validator parity).
+# Draft 2020-12 keywords schema_errors() enforces, agreeing with jsonschema.Draft202012Validator on them.
+# One deliberate difference: format (date, date-time) is asserted here, while Draft202012Validator without a
+# format_checker treats format as an annotation only.
 SUPPORTED_KEYWORDS = frozenset(
     {
         "$ref", "type", "const", "enum",
@@ -61,6 +63,19 @@ def type_matches(value, name):
     return isinstance(value, TYPES[name])
 
 
+def json_equal(a, b):
+    """JSON equality as jsonschema defines it: bool only equals bool, 1 equals 1.0, containers compare deeply."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
+    return type(a) is type(b) and a == b
+
+
 def schema_errors(value, rule, schema, path="$", seen=None):
     seen = set() if seen is None else seen
     if rule is True:
@@ -96,9 +111,9 @@ def schema_errors(value, rule, schema, path="$", seen=None):
         names = expected if isinstance(expected, list) else [expected]
         if not any(type_matches(value, name) for name in names):
             return [f"{path} must be {expected if isinstance(expected, str) else ' or '.join(names)}"]
-    if "const" in rule and value != rule["const"]:
+    if "const" in rule and not json_equal(value, rule["const"]):
         errors.append(f"{path} must equal {rule['const']!r}")
-    if "enum" in rule and value not in rule["enum"]:
+    if "enum" in rule and not any(json_equal(value, option) for option in rule["enum"]):
         errors.append(f"{path} must be one of {rule['enum']!r}")
     if isinstance(value, str):
         if "pattern" in rule and not re.search(rule["pattern"], value):
@@ -134,7 +149,7 @@ def schema_errors(value, rule, schema, path="$", seen=None):
         if "maxItems" in rule and len(value) > rule["maxItems"]:
             errors.append(f"{path} has too many items")
         if rule.get("uniqueItems") and any(
-            value[i] == value[j] and type(value[i]) is type(value[j])
+            json_equal(value[i], value[j])
             for i in range(len(value))
             for j in range(i + 1, len(value))
         ):
