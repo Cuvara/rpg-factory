@@ -17,6 +17,8 @@ byte for byte (`-text`), so a checkout with `core.autocrlf true` does not change
 `good.vfxrecipe.json` changes the hash: update `recipe.sha256` in every `*.inspect.json` and `recipe_sha256` in
 every `*.stats.json` to match.
 
+`good-characters.stats.json` is `good.stats.json` plus the optional `characters` and `binders` fields of the capture schema (added 2026-11-27); it only feeds the schema cases of `tests/vfx-production.test.sh`.
+
 ## Good cases (exit 0, no FAIL, no WARN)
 
 | Case | Arguments after `lint --style <profile>` | Rows |

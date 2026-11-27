@@ -106,6 +106,20 @@ bad = [p for p in stats if errors(load(p), capture)]
 cases.append(("every fixture stats.json validates against the vfx-capture mirror", not bad))
 broken = load(stats[0]); broken["schema"] = "cuvara.vfx-capture/2"
 cases.append(("vfx-capture mirror rejects another schema id", errors(broken, capture) != []))
+chars = load(fx + "/lint/good-characters.stats.json")
+cases.append(("vfx-capture mirror accepts the optional characters and binders (good-characters.stats.json)",
+              errors(chars, capture) == [] and chars["characters"]["target_count"] == len(chars["characters"]["targets"])
+              and len(chars["binders"]) == 1))
+broken = json.loads(json.dumps(chars)); del broken["characters"]["caster"]
+cases.append(("vfx-capture mirror rejects characters without a caster", errors(broken, capture) != []))
+broken = json.loads(json.dumps(chars)); broken["characters"]["target_count"] = 9
+cases.append(("vfx-capture mirror rejects more than 8 targets", errors(broken, capture) != []))
+broken = json.loads(json.dumps(chars)); broken["binders"][0]["hop_count"] = 9
+cases.append(("vfx-capture mirror rejects a binder hop_count above 8", errors(broken, capture) != []))
+broken = json.loads(json.dumps(chars)); broken["binders"][0]["source"] = [0, 1]
+cases.append(("vfx-capture mirror rejects a binder source that is not a vector3", errors(broken, capture) != []))
+broken = json.loads(json.dumps(chars)); broken["binders"] = []
+cases.append(("vfx-capture mirror accepts no binders", errors(broken, capture) == []))
 for label, good in cases:
     print(("PASS " if good else "FAIL ") + label)
 if bad: print("  not valid:", bad, [errors(load(p), capture)[:3] for p in bad])
@@ -115,6 +129,44 @@ while IFS= read -r line; do
   case "$line" in "PASS "*) ok "${line#PASS }" ;; "FAIL "*) no "${line#FAIL }" ;; *) echo "      $line" ;; esac
 done < "$TMP/schema.txt"
 grep -qE '^(PASS|FAIL) ' "$TMP/schema.txt" || no "schema checks did not run: $(head -c 300 "$TMP/schema.txt")"
+
+# -- templates/vfx/vfx-asset.md: a fresh template does not FAIL vfx-asset-style-lint, a placeholder style record does
+# (the quality plugin runs git hash-object on the profile: this block runs without the sandbox blocker)
+env -u PYTHONPATH python3 -B - "$ROOT" > "$TMP/template.txt" 2>&1 <<'PY'
+import importlib.util, json, pathlib, re, sys
+root = pathlib.Path(sys.argv[1]); sys.path.insert(0, str(root / "scripts/checks"))
+from domains._api import Context
+ps = importlib.util.spec_from_file_location("vfx_quality_template", root / "scripts/checks/domains/vfx.py")
+plugin = importlib.util.module_from_spec(ps); ps.loader.exec_module(plugin)
+registry = json.loads((root / "registry.json").read_text(encoding="utf-8"))
+auth = root / "tests/fixtures/vfx/plan/done/authoring"
+front = re.compile(r"\A---json\s*\n(.*?)\n---", re.S)
+style_rel = "vfx/style/vfx-style.md"
+style = json.loads(front.match((auth / style_rel).read_text(encoding="utf-8")).group(1))
+template = json.loads(front.match((root / "templates/vfx/vfx-asset.md").read_text(encoding="utf-8")).group(1))
+def grade(asset, arts=None):
+    arts = arts if arts is not None else {style["id"]: (style_rel, style)}
+    ctx = Context(str(auth), registry, "", dict(arts), lambda _: None, {})
+    return {r.check: r.state for r in plugin.check(asset, ctx)}.get("vfx-asset-style-lint")
+fresh = grade(template)
+print(("PASS " if fresh != "FAIL" else "FAIL ") + "a fresh vfx-asset template does not FAIL vfx-asset-style-lint (state %s)" % fresh)
+print(("PASS " if "style" not in template["spec"] and "lint" not in template["spec"] else "FAIL ")
+      + "the vfx-asset template carries no placeholder spec.style or spec.lint")
+placeholder = json.loads(json.dumps(template))
+placeholder["spec"]["style"] = {"profile_id": style["id"], "blob_revision": "0" * 40}
+placeholder["spec"]["lint"] = {"state": "PASS", "report_hash": "0" * 64}
+state = grade(placeholder)
+print(("PASS " if state == "FAIL" else "FAIL ") + "a placeholder blob revision still FAILs vfx-asset-style-lint (state %s)" % state)
+named = {"VFX-spec-template": ("vfx/specs/t.md", {"id": "VFX-spec-template", "kind": "vfx-spec", "domain": "vfx",
+         "spec": {"style": style["id"]}})}
+named_asset = json.loads(json.dumps(template)); named_asset["sources"] = ["VFX-spec-template"]
+state = grade(named_asset, dict({style["id"]: (style_rel, style)}, **named))
+print(("PASS " if state == "WARN" else "FAIL ") + "a draft template whose spec names a profile is a WARN (state %s)" % state)
+PY
+while IFS= read -r line; do
+  case "$line" in "PASS "*) ok "${line#PASS }" ;; "FAIL "*) no "${line#FAIL }" ;; *) echo "      $line" ;; esac
+done < "$TMP/template.txt"
+grep -qE '^(PASS|FAIL) ' "$TMP/template.txt" || no "template checks did not run: $(head -c 400 "$TMP/template.txt")"
 
 # -- vfx_style.py show
 run() { rm -f "$TMP/o.json" "$TMP/err"; py "$@" > "$TMP/o.json" 2>"$TMP/err"; }
@@ -332,6 +384,11 @@ plan --effect fire-bolt --root "$P/style-only/authoring" --project "$P/style-onl
 plan --json "$(cat "$P/not-vfx/request.txt")"; rc=$?
 [ $rc -eq 0 ] && [ "$(q .status)" = NOT_VFX ] && [ "$(q '.steps | length')" = 0 ] && [ "$(q .lead)" = null ] \
   && ok "plan NOT_VFX: a Nakama request has no VFX signal (exit 0, no steps, no lead)" || no "plan NOT_VFX: rc=$rc status=$(q .status)"
+for req in "make a fire burst" "create a burst of lightning for the staff" "add a frost nova"; do
+  plan --json "$req" --root "$P/empty/authoring" --project "$P/empty/project"; rc=$?
+  [ $rc -eq 3 ] && [ "$(q .status)" = NEEDS_CONTEXT ] && [ "$(q .lead)" != null ] \
+    && ok "plan: '$req' is a VFX request (NEEDS_CONTEXT for the effect id, not NOT_VFX)" || no "plan '$req': rc=$rc status=$(q .status)"
+done
 plan --json "add a fire effect to the fireball spell" --root "$P/empty/authoring" --project "$P/empty/project"; rc=$?
 [ $rc -eq 3 ] && [ "$(q .status)" = NEEDS_CONTEXT ] && [ "$(q '[.missing[].item] | join(",")')" = effect-id ] \
   && q '.next[0]' | grep -q '^ask the user for exactly: effect-id' \

@@ -24,8 +24,8 @@ verb, the data layers and the run directory). `<A>` is the authoring repo root f
 ## Scope
 
 Repo `authoring`, module `authoring.assetgen` (`assetgen/`): game layer `{purposes,styles,templates}/`, run directories
-`runs/<run-id>/`, style lock (`project.json`, `styles/<style-id>/` anchors and rejections). Core data (`templates/assetgen/`)
-changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`.
+`runs/<run-id>/`, style lock (`project.json`, `styles/<style-id>/` anchors and rejections). Core data (`templates/assetgen/`) changes only through a plugin task.
+Drives the handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`. Effect textures use the vfx purposes `vfx-flipbook`, `vfx-noise-tileable`, `vfx-trail` and `vfx-sprite` (the vfx-style profile's `assetgen_style`), handed after approval to `rpg-factory:vfx` through `assetgen-to-vfx`.
 
 ## Workflow delta
 

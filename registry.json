@@ -6044,6 +6044,31 @@
       "domain": "vfx",
       "order": 89,
       "summary": "Production VFX direction, effect specification, and asset delivery workflows."
+    },
+    "vfx-graph": {
+      "kind": "tech",
+      "repos": [
+        "unityvfx",
+        "authoring"
+      ],
+      "domain": "vfx",
+      "order": 102,
+      "paths": [
+        "**/*.vfx",
+        "**/*.vfxrecipe.json",
+        "**/*.vfxoperator",
+        "**/*.vfxblock",
+        "Effects/",
+        "Editor/",
+        "Sandbox~/",
+        "Samples~/Showcase/",
+        "vfx/assets/"
+      ],
+      "used_by": [
+        "unity-package",
+        "vfx"
+      ],
+      "summary": "How an effect is authored with com.cuvara.vfx in UnityVFX: the recipe format and ops, catalog and describe before writing, build and apply, import-texture, the agent-owned Sandbox driven through Tools~/vfxcli.py and unity-mcp-cli, deterministic capture with its contact sheet and stats.json, and a VFX Graph review checklist."
     }
   },
   "human_gates": [
