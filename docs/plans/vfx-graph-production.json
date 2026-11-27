@@ -521,6 +521,35 @@
         "local Sandbox runs of every category still pass",
         "CI.md states which tests CI runs and which only the Sandbox runs"
       ]
+    },
+    {
+      "id": "lint-keywords",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "standard",
+      "grade_reason": "a few keywords in one small validator function, with tests that copy the existing pattern",
+      "objective": "CI on PR #161 (run 45990316095, job 'suite tests/vfx-production.test.sh (windows-2025)') failed 3 of 143 cases because the Windows runner has no jsonschema package and the fallback validator schema_errors() in scripts/checks/artifact-lint.py ignores keywords the new VFX schemas use: 'vfx-style schema rejects a palette colour that is not #RRGGBB' (a map whose values carry a pattern through additionalProperties as a schema), 'vfx-capture mirror rejects more than 8 targets' (maxItems) and 'vfx-capture mirror rejects a binder hop_count above 8' (maximum). Teach the fallback the draft 2020-12 keywords the repository's schemas use and it ignores today - at least minProperties, propertyNames, maxItems, maxLength, maximum, minimum, exclusiveMaximum, exclusiveMinimum and additionalProperties given as a schema; check docs/schemas/ for any other keyword it still ignores and either support it or list it in a comment - so the fallback and jsonschema agree on every committed schema. Tests: cases in the existing artifact-lint test suite for each new keyword (accept and reject), run without jsonschema (the suite's fallback path), and tests/vfx-production.test.sh must pass with jsonschema absent. One fragment changelog.d/lint-keywords.md (### Fixed).",
+      "paths": [
+        "scripts/checks/artifact-lint.py",
+        "tests/artifacts.test.sh",
+        "tests/artifact-quality.test.sh",
+        "tests/fixtures/artifacts/",
+        "changelog.d/lint-keywords.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "sync-main"
+      ],
+      "checks": [
+        "tests/artifacts.test.sh",
+        "tests/vfx-production.test.sh",
+        "tests/vfx-workflow.test.sh"
+      ],
+      "acceptance": [
+        "the three vfx-production cases pass with jsonschema not installed",
+        "each new keyword has an accept and a reject case on the fallback path",
+        "no committed schema uses a keyword the fallback silently ignores, or the comment lists it"
+      ]
     }
   ]
 }
