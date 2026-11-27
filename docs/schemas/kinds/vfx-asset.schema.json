@@ -57,6 +57,120 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "capture": {
+      "type": "object",
+      "description": "evidence of the capture the stats come from (cuvara.vfx-capture/1, docs/schemas/vfx-capture.schema.json); optional, a .vfx asset without it stays HUMAN_REQUIRED",
+      "required": [
+        "stats_hash",
+        "seed",
+        "alive_peak"
+      ],
+      "properties": {
+        "stats_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the capture's stats.json"
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "VisualEffect.startSeed the capture used"
+        },
+        "alive_peak": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "largest alive particle count of the capture (alive.peak)"
+        },
+        "contact_sheet_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the contact sheet image (capture contact_sheet.sha256) a person reviews"
+        }
+      },
+      "additionalProperties": false
+    },
+    "style": {
+      "type": "object",
+      "description": "the vfx-style profile the effect was linted against",
+      "required": [
+        "profile_id",
+        "blob_revision"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "id of the vfx-style artifact, for example VFX-style-001"
+        },
+        "blob_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "git blob id of the profile's file at the lint (the revision an approval record names)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "textures": {
+      "type": "array",
+      "description": "one entry per game texture the effect uses: the approved gen-run output it came from and the import-texture transform that made it",
+      "items": {
+        "type": "object",
+        "required": [
+          "gen_run_id",
+          "output_hash",
+          "transform",
+          "game_texture_hash"
+        ],
+        "properties": {
+          "gen_run_id": {
+            "type": "string",
+            "pattern": "^AGEN-\\S+$",
+            "description": "id of the approved asset-gen run, AGEN-<run id>"
+          },
+          "output_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the gen-run output image (import-texture source_sha256)"
+          },
+          "transform": {
+            "type": "string",
+            "minLength": 1,
+            "description": "name of the named import-texture transform applied, for example luminance_to_alpha"
+          },
+          "game_texture_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the game texture the transform wrote (import-texture output_sha256)"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "lint": {
+      "type": "object",
+      "description": "result of scripts/vfx/vfx_style.py lint (rpg-factory.vfx-lint/1) for the effect",
+      "required": [
+        "state",
+        "report_hash"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "PASS",
+            "WARN",
+            "FAIL"
+          ],
+          "description": "status of the lint result"
+        },
+        "report_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the lint result JSON"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

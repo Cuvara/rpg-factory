@@ -1,0 +1,91 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "VFX trail strip",
+ "description": "Landscape opaque pure-black strip with one horizontal streak that repeats seamlessly left to right, for trails, ribbons and beams.",
+ "handoff_domain": "vfx",
+ "default_template": "image-generate",
+ "default_family": "vfx",
+ "dimensions": [
+  "palette",
+  "lighting",
+  "shape",
+  "composition"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1536x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name the trail (for example sword slash, magic ribbon, energy beam, speed streak) and its colour.",
+   "The streak runs horizontally across the full width of the image and repeats seamlessly from the right edge to the left edge.",
+   "Keep the top and bottom edges pure black: the streak fades to black before it reaches them.",
+   "Ask for an opaque pure-black (#000000) background and a bright, saturated subject that works with additive blending.",
+   "No text, no scene, no characters, no perspective."
+  ],
+  "must_include": [
+   "trail name",
+   "horizontal streak across the full width",
+   "seamless left to right repeat",
+   "dark top and bottom edges",
+   "opaque pure black #000000 background",
+   "bright additive-blend-friendly subject"
+  ],
+  "avoid": [
+   "visible seam at the left or right edge",
+   "streak touching the top or bottom edge",
+   "grey or coloured background",
+   "text",
+   "scene or ground",
+   "characters",
+   "transparent background"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear trail effect and its colour.",
+  "The prompt states that the streak runs horizontally across the full width and repeats seamlessly left to right.",
+  "The prompt asks for an opaque pure-black (#000000) background, dark top and bottom edges and a bright subject that suits additive blending.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example a seamless repeat and a streak that ends inside the frame)."
+ ],
+ "image_rubric": [
+  "The image shows one horizontal streak across the full width, as the prompt asked, without extra subjects.",
+  "The left and right edges match: no visible seam when the strip is repeated left to right.",
+  "The top and bottom edges are pure black; the streak does not touch them.",
+  "The background is pure black everywhere outside the streak; no grey haze, vignette or gradient.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame."
+ ],
+ "constraints": {
+  "background": "Opaque pure black (#000000) background; the streak is bright and suits additive blending.",
+  "framing": "Landscape strip; the streak runs horizontally across the full width and is tileable on the x axis only.",
+  "processing": "Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool."
+ },
+ "qa": {
+  "size": {
+   "mode": "orientation",
+   "expect": "1536x1024",
+   "orientation": "landscape",
+   "allow_swap": false,
+   "min_side": 256,
+   "min_pixels": 262144
+  },
+  "alpha": "forbidden",
+  "tileable": {
+   "max_seam_error": 0.06,
+   "axis": "x"
+  },
+  "black_background": {
+   "max_luminance": 16,
+   "edges": [
+    "top",
+    "bottom"
+   ]
+  },
+  "not_blank": {
+   "min_stddev": 2.0
+  }
+ }
+}

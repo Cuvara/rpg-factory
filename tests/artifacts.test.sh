@@ -240,5 +240,89 @@ open(p, "w", encoding="utf-8", newline="\n").write("---json\n" + json.dumps(o) +
 PY3
 git -C "$K" add spec.md; git -C "$K" commit -qm two
 got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$K" --registry "$T/reg.json" | head -1); [[ "$got" == 'PASS FX-test-001' ]] && ok 'unchanged status across commits is not a transition' || bad "draft edited twice: $got"
+# fallback validator schema_errors() (no jsonschema): one accept and one reject case per draft 2020-12 keyword
+fb_out=$(python3 -B - "$ROOT" <<'PY4'
+import glob, importlib.util, json, os, sys
+root = sys.argv[1]
+spec = importlib.util.spec_from_file_location("artifact_lint", root + "/scripts/checks/artifact-lint.py")
+al = importlib.util.module_from_spec(spec); spec.loader.exec_module(al)
+HEX = {"type": "object", "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}
+CASES = [
+    ("additionalProperties schema", HEX, {"a": "#ff8800"}, {"a": "orange"}),
+    ("additionalProperties schema spares declared properties",
+     {"type": "object", "properties": {"id": {"type": "integer"}}, "additionalProperties": {"type": "string"}}, {"id": 1, "x": "s"}, {"id": 1, "x": 2}),
+    ("additionalProperties true", {"type": "object", "properties": {"id": {"type": "integer"}}, "additionalProperties": True}, {"id": 1, "x": 2}, {"id": "no", "x": 2}),
+    ("additionalProperties false", {"type": "object", "properties": {"id": {"type": "integer"}}, "additionalProperties": False}, {"id": 1}, {"id": 1, "x": 2}),
+    ("minProperties", {"type": "object", "minProperties": 2}, {"a": 1, "b": 2}, {"a": 1}),
+    ("maxProperties", {"type": "object", "maxProperties": 2}, {"a": 1, "b": 2}, {"a": 1, "b": 2, "c": 3}),
+    ("propertyNames", {"type": "object", "propertyNames": {"pattern": "^[a-z]+$"}}, {"abc": 1}, {"ABC": 1}),
+    ("minItems", {"type": "array", "minItems": 2}, [1, 2], [1]),
+    ("maxItems", {"type": "array", "maxItems": 2}, [1, 2], [1, 2, 3]),
+    ("uniqueItems", {"type": "array", "uniqueItems": True}, [1, 2], [1, 1]),
+    ("uniqueItems compares objects by value", {"type": "array", "uniqueItems": True}, [{"a": 1}, {"a": 2}], [{"a": 1}, {"a": 1}]),
+    ("uniqueItems keeps true and 1 distinct", {"type": "array", "uniqueItems": True}, [1, True], [1, 1.0]),
+    ("minLength", {"type": "string", "minLength": 2}, "ab", "a"),
+    ("maxLength", {"type": "string", "maxLength": 3}, "abc", "abcd"),
+    ("minimum is inclusive", {"type": "number", "minimum": 0}, 0, -1),
+    ("maximum is inclusive", {"type": "integer", "maximum": 8}, 8, 9),
+    ("exclusiveMinimum", {"type": "number", "exclusiveMinimum": 0}, 1, 0),
+    ("exclusiveMaximum", {"type": "number", "exclusiveMaximum": 10}, 9, 10),
+    ("minimum ignores non-numbers", {"minimum": 5}, "text", -1),
+    ("allOf", {"allOf": [{"type": "integer"}, {"minimum": 1}, {"maximum": 5}]}, 3, 7),
+    ("not", {"not": {"type": "string"}}, 1, "x"),
+    ("if then", {"if": {"properties": {"k": {"const": "a"}}, "required": ["k"]}, "then": {"required": ["x"]}}, {"k": "a", "x": 1}, {"k": "a"}),
+    ("if else", {"if": {"properties": {"k": {"const": "a"}}, "required": ["k"]}, "then": {"required": ["x"]}, "else": {"required": ["y"]}}, {"k": "b", "y": 1}, {"k": "b"}),
+    ("type as a list", {"type": ["string", "null"]}, None, 1),
+    ("type as a list accepts each member", {"type": ["string", "null"]}, "x", 1),
+    ("format date", {"type": "string", "format": "date"}, "2026-11-27", "27/11/2026"),
+    ("format date rejects an impossible day", {"type": "string", "format": "date"}, "2026-02-28", "2026-02-30"),
+    ("uniqueItems keeps nested true and 1 distinct", {"type": "array", "uniqueItems": True}, [{"a": 1}, {"a": True}], [[1], [1.0]]),
+    ("const compares JSON numbers, not bool", {"const": 1}, 1.0, True),
+    ("enum compares JSON numbers, not bool", {"enum": [0, "x"]}, 0.0, False),
+]
+for name, schema, good, bad in CASES:
+    for label, value, want in (("accepts", good, True), ("rejects", bad, False)):
+        try:
+            errs = al.schema_errors(value, schema, schema)
+        except Exception as exc:
+            print("FAIL fallback %s: %s raised %s: %s" % (name, label, type(exc).__name__, exc)); continue
+        if bool(errs) == (not want):
+            print("PASS fallback %s %s" % (name, label))
+        else:
+            print("FAIL fallback %s %s: value %r errors %r" % (name, label, value, errs))
+# guard: every keyword a committed schema uses must be supported or a known annotation
+MAPS = {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
+OPAQUE = {"const", "enum", "default", "examples"}
+def walk(node, file, found):
+    if isinstance(node, list):
+        for item in node: walk(item, file, found)
+        return
+    if not isinstance(node, dict): return
+    for key, value in node.items():
+        found.setdefault(key, set()).add(file)
+        if key in OPAQUE: continue
+        if key in MAPS and isinstance(value, dict):
+            for sub in value.values(): walk(sub, file, found)
+        elif isinstance(value, (dict, list)) and key not in MAPS:
+            walk(value, file, found)
+found = {}
+files = sorted(glob.glob(root + "/docs/**/*.schema.json", recursive=True))
+for f in files:
+    walk(json.load(open(f, encoding="utf-8")), os.path.relpath(f, root).replace(os.sep, "/"), found)
+known = set(getattr(al, "SUPPORTED_KEYWORDS", frozenset())) | set(getattr(al, "ANNOTATION_KEYWORDS", frozenset()))
+unknown = {k: sorted(v) for k, v in found.items() if k not in known}
+if files and known and not unknown:
+    print("PASS fallback supports every keyword used by %d committed schemas" % len(files))
+else:
+    print("FAIL fallback keyword coverage: %d schemas, %d known keywords, unknown %s" % (len(files), len(known), json.dumps(unknown, sort_keys=True)))
+PY4
+)
+while IFS= read -r fb_line; do
+  case "$fb_line" in
+    PASS*) pass=$((pass+1)); echo "$fb_line" ;;
+    *) fail=$((fail+1)); echo "FAIL ${fb_line#FAIL }" ;;
+  esac
+done <<< "$fb_out"
+[ -n "$fb_out" ] || bad 'fallback schema_errors cases produced no output'
 echo "artifacts: $((pass+fail+skip)) run, $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

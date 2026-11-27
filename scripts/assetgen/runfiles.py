@@ -44,8 +44,9 @@ comfy_jobs_dir() -> the configured or platform-default comfy-cli jobs directory.
 output_origins(run_dir, workflow, jobs_dir=None) -> output PNG origins from names, fetch.json or job-state evidence.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
-  exactly these; the plugin requires a PASS row for each): png-edge-fringe comes last, only for qa.alpha required.
-  Malformed input never raises.
+  exactly these; the plugin requires a PASS row for each), in the order png-valid, png-size, png-alpha, [png-corners],
+  [png-tileable], [png-flipbook-grid] (qa.flipbook_grid), [png-black-background] (qa.black_background),
+  [png-not-blank], [png-edge-fringe] (last, only for qa.alpha required). Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
 requested_size(workflow, spec) -> the size the run asked for: the size input of the template's primary_node
@@ -79,6 +80,8 @@ SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
 SIZE_MODES = {"exact", "min", "aspect", "orientation", "area", "any"}
 ORIENTATIONS = {"landscape", "portrait", "square", "auto"}
 ALPHA_MODES = {"required", "forbidden", "any"}
+TILE_AXES = {"both", "x", "y"}
+BORDER_EDGES = ("top", "bottom", "left", "right")
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
@@ -89,6 +92,10 @@ def required_checks(purpose_qa):
         checks.append("png-corners")
     if qa.get("tileable"):
         checks.append("png-tileable")
+    if qa.get("flipbook_grid") is not None:
+        checks.append("png-flipbook-grid")
+    if qa.get("black_background") is not None:
+        checks.append("png-black-background")
     if qa.get("not_blank") is not None:
         checks.append("png-not-blank")
     if qa.get("alpha") == "required":
@@ -98,6 +105,48 @@ def required_checks(purpose_qa):
 
 def _number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _integer(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _flipbook_errors(grid):
+    if grid is None:
+        return []
+    if not isinstance(grid, dict):
+        return ["qa.flipbook_grid must be an object"]
+    errs = []
+    for key in ("columns", "rows"):
+        if not (_integer(grid.get(key)) and grid[key] >= 1):
+            errs.append("qa.flipbook_grid.%s must be an integer >= 1" % key)
+    if not errs and grid["columns"] * grid["rows"] < 2:
+        errs.append("qa.flipbook_grid columns x rows must be at least 2")
+    if "max_gutter_luminance" in grid and not (_number(grid["max_gutter_luminance"])
+                                               and 0 <= grid["max_gutter_luminance"] <= 255):
+        errs.append("qa.flipbook_grid.max_gutter_luminance must be a number between 0 and 255")
+    if "min_cell_stddev" in grid and not (_number(grid["min_cell_stddev"]) and grid["min_cell_stddev"] >= 0):
+        errs.append("qa.flipbook_grid.min_cell_stddev must be a number >= 0")
+    return errs
+
+
+def _black_background_errors(bg):
+    if bg is None:
+        return []
+    if not isinstance(bg, dict):
+        return ["qa.black_background must be an object"]
+    errs = []
+    if "max_luminance" in bg and not (_number(bg["max_luminance"]) and 0 <= bg["max_luminance"] <= 255):
+        errs.append("qa.black_background.max_luminance must be a number between 0 and 255")
+    if "border" in bg and not (_number(bg["border"]) and 0 < bg["border"] < 0.5):
+        errs.append("qa.black_background.border must be a number above 0 and below 0.5 (share of the short side)")
+    if "edges" in bg:
+        edges = bg["edges"]
+        if not (isinstance(edges, list) and edges and all(isinstance(e, str) and e in BORDER_EDGES for e in edges)
+                and len(set(edges)) == len(edges)):
+            errs.append("qa.black_background.edges must be a non-empty list of distinct values from %s"
+                        % list(BORDER_EDGES))
+    return errs
 
 
 def qa_errors(qa):
@@ -135,6 +184,9 @@ def qa_errors(qa):
     if tile is not None and not (isinstance(tile, dict) and _number(tile.get("max_seam_error"))
                                  and 0 < tile["max_seam_error"] < 1):
         errs.append("qa.tileable.max_seam_error must be a number between 0 and 1")
+    if isinstance(tile, dict) and not (isinstance(tile.get("axis", "both"), str) and tile.get("axis", "both") in TILE_AXES):
+        errs.append("qa.tileable.axis must be one of %s" % sorted(TILE_AXES))
+    errs += _flipbook_errors(qa.get("flipbook_grid")) + _black_background_errors(qa.get("black_background"))
     blank = qa.get("not_blank")
     if blank is not None:
         if not isinstance(blank, dict):

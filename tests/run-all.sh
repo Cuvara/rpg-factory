@@ -1474,6 +1474,7 @@ run "UI/UX production workflow" tests/ui-workflow.test.sh
 run "2D Art production workflow" tests/art2d-workflow.test.sh
 run "3D Art production workflow" tests/art3d-workflow.test.sh
 run "VFX production workflow" tests/vfx-workflow.test.sh
+run "VFX production helpers: vfx-style profile, lint, plan, VFX Graph adapter (no network, no Unity)" env -u TMPDIR tests/vfx-production.test.sh
 run "asset-gen engine, core templates, image QA, gen-run quality plugin (temp authoring repo, no network)" env -u TMPDIR tests/assetgen.test.sh
 run "Comfy Desktop setup script and the vendored 9router node (fake Desktop dir, ComfyUI and CLIs, no network)" env -u TMPDIR tests/comfy-desktop-setup.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh

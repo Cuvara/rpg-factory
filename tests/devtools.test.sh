@@ -69,7 +69,7 @@ grep -qE "$SECRET1|$SECRET2" <<<"$out" && no "probe output leaks a planted secre
 
 # -- scenarios over the REAL registry in a controlled environment (fake PATH, config, Editor port)
 SC="$TMP/scen"; mkdir -p "$SC/bin" "$SC/cfg" "$SC/ws"
-for b in gopls csharp-ls dotnet dotnet-counters go protoc protoc-gen-go docker codex; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
+for b in gopls csharp-ls dotnet dotnet-counters go protoc protoc-gen-go docker codex unity-mcp-cli; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
 # a fake Codex CLI (`codex features list` table; multi_agent from $FAKE_MULTI_AGENT): an sh script for Linux and a
 # .cmd for Windows, where shutil.which resolves codex.CMD through PATHEXT
 mkfake_codex() { # bin-dir

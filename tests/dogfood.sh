@@ -149,6 +149,8 @@ PROMPT[tech-dots]="Analyze only: in the UnityDots package, should a new projecti
 EXPECT[tech-dots]="unity-package unity-dots"; HANDOFF[tech-dots]=""; SHOWS[tech-dots]="SystemOrderVerifier|ParallelScheduling"
 PROMPT[tech-netcode]="Analyze only: in the Netcode package, why can a client running at 20 fps see snapshots up to 50 ms late before interpolation even starts, and which headless tests cover the KCP session?"
 EXPECT[tech-netcode]="unity-package netcode-client"; HANDOFF[tech-netcode]=""; SHOWS[tech-netcode]="KcpTransport|PlayerLoop|frame"
+PROMPT[tech-vfx]="Analyze only: in the UnityVFX package, how do I build the Effects/FireBurst effect from its recipe, capture it with a fixed seed and have it checked, and which step of the review stays with a person?"
+EXPECT[tech-vfx]="unity-package vfx-graph"; HANDOFF[tech-vfx]=""; SHOWS[tech-vfx]="vfxcli|setup-sandbox|HUMAN_REQUIRED|contact sheet"
 # a tech skill requested before factory-core on purpose: the Skill hook loads factory-core instead (never
 # blocks), and the session must still route to the lead, load go-backend and finish
 PROMPT[tech-first]="Your very first action: invoke the Skill tool with skill rpg-factory:go-backend. Then, analyze only: in the rpg-mmo-server Go gateway, how do I run one gateway test with the race detector?"
@@ -244,7 +246,7 @@ if $write_mode; then
   scenarios=()
 fi
 
-[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui asset-gen comfy-setup asset-style)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-vfx tech-first ui-settings ui-figma ui-not-ui asset-gen comfy-setup asset-style)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")

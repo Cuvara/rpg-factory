@@ -80,9 +80,10 @@
       "repos": [
         "netcode",
         "unitydots",
-        "uitoolkit"
+        "uitoolkit",
+        "unityvfx"
       ],
-      "summary": "Development inside Netcode, UnityDots, UIToolkit up to ready-to-tag.",
+      "summary": "Development inside Netcode, UnityDots, UIToolkit, UnityVFX up to ready-to-tag.",
       "order": 50
     },
     "client-integration": {
@@ -128,7 +129,8 @@
         "client",
         "netcode",
         "unitydots",
-        "uitoolkit"
+        "uitoolkit",
+        "unityvfx"
       ],
       "order": 92,
       "used_by": [

@@ -1,0 +1,182 @@
+{
+ "schema": "rpg-factory.vfx-lint/1",
+ "effect": "fire-bolt",
+ "style": {
+  "path": "authoring/vfx/style/vfx-style.md",
+  "artifact": {
+   "id": "VFX-style-001",
+   "kind": "vfx-style",
+   "status": "approved",
+   "title": "Project VFX style profile",
+   "binding_values": true
+  }
+ },
+ "inputs": {
+  "recipe": {
+   "path": "project/Effects/FireBolt/FireBolt.vfxrecipe.json",
+   "sha256": "f994b2cbbecfd0304f56ae71073345a01f9be0ef922ae42d9df013d46a43c033"
+  },
+  "inspect": null,
+  "stats": "project/Captures/FireBolt/seed-1234-gameplay-dusk/stats.json",
+  "spec": "authoring/vfx/specs/fire-bolt.md"
+ },
+ "element": "fire",
+ "tier": "primary",
+ "status": "WARN",
+ "counts": {
+  "PASS": 13,
+  "FAIL": 0,
+  "WARN": 2,
+  "NOT_AVAILABLE": 4
+ },
+ "rows": [
+  {
+   "id": "recipe-schema",
+   "state": "PASS",
+   "evidence": [
+    "schema cuvara.vfx-recipe/1",
+    "id fire-bolt"
+   ]
+  },
+  {
+   "id": "vfx-graph-version",
+   "state": "PASS",
+   "evidence": [
+    "recipe vfx_graph 17.6 matches profile 17.6",
+    "capture vfx_graph 17.6.0 matches"
+   ]
+  },
+  {
+   "id": "timing-sum",
+   "state": "PASS",
+   "evidence": [
+    "phase seconds sum to 1, meta.duration_seconds 1 (tolerance 0.05 s)"
+   ]
+  },
+  {
+   "id": "timing-ratios",
+   "state": "PASS",
+   "evidence": [
+    "anticipation 0.1 of 1 s = 0.1, band 0..0.25",
+    "impact 0.3 of 1 s = 0.3, band 0.1..0.4",
+    "dissipation 0.6 of 1 s = 0.6, band 0.35..0.8"
+   ]
+  },
+  {
+   "id": "hdr-intensity",
+   "state": "PASS",
+   "evidence": [
+    "tier primary band 1..4, from recipe colour values (no inspect)",
+    "p_tint: intensity 1"
+   ]
+  },
+  {
+   "id": "palette",
+   "state": "PASS",
+   "evidence": [
+    "element fire, hue tolerance 15 deg",
+    "p_tint: hue 27.0426 deg, 0.0004 deg from body"
+   ]
+  },
+  {
+   "id": "texture-size",
+   "state": "NOT_AVAILABLE",
+   "evidence": [
+    "needs --inspect (inspect textures)"
+   ]
+  },
+  {
+   "id": "texture-flipbook-grid",
+   "state": "PASS",
+   "evidence": [
+    "the recipe sets no flipBookSize"
+   ]
+  },
+  {
+   "id": "texture-color-space",
+   "state": "NOT_AVAILABLE",
+   "evidence": [
+    "needs --inspect (inspect textures srgb)"
+   ]
+  },
+  {
+   "id": "output-type",
+   "state": "WARN",
+   "evidence": [
+    "from recipe output contexts (no inspect)",
+    "the effect has no output context"
+   ]
+  },
+  {
+   "id": "blend-mode",
+   "state": "WARN",
+   "evidence": [
+    "from recipe output contexts (no inspect)",
+    "the effect has no output context"
+   ]
+  },
+  {
+   "id": "shader",
+   "state": "NOT_AVAILABLE",
+   "evidence": [
+    "needs --inspect (inspect outputs shader and shader_graph)"
+   ]
+  },
+  {
+   "id": "budget-capacity",
+   "state": "PASS",
+   "evidence": [
+    "capacity 512 from capture systems",
+    "android: 512 <= 2000"
+   ]
+  },
+  {
+   "id": "budget-systems",
+   "state": "PASS",
+   "evidence": [
+    "particle systems 1 from capture systems",
+    "android: 1 <= 4"
+   ]
+  },
+  {
+   "id": "budget-texture-memory",
+   "state": "NOT_AVAILABLE",
+   "evidence": [
+    "needs --inspect (inspect totals.texture_bytes)"
+   ]
+  },
+  {
+   "id": "budget-alive",
+   "state": "PASS",
+   "evidence": [
+    "alive peak 300 from capture alive.peak",
+    "android: 300 <= 2000"
+   ]
+  },
+  {
+   "id": "capture-conditions",
+   "state": "PASS",
+   "evidence": [
+    "camera gameplay",
+    "lighting dusk",
+    "seed 1234"
+   ]
+  },
+  {
+   "id": "recipe-hash",
+   "state": "PASS",
+   "evidence": [
+    "recipe file sha256 f994b2cbbecfd0304f56ae71073345a01f9be0ef922ae42d9df013d46a43c033",
+    "capture recipe_sha256 f994b2cbbecfd0304f56ae71073345a01f9be0ef922ae42d9df013d46a43c033"
+   ]
+  },
+  {
+   "id": "spec-match",
+   "state": "PASS",
+   "evidence": [
+    "duration: recipe 1, spec 1",
+    "phases: recipe anticipation 0.1, impact 0.3, dissipation 0.6, spec anticipation 0.1, impact 0.3, dissipation 0.6"
+   ]
+  }
+ ]
+}

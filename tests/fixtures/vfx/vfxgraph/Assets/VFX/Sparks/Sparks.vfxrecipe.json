@@ -1,0 +1,17 @@
+{
+  "schema": "cuvara.vfx-recipe/1",
+  "id": "sparks",
+  "vfx_graph": "17.6",
+  "meta": {
+    "duration_seconds": 1.0,
+    "looping": false,
+    "tags": ["fixture"],
+    "phases": [
+      {"name": "burst", "seconds": 0.1},
+      {"name": "fade", "seconds": 0.9}
+    ]
+  },
+  "ops": [
+    {"op": "comment", "title": "Sparks", "text": "Fixture of the rpg-factory VFX Graph adapter: a spark burst and a strip trail."}
+  ]
+}

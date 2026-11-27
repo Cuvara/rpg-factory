@@ -15,7 +15,7 @@ registry=json.loads((root/'registry.json').read_text())
 for path in sorted((root/'templates/vfx').glob('*.md')):
  data=json.loads(re.search(r'^---json\s*\n(.*?)\n---',path.read_text(),re.S).group(1)); assert data['status']=='draft'; assert data['schema_version']==2
  (temp/'authoring/vfx/specs'/(path.stem+'.artifact.json')).write_text(json.dumps(data))
-assert len(list((root/'templates/vfx').glob('*.md')))==3
+assert len(list((root/'templates/vfx').glob('*.md')))==4
 design={'id':'DS-event-001','kind':'feature-spec','domain':'design','spec':{'gameplay_events':['combat.hit']}}
 valid={'id':'VFX-burst-001','kind':'vfx-spec','domain':'vfx','status':'approved','spec':{'purpose':'proposal','triggers':['DS-event-001'],'duration_seconds':1,'phases':[{'name':'active','duration_seconds':1}],'curves':[{'property':'size','keyframes':[{'time':0,'value':0},{'time':1,'value':1}]}],'particle_systems':[{'id':'main','max_particles':8,'lifetime_seconds':1,'spawn_per_second':8}],'materials':[],'platforms':{'desktop':{'budget':{'max_particles':10,'max_overdraw':1,'max_draw_calls':1,'max_ms':1},'constraints':[]}},'platform_constraints':[],'dependencies':[{'id':'UI-cue-001','kind':'ui','status':'tbd'}]}}
 ctx=Context(str(temp/'authoring'),registry,'',{'DS-event-001':('design/features/event.json',design),'VFX-burst-001':('vfx/specs/spec.json',valid)},lambda _:None)
@@ -79,6 +79,120 @@ assert states(asset)['vfx-asset-budget']=='FAIL'
 verified=json.loads(json.dumps(valid)); verified['status']='verified'; assert states(verified)['vfx-verification-evidence']=='FAIL'
 asset['status']='verified'; asset['spec']['checks']=['prefab-inspection']; assert states(verified)['vfx-verification-evidence']=='PASS'
 print('VFX domain failure cases: %d passed, 0 failed' % len(cases))
+PY
+# Style profile and production evidence checks, on a work copy of the vfx-production "done" fixture
+# (authoring repo + effect project with its capture and the vfx_style.py lint result next to it).
+cp -r "$ROOT/tests/fixtures/vfx/plan/done" "$T/st"
+python3 -B - "$ROOT" "$T/st" <<'PY'
+import hashlib,importlib.util,json,pathlib,re,sys
+root=pathlib.Path(sys.argv[1]); st=pathlib.Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts/checks'))
+from domains._api import Context
+ps=importlib.util.spec_from_file_location('vfx_quality_style',root/'scripts/checks/domains/vfx.py'); plugin=importlib.util.module_from_spec(ps); ps.loader.exec_module(plugin)
+registry=json.loads((root/'registry.json').read_text(encoding='utf-8'))
+auth=st/'authoring'; project=st/'project'; cap=project/'Captures/FireBolt/seed-1234-gameplay-dusk'
+FRONT=re.compile(r'\A---json\s*\n(.*?)\n---',re.S)
+def load(p): return json.loads(FRONT.match(p.read_text(encoding='utf-8')).group(1))
+def dump(p,obj): p.parent.mkdir(parents=True,exist_ok=True); p.write_text('---json\n'+json.dumps(obj,indent=1)+'\n---\n',encoding='utf-8',newline='\n')
+def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+def blob(p): d=p.read_bytes(); return hashlib.sha1(b'blob %d\x00'%len(d)+d).hexdigest()
+def clone(x): return json.loads(json.dumps(x))
+base={}
+for p in sorted(auth.rglob('*.md')):
+    if p.read_text(encoding='utf-8').startswith('---json'): o=load(p); base[o['id']]=(p.relative_to(auth).as_posix(),o)
+style_rel,style=base['VFX-style-001']; spec_rel,fspec=base['VFX-spec-001']; asset_rel,fasset=base['VFX-asset-001']
+VERIFIED={'state':'verified','reasons':['test double']}
+def ctx_for(extra=(),drop=(),approval=VERIFIED,roots=True):
+    arts={k:v for k,v in base.items() if k not in drop}
+    for rel,obj in extra: arts[obj['id']]=(rel,obj)
+    c=Context(str(auth),registry,'',arts,lambda _:None,{'authoring':auth,'unityvfx':project} if roots else {})
+    c.approval=lambda _aid:approval
+    return c
+def state(a,check,c=None):
+    rows={r.check:r for r in plugin.check(a,c or ctx_for())}
+    return rows[check].state if check in rows else None
+def reasons(a,check,c=None): return [x for r in plugin.check(a,c or ctx_for()) if r.check==check for x in r.reasons]
+n=0
+def expect(label,got,want):
+    global n
+    assert got==want,(label,got,want); n+=1
+# vfx-style: the kind is graded (no vfx-kind FAIL) and the profile resolves with vfx_style.py.
+expect('style profile',{r.check:r.state for r in plugin.check(style,ctx_for())},{'vfx-style-profile':'PASS'})
+bad=clone(style); bad['binding_values']=False; expect('style not binding',state(bad,'vfx-style-profile'),'FAIL')
+bad=clone(style); bad['id']='VFX-style-002'; del bad['spec']['palette']; dump(auth/'vfx/style/broken.md',bad)
+expect('style malformed',state(bad,'vfx-style-profile',ctx_for([('vfx/style/broken.md',bad)],drop=['VFX-style-001'])),'FAIL')
+assert any('palette' in x for x in reasons(bad,'vfx-style-profile',ctx_for([('vfx/style/broken.md',bad)],drop=['VFX-style-001'])))
+second=clone(style); second['id']='VFX-style-003'; dump(auth/'vfx/style/second.md',second)
+expect('two live profiles',state(style,'vfx-style-profile',ctx_for([('vfx/style/second.md',second)])),'FAIL')
+second['status']='superseded'; expect('superseded profile',state(style,'vfx-style-profile',ctx_for([('vfx/style/second.md',second)])),'PASS')
+(auth/'vfx/style/broken.md').unlink(); (auth/'vfx/style/second.md').unlink()
+# vfx-spec-style: a spec naming the profile keeps its budgets and phase shares inside the profile's bands.
+sspec=clone(fspec); sspec['id']='VFX-spec-style'
+sspec['spec'].update(style='VFX-style-001',triggers=[],curves=[],materials=[],dependencies=[],platform_constraints=[],
+    particle_systems=[{'id':'bolt','max_particles':300,'lifetime_seconds':1,'spawn_per_second':300}],
+    platforms={'android':{'budget':{'max_particles':500,'max_overdraw':1,'max_draw_calls':2,'max_ms':0.5},'constraints':[]}})
+expect('spec style',state(sspec,'vfx-spec-style'),'PASS')
+expect('spec without style',state(fspec,'vfx-spec-style'),None)
+bad=clone(sspec); bad['spec']['platforms']['android']['budget']['max_particles']=5000; expect('spec budget over profile',state(bad,'vfx-spec-style'),'FAIL')
+bad=clone(sspec); bad['spec']['particle_systems']=[{'id':'s%d'%i,'max_particles':1,'lifetime_seconds':1,'spawn_per_second':1} for i in range(5)]; expect('spec systems over profile',state(bad,'vfx-spec-style'),'FAIL')
+bad=clone(sspec); bad['spec']['phases']=[{'name':'anticipation','duration_seconds':0.5},{'name':'impact','duration_seconds':0.2},{'name':'dissipation','duration_seconds':0.3}]; expect('spec phase share',state(bad,'vfx-spec-style'),'FAIL')
+bad=clone(sspec); bad['spec']['style']='VFX-style-missing'; expect('spec unknown profile',state(bad,'vfx-spec-style'),'FAIL')
+bad=clone(sspec); bad['spec']['platforms']['desktop']=clone(bad['spec']['platforms']['android']); expect('spec platform the profile does not budget',state(bad,'vfx-spec-style'),'WARN')
+# vfx-asset evidence: capture, style lint and textures, bound to the fixture's files.
+stats=json.loads((cap/'stats.json').read_text(encoding='utf-8'))
+good=clone(fasset); good['spec'].update(
+    capture={'stats_hash':sha(cap/'stats.json'),'seed':stats['seed'],'alive_peak':stats['alive']['peak'],'contact_sheet_hash':stats['contact_sheet']['sha256']},
+    style={'profile_id':'VFX-style-001','blob_revision':blob(auth/style_rel)},
+    lint={'state':'WARN','report_hash':sha(cap/'vfx-lint.json')},
+    textures=[{'gen_run_id':'AGEN-fire-bolt-glow-001','output_hash':'1'*64,'transform':'luminance_to_alpha','game_texture_hash':'3'*64}])
+rows={r.check:r.state for r in plugin.check(good,ctx_for())}
+expect('evidence graded',{k:rows[k] for k in ('vfx-asset-capture','vfx-asset-style-lint','vfx-asset-textures','vfx-graph-visual-verification')},
+       {'vfx-asset-capture':'PASS','vfx-asset-style-lint':'WARN','vfx-asset-textures':'PASS','vfx-graph-visual-verification':'HUMAN_REQUIRED'})
+assert any('recorded lint state is WARN' in x for x in reasons(good,'vfx-asset-style-lint')),reasons(good,'vfx-asset-style-lint')
+# capture
+bad=clone(good); del bad['spec']['capture']; expect('.vfx without capture',state(bad,'vfx-asset-capture'),'HUMAN_REQUIRED')
+bad=clone(good); bad['spec']['capture']['alive_peak']=299; expect('capture differs from stats.json',state(bad,'vfx-asset-capture'),'FAIL')
+bad=clone(good); bad['spec']['capture']['contact_sheet_hash']='4'*64; expect('capture contact sheet differs',state(bad,'vfx-asset-capture'),'FAIL')
+bad=clone(good); bad['spec']['capture']['stats_hash']='XYZ'; expect('capture malformed',state(bad,'vfx-asset-capture'),'FAIL')
+bad=clone(good); bad['spec']['capture']['seed']=-1; expect('capture seed malformed',state(bad,'vfx-asset-capture'),'FAIL')
+expect('capture without project roots',state(good,'vfx-asset-capture',ctx_for(roots=False)),'PASS')
+prefab=clone(fasset); prefab['spec']['asset_path']='Assets/VFX/a.prefab'
+expect('prefab without capture',state(prefab,'vfx-asset-capture'),None)
+expect('prefab visual review',state(prefab,'vfx-visual-review'),'HUMAN_REQUIRED')
+assert any('vfx-visual-review' in x for x in reasons(prefab,'vfx-visual-review'))
+# style lint
+bad=clone(good); bad['spec']['style']['blob_revision']='0'*40; expect('lint of another profile revision',state(bad,'vfx-asset-style-lint'),'FAIL')
+bad=clone(good); bad['spec']['lint']['state']='PASS'; expect('lint state differs from report',state(bad,'vfx-asset-style-lint'),'FAIL')
+bad=clone(good); bad['spec']['lint']['state']='FAIL'; expect('lint state FAIL',state(bad,'vfx-asset-style-lint'),'FAIL')
+bad=clone(good); bad['spec']['style']['profile_id']='VFX-style-missing'; expect('lint unknown profile',state(bad,'vfx-asset-style-lint'),'FAIL')
+bad=clone(good); del bad['spec']['capture']; expect('lint without capture',state(bad,'vfx-asset-style-lint'),'FAIL')
+bad=clone(good); bad['spec']['lint']['report_hash']='5'*64; expect('lint report not found',state(bad,'vfx-asset-style-lint'),'NOT_AVAILABLE')
+expect('lint without project roots',state(good,'vfx-asset-style-lint',ctx_for(roots=False)),'NOT_AVAILABLE')
+named=clone(fspec); named['spec']['style']='VFX-style-other'
+expect('spec names another profile',state(good,'vfx-asset-style-lint',ctx_for([(spec_rel,named)])),'FAIL')
+named['spec']['style']='VFX-style-001'; bare=clone(fasset)
+expect('spec names a profile, no lint past draft',state(bare,'vfx-asset-style-lint',ctx_for([(spec_rel,named)])),'FAIL')
+bare['status']='draft'; expect('spec names a profile, no lint at draft',state(bare,'vfx-asset-style-lint',ctx_for([(spec_rel,named)])),'WARN')
+# A capture edited after the lint (stats_hash recorded anew): vfx_style.py lint now computes other rows.
+original=(cap/'stats.json').read_bytes(); edited=json.loads(original); edited['alive']['peak']=5000
+(cap/'stats.json').write_text(json.dumps(edited,indent=2),encoding='utf-8',newline='\n')
+bad=clone(good); bad['spec']['capture'].update(stats_hash=sha(cap/'stats.json'),alive_peak=5000)
+expect('lint stale against the capture',state(bad,'vfx-asset-style-lint'),'FAIL')
+assert any('budget-alive' in x for x in reasons(bad,'vfx-asset-style-lint')),reasons(bad,'vfx-asset-style-lint')
+expect('old stats hash no longer found',state(good,'vfx-asset-style-lint'),'NOT_AVAILABLE')
+(cap/'stats.json').write_bytes(original)
+# textures
+expect('textures without verified approval past draft',state(good,'vfx-asset-textures',ctx_for(approval={'state':'missing','reasons':['no record']})),'FAIL')
+draft=clone(good); draft['status']='draft'
+expect('textures without verified approval at draft',state(draft,'vfx-asset-textures',ctx_for(approval={'state':'missing','reasons':['no record']})),'WARN')
+bad=clone(good); bad['spec']['textures'][0]['gen_run_id']='AGEN-missing'; expect('textures unknown gen-run',state(bad,'vfx-asset-textures'),'FAIL')
+bad['status']='draft'; expect('textures unknown gen-run at draft',state(bad,'vfx-asset-textures'),'WARN')
+run_rel,run=base['AGEN-fire-bolt-glow-001']; unapproved=clone(run); unapproved['status']='proposed'
+expect('textures gen-run not approved',state(good,'vfx-asset-textures',ctx_for([(run_rel,unapproved)])),'FAIL')
+bad=clone(good); bad['spec']['textures'][0]['output_hash']='6'*64; expect('textures output not of the gen-run',state(bad,'vfx-asset-textures'),'FAIL')
+bad['status']='draft'; expect('textures output not of the gen-run at draft',state(bad,'vfx-asset-textures'),'FAIL')
+other=clone(run); other['spec']['style']['id']='pixel-art'
+expect('textures gen-run in another asset-gen style',state(good,'vfx-asset-textures',ctx_for([(run_rel,other)])),'FAIL')
+print('VFX style and evidence checks: %d passed, 0 failed' % n)
 PY
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T/authoring" --registry "$ROOT/registry.json"
 # The shared lifecycle rejects a direct draft -> released shortcut.

@@ -32,6 +32,15 @@
                                           --authoring defaults to the workspace authoring repo when
                                           it has assetgen/ (also where a review-cmd --run <run-id> resolves);
                                           resolve prints a summary, --verbose adds the field sources
+  vfx-plan [--json] [--effect ID] [--root DIR] [--project DIR] [--style FILE] [--spec ID|FILE] [--asset ID|FILE]
+           [--gen-run ID]... [--captures DIR] [--lint FILE] <request...>
+                                          scripts/vfx/vfx_plan.py: the five production steps of one VFX effect
+                                          (style, textures, recipe, capture, record), what is missing, next
+                                          steps (exit 3 = NEEDS_CONTEXT)
+  vfx-lint [--json] --style FILE --recipe FILE [--inspect FILE] [--stats FILE] [--spec FILE]
+                                          scripts/vfx/vfx_style.py lint, read-only: a recipe against the vfx-style
+                                          profile; a relative --style/--spec resolves under the authoring repo;
+                                          --out/--output/--write refused; exit 1 = a FAIL, 3 = input missing
   help [--json]                           every command with its arguments, an example, the Claude form
                                           (/rpg-factory:<verb>) and the Codex form (python3 -B ...)
 
@@ -333,6 +342,129 @@ def cmd_assetgen(raw):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "assetgen", "assetgen.py"), *args])
 
 
+VFX_VERBS = ("vfx-plan", "vfx-lint")
+VFX_PLAN_VALUE_OPTS = ("--effect", "--root", "--project", "--style", "--spec", "--asset", "--gen-run", "--captures", "--lint")
+VFX_LINT_VALUE_OPTS = ("--style", "--recipe", "--inspect", "--stats", "--spec")
+VFX_WRITING_OPTS = ("--out", "--output", "--write")
+
+
+def vfx_tokens(raw):
+    """One quoted string (a slash command passes $ARGUMENTS as one) is split on blanks, quotes honoured, backslashes
+    kept (Windows paths); several arguments are taken as given."""
+    if len(raw) != 1:
+        return list(raw)
+    lex = shlex.shlex(raw[0], posix=True)
+    lex.whitespace_split, lex.escape, lex.commenters = True, "", ""
+    try:
+        return list(lex)
+    except ValueError as e:
+        raise ValueError(f"cannot read the arguments: {e}")
+
+
+def vfx_option(tok, value_opts, verb):
+    """Split `--name=value` into (name, value or None); a name that is not one of value_opts or --json is an error."""
+    name, eq, value = tok.partition("=")
+    if name != "--json" and name not in value_opts:
+        raise ValueError(f"{verb} does not accept {name}; options: --json {' '.join(value_opts)}")
+    if name == "--json" and eq:
+        raise ValueError(f"{verb} --json takes no value")
+    return name, (value if eq else None)
+
+
+def cmd_vfx_plan(raw):
+    """vfx_plan.py: the request text stays intact (one quoted string, outer quotes stripped); options pass through."""
+    tokens = vfx_tokens(raw)
+    opts, words, effect, i = [], [], False, 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.startswith("--"):
+            name, value = vfx_option(t, VFX_PLAN_VALUE_OPTS, "vfx-plan")
+            if name == "--json":
+                opts.append(name)
+            else:
+                if value is None:
+                    if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
+                        raise ValueError(f"vfx-plan {name} needs a value")
+                    value, i = tokens[i + 1], i + 1
+                effect = effect or name == "--effect"
+                opts += [name, value]
+        elif t:
+            words.append(t)
+        i += 1
+    text = " ".join(words).strip()
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    if not text and not effect:
+        raise ValueError("vfx-plan needs a request or --effect ID, e.g. vfx-plan Create a VFX for the fire burst")
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "vfx", "vfx_plan.py"), *opts, *([text] if text else [])])
+
+
+def vfx_lint_summary(result):
+    """Short human summary of one rpg-factory.vfx-lint/1 object: status, counts and the FAIL and WARN rows."""
+    c = result.get("counts", {})
+    print(f"vfx-lint: {result.get('status')} - " + ", ".join(f"{c.get(s, 0)} {s}" for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")))
+    print(f"effect {result.get('effect')}; element {result.get('element') or '-'}; tier {result.get('tier') or '-'}")
+    inputs = result.get("inputs", {})
+    print(f"style {result.get('style', {}).get('path')}; recipe {inputs.get('recipe', {}).get('path')} "
+          f"(sha256 {inputs.get('recipe', {}).get('sha256')})")
+    for state in ("FAIL", "WARN"):
+        for row in result.get("rows", []):
+            if row.get("state") == state:
+                print(f"{state} {row.get('id')}")
+                for line in row.get("evidence", []):
+                    print(f"  - {line}")
+
+
+def cmd_vfx_lint(raw):
+    """Read-only vfx_style.py lint. A relative --style or --spec that is not found from the current directory resolves
+    under the workspace authoring repo. Every option that writes (--out/--output/--write and prefixes) is refused."""
+    tokens = vfx_tokens(raw)
+    for t in tokens:
+        name = t.split("=", 1)[0]
+        if len(name) >= 3 and name.startswith("--") and any(w.startswith(name) for w in VFX_WRITING_OPTS):
+            raise ValueError(f"vfx-lint {name} writes a file: the vfx verbs are read-only (vfx-lint prints the result; "
+                             "redirect the output in the shell when a file is needed)")
+    opts, as_json, i = {}, False, 0
+    while i < len(tokens):
+        name, value = vfx_option(tokens[i], VFX_LINT_VALUE_OPTS, "vfx-lint")
+        if name == "--json":
+            as_json = True
+        else:
+            if value is None:
+                if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
+                    raise ValueError(f"vfx-lint {name} needs a value")
+                value, i = tokens[i + 1], i + 1
+            if name in opts:
+                raise ValueError(f"vfx-lint {name} given twice")
+            opts[name] = value
+        i += 1
+    absent = [n for n in ("--style", "--recipe") if n not in opts]
+    if absent:
+        raise ValueError("vfx-lint needs " + " and ".join(absent) + ", e.g. vfx-lint --style Profile.md --recipe Fire.vfxrecipe.json")
+    reg = registry()
+    game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
+    for name in ("--style", "--spec"):
+        v = opts.get(name)
+        if v and not os.path.exists(v) and not os.path.isabs(v) and os.path.exists(os.path.join(game, v)):
+            opts[name] = os.path.join(game, v)
+    argv = [sys.executable, "-B", os.path.join(ROOT, "scripts", "vfx", "vfx_style.py"), "lint"]
+    for name, value in opts.items():
+        argv += [name, value]
+    if as_json:
+        return run(argv)
+    sys.stdout.flush()
+    p = subprocess.run(argv, env={**os.environ, "CLAUDE_PLUGIN_ROOT": ROOT}, stdout=subprocess.PIPE, text=True,
+                       encoding="utf-8", errors="replace")  # stderr (exit 3 reasons) goes straight through
+    if p.returncode in (0, 1):
+        try:
+            vfx_lint_summary(json.loads(p.stdout))
+            return p.returncode
+        except ValueError:
+            pass
+    sys.stdout.write(p.stdout)
+    return p.returncode
+
+
 def cmd_domain(args):
     as_json = "--json" in args
     ids = [a for a in args if a != "--json"]
@@ -476,6 +608,13 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
     {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd|drift|style report [args]", "read_only": True,
      "example": "assetgen list --kind purpose",
      "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed), style drift, style report (read-only; style init|bump|derive stay with the skill)"},
+    {"verb": "vfx-plan", "args": "[--json] [--effect <id>] [--root <authoring>] [--project <dir>] [--style <file>] [--spec <id|file>] "
+                                 "[--asset <id|file>] [--gen-run <id>]... [--captures <dir>] [--lint <file>] <request>",
+     "read_only": True, "example": "vfx-plan --json --effect fire-burst --project C:/Game/Packages/vfx",
+     "summary": "VFX production plan: state of the five steps (style, textures, recipe, capture, record) of one effect and what is missing"},
+    {"verb": "vfx-lint", "args": "[--json] --style <profile> --recipe <file> [--inspect <file>] [--stats <file>] [--spec <file>]",
+     "read_only": True, "example": "vfx-lint --style vfx/styles/house.md --recipe FireBurst.vfxrecipe.json --json",
+     "summary": "lint one VFX recipe against the project's vfx-style profile (read-only; refuses --out); a relative --style or --spec resolves under the authoring repo"},
     {"verb": "help", "args": "[--json]", "read_only": True, "example": "help --json",
      "summary": "this list; no slash command - agents and Codex discover the commands here"},
 ]
@@ -519,6 +658,11 @@ def main(argv):
     if argv[0] in UI_VERBS:
         try:
             return cmd_ui(argv[0], argv[1:])
+        except ValueError as e:
+            return usage(str(e))
+    if argv[0] in VFX_VERBS:
+        try:
+            return (cmd_vfx_plan if argv[0] == "vfx-plan" else cmd_vfx_lint)(argv[1:])
         except ValueError as e:
             return usage(str(e))
     verb, args = argv[0], split_args(argv[1:])

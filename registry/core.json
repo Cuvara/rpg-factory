@@ -128,10 +128,25 @@
         "netcode-client",
         "ui-toolkit-screen",
         "ui-validation",
-        "ui-figma-import"
+        "ui-figma-import",
+        "vfx-graph"
       ],
       "required": false,
       "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
+    },
+    {
+      "id": "unity-mcp-cli",
+      "kind": "binary",
+      "probes": [
+        "bin:unity-mcp-cli"
+      ],
+      "provides": "The global Unity-MCP CLI (0.93.2, UnityVFX Documentation~/DESIGN.md section Versions) that opens, waits for, queries and drives a Unity editor through Unity-MCP: open, wait-for-ready, status, run-tool <tool> --input-file args.json, close. UnityVFX Tools~/setup-sandbox.py and Tools~/vfxcli.py use it for the agent-owned Sandbox, always on the open path setup-sandbox.py prints (never Sandbox~).",
+      "used_by": [
+        "unity-package",
+        "vfx-graph"
+      ],
+      "required": false,
+      "fallback": "the sandbox-capture and unity-tests checks stay NOT_RUN with the exact command they would run (python3 Tools~/setup-sandbox.py --open, then python3 Tools~/vfxcli.py capture ...); CI ci.yml validate is the licence-free gate"
     },
     {
       "id": "lsp-go",
@@ -419,13 +434,15 @@
           "client",
           "netcode",
           "unitydots",
-          "uitoolkit"
+          "uitoolkit",
+          "unityvfx"
         ],
-        "rule": "One Unity EditMode/PlayMode test run at a time across every Unity project and package test project; other tasks queue for it while non-Unity work continues."
+        "rule": "One Unity EditMode/PlayMode test run at a time across every Unity project and package test project (including the UnityVFX Sandbox~ editor); other tasks queue for it while non-Unity work continues."
       }
     ],
     "no_worktree_markers": [
-      "ProjectSettings/ProjectVersion.txt"
+      "ProjectSettings/ProjectVersion.txt",
+      "Sandbox~/ProjectSettings/ProjectVersion.txt"
     ],
     "agent_routing": {
       "lead": "claude",
@@ -710,6 +727,11 @@
           "path": "Packages/com.cuvara.uitoolkit",
           "of": "uitoolkit",
           "note": "gitignored clone; often dirty with the user's work in progress"
+        },
+        {
+          "path": "Packages/com.cuvara.vfx",
+          "of": "unityvfx",
+          "note": "clone Unity resolves instead of a manifest pin when present; the client has no com.cuvara.vfx pin and its .gitignore does not list this path yet (known issue unityvfx-untagged); user state"
         }
       ]
     },
@@ -779,6 +801,31 @@
       "notes": [
         "No CLAUDE.md in this repo.",
         "CHANGELOG.md is not valid UTF-8 (tools must read with replacement)."
+      ]
+    },
+    "unityvfx": {
+      "path": "UnityVFX",
+      "remote": "https://github.com/Cuvara/UnityVFX.git",
+      "default_branch": "main",
+      "protected_branches": [
+        "main"
+      ],
+      "branch_pattern": "<type>/<topic>, PR into main",
+      "commit_style": "Conventional Commits: feat(editor): ..., fix(runtime): ..., docs: ..., chore: release vX.Y.Z - ...",
+      "merge": "PR into main; bump package.json + dated CHANGELOG heading in the release commit; tag vX.Y.Z (lead)",
+      "instructions": [
+        "README.md",
+        "Documentation~/DESIGN.md",
+        "Documentation~/AUTHORING.md",
+        "Documentation~/CAPTURE.md",
+        "Documentation~/CI.md"
+      ],
+      "notes": [
+        "No CLAUDE.md in this repo.",
+        "No remote yet: Cuvara/UnityVFX is created only after the owner accepts the play-test. Untagged and unpublished until the owner tags; no client pin (known issue unityvfx-untagged).",
+        "Built formats are authoritative where they differ from DESIGN.md: Documentation~/AUTHORING.md section 'Differences from DESIGN.md', Documentation~/CAPTURE.md and Schemas~/.",
+        "Sandbox~/ is an agent-owned Unity (fact unityvfx-editor-version) project: never open it at Sandbox~; only through Tools~/setup-sandbox.py --open on the open path it prints (Documentation~/AUTHORING.md, Sandbox). One editor at a time (exclusive resource unity-test).",
+        "Sandbox~/ProjectSettings/ProjectVersion.txt is a pipeline no_worktree_marker: tasks run in the main checkout, one after another."
       ]
     },
     "authoring": {
@@ -937,6 +984,16 @@
       "id": "gameserver-claude-stale",
       "scope": "server",
       "summary": "backend/gameserver-dotnet/CLAUDE.md still describes the wire as '4-byte BE length + JSON' (protobuf is current, ADR-9) and says there are no external dependencies (the csproj references Arch, Npgsql, StackExchange.Redis, OpenTelemetry, Google.Protobuf, BouncyCastle). Fix pending: server branch docs/claude/stale-wire-and-rates (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
+    },
+    {
+      "id": "vfx-graph-internal-api",
+      "scope": "unityvfx",
+      "summary": "The bridge assembly Unity.Testing.VisualEffectGraph.Editor (Editor/Bridge/) reaches VFX Graph internal types (VFXGraph, VFXContext, VFXBlock, VFXSlot, ...) because its name is in the InternalsVisibleTo list of com.unity.visualeffectgraph (Editor/PackageInfo.cs). An upstream version change (fact unityvfx-vfx-graph-version) breaks compilation; the editor code checks for VFX Graph 17.6.x. UnityVFX Documentation~/DESIGN.md section 'VFX Graph internals'."
+    },
+    {
+      "id": "unityvfx-untagged",
+      "scope": "unityvfx",
+      "summary": "UnityVFX has no tag, no remote and no client pin: the package-pins contract and pin-bump do not cover com.cuvara.vfx until the owner creates the repository and tags a release. factory-status.py reports it as untagged and unpinned."
     }
   ],
   "skills": {},
@@ -1006,7 +1063,7 @@
     {
       "id": "unity-batch",
       "read_only_exempt": true,
-      "rule": "Unity batch-mode runs open the user's project and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them.",
+      "rule": "Unity batch-mode runs open one of the user's Unity projects and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them. Exempt: the agent-owned UnityVFX Sandbox~ project (module unityvfx.sandbox), which agents open, run and test without asking.",
       "match": "-executeMethod\\s+(PlayerBuilder|PlayClientBuilder|SampleBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\.|(^|\\s)-runTests\\b"
     },
     {
@@ -1017,7 +1074,7 @@
     },
     {
       "id": "unity-asset-edit",
-      "rule": "Scene/prefab/asset edits through Unity MCP tools need an explicit yes (the Editor state is the user's)."
+      "rule": "Scene/prefab/asset edits through Unity MCP tools in one of the user's Unity projects need an explicit yes (the Editor state is the user's). Exempt: the agent-owned UnityVFX Sandbox~ project (module unityvfx.sandbox), where agents edit scenes, prefabs and assets without asking."
     },
     {
       "id": "sgl-release",
@@ -1032,6 +1089,10 @@
     {
       "id": "art3d-visual-review",
       "rule": "3D visual acceptance, rights and final production review are human decisions."
+    },
+    {
+      "id": "vfx-visual-review",
+      "rule": "A person judges the look, readability, overdraw and frame time of an effect in Play mode before it is accepted; agents never record this review, and those four criteria stay HUMAN_REQUIRED in every check."
     },
     {
       "id": "assetgen-approval",
@@ -1200,6 +1261,27 @@
       "repo": "uitoolkit",
       "probe": "git show origin/main:Editor/Figma/Cuvara.UIToolkit.Editor.Figma.asmdef | sed -n 's/.*\"expression\": \"\\(.*\\)\".*/\\1/p'",
       "why": "com.unity.ui.figma version that opens the gated Cuvara.UIToolkit.Editor.Figma assembly; also the tested connector version (FIGMA-INTEGRATION.md Requirements)"
+    },
+    {
+      "id": "unityvfx-editor-version",
+      "value": "6000.6.9f1",
+      "repo": "unityvfx",
+      "probe": "sed -n 's/^m_EditorVersion: //p' Sandbox~/ProjectSettings/ProjectVersion.txt",
+      "why": "Unity version of the UnityVFX Sandbox~ project, its CI image (ci.yml UNITY_VERSION) and the package's tested editor"
+    },
+    {
+      "id": "unityvfx-vfx-graph-version",
+      "value": "17.6.0",
+      "repo": "unityvfx",
+      "probe": "jq -r '.dependencies[\"com.unity.visualeffectgraph\"]' package.json",
+      "why": "the bridge compiles against VFX Graph internals of exactly this line (known issue vfx-graph-internal-api)"
+    },
+    {
+      "id": "unityvfx-sandbox-unity-mcp-version",
+      "value": "1.7.0",
+      "repo": "unityvfx",
+      "probe": "jq -r '.dependencies[\"com.ivanmurzak.unity.mcp\"]' Sandbox~/Packages/manifest.json",
+      "why": "Unity-MCP plugin the Sandbox editor runs; unity-mcp-cli drives it (dev tool unity-mcp-cli)"
     }
   ],
   "domains": {
@@ -1212,7 +1294,8 @@
         "client",
         "netcode",
         "unitydots",
-        "uitoolkit"
+        "uitoolkit",
+        "unityvfx"
       ],
       "artifact_kinds": [],
       "quality_gates": [],

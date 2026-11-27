@@ -1,0 +1,36 @@
+{
+  "schema": "cuvara.vfx-capture/1",
+  "effect": "Assets/VFX/Sparks/Sparks.vfx",
+  "recipe_sha256": "962592d2d45f1bb1af1948825e4001d25e3d849dae41f7e23c71a0d243298db7",
+  "seed": 1234,
+  "delta_time": 0.016667,
+  "camera": "gameplay",
+  "lighting": "dusk",
+  "unity": "6000.0.40f1",
+  "vfx_graph": "17.0.4",
+  "duration_seconds": 1.05,
+  "alive": {
+    "peak": 150,
+    "samples": [
+      {"t": 0.0, "count": 0},
+      {"t": 0.1, "count": 150},
+      {"t": 0.5, "count": 96},
+      {"t": 1.0, "count": 4}
+    ]
+  },
+  "bounds": {"center": [0.0, 1.0, 0.0], "size": [4.0, 4.0, 4.0]},
+  "systems": [
+    {"name": "Sparks", "capacity": 64, "peak": 60},
+    {"name": "System", "capacity": 128, "peak": 90}
+  ],
+  "frames": [
+    {"t": 0.0, "file": "frame-0.00.png", "sha256": "0000000000000000000000000000000000000000000000000000000000000001", "mean_luminance": 0.029, "max_luminance": 0.04},
+    {"t": 0.1, "file": "frame-0.10.png", "sha256": "0000000000000000000000000000000000000000000000000000000000000002", "mean_luminance": 0.061, "max_luminance": 2.4},
+    {"t": 0.5, "file": "frame-0.50.png", "sha256": "0000000000000000000000000000000000000000000000000000000000000003", "mean_luminance": 0.044, "max_luminance": 1.1},
+    {"t": 1.0, "file": "frame-1.00.png", "sha256": "0000000000000000000000000000000000000000000000000000000000000004", "mean_luminance": 0.03, "max_luminance": 0.2}
+  ],
+  "contact_sheet": {"file": "contact-sheet.png", "sha256": "0000000000000000000000000000000000000000000000000000000000000005", "columns": 4},
+  "resolution": [640, 360],
+  "probe_interval": 0.05,
+  "settle_frames": 70
+}

@@ -4638,13 +4638,16 @@ owait "orca-wait: a negative timeout is a usage error" 2 "--timeout and --interv
 unset FAKE_ORCA_WT
 echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
 # kill, taskkill and Stop-Process match as whole words only (a hyphen counts as a word character, ERE has no portable
-# \b): a checkout path containing 'skill' (the status and cleanup "next:" lines print the script path) must not trip it.
+# \b): a checkout path containing 'skill' (the status and cleanup "next:" lines print the script path, e.g.
+# .../feat-skills-vfx-graph-touchpoints) must not trip it.
 NOKILL='(^|[^[:alnum:]_-])(kill|taskkill|Stop-Process)([^[:alnum:]_-]|$)|--force'
-for nk in 'kill 4242' '  taskkill /PID 42 /F' 'Stop-Process -Id 42' 'git worktree remove --force x'; do
+for nk in 'kill 4242' 'kill -9 4242' 'run: kill' '  taskkill /PID 42 /F' 'taskkill /F /PID 4' 'Stop-Process -Id 42' \
+          'git worktree remove --force x'; do
   if has_ere "$nk" "$NOKILL"; then pass=$((pass + 1)); echo "PASS  NOKILL matches '$nk'"
   else fail=$((fail + 1)); echo "FAIL  NOKILL must match '$nk'"; fi
 done
-for nk in '/c/x/feat-assetgen-style-skill-scenarios/scripts/factory-pipeline.py status' 'skills/factory-core' 'nokill-word-match'; do
+for nk in '/c/x/feat-assetgen-style-skill-scenarios/scripts/factory-pipeline.py status' 'skills/factory-core' 'nokill-word-match' \
+          "  git -C /w/feat-skills-vfx-graph-touchpoints worktree remove '/w/skills/srv-gw'"; do
   if has_ere "$nk" "$NOKILL"; then fail=$((fail + 1)); echo "FAIL  NOKILL must not match '$nk'"
   else pass=$((pass + 1)); echo "PASS  NOKILL ignores '$nk'"; fi
 done

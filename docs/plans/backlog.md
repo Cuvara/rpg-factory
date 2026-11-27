@@ -95,6 +95,27 @@ Review nits from plan session-lows (`docs/plans/session-lows/report.md`):
   on a branch without `assetgen/runs/` and `ui/requirements/` (seen in plan session-lows, also on main): decide
   whether empty handoff directories belong in the authoring repo or the check should skip absent ones.
 
+### vfx-graph-production-followups
+
+From plan vfx-graph-production (task reports):
+
+- Add `unityvfx` to the package-pins contract upstream and pin-bump repos once the owner tags UnityVFX and the client
+  pins it.
+- `tests/run-all.sh` loops package-ready over Netcode, UnityDots and UIToolkit only: add UnityVFX with
+  `--first-release` semantics.
+- `scripts/lib/context.py` passes the changed-file list as argv, so `factory-context --json` fails with WinError 206
+  on a large branch diff on Windows.
+- Fixtures under `tests/fixtures/vfx` (vfx-spec, the gen-run, vfx-asset) are not artifact-linted by any suite.
+- `vfx_style.py` does not type-check numeric profile fields at resolve time (a bad value gives a lint FAIL row and
+  exit 1, not exit 3).
+- The vfx_plan IN_PROGRESS fixture uses the non-lifecycle status `in-review`.
+- Lint reads tier and element from recipe `meta.tags` because vfx-spec has no tier field: decide whether vfx-spec
+  gets one.
+- `vfx-lint` resolves a relative `--style` or `--spec` that does not exist from the cwd under the authoring repo.
+- `vfx-asset-capture` passes on format alone when no `stats.json` is found, and the relint uses the first linked
+  vfx-spec only.
+- A capture with `characters` null is untested because the artifact-lint mini validator cannot evaluate that anyOf.
+
 ## Covered
 
 - **session-lows** (a verify run left holding its test slot, stalled and silent workers, plain `tier` line count,

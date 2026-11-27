@@ -69,8 +69,9 @@ game wins) core ids. resolve --verbose prints the merged spec with the source fi
 Param precedence, low to high: template default < style params < purpose params < render --param. The review prompts
 list the params render used (rendered_params: read back from workflow.json, so a render --param shows; spec.json
 params before the first render), and each review is bound to exactly those params.
-Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
-style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
+Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing, processing)
+replaces the style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts
+use spec.hints.
 
 Profile routing (UNTESTED on RTX 5060: nothing was generated or measured on the target machine): resolve --profile
 picks the template per purpose and hardware profile (data/hardware.json) from scripts/assetgen/data/template-profiles.json

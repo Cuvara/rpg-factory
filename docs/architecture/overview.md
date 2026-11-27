@@ -26,15 +26,16 @@ How the rpg-factory plugin fits together and where things live. Moved from `.cla
     is logged to the session's `ADVISORIES` file (tests, dogfood). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor, workflow, pipeline, ui, ui-figma, ui-components, ui-screen,
-  ui-review, assetgen) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
+  ui-review, assetgen, vfx-plan, vfx-lint) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
   `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`;
-  `assetgen` forwards the read-only verbs of `scripts/assetgen/assetgen.py` (asset-gen engine, `tests/assetgen.test.sh`).
+  `assetgen` forwards the read-only verbs of `scripts/assetgen/assetgen.py` (asset-gen engine, `tests/assetgen.test.sh`);
+  `vfx-plan` and `vfx-lint` are the read-only VFX production verbs (`scripts/vfx/`, `tests/vfx-production.test.sh`; `docs/architecture/vfx-production.md`).
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work, engineering, workflows) routes to
   14 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
-  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d, vfx and asset-gen. 13 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
+  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d, vfx and asset-gen. 14 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
   unity-client-tech, unity-dots, netcode-client, the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
-  ui-toolkit-screen, ui-validation, comfyui, comfy-desktop-setup, and asset-style) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
-  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders; comfyui and asset-style: `assetgen/`), and the
+  ui-toolkit-screen, ui-validation, comfyui, comfy-desktop-setup, asset-style, and vfx-graph) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
+  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders; comfyui and asset-style: `assetgen/`; vfx-graph: `.vfx`, `.vfxrecipe.json`, `Effects/`, `vfx/assets/`), and the
   snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
   (`docs/architecture/ui-skills.md`). `delivery` (kind `core`, generic: the two-level delivery flow, agent routing, review,
   QA tiers and the plan/verdict/gate pipeline for any repository, in any project; one reference, `delivery.md`) owns no module and is never

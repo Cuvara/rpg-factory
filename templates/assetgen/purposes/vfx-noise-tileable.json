@@ -1,0 +1,76 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "VFX tileable noise",
+ "description": "Seamless grayscale noise texture, tileable on both axes, for effect masks, distortion and dissolve.",
+ "handoff_domain": "vfx",
+ "default_template": "image-generate",
+ "default_family": "vfx",
+ "dimensions": [
+  "palette",
+  "texture"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1024x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name the noise type (for example soft cloud noise, cellular noise, wispy smoke, turbulent fluid) and its feature scale.",
+   "Ask for a grayscale, seamless, tileable-on-both-axes, top-down texture whose values fill the frame from black to white.",
+   "No objects, no perspective, no vignetting, no colour tint, no baked light direction.",
+   "The noise fills the whole frame, so the image has no separate background."
+  ],
+  "must_include": [
+   "noise type",
+   "grayscale",
+   "seamless tileable on both axes",
+   "fills the frame",
+   "even coverage"
+  ],
+  "avoid": [
+   "colour tint",
+   "perspective",
+   "vignette",
+   "single focal object",
+   "visible seam",
+   "text"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear noise type and its role in an effect (mask, distortion or dissolve).",
+  "The prompt asks for a grayscale texture that is seamless on both axes and fills the frame evenly.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example seamless tiling and a single focal object or a vignette).",
+  "The prompt asks for an opaque image with no transparency."
+ ],
+ "image_rubric": [
+  "The image shows the noise the prompt asked for, without objects or extra subjects.",
+  "The image is grayscale, with no colour tint.",
+  "No visible seam or repeating focal feature when tiled 2x2.",
+  "Coverage is even; no vignette, gradient or large empty area.",
+  "No unwanted text, watermark, signature or frame."
+ ],
+ "constraints": {
+  "background": "Opaque; the noise fills the whole frame on a pure-black (#000000) base, darkest values black.",
+  "lighting": "Even coverage with no baked light direction and no vignette.",
+  "processing": "Alpha extraction, channel packing and power-of-two resize are not asset-gen's job. The gen-run binds the output hashes and the image service ignores the requested size, so those transforms belong to the consuming package's import tool."
+ },
+ "qa": {
+  "size": {
+   "mode": "orientation",
+   "expect": "1024x1024",
+   "square_tolerance": 0.15,
+   "min_side": 512,
+   "min_pixels": 262144
+  },
+  "alpha": "forbidden",
+  "tileable": {
+   "max_seam_error": 0.06
+  },
+  "not_blank": {
+   "min_stddev": 2.0
+  }
+ }
+}

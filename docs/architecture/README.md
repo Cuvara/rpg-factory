@@ -9,6 +9,7 @@ This directory contains accepted architecture decisions and plans for rpg-factor
 - [Routing, handoffs and ownership](routing.md): entry points, dependency graphs, conflict rules and downstream invalidation.
 - [UI skills](ui-skills.md): UI request planning, progressive skill loading, the five UI tech skills and their boundaries.
 - [Real Figma-to-Unity integration test](ui-figma-real-test.md): the "Game Settings" procedure and its evidence table (NOT YET RUN until filled).
+- [VFX production chain](vfx-production.md): style profile, textures, recipe, capture, lint, human review and record; which repository owns what and what stays `HUMAN_REQUIRED`.
 - [ADR 0001: Domains](adr/0001-domains.md): the registry and shared artifact contract decision.
 
 ## Conventions

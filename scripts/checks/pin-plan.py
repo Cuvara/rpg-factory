@@ -4,7 +4,7 @@
 Usage: pin-plan.py <package> <new-tag> [--workspace DIR] [--client-ref REF] [--json]
   --client-ref  read the client's manifest/lock at a git ref instead of the working tree
                 (replaying historical bumps without touching the checkout)
-  <package>  com.cuvara.netcode | com.cuvara.dots | com.cuvara.uitoolkit | com.rpgmmo.shared-gamelogic
+  <package>  com.cuvara.netcode | com.cuvara.dots | com.cuvara.uitoolkit | com.cuvara.vfx | com.rpgmmo.shared-gamelogic
   <new-tag>  vX.Y.Z (packages) or sgl-vX.Y.Z (shared-gamelogic)
 
 Prints:
@@ -16,7 +16,10 @@ Prints:
   - for com.cuvara.netcode: whether Samples~/DOTSSample changed between the tags and the
     .sample-source lines to write (recopy byte-for-byte, .meta included)
   - the CHANGELOG line to add under [Unreleased]
-Exit 0 = plan produced; 1 = blocking problem (tag missing, version mismatch); 2 = usage/IO error.
+A package the client does not pin yet (no manifest or lock entry, e.g. com.cuvara.vfx) has no pin to
+move: no manifest/lock/CHANGELOG step is printed, only BLOCKED lines (adding a dependency is a separate
+client change, not a pin bump). An upstream with no release tag at all is named as such.
+Exit 0 = plan produced; 1 = blocking problem (tag missing, version mismatch, not pinned); 2 = usage/IO error.
 Uses the workspace clones only; run `git -C <repo> fetch --tags` yourself if a tag is missing.
 """
 import json
@@ -32,6 +35,7 @@ PKGS = {
     "com.cuvara.netcode": ("Netcode", "package.json", "https://github.com/Cuvara/Netcode.git"),
     "com.cuvara.dots": ("UnityDots", "package.json", "https://github.com/Cuvara/UnityDots.git"),
     "com.cuvara.uitoolkit": ("UIToolkit", "package.json", "https://github.com/Cuvara/UIToolkit.git"),
+    "com.cuvara.vfx": ("UnityVFX", "package.json", "https://github.com/Cuvara/UnityVFX.git"),
     "com.rpgmmo.shared-gamelogic": ("rpg-mmo-server", "backend/gameserver-dotnet/Shared.GameLogic/package.json",
                                     "https://github.com/Cuvara/rpg-mmo-server.git?path=/backend/gameserver-dotnet/Shared.GameLogic"),
 }
@@ -77,13 +81,30 @@ def main():
     lock = client_json("Packages/packages-lock.json")["dependencies"]
     cur_m, cur_l = manifest.get(name), (lock.get(name) or {})
     old_tag = (cur_m or "").rsplit("#", 1)[-1] if cur_m and "#" in cur_m else None
-    problems, plan = [], {"package": name, "upstream": d, "old_tag": old_tag, "new_tag": new_tag}
+    pinned = cur_m is not None or name in lock
+    problems, plan = [], {"package": name, "upstream": d, "old_tag": old_tag, "new_tag": new_tag, "pinned": pinned}
 
     rc, commit = git(up, "rev-parse", "-q", "--verify", f"refs/tags/{new_tag}^{{commit}}")
     if rc != 0:
-        problems.append(f"tag {new_tag} not found in {d}/ - it must be created by the lead and fetched "
+        prefix = "sgl-v" if new_tag.startswith("sgl-v") else "v"
+        any_tag = os.path.isdir(up) and bool(git(up, "tag", "-l", f"{prefix}[0-9]*")[1])
+        why = (f"{d}/ is not in the workspace" if not os.path.isdir(up) else
+               f"{d}/ has no release tag ({prefix}*) yet - the first release is tagged by the owner" if not any_tag else
+               f"no such tag in {d}/")
+        problems.append(f"tag {new_tag} not found: {why}; it must be created by the lead and fetched "
                         f"(`git -C {up} fetch --tags`); pin-bump never creates tags")
         commit = None
+    if not pinned:
+        problems.append(f"the client does not pin {name} (no entry in Packages/manifest.json or packages-lock.json) - "
+                        "there is no pin to move; adding the dependency is a separate client change, not a pin bump")
+        plan["problems"] = problems
+        if "--json" in sys.argv:
+            print(json.dumps(plan, indent=2))
+        else:
+            print(f"package      {name}  ({d})  not pinned by the client -> {new_tag}")
+            for p in problems:
+                print(f"BLOCKED: {p}")
+        return 1
     new_spec = f"{url}#{new_tag}"
     plan["manifest"] = {"from": cur_m, "to": new_spec}
     plan["lock"] = {"from": {"version": cur_l.get("version"), "hash": cur_l.get("hash")},

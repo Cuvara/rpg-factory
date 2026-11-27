@@ -64,7 +64,8 @@
       "BLOCKED"
     ],
     "no_worktree_markers": [
-      "ProjectSettings/ProjectVersion.txt"
+      "ProjectSettings/ProjectVersion.txt",
+      "Sandbox~/ProjectSettings/ProjectVersion.txt"
     ],
     "agent_routing": {
       "lead": "claude",

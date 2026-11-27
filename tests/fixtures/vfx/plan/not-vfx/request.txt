@@ -1,0 +1,1 @@
+add a leaderboard RPC to the Nakama plugin

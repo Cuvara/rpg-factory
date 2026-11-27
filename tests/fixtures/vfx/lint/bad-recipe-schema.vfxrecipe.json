@@ -1,0 +1,251 @@
+{
+ "schema": "cuvara.vfx-recipe/2",
+ "id": "fire-burst",
+ "vfx_graph": "17.6",
+ "meta": {
+  "duration_seconds": 1.0,
+  "looping": false,
+  "tags": [
+   "element:fire",
+   "tier:primary"
+  ],
+  "phases": [
+   {
+    "name": "anticipation",
+    "seconds": 0.1
+   },
+   {
+    "name": "impact",
+    "seconds": 0.3
+   },
+   {
+    "name": "dissipation",
+    "seconds": 0.6
+   }
+  ]
+ },
+ "ops": [
+  {
+   "op": "comment",
+   "title": "FireBurst",
+   "text": "Lint fixture of rpg-factory: one burst of additive flipbook quads, warm core cooling to smoke."
+  },
+  {
+   "op": "add_parameter",
+   "id": "p_tint",
+   "name": "Tint",
+   "type": "Color",
+   "value": [
+    4.0,
+    1.0166,
+    0.0926,
+    1.0
+   ],
+   "exposed": true
+  },
+  {
+   "op": "add_parameter",
+   "id": "p_mask",
+   "name": "Mask",
+   "type": "Texture2D",
+   "value": "Assets/VFX/FireBurst/FireBurst_Mask.png",
+   "exposed": true
+  },
+  {
+   "op": "add_context",
+   "id": "spawn",
+   "type": "VFXBasicSpawner"
+  },
+  {
+   "op": "add_block",
+   "id": "burst",
+   "context": "spawn",
+   "type": "VFXSpawnerBurst",
+   "variant": "Spawn/Single Burst",
+   "slots": {
+    "Count": 120,
+    "Delay": 0.0
+   }
+  },
+  {
+   "op": "add_context",
+   "id": "init",
+   "type": "VFXBasicInitialize",
+   "variant": "Context/#0Common/Initialize Particle",
+   "settings": {
+    "capacity": 256,
+    "boundsMode": "Manual"
+   },
+   "slots": {
+    "bounds": {
+     "center": [
+      0.0,
+      1.0,
+      0.0
+     ],
+     "size": [
+      4.0,
+      4.0,
+      4.0
+     ]
+    }
+   }
+  },
+  {
+   "op": "add_block",
+   "id": "lifetime",
+   "context": "init",
+   "type": "SetAttribute",
+   "settings": {
+    "attribute": "lifetime",
+    "Random": "Uniform"
+   },
+   "slots": {
+    "A": 0.5,
+    "B": 0.9
+   }
+  },
+  {
+   "op": "add_block",
+   "id": "velocity",
+   "context": "init",
+   "type": "SetAttribute",
+   "settings": {
+    "attribute": "velocity",
+    "Random": "PerComponent"
+   },
+   "slots": {
+    "A": [
+     -1.5,
+     0.5,
+     -1.5
+    ],
+    "B": [
+     1.5,
+     2.5,
+     1.5
+    ]
+   }
+  },
+  {
+   "op": "add_context",
+   "id": "update",
+   "type": "VFXBasicUpdate"
+  },
+  {
+   "op": "add_context",
+   "id": "output",
+   "type": "VFXPlanarPrimitiveOutput",
+   "variant": "Context/#2Output Basic/Output Particle|Unlit|Quad",
+   "settings": {
+    "uvMode": "Flipbook"
+   },
+   "slots": {
+    "flipBookSize": [
+     4,
+     4
+    ]
+   }
+  },
+  {
+   "op": "add_block",
+   "id": "tint",
+   "context": "output",
+   "type": "SetAttribute",
+   "settings": {
+    "attribute": "color"
+   }
+  },
+  {
+   "op": "add_block",
+   "id": "color_over_life",
+   "context": "output",
+   "type": "AttributeFromCurve",
+   "settings": {
+    "attribute": "color",
+    "SampleMode": "OverLife",
+    "Composition": "Multiply",
+    "ColorMode": "ColorAndAlpha"
+   },
+   "slots": {
+    "Color": {
+     "mode": "Blend",
+     "color_keys": [
+      {
+       "t": 0.0,
+       "color": [
+        1.0,
+        0.7605,
+        0.3916
+       ]
+      },
+      {
+       "t": 0.3,
+       "color": [
+        1.0,
+        0.2542,
+        0.0232
+       ]
+      },
+      {
+       "t": 0.7,
+       "color": [
+        0.5776,
+        0.0319,
+        0.013
+       ]
+      },
+      {
+       "t": 1.0,
+       "color": [
+        0.0423,
+        0.0343,
+        0.0296
+       ]
+      }
+     ],
+     "alpha_keys": [
+      {
+       "t": 0.0,
+       "alpha": 1.0
+      },
+      {
+       "t": 0.7,
+       "alpha": 0.6
+      },
+      {
+       "t": 1.0,
+       "alpha": 0.0
+      }
+     ]
+    }
+   }
+  },
+  {
+   "op": "set_output",
+   "node": "output",
+   "texture": "Assets/VFX/FireBurst/FireBurst_Flipbook.png",
+   "blend_mode": "Additive"
+  },
+  {
+   "op": "link_flow",
+   "from": "spawn",
+   "to": "init"
+  },
+  {
+   "op": "link_flow",
+   "from": "init",
+   "to": "update"
+  },
+  {
+   "op": "link_flow",
+   "from": "update",
+   "to": "output"
+  },
+  {
+   "op": "link_slots",
+   "from": "p_tint.out",
+   "to": "tint._Color"
+  }
+ ]
+}

@@ -86,6 +86,46 @@
       "docs": []
     },
     {
+      "id": "authoring.vfx-style",
+      "repo": "authoring",
+      "paths": [
+        "vfx/style/"
+      ],
+      "responsibility": "VFX style profiles (vfx-style): the measurable look and budget bands that specs and assets are linted against.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
+    },
+    {
       "id": "authoring.vfx-direction",
       "repo": "authoring",
       "paths": [
@@ -125,6 +165,31 @@
       "domain": "vfx",
       "order": 89,
       "summary": "Production VFX direction, effect specification, and asset delivery workflows."
+    },
+    "vfx-graph": {
+      "kind": "tech",
+      "repos": [
+        "unityvfx",
+        "authoring"
+      ],
+      "domain": "vfx",
+      "order": 104,
+      "paths": [
+        "**/*.vfx",
+        "**/*.vfxrecipe.json",
+        "**/*.vfxoperator",
+        "**/*.vfxblock",
+        "Effects/",
+        "Editor/",
+        "Sandbox~/",
+        "Samples~/Showcase/",
+        "vfx/assets/"
+      ],
+      "used_by": [
+        "unity-package",
+        "vfx"
+      ],
+      "summary": "How an effect is authored with com.cuvara.vfx in UnityVFX: the recipe format and ops, catalog and describe before writing, build and apply, import-texture, the agent-owned Sandbox driven through Tools~/vfxcli.py and unity-mcp-cli, deterministic capture with its contact sheet and stats.json, and a VFX Graph review checklist."
     }
   },
   "contracts": [
@@ -141,6 +206,10 @@
         {
           "repo": "client",
           "path": "Assets/"
+        },
+        {
+          "repo": "unityvfx",
+          "path": "Effects/"
         }
       ],
       "driver": "vfx",
@@ -159,14 +228,17 @@
       "artifact_kinds": [
         "vfx-direction",
         "vfx-spec",
-        "vfx-asset"
+        "vfx-asset",
+        "vfx-style"
       ],
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
         "asset-manifest"
       ],
-      "human_gates": [],
+      "human_gates": [
+        "vfx-visual-review"
+      ],
       "handoffs": [
         "assetgen-to-vfx",
         "gameplay-event-to-vfx",
@@ -177,7 +249,14 @@
       "may_own_feature_state": false,
       "approvers": [],
       "quality_plugin": "scripts/checks/domains/vfx.py",
-      "engineering_event_ids": [],
+      "engineering_event_ids": [
+        "vfx.showcase.chain-lightning",
+        "vfx.showcase.ground-slam"
+      ],
+      "engineering_event_descriptions": {
+        "vfx.showcase.chain-lightning": "Showcase trigger of the UnityVFX Samples~/Showcase scene for the chain lightning effect; not a gameplay binding.",
+        "vfx.showcase.ground-slam": "Showcase trigger of the UnityVFX Samples~/Showcase scene for the ground slam effect; not a gameplay binding."
+      },
       "reviewers": []
     }
   },
@@ -526,11 +605,125 @@
           "blocked_by": true
         }
       }
+    },
+    "vfx-style": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
     }
   },
   "kind_schemas": {
     "vfx-spec": "docs/schemas/kinds/vfx-spec.schema.json",
     "vfx-asset": "docs/schemas/kinds/vfx-asset.schema.json",
-    "vfx-direction": "docs/schemas/kinds/vfx-direction.schema.json"
+    "vfx-direction": "docs/schemas/kinds/vfx-direction.schema.json",
+    "vfx-style": "docs/schemas/kinds/vfx-style.schema.json"
   }
 }

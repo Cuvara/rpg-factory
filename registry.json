@@ -128,10 +128,25 @@
         "netcode-client",
         "ui-toolkit-screen",
         "ui-validation",
-        "ui-figma-import"
+        "ui-figma-import",
+        "vfx-graph"
       ],
       "required": false,
       "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
+    },
+    {
+      "id": "unity-mcp-cli",
+      "kind": "binary",
+      "probes": [
+        "bin:unity-mcp-cli"
+      ],
+      "provides": "The global Unity-MCP CLI (0.93.2, UnityVFX Documentation~/DESIGN.md section Versions) that opens, waits for, queries and drives a Unity editor through Unity-MCP: open, wait-for-ready, status, run-tool <tool> --input-file args.json, close. UnityVFX Tools~/setup-sandbox.py and Tools~/vfxcli.py use it for the agent-owned Sandbox, always on the open path setup-sandbox.py prints (never Sandbox~).",
+      "used_by": [
+        "unity-package",
+        "vfx-graph"
+      ],
+      "required": false,
+      "fallback": "the sandbox-capture and unity-tests checks stay NOT_RUN with the exact command they would run (python3 Tools~/setup-sandbox.py --open, then python3 Tools~/vfxcli.py capture ...); CI ci.yml validate is the licence-free gate"
     },
     {
       "id": "lsp-go",
@@ -419,13 +434,15 @@
           "client",
           "netcode",
           "unitydots",
-          "uitoolkit"
+          "uitoolkit",
+          "unityvfx"
         ],
-        "rule": "One Unity EditMode/PlayMode test run at a time across every Unity project and package test project; other tasks queue for it while non-Unity work continues."
+        "rule": "One Unity EditMode/PlayMode test run at a time across every Unity project and package test project (including the UnityVFX Sandbox~ editor); other tasks queue for it while non-Unity work continues."
       }
     ],
     "no_worktree_markers": [
-      "ProjectSettings/ProjectVersion.txt"
+      "ProjectSettings/ProjectVersion.txt",
+      "Sandbox~/ProjectSettings/ProjectVersion.txt"
     ],
     "agent_routing": {
       "lead": "claude",
@@ -710,6 +727,11 @@
           "path": "Packages/com.cuvara.uitoolkit",
           "of": "uitoolkit",
           "note": "gitignored clone; often dirty with the user's work in progress"
+        },
+        {
+          "path": "Packages/com.cuvara.vfx",
+          "of": "unityvfx",
+          "note": "clone Unity resolves instead of a manifest pin when present; the client has no com.cuvara.vfx pin and its .gitignore does not list this path yet (known issue unityvfx-untagged); user state"
         }
       ]
     },
@@ -779,6 +801,31 @@
       "notes": [
         "No CLAUDE.md in this repo.",
         "CHANGELOG.md is not valid UTF-8 (tools must read with replacement)."
+      ]
+    },
+    "unityvfx": {
+      "path": "UnityVFX",
+      "remote": "https://github.com/Cuvara/UnityVFX.git",
+      "default_branch": "main",
+      "protected_branches": [
+        "main"
+      ],
+      "branch_pattern": "<type>/<topic>, PR into main",
+      "commit_style": "Conventional Commits: feat(editor): ..., fix(runtime): ..., docs: ..., chore: release vX.Y.Z - ...",
+      "merge": "PR into main; bump package.json + dated CHANGELOG heading in the release commit; tag vX.Y.Z (lead)",
+      "instructions": [
+        "README.md",
+        "Documentation~/DESIGN.md",
+        "Documentation~/AUTHORING.md",
+        "Documentation~/CAPTURE.md",
+        "Documentation~/CI.md"
+      ],
+      "notes": [
+        "No CLAUDE.md in this repo.",
+        "No remote yet: Cuvara/UnityVFX is created only after the owner accepts the play-test. Untagged and unpublished until the owner tags; no client pin (known issue unityvfx-untagged).",
+        "Built formats are authoritative where they differ from DESIGN.md: Documentation~/AUTHORING.md section 'Differences from DESIGN.md', Documentation~/CAPTURE.md and Schemas~/.",
+        "Sandbox~/ is an agent-owned Unity (fact unityvfx-editor-version) project: never open it at Sandbox~; only through Tools~/setup-sandbox.py --open on the open path it prints (Documentation~/AUTHORING.md, Sandbox). One editor at a time (exclusive resource unity-test).",
+        "Sandbox~/ProjectSettings/ProjectVersion.txt is a pipeline no_worktree_marker: tasks run in the main checkout, one after another."
       ]
     },
     "authoring": {
@@ -3670,6 +3717,542 @@
       "obligations": []
     },
     {
+      "id": "unityvfx.runtime",
+      "repo": "unityvfx",
+      "paths": [
+        "Runtime/"
+      ],
+      "responsibility": "Runtime assembly Cuvara.VFX: VfxLibrary, VfxPlayer (VfxHandle), VfxSocket, ChainLightningBinder; Presets/ (VfxLightingPreset, VfxCameraPreset).",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/DESIGN.md",
+        "Documentation~/AUTHORING.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "No dependency on Entities, netcode, VContainer or another Cuvara package (README.md, Requirements)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          },
+          {
+            "id": "asmdefs",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_asmdefs.py",
+            "evidence": "exit 0: 'check_asmdefs: OK, N asmdef(s)' (file name equals name; Cuvara.VFX* except the bridge)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-tests",
+            "run": "EditMode and PlayMode tests in the Sandbox: python3 Tools~/setup-sandbox.py --open, then unity-mcp-cli run-tool tests-run \"<open path>\" --input-file tests.json (Documentation~/AUTHORING.md, 'Open, watch, check, drive, close'), or CI ci.yml editmode/playmode jobs (need the UNITY_LICENSE secret; no GPU, so CaptureTests need the local run)",
+            "evidence": "Cuvara.VFX.Editor.Tests (EditMode) and Cuvara.VFX.Tests (PlayMode) with a non-zero executed count and 0 failed; zero tests is a FAIL (assert_test_results.py); CI jobs skipped without UNITY_LICENSE are not a pass. No editor: HUMAN_REQUIRED or NOT_RUN with the command."
+          },
+          {
+            "id": "sandbox-capture",
+            "run": "In the UnityVFX root with dev tool unity-mcp-cli and the exclusive resource unity-test: python3 Tools~/setup-sandbox.py --open && python3 Tools~/vfxcli.py capture --json '{\"effect\": \"<path>.vfx\", \"seed\": 1234}' && python3 Tools~/setup-sandbox.py --close (the Sandbox only through its open path, never Sandbox~; Documentation~/CAPTURE.md)",
+            "evidence": "Verb result ok true; contact-sheet.png, frame-<t>.png per sample and stats.json (schema cuvara.vfx-capture/1, alive.peak > 0) under Sandbox~/Captures/<Effect>/seed-<seed>-<camera>-<lighting>/. No editor or no unity-mcp-cli: NOT_RUN with this exact command."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unityvfx.editor",
+      "repo": "unityvfx",
+      "paths": [
+        "Editor/"
+      ],
+      "responsibility": "Editor assembly Cuvara.VFX.Editor (VfxCli and the verbs catalog, describe, build, apply, import-texture, inspect, capture; recipe builder, texture import, inspect, capture) and the bridge assembly Unity.Testing.VisualEffectGraph.Editor (Editor/Bridge/, VfxGraphBridge only).",
+      "depends_on": [
+        "unityvfx.runtime"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/DESIGN.md",
+        "Documentation~/AUTHORING.md",
+        "Documentation~/CAPTURE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "The bridge (Editor/Bridge/) is the only assembly not named Cuvara.VFX.*: it reaches VFX Graph internals through a friend assembly name (known issue vfx-graph-internal-api, fact unityvfx-vfx-graph-version); every other assembly calls it through its public API.",
+        "Never write or patch .vfx YAML as text: a .vfx changes only through the build or apply verb (Tools~/vfxcli.py)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          },
+          {
+            "id": "recipe-lint",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
+            "parser": "exit"
+          },
+          {
+            "id": "asmdefs",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_asmdefs.py",
+            "evidence": "exit 0: 'check_asmdefs: OK, N asmdef(s)' (file name equals name; Cuvara.VFX* except the bridge)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-tests",
+            "run": "EditMode and PlayMode tests in the Sandbox: python3 Tools~/setup-sandbox.py --open, then unity-mcp-cli run-tool tests-run \"<open path>\" --input-file tests.json (Documentation~/AUTHORING.md, 'Open, watch, check, drive, close'), or CI ci.yml editmode/playmode jobs (need the UNITY_LICENSE secret; no GPU, so CaptureTests need the local run)",
+            "evidence": "Cuvara.VFX.Editor.Tests (EditMode) and Cuvara.VFX.Tests (PlayMode) with a non-zero executed count and 0 failed; zero tests is a FAIL (assert_test_results.py); CI jobs skipped without UNITY_LICENSE are not a pass. No editor: HUMAN_REQUIRED or NOT_RUN with the command."
+          },
+          {
+            "id": "sandbox-capture",
+            "run": "In the UnityVFX root with dev tool unity-mcp-cli and the exclusive resource unity-test: python3 Tools~/setup-sandbox.py --open && python3 Tools~/vfxcli.py capture --json '{\"effect\": \"<path>.vfx\", \"seed\": 1234}' && python3 Tools~/setup-sandbox.py --close (the Sandbox only through its open path, never Sandbox~; Documentation~/CAPTURE.md)",
+            "evidence": "Verb result ok true; contact-sheet.png, frame-<t>.png per sample and stats.json (schema cuvara.vfx-capture/1, alive.peak > 0) under Sandbox~/Captures/<Effect>/seed-<seed>-<camera>-<lighting>/. No editor or no unity-mcp-cli: NOT_RUN with this exact command."
+          }
+        ]
+      },
+      "obligations": [
+        "A recipe change rebuilds the .vfx from the recipe through the build verb and re-runs its capture (contact sheet and stats.json); commit recipe, .vfx and capture together."
+      ]
+    },
+    {
+      "id": "unityvfx.sandbox",
+      "repo": "unityvfx",
+      "paths": [
+        "Sandbox~/"
+      ],
+      "responsibility": "Agent-owned Unity (fact unityvfx-editor-version) test project: URP, VFX Graph, Unity-MCP (fact unityvfx-sandbox-unity-mcp-version), Test Framework, Input System; references the package as file:../../package through the open path.",
+      "depends_on": [
+        "unityvfx.runtime",
+        "unityvfx.editor"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/AUTHORING.md",
+        "Documentation~/CI.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "Open only through Tools~/setup-sandbox.py --open on the open path it prints, never at Sandbox~ (Documentation~/AUTHORING.md, Sandbox); close with --close; one editor at a time (exclusive resource unity-test).",
+        "Sandbox~/Library, Temp, Logs, UserSettings and Captures are gitignored: never commit them.",
+        "No link inside the repository (a link to the root or an ancestor is a directory cycle); setup-sandbox.py makes its links in the sandbox home outside the repository.",
+        "check_metas.py skips ~ paths: the Sandbox's own .meta files come from its editor, not from the check."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-tests",
+            "run": "EditMode and PlayMode tests in the Sandbox: python3 Tools~/setup-sandbox.py --open, then unity-mcp-cli run-tool tests-run \"<open path>\" --input-file tests.json (Documentation~/AUTHORING.md, 'Open, watch, check, drive, close'), or CI ci.yml editmode/playmode jobs (need the UNITY_LICENSE secret; no GPU, so CaptureTests need the local run)",
+            "evidence": "Cuvara.VFX.Editor.Tests (EditMode) and Cuvara.VFX.Tests (PlayMode) with a non-zero executed count and 0 failed; zero tests is a FAIL (assert_test_results.py); CI jobs skipped without UNITY_LICENSE are not a pass. No editor: HUMAN_REQUIRED or NOT_RUN with the command."
+          },
+          {
+            "id": "sandbox-capture",
+            "run": "In the UnityVFX root with dev tool unity-mcp-cli and the exclusive resource unity-test: python3 Tools~/setup-sandbox.py --open && python3 Tools~/vfxcli.py capture --json '{\"effect\": \"<path>.vfx\", \"seed\": 1234}' && python3 Tools~/setup-sandbox.py --close (the Sandbox only through its open path, never Sandbox~; Documentation~/CAPTURE.md)",
+            "evidence": "Verb result ok true; contact-sheet.png, frame-<t>.png per sample and stats.json (schema cuvara.vfx-capture/1, alive.peak > 0) under Sandbox~/Captures/<Effect>/seed-<seed>-<camera>-<lighting>/. No editor or no unity-mcp-cli: NOT_RUN with this exact command."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unityvfx.tests",
+      "repo": "unityvfx",
+      "paths": [
+        "Tests/"
+      ],
+      "responsibility": "Cuvara.VFX.Editor.Tests (EditMode, Tests/Editor) and Cuvara.VFX.Tests (PlayMode, Tests/Runtime); Tests/Fixtures/BurstQuads holds a recipe and the .vfx it builds.",
+      "depends_on": [
+        "unityvfx.runtime",
+        "unityvfx.editor"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/CI.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "Never write or patch .vfx YAML as text: a .vfx changes only through the build or apply verb (Tools~/vfxcli.py)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          },
+          {
+            "id": "recipe-lint",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
+            "parser": "exit"
+          },
+          {
+            "id": "asmdefs",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_asmdefs.py",
+            "evidence": "exit 0: 'check_asmdefs: OK, N asmdef(s)' (file name equals name; Cuvara.VFX* except the bridge)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-tests",
+            "run": "EditMode and PlayMode tests in the Sandbox: python3 Tools~/setup-sandbox.py --open, then unity-mcp-cli run-tool tests-run \"<open path>\" --input-file tests.json (Documentation~/AUTHORING.md, 'Open, watch, check, drive, close'), or CI ci.yml editmode/playmode jobs (need the UNITY_LICENSE secret; no GPU, so CaptureTests need the local run)",
+            "evidence": "Cuvara.VFX.Editor.Tests (EditMode) and Cuvara.VFX.Tests (PlayMode) with a non-zero executed count and 0 failed; zero tests is a FAIL (assert_test_results.py); CI jobs skipped without UNITY_LICENSE are not a pass. No editor: HUMAN_REQUIRED or NOT_RUN with the command."
+          },
+          {
+            "id": "sandbox-capture",
+            "run": "In the UnityVFX root with dev tool unity-mcp-cli and the exclusive resource unity-test: python3 Tools~/setup-sandbox.py --open && python3 Tools~/vfxcli.py capture --json '{\"effect\": \"<path>.vfx\", \"seed\": 1234}' && python3 Tools~/setup-sandbox.py --close (the Sandbox only through its open path, never Sandbox~; Documentation~/CAPTURE.md)",
+            "evidence": "Verb result ok true; contact-sheet.png, frame-<t>.png per sample and stats.json (schema cuvara.vfx-capture/1, alive.peak > 0) under Sandbox~/Captures/<Effect>/seed-<seed>-<camera>-<lighting>/. No editor or no unity-mcp-cli: NOT_RUN with this exact command."
+          }
+        ]
+      },
+      "obligations": [
+        "A recipe change rebuilds the .vfx from the recipe through the build verb and re-runs its capture (contact sheet and stats.json); commit recipe, .vfx and capture together."
+      ]
+    },
+    {
+      "id": "unityvfx.effects",
+      "repo": "unityvfx",
+      "paths": [
+        "Effects/"
+      ],
+      "responsibility": "The effects the package ships, one folder per effect (Effects/README.md): <Name>.vfxrecipe.json (the source of truth), the <Name>.vfx the build verb makes from it, the <Name>.prefab a VfxLibrary entry points at, and <Name>_<Purpose>.png textures brought in with import-texture. The copy end of the vfx-spec-to-impl handoff.",
+      "depends_on": [
+        "unityvfx.runtime",
+        "unityvfx.editor",
+        "unityvfx.library"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Effects/README.md",
+        "Documentation~/AUTHORING.md",
+        "Documentation~/CAPTURE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "Never write or patch .vfx YAML as text: a .vfx changes only through the build or apply verb (Tools~/vfxcli.py).",
+        "One folder per effect, <Name> in PascalCase and the recipe id in kebab-case (Effects/README.md); pieces shared by several effects go in Library/, not here.",
+        "Rebuild a .vfx only when its recipe changed: two builds of one recipe give different bytes and the same describe (Documentation~/AUTHORING.md, Pitfalls)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          },
+          {
+            "id": "recipe-lint",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "sandbox-capture",
+            "run": "In the UnityVFX root with dev tool unity-mcp-cli and the exclusive resource unity-test: python3 Tools~/setup-sandbox.py --open && python3 Tools~/vfxcli.py capture --json '{\"effect\": \"<path>.vfx\", \"seed\": 1234}' && python3 Tools~/setup-sandbox.py --close (the Sandbox only through its open path, never Sandbox~; Documentation~/CAPTURE.md)",
+            "evidence": "Verb result ok true; contact-sheet.png, frame-<t>.png per sample and stats.json (schema cuvara.vfx-capture/1, alive.peak > 0) under Sandbox~/Captures/<Effect>/seed-<seed>-<camera>-<lighting>/. No editor or no unity-mcp-cli: NOT_RUN with this exact command."
+          }
+        ]
+      },
+      "obligations": [
+        "A recipe change rebuilds the .vfx from the recipe through the build verb and re-runs its capture (contact sheet and stats.json); commit recipe, .vfx and capture together."
+      ]
+    },
+    {
+      "id": "unityvfx.library",
+      "repo": "unityvfx",
+      "paths": [
+        "Library/"
+      ],
+      "responsibility": "Pieces shared by several effects and by the Showcase and capture stage: today only Library/Grid (the Cuvara/VFX/Grid shader CuvaraVfxGrid.shader and its materials VfxGridGround.mat and VfxGridBackdrop.mat); shared subgraphs, gradients and textures go here too.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/AUTHORING.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "Only pieces used by more than one effect or by the stage live here; an effect's own files stay in its Effects/<Name>/ folder."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "unityvfx.samples",
+      "repo": "unityvfx",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "Package samples: Showcase (today the test characters under Samples~/Showcase/Characters; the rest of the Showcase is built by the pkg-showcase task), linked into the Sandbox at Sandbox~/Assets/Showcase by setup-sandbox.py when Samples~/Showcase exists (Documentation~/AUTHORING.md).",
+      "depends_on": [
+        "unityvfx.runtime",
+        "unityvfx.effects",
+        "unityvfx.library"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/AUTHORING.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one. check_metas.py skips ~ paths, so Samples~ keeps full .meta coverage by hand review: the Sandbox imports it through its link.",
+        "A sample with scripts has its own asmdef named Cuvara.VFX.* (file name equals name; check_asmdefs.py).",
+        "A new sample is listed in package.json samples[] with an existing path (check_package_json.py) and documented in Documentation~/."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "asmdefs",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_asmdefs.py",
+            "evidence": "exit 0: 'check_asmdefs: OK, N asmdef(s)' (file name equals name; Cuvara.VFX* except the bridge)",
+            "parser": "exit"
+          },
+          {
+            "id": "package-json",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_package_json.py",
+            "evidence": "exit 0: 'check_package_json: OK, com.cuvara.vfx@<version>, N sample(s), 2 dependencies'",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-tests",
+            "run": "EditMode and PlayMode tests in the Sandbox: python3 Tools~/setup-sandbox.py --open, then unity-mcp-cli run-tool tests-run \"<open path>\" --input-file tests.json (Documentation~/AUTHORING.md, 'Open, watch, check, drive, close'), or CI ci.yml editmode/playmode jobs (need the UNITY_LICENSE secret; no GPU, so CaptureTests need the local run)",
+            "evidence": "Cuvara.VFX.Editor.Tests (EditMode) and Cuvara.VFX.Tests (PlayMode) with a non-zero executed count and 0 failed; zero tests is a FAIL (assert_test_results.py); CI jobs skipped without UNITY_LICENSE are not a pass. No editor: HUMAN_REQUIRED or NOT_RUN with the command."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unityvfx.package",
+      "repo": "unityvfx",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "LICENSE",
+        "Documentation~/",
+        "Schemas~/",
+        "Tools~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, licence, docs, JSON Schemas (recipe, describe, inspect, capture), agent tools (vfxcli.py, setup-sandbox.py, sandbox_paths.py), CI and the validation scripts.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/CI.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every Unity-visible file and folder needs its .meta; Unity generates .meta files, never hand-write one.",
+        "A Schemas~ change is a format change: update the verbs, Documentation~/AUTHORING.md and every recipe in the same change.",
+        "Validation scripts take --root and exit 0 ok, 1 failed, 2 dependency missing; a new gate is proved to fail on a broken copy (Documentation~/CI.md, Adding a gate)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0: 'check_metas: OK, N Unity-visible file(s) and M folder(s) have a .meta, 0 orphan .meta file(s)'. Reads git ls-files --cached --others --exclude-standard; paths with a . or ~ component (Sandbox~, Samples~) are skipped.",
+            "parser": "exit"
+          },
+          {
+            "id": "recipe-lint",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
+            "parser": "exit"
+          },
+          {
+            "id": "package-json",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_package_json.py",
+            "evidence": "exit 0: 'check_package_json: OK, com.cuvara.vfx@<version>, N sample(s), 2 dependencies'",
+            "parser": "exit"
+          },
+          {
+            "id": "changelog",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_changelog.py",
+            "evidence": "exit 0: 'check_changelog: OK, [Unreleased] present, N released heading(s), package version <version>'",
+            "parser": "exit"
+          },
+          {
+            "id": "schemas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_schemas.py",
+            "evidence": "exit 0: 'check_schemas: OK, N schema(s) are valid draft 2020-12 schemas'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons (an untagged package with no client pin is reported, never a false READY); only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
+          }
+        ],
+        "external": [
+          {
+            "id": "ci",
+            "run": "UnityVFX ci.yml on the PR (validate job; editmode/playmode only with UNITY_LICENSE)",
+            "evidence": "validate passes; editmode/playmode skipped without the secret are not a test pass. Not available until the remote exists."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unityvfx.root",
+      "repo": "unityvfx",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; the Sandbox~ ignore rules in .gitignore are anchored on purpose."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
       "id": "authoring.art2d-brief",
       "repo": "authoring",
       "paths": [
@@ -4884,6 +5467,46 @@
       "docs": []
     },
     {
+      "id": "authoring.vfx-style",
+      "repo": "authoring",
+      "paths": [
+        "vfx/style/"
+      ],
+      "responsibility": "VFX style profiles (vfx-style): the measurable look and budget bands that specs and assets are linted against.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
+    },
+    {
       "id": "authoring.vfx-direction",
       "repo": "authoring",
       "paths": [
@@ -5059,6 +5682,16 @@
       "id": "gameserver-claude-stale",
       "scope": "server",
       "summary": "backend/gameserver-dotnet/CLAUDE.md still describes the wire as '4-byte BE length + JSON' (protobuf is current, ADR-9) and says there are no external dependencies (the csproj references Arch, Npgsql, StackExchange.Redis, OpenTelemetry, Google.Protobuf, BouncyCastle). Fix pending: server branch docs/claude/stale-wire-and-rates (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
+    },
+    {
+      "id": "vfx-graph-internal-api",
+      "scope": "unityvfx",
+      "summary": "The bridge assembly Unity.Testing.VisualEffectGraph.Editor (Editor/Bridge/) reaches VFX Graph internal types (VFXGraph, VFXContext, VFXBlock, VFXSlot, ...) because its name is in the InternalsVisibleTo list of com.unity.visualeffectgraph (Editor/PackageInfo.cs). An upstream version change (fact unityvfx-vfx-graph-version) breaks compilation; the editor code checks for VFX Graph 17.6.x. UnityVFX Documentation~/DESIGN.md section 'VFX Graph internals'."
+    },
+    {
+      "id": "unityvfx-untagged",
+      "scope": "unityvfx",
+      "summary": "UnityVFX has no tag, no remote and no client pin: the package-pins contract and pin-bump do not cover com.cuvara.vfx until the owner creates the repository and tags a release. factory-status.py reports it as untagged and unpinned."
     }
   ],
   "skills": {
@@ -5142,9 +5775,10 @@
       "repos": [
         "netcode",
         "unitydots",
-        "uitoolkit"
+        "uitoolkit",
+        "unityvfx"
       ],
-      "summary": "Development inside Netcode, UnityDots, UIToolkit up to ready-to-tag.",
+      "summary": "Development inside Netcode, UnityDots, UIToolkit, UnityVFX up to ready-to-tag.",
       "order": 50
     },
     "client-integration": {
@@ -5190,7 +5824,8 @@
         "client",
         "netcode",
         "unitydots",
-        "uitoolkit"
+        "uitoolkit",
+        "unityvfx"
       ],
       "order": 92,
       "used_by": [
@@ -5439,6 +6074,31 @@
       "domain": "vfx",
       "order": 89,
       "summary": "Production VFX direction, effect specification, and asset delivery workflows."
+    },
+    "vfx-graph": {
+      "kind": "tech",
+      "repos": [
+        "unityvfx",
+        "authoring"
+      ],
+      "domain": "vfx",
+      "order": 104,
+      "paths": [
+        "**/*.vfx",
+        "**/*.vfxrecipe.json",
+        "**/*.vfxoperator",
+        "**/*.vfxblock",
+        "Effects/",
+        "Editor/",
+        "Sandbox~/",
+        "Samples~/Showcase/",
+        "vfx/assets/"
+      ],
+      "used_by": [
+        "unity-package",
+        "vfx"
+      ],
+      "summary": "How an effect is authored with com.cuvara.vfx in UnityVFX: the recipe format and ops, catalog and describe before writing, build and apply, import-texture, the agent-owned Sandbox driven through Tools~/vfxcli.py and unity-mcp-cli, deterministic capture with its contact sheet and stats.json, and a VFX Graph review checklist."
     }
   },
   "human_gates": [
@@ -5507,7 +6167,7 @@
     {
       "id": "unity-batch",
       "read_only_exempt": true,
-      "rule": "Unity batch-mode runs open the user's project and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them.",
+      "rule": "Unity batch-mode runs open one of the user's Unity projects and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them. Exempt: the agent-owned UnityVFX Sandbox~ project (module unityvfx.sandbox), which agents open, run and test without asking.",
       "match": "-executeMethod\\s+(PlayerBuilder|PlayClientBuilder|SampleBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\.|(^|\\s)-runTests\\b"
     },
     {
@@ -5518,7 +6178,7 @@
     },
     {
       "id": "unity-asset-edit",
-      "rule": "Scene/prefab/asset edits through Unity MCP tools need an explicit yes (the Editor state is the user's)."
+      "rule": "Scene/prefab/asset edits through Unity MCP tools in one of the user's Unity projects need an explicit yes (the Editor state is the user's). Exempt: the agent-owned UnityVFX Sandbox~ project (module unityvfx.sandbox), where agents edit scenes, prefabs and assets without asking."
     },
     {
       "id": "sgl-release",
@@ -5533,6 +6193,10 @@
     {
       "id": "art3d-visual-review",
       "rule": "3D visual acceptance, rights and final production review are human decisions."
+    },
+    {
+      "id": "vfx-visual-review",
+      "rule": "A person judges the look, readability, overdraw and frame time of an effect in Play mode before it is accepted; agents never record this review, and those four criteria stay HUMAN_REQUIRED in every check."
     },
     {
       "id": "assetgen-approval",
@@ -6316,6 +6980,10 @@
         {
           "repo": "client",
           "path": "Assets/"
+        },
+        {
+          "repo": "unityvfx",
+          "path": "Effects/"
         }
       ],
       "driver": "vfx",
@@ -6484,6 +7152,27 @@
       "repo": "uitoolkit",
       "probe": "git show origin/main:Editor/Figma/Cuvara.UIToolkit.Editor.Figma.asmdef | sed -n 's/.*\"expression\": \"\\(.*\\)\".*/\\1/p'",
       "why": "com.unity.ui.figma version that opens the gated Cuvara.UIToolkit.Editor.Figma assembly; also the tested connector version (FIGMA-INTEGRATION.md Requirements)"
+    },
+    {
+      "id": "unityvfx-editor-version",
+      "value": "6000.6.9f1",
+      "repo": "unityvfx",
+      "probe": "sed -n 's/^m_EditorVersion: //p' Sandbox~/ProjectSettings/ProjectVersion.txt",
+      "why": "Unity version of the UnityVFX Sandbox~ project, its CI image (ci.yml UNITY_VERSION) and the package's tested editor"
+    },
+    {
+      "id": "unityvfx-vfx-graph-version",
+      "value": "17.6.0",
+      "repo": "unityvfx",
+      "probe": "jq -r '.dependencies[\"com.unity.visualeffectgraph\"]' package.json",
+      "why": "the bridge compiles against VFX Graph internals of exactly this line (known issue vfx-graph-internal-api)"
+    },
+    {
+      "id": "unityvfx-sandbox-unity-mcp-version",
+      "value": "1.7.0",
+      "repo": "unityvfx",
+      "probe": "jq -r '.dependencies[\"com.ivanmurzak.unity.mcp\"]' Sandbox~/Packages/manifest.json",
+      "why": "Unity-MCP plugin the Sandbox editor runs; unity-mcp-cli drives it (dev tool unity-mcp-cli)"
     }
   ],
   "domains": {
@@ -6496,7 +7185,8 @@
         "client",
         "netcode",
         "unitydots",
-        "uitoolkit"
+        "uitoolkit",
+        "unityvfx"
       ],
       "artifact_kinds": [],
       "quality_gates": [],
@@ -6693,14 +7383,17 @@
       "artifact_kinds": [
         "vfx-direction",
         "vfx-spec",
-        "vfx-asset"
+        "vfx-asset",
+        "vfx-style"
       ],
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
         "asset-manifest"
       ],
-      "human_gates": [],
+      "human_gates": [
+        "vfx-visual-review"
+      ],
       "handoffs": [
         "assetgen-to-vfx",
         "gameplay-event-to-vfx",
@@ -6711,7 +7404,14 @@
       "may_own_feature_state": false,
       "approvers": [],
       "quality_plugin": "scripts/checks/domains/vfx.py",
-      "engineering_event_ids": [],
+      "engineering_event_ids": [
+        "vfx.showcase.chain-lightning",
+        "vfx.showcase.ground-slam"
+      ],
+      "engineering_event_descriptions": {
+        "vfx.showcase.chain-lightning": "Showcase trigger of the UnityVFX Samples~/Showcase scene for the chain lightning effect; not a gameplay binding.",
+        "vfx.showcase.ground-slam": "Showcase trigger of the UnityVFX Samples~/Showcase scene for the ground slam effect; not a gameplay binding."
+      },
       "reviewers": []
     }
   },
@@ -10350,6 +11050,119 @@
           "blocked_by": true
         }
       }
+    },
+    "vfx-style": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
     }
   },
   "phase": {
@@ -10404,6 +11217,7 @@
     "ui-handoff": "docs/schemas/kinds/ui-handoff.schema.json",
     "vfx-spec": "docs/schemas/kinds/vfx-spec.schema.json",
     "vfx-asset": "docs/schemas/kinds/vfx-asset.schema.json",
-    "vfx-direction": "docs/schemas/kinds/vfx-direction.schema.json"
+    "vfx-direction": "docs/schemas/kinds/vfx-direction.schema.json",
+    "vfx-style": "docs/schemas/kinds/vfx-style.schema.json"
   }
 }

@@ -1,0 +1,140 @@
+{
+ "schema": "rpg-factory.vfx-plan-rules/1",
+ "note": "Rules of scripts/vfx/vfx_plan.py. vfx_signals are Python regexes matched case-insensitively against the request text with URLs removed; a request with none of them (and no --effect) is NOT_VFX. effect_id_patterns name the effect id inside the request text (group id, a kebab-case recipe id); --effect wins. Authoring paths come from the registry first (module ids under registry, the contract's source path for gen-runs) and fall back to the defaults here. The vfx-style module (authoring.vfx-style) is registered; its default is the place the vfx-style schema names. Step states: DONE, IN_PROGRESS, TODO, NEEDS_APPROVAL, STALE, FAIL, BLOCKED (meanings in states). lead_domain resolves a step's lead skill through registry domains.<d>.lead; lead_skill is the fallback when the domain is not registered.",
+ "vfx_signals": [
+  "\\bvfx\\b",
+  "\\bvfx ?graph\\b",
+  "\\bvisual effects?\\b",
+  "\\bparticles?\\b",
+  "\\bparticle systems?\\b",
+  "\\bshuriken\\b",
+  "\\bflipbooks?\\b",
+  "\\bemitters?\\b",
+  "\\bvfxrecipe\\b",
+  "\\.vfx\\b",
+  "com\\.cuvara\\.vfx",
+  "\\bvfx-(style|spec|asset|direction|lint|capture)\\b",
+  "\\b(spell|hit|impact|explosion|fire|frost|ice|lightning|magic|aura|trail|muzzle|smoke|spark|heal|buff|debuff|portal|shield) (effect|fx)s?\\b",
+  "\\b(fire|flame|frost|ice|lightning|magic|arcane|smoke|spark|ember|poison|holy|shadow) (burst|blast|bolt|nova|ring|slash|swirl|puff|flash|wave|beam|orb|strike|storm|splash|trail|cloud|bloom)s?\\b(?!\\s+(cooldowns?|damage|dmg|cost|mana|range|radius|scaling|stats?|rank|tooltip|talent|crit|chance|proc|balance|nerf|buff))",
+  "\\b(burst|blast|bolt|nova|swirl|puff|flash|cloud|storm)s? of (fire|flame|frost|ice|lightning|magic|smoke|sparks?|embers?)\\b",
+  "\\beffects? (recipe|graph|capture|texture|budget|style)s?\\b",
+  "\\bfx\\b",
+  "\\b(make|create|build|author|design|add|capture|lint|plan|deliver|record)\\b.{0,40}\\b(effect|fx)s?\\b"
+ ],
+ "effect_id_patterns": [
+  "\\b(?:effect|vfx|recipe)(?: id)?[ :=]+[`'\"]?(?P<id>[a-z0-9]+(?:-[a-z0-9]+)+)\\b",
+  "\\b(?P<id>[a-z0-9]+(?:-[a-z0-9]+)+)(?: effect| vfx|\\.vfxrecipe\\.json)\\b"
+ ],
+ "effect_id": "^[a-z0-9][a-z0-9-]*$",
+ "registry": {
+  "authoring_repo": "authoring",
+  "domain": "vfx",
+  "style_module": "authoring.vfx-style",
+  "spec_module": "authoring.vfx-spec",
+  "asset_module": "authoring.vfx-asset",
+  "gen_run_contract": "assetgen-to-vfx",
+  "gen_run_domain": "assetgen"
+ },
+ "defaults": {
+  "style_dir": "vfx/style/",
+  "spec_dir": "vfx/specs/",
+  "asset_dir": "vfx/assets/",
+  "gen_run_dir": "assetgen/runs/",
+  "approvals_dir": "approvals/",
+  "captures_dir": "Captures/"
+ },
+ "kinds": {
+  "style": "vfx-style",
+  "spec": "vfx-spec",
+  "asset": "vfx-asset",
+  "gen_run": "gen-run"
+ },
+ "schemas": {
+  "recipe": "cuvara.vfx-recipe/1",
+  "capture": "cuvara.vfx-capture/1",
+  "lint": "rpg-factory.vfx-lint/1"
+ },
+ "recipe_suffix": ".vfxrecipe.json",
+ "asset_suffix": ".vfx",
+ "capture_file": "stats.json",
+ "lint_files": [
+  "vfx-lint.json",
+  "lint.json"
+ ],
+ "skip_dirs": [
+  ".git",
+  "Library",
+  "Temp",
+  "Logs",
+  "obj",
+  "Build",
+  "Builds",
+  "UserSettings",
+  "node_modules",
+  "approvals"
+ ],
+ "approved_states": [
+  "approved",
+  "in-implementation",
+  "verified",
+  "released"
+ ],
+ "open_states": [
+  "draft",
+  "proposed",
+  "review",
+  "reviewed"
+ ],
+ "blocked_states": [
+  "blocked",
+  "rejected",
+  "deprecated",
+  "superseded"
+ ],
+ "states": {
+  "DONE": "the step's output exists, is bound to the current inputs and (where a person approves it) has an approval record for its current revision",
+  "IN_PROGRESS": "the step's output exists but is not finished (an open lifecycle state, or a later part of the step is missing)",
+  "TODO": "the step's output does not exist yet",
+  "NEEDS_APPROVAL": "the output is finished but has no approval record for its current revision (only a person approves)",
+  "STALE": "the output is bound to another revision of its input (a capture of an older recipe, an approval of an older revision, a hash that does not match the asset)",
+  "FAIL": "the step's own check failed (lint FAIL rows)",
+  "BLOCKED": "the output is blocked, rejected, deprecated or superseded"
+ },
+ "steps": [
+  {
+   "id": "style",
+   "title": "Style profile present and approved",
+   "lead_domain": "vfx",
+   "lead_skill": "vfx",
+   "action": "author the project's vfx-style profile from templates/vfx/vfx-style.md under the authoring vfx style path, check it with scripts/vfx/vfx_style.py show, then ask a person to approve it (binding_values: an approval record is required)"
+  },
+  {
+   "id": "textures",
+   "title": "Texture gen-runs approved",
+   "lead_domain": "assetgen",
+   "lead_skill": "asset-gen",
+   "action": "generate the effect textures with rpg-factory:asset-gen (a vfx purpose and the profile's assetgen_style), have a person approve each gen-run, and cite each AGEN-<run id> in the sources of the effect's vfx-spec"
+  },
+  {
+   "id": "recipe",
+   "title": "Recipe and built asset",
+   "lead_domain": "vfx",
+   "lead_skill": "vfx",
+   "action": "write <Name>.vfxrecipe.json (cuvara.vfx-recipe/1, id = the effect id) in the effect folder and build it with com.cuvara.vfx Tools~/vfxcli.py build, which writes <Name>.vfx next to it (authoring and building use rpg-factory:vfx-graph; a change to the com.cuvara.vfx package itself goes through rpg-factory:unity-package)"
+  },
+  {
+   "id": "capture",
+   "title": "Capture and lint",
+   "lead_domain": "vfx",
+   "lead_skill": "vfx",
+   "action": "capture the built effect with Tools~/vfxcli.py capture at the profile's camera, lighting and seed, then run scripts/vfx/vfx_style.py lint --style <profile> --recipe <recipe> --inspect <inspect> --stats <stats.json> and save its JSON next to stats.json as vfx-lint.json; a person reviews the contact sheet (HUMAN_REQUIRED); a capture or catalog defect in the com.cuvara.vfx package goes through rpg-factory:unity-package, not an edit in this step"
+  },
+  {
+   "id": "record",
+   "title": "vfx-asset delivery record",
+   "lead_domain": "vfx",
+   "lead_skill": "vfx",
+   "action": "write the vfx-asset record from templates/vfx/vfx-asset.md: asset_path of the built effect, its content hash, the capture stats, the checks run (vfx-lint), sources citing the vfx-spec and the gen-runs; then take it through review"
+  }
+ ]
+}

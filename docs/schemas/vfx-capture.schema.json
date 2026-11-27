@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "com.cuvara.vfx capture statistics (stats.json), lint mirror",
+  "description": "Mirror of the UnityVFX package schema Schemas~/vfx-capture.schema.json (cuvara.vfx-capture/1, Documentation~/CAPTURE.md), restricted to the fields scripts/vfx/vfx_style.py lint and the vfx quality plugin read. Every field named here exists in the package schema with the same name and type; the package schema is the source of truth and holds more fields (frames, contact_sheet, bounds, resolution, ...), so this mirror allows additional properties. The capture records no platform or budget field: budgets come from the vfx-style profile.",
+  "type": "object",
+  "required": [
+    "schema",
+    "effect",
+    "recipe_sha256",
+    "seed",
+    "camera",
+    "lighting",
+    "vfx_graph",
+    "duration_seconds",
+    "alive",
+    "systems"
+  ],
+  "properties": {
+    "schema": {
+      "const": "cuvara.vfx-capture/1"
+    },
+    "effect": {
+      "type": "string",
+      "pattern": "\\.(prefab|vfx)$",
+      "description": "project path of the captured .prefab or .vfx"
+    },
+    "recipe_sha256": {
+      "description": "SHA-256 of the <name>.vfxrecipe.json next to the effect's .vfx, or null when there is none; lint compares it with the recipe file",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "description": "VisualEffect.startSeed; compared with the profile's capture.seed"
+    },
+    "camera": {
+      "enum": [
+        "gameplay",
+        "close",
+        "side"
+      ]
+    },
+    "lighting": {
+      "enum": [
+        "day",
+        "dusk",
+        "night"
+      ]
+    },
+    "vfx_graph": {
+      "type": "string",
+      "minLength": 1,
+      "description": "installed VFX Graph version (17.6.0)"
+    },
+    "duration_seconds": {
+      "description": "simulated time at which the effect ended; null when it did not end by max_seconds or never had a particle",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "number",
+          "minimum": 0
+        }
+      ]
+    },
+    "alive": {
+      "type": "object",
+      "required": [
+        "peak"
+      ],
+      "properties": {
+        "peak": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "largest alive count at any sample or probe; graded against each platform's max_alive_particles"
+        }
+      }
+    },
+    "systems": {
+      "type": "array",
+      "description": "one entry per particle system; capacity is graded against the budgets and peak against capacity",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "capacity",
+          "peak"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "peak": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "characters": {
+      "description": "added 2026-11-27, optional: the characters the capture placed (inputs character, target_count, target_spacing, source_socket, target_socket); null when the capture placed none",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "character",
+            "placed",
+            "source_socket",
+            "target_socket",
+            "target_count",
+            "target_spacing",
+            "caster",
+            "targets"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "character": {
+              "type": "string",
+              "minLength": 1,
+              "description": "the character input: placeholder, or the project path of the requested prefab"
+            },
+            "placed": {
+              "type": "string",
+              "minLength": 1,
+              "description": "what was placed: placeholder (the code-built VfxMannequin), or the project path of the prefab; placeholder when the requested prefab does not exist"
+            },
+            "source_socket": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target_socket": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 8
+            },
+            "target_spacing": {
+              "type": "number",
+              "minimum": 0.5,
+              "maximum": 10
+            },
+            "caster": {
+              "$ref": "#/$defs/character"
+            },
+            "targets": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/character"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "binders": {
+      "description": "added 2026-11-27, optional: one entry per ChainLightningBinder the capture bound to the characters (empty when none); source and targets are the values the graph holds after binding, null or shorter when the graph does not expose the property",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "added",
+          "hop_count",
+          "graph_hop_count",
+          "source",
+          "targets"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "hierarchy path of the binder's object in the effect"
+          },
+          "added": {
+            "type": "boolean",
+            "description": "true when the capture added the binder to a .vfx effect whose graph exposes the binder's default properties"
+          },
+          "hop_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8,
+            "description": "ChainLightningBinder.HopCount after binding"
+          },
+          "graph_hop_count": {
+            "description": "the hop count property read back from the graph, or null when not exposed",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/vector3"
+              }
+            ]
+          },
+          "targets": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/$defs/vector3"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vector3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "character": {
+      "type": "object",
+      "required": [
+        "position",
+        "socket",
+        "socket_found",
+        "in_frame"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/vector3",
+          "description": "world position of the character's root (its feet)"
+        },
+        "socket": {
+          "$ref": "#/$defs/vector3",
+          "description": "world position of the bound socket (source_socket for the caster, target_socket for a target), or of the root when socket_found is false"
+        },
+        "socket_found": {
+          "type": "boolean"
+        },
+        "in_frame": {
+          "type": "boolean",
+          "description": "true when the world bounds of the character's renderers lie inside the camera's frame"
+        }
+      }
+    }
+  }
+}

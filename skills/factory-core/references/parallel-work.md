@@ -133,3 +133,8 @@ lessons of this repo behind it, each with its reason.
   whose session has already finished reaches no one and makes Orca start a follow-up worker (two appeared in plan
   plugin-flow-5). Send lead messages only to the run of a live task lead (`--to run:<id>`), and put the context a
   session needs into its start prompt (the dispatch spec, `--note` or `--note-file`), not into a later message.
+- `orca terminal read` answering `terminal_handle_stale` is not proof that a task lead ended: check
+  `orca orchestration worker-list --run <its run>` for liveness and read the lead's own Run messages before
+  dispatching a replacement lead. Reason: on 2026-11-27 Orca resumed the first pkg-core lead one minute before a
+  replacement was dispatched, and both started a verify of the same SHA; the first lead's verify noticed the foreign
+  Sandbox editor and stopped.

@@ -40,6 +40,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 import devtools  # noqa: E402
+import routing_engine  # noqa: E402
 import workspace  # noqa: E402
 from workspace import native_abs  # noqa: E402,F401  (public: run-checks.py imports it from here)
 from pluginroot import plugin_root
@@ -48,7 +49,6 @@ from snapshot_render import (  # noqa: E402,F401 (public context helpers remain 
 )
 PLUGIN_ROOT = plugin_root()
 REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "registry.json")
-RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 
 
 GIT_TIMEOUT = 60  # seconds per git call; tests patch it down
@@ -283,12 +283,7 @@ def repo_state(key, d, rep, args, reg, ws=None):
 
 
 def resolve(reg, key, files, subst, tools):
-    r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files),
-                        "--argjson", "subst", json.dumps(subst), "--argjson", "tools", json.dumps(tools),
-                        "-f", RESOLVE, REGISTRY], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if r.returncode != 0:
-        die(f"routing engine failed: {r.stderr.strip()}")
-    return json.loads(r.stdout)
+    return routing_engine.resolve(REGISTRY, key, files, subst, tools)
 
 
 def apply_override(state, lead):
