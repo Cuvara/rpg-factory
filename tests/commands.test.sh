@@ -30,7 +30,8 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json" \n         "vfx-plan" "vfx-plan --effect" "vfx-plan --bogus x" "vfx-lint" "vfx-lint --style x.md" "vfx-lint --recipe r.json" "vfx-lint --style x.md --recipe r.json --out o.json" "vfx-lint --style x.md --recipe r.json --output=o.json" "vfx-lint --style x.md --recipe r.json --wr o.json" "vfx-lint --style x.md --recipe r.json --bogus"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json" \
+         "vfx-plan" "vfx-plan --effect" "vfx-plan --bogus x" "vfx-lint" "vfx-lint --style x.md" "vfx-lint --recipe r.json" "vfx-lint --style x.md --recipe r.json --out o.json" "vfx-lint --style x.md --recipe r.json --output=o.json" "vfx-lint --style x.md --recipe r.json --wr o.json" "vfx-lint --style x.md --recipe r.json --bogus"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -228,7 +229,7 @@ python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen")
 # -- vfx-plan and vfx-lint: read-only VFX verbs (help with an example, --json, vfx-lint refuses every writing option)
 VL="$ROOT/tests/fixtures/vfx/lint"; VP="$ROOT/tests/fixtures/vfx/style/profile.json"
 python3 -B "$CMD" help --json | jq -e '[.commands[] | select(.verb == "vfx-plan" or .verb == "vfx-lint")] as $v | ($v | length) == 2
-  and all($v[]; .read_only and (.example | startswith(.verb)) and (.claude == "/rpg-factory:" + .verb) and (.args | test("--json")))' >/dev/null \
+  and all($v[]; .verb as $n | .read_only and (.example | startswith($n)) and (.claude == "/rpg-factory:" + .verb) and (.args | test("--json")))' >/dev/null \
   && ok "help lists vfx-plan and vfx-lint as read-only with an example and their slash commands" || no "help lacks vfx-plan or vfx-lint"
 out=$(python3 -B "$CMD" help); grep -q '^- vfx-plan ' <<<"$out" && grep -q '^- vfx-lint ' <<<"$out" && grep -q 'e.g. /rpg-factory:vfx-lint --style ' <<<"$out" \
   && ok "help text: vfx-plan and vfx-lint with an e.g. line" || no "help text lacks the vfx verbs"
