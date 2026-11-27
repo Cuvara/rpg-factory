@@ -22,8 +22,66 @@ def resolve_ref(schema, ref):
     return value
 
 
+# Draft 2020-12 keywords schema_errors() enforces, agreeing with jsonschema.Draft202012Validator on them.
+# One deliberate difference: format (date, date-time) is asserted here, while Draft202012Validator without a
+# format_checker treats format as an annotation only.
+SUPPORTED_KEYWORDS = frozenset(
+    {
+        "$ref", "type", "const", "enum",
+        "pattern", "minLength", "maxLength", "format",
+        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+        "minItems", "maxItems", "uniqueItems", "items",
+        "required", "properties", "additionalProperties", "minProperties", "maxProperties", "propertyNames",
+        "oneOf", "anyOf", "allOf", "not", "if", "then", "else",
+    }
+)
+# Keywords that carry no assertion; deliberately not validated.
+ANNOTATION_KEYWORDS = frozenset({"$schema", "$id", "$defs", "title", "description", "default", "examples", "$comment"})
+# Draft 2020-12 keywords still unsupported (no committed schema uses them): patternProperties, prefixItems,
+# contains, minContains, maxContains, multipleOf, dependentRequired, dependentSchemas, unevaluatedProperties,
+# unevaluatedItems, $anchor, $dynamicRef, $dynamicAnchor, $vocabulary, deprecated, readOnly, writeOnly,
+# contentEncoding, contentMediaType, contentSchema, and every format except date and date-time.
+TYPES = {
+    "object": dict,
+    "array": list,
+    "string": str,
+    "boolean": bool,
+    "integer": int,
+    "number": (int, float),
+    "null": type(None),
+}
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def type_matches(value, name):
+    if name not in TYPES:
+        return False
+    if name in ("integer", "number") and isinstance(value, bool):
+        return False
+    if name == "integer" and isinstance(value, float):
+        return value.is_integer()
+    return isinstance(value, TYPES[name])
+
+
+def json_equal(a, b):
+    """JSON equality as jsonschema defines it: bool only equals bool, 1 equals 1.0, containers compare deeply."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
+    return type(a) is type(b) and a == b
+
+
 def schema_errors(value, rule, schema, path="$", seen=None):
     seen = set() if seen is None else seen
+    if rule is True:
+        return []
+    if rule is False:
+        return [f"{path} is not allowed"]
     if "$ref" in rule:
         key = (rule["$ref"], path)
         if key in seen:
@@ -40,27 +98,62 @@ def schema_errors(value, rule, schema, path="$", seen=None):
         accepted = valid == 1 if keyword == "oneOf" else valid > 0
         if not accepted:
             errors.extend(min(matches, key=len) if valid == 0 and matches else [f"{path} must match {keyword}"])
+    for branch in rule.get("allOf", []):
+        errors.extend(schema_errors(value, branch, schema, path, seen))
+    if "not" in rule and not schema_errors(value, rule["not"], schema, path, seen):
+        errors.append(f"{path} must not match the not schema")
+    if "if" in rule:
+        branch = "then" if not schema_errors(value, rule["if"], schema, path, seen) else "else"
+        if branch in rule:
+            errors.extend(schema_errors(value, rule[branch], schema, path, seen))
     expected = rule.get("type")
-    types = {"object": dict, "array": list, "string": str, "boolean": bool, "integer": int, "number": (int, float)}
-    if expected and (expected not in types or not isinstance(value, types[expected]) or expected in ("integer", "number") and isinstance(value, bool)):
-        return [f"{path} must be {expected}"]
-    if "const" in rule and value != rule["const"]:
+    if expected:
+        names = expected if isinstance(expected, list) else [expected]
+        if not any(type_matches(value, name) for name in names):
+            return [f"{path} must be {expected if isinstance(expected, str) else ' or '.join(names)}"]
+    if "const" in rule and not json_equal(value, rule["const"]):
         errors.append(f"{path} must equal {rule['const']!r}")
-    if "enum" in rule and value not in rule["enum"]:
+    if "enum" in rule and not any(json_equal(value, option) for option in rule["enum"]):
         errors.append(f"{path} must be one of {rule['enum']!r}")
     if isinstance(value, str):
         if "pattern" in rule and not re.search(rule["pattern"], value):
             errors.append(f"{path} does not match pattern")
         if len(value) < rule.get("minLength", 0):
             errors.append(f"{path} is too short")
+        if "maxLength" in rule and len(value) > rule["maxLength"]:
+            errors.append(f"{path} is too long")
         if rule.get("format") == "date-time":
             try:
                 datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
             except ValueError:
                 errors.append(f"{path} must be date-time")
+        if rule.get("format") == "date":
+            try:
+                if not DATE.match(value):
+                    raise ValueError(value)
+                datetime.date.fromisoformat(value)
+            except ValueError:
+                errors.append(f"{path} must be date")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in rule and value < rule["minimum"]:
+            errors.append(f"{path} is below minimum {rule['minimum']}")
+        if "maximum" in rule and value > rule["maximum"]:
+            errors.append(f"{path} is above maximum {rule['maximum']}")
+        if "exclusiveMinimum" in rule and value <= rule["exclusiveMinimum"]:
+            errors.append(f"{path} must be above {rule['exclusiveMinimum']}")
+        if "exclusiveMaximum" in rule and value >= rule["exclusiveMaximum"]:
+            errors.append(f"{path} must be below {rule['exclusiveMaximum']}")
     if isinstance(value, list):
         if len(value) < rule.get("minItems", 0):
             errors.append(f"{path} has too few items")
+        if "maxItems" in rule and len(value) > rule["maxItems"]:
+            errors.append(f"{path} has too many items")
+        if rule.get("uniqueItems") and any(
+            json_equal(value[i], value[j])
+            for i in range(len(value))
+            for j in range(i + 1, len(value))
+        ):
+            errors.append(f"{path} has duplicate items")
         if "items" in rule:
             for i, item in enumerate(value):
                 errors.extend(schema_errors(item, rule["items"], schema, f"{path}[{i}]", seen))
@@ -68,12 +161,22 @@ def schema_errors(value, rule, schema, path="$", seen=None):
         for key in rule.get("required", []):
             if key not in value:
                 errors.append(f"{path} missing {key}")
+        if len(value) < rule.get("minProperties", 0):
+            errors.append(f"{path} has too few properties")
+        if "maxProperties" in rule and len(value) > rule["maxProperties"]:
+            errors.append(f"{path} has too many properties")
+        if "propertyNames" in rule:
+            for key in value:
+                errors.extend(schema_errors(key, rule["propertyNames"], schema, f"{path}.{key} (name)", seen))
         props = rule.get("properties", {})
+        extra = rule.get("additionalProperties")
         for key, item in value.items():
             if key in props:
                 errors.extend(schema_errors(item, props[key], schema, f"{path}.{key}", seen))
-            elif rule.get("additionalProperties") is False:
+            elif extra is False:
                 errors.append(f"{path} unknown field {key}")
+            elif isinstance(extra, dict):
+                errors.extend(schema_errors(item, extra, schema, f"{path}.{key}", seen))
     return errors
 
 
