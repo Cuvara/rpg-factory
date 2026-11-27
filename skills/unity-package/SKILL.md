@@ -124,6 +124,8 @@ topic name) - never by hand-editing the client.
 - `dotnet`: Netcode headless tests (`scripts/checks/netcode-headless.sh`); missing = NOT_AVAILABLE.
 - `unity-mcp`: package tests inside the client project (`testables`) and Editor compiles; not reachable =
   HUMAN_REQUIRED / CI.
+- `unity-mcp-cli`: drives the UnityVFX Sandbox on the open path `Tools~/setup-sandbox.py` prints (never
+  `Sandbox~`); missing = `sandbox-capture` and `unity-tests` NOT_RUN with the exact command.
 - `lsp-csharp`: find callers of a public package API before changing it (MISSING here: grep the package,
   the client and the DOTS Sample copy, then compile in the Editor or run the headless build).
 - `context-mode`: keep headless test and Editor logs out of context (fallback: the `.trx` counters only).
