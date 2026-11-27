@@ -29,6 +29,7 @@ Usage (via factory-context.sh):
   --toolchain probe tool versions (slow on WSL: dotnet.exe ~5 s)
   --submodules scan uncommitted work inside submodules (the client's com.gdk.* cost ~9 s)
 """
+import functools
 import glob
 import json
 import os
@@ -279,10 +280,17 @@ def repo_state(key, d, rep, args, reg, ws=None):
             "committed_paths": committed, "submodules_scanned": args["submodules"]}
 
 
+@functools.lru_cache(maxsize=None)
+def _resolve_program():
+    # Nothing path-sized goes through argv (Windows limit: 32767 characters): stdin binds the inputs, the registry is a file.
+    with open(RESOLVE, encoding="utf-8") as fh:
+        return ". as {files: $files, subst: $subst, tools: $tools} | $__reg[0] | " + fh.read()
+
+
 def resolve(reg, key, files, subst, tools):
-    r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files),
-                        "--argjson", "subst", json.dumps(subst), "--argjson", "tools", json.dumps(tools),
-                        "-f", RESOLVE, REGISTRY], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--slurpfile", "__reg", REGISTRY, _resolve_program()],
+                       input=json.dumps({"files": files, "subst": subst, "tools": tools}),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         die(f"routing engine failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
