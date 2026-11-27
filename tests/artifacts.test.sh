@@ -275,7 +275,10 @@ CASES = [
     ("type as a list", {"type": ["string", "null"]}, None, 1),
     ("type as a list accepts each member", {"type": ["string", "null"]}, "x", 1),
     ("format date", {"type": "string", "format": "date"}, "2026-11-27", "27/11/2026"),
-    ("format date rejects an impossible day", {"type": "string", "format": "date"}, "2026-02-30", "2026-13-01"),
+    ("format date rejects an impossible day", {"type": "string", "format": "date"}, "2026-02-28", "2026-02-30"),
+    ("uniqueItems keeps nested true and 1 distinct", {"type": "array", "uniqueItems": True}, [{"a": 1}, {"a": True}], [[1], [1.0]]),
+    ("const compares JSON numbers, not bool", {"const": 1}, 1.0, True),
+    ("enum compares JSON numbers, not bool", {"enum": [0, "x"]}, 0.0, False),
 ]
 for name, schema, good, bad in CASES:
     for label, value, want in (("accepts", good, True), ("rejects", bad, False)):
