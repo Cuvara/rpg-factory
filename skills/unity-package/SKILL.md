@@ -1,10 +1,10 @@
 ---
 name: unity-package
-description: Use when changing the source of a Cuvara Unity package itself - com.cuvara.netcode (Netcode repo), com.cuvara.dots (UnityDots repo) or com.cuvara.uitoolkit (UIToolkit repo) - including its runtime code, tests, samples, docs, CI, generated files, or preparing a package release up to "ready to tag". Also runs the Netcode leg (Wire.cs resync) when wire-contract invokes it. Not for moving the client's pins to a new package tag (pin-bump), not for client code that uses the packages (client-integration), and not for server or proto changes.
+description: Use when changing the source of a Cuvara Unity package itself - com.cuvara.netcode (Netcode repo), com.cuvara.dots (UnityDots repo), com.cuvara.uitoolkit (UIToolkit repo) or com.cuvara.vfx (UnityVFX repo) - including its runtime code, tests, samples, docs, CI, generated files, or preparing a package release up to "ready to tag". Also runs the Netcode leg (Wire.cs resync) when wire-contract invokes it. Not for moving the client's pins to a new package tag (pin-bump), not for client code that uses the packages (client-integration), and not for server or proto changes.
 argument-hint: "[package] [task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/netcode-headless.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
 ---
-# Unity package development (Netcode, UnityDots, UIToolkit)
+# Unity package development (Netcode, UnityDots, UIToolkit, UnityVFX)
 
 > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
@@ -12,7 +12,7 @@ Task: $ARGUMENTS
 
 ## Applies when / Not when
 
-- **Applies:** any edit inside `Netcode/`, `UnityDots/` or `UIToolkit/` at the workspace root:
+- **Applies:** any edit inside `Netcode/`, `UnityDots/`, `UIToolkit/` or `UnityVFX/` at the workspace root:
   runtime/editor code, asmdefs, tests (Unity or headless), `Samples~`, `Documentation~`,
   `.github/`, generated files, and the release-prep commit (version + CHANGELOG heading).
 - **Not when:** the client's `Packages/manifest.json` / `packages-lock.json` pins or the DOTS
@@ -28,17 +28,18 @@ Task: $ARGUMENTS
 | `Netcode/` (netcode) | `netcode.protocol`, `netcode.codec`, `netcode.runtime`, `netcode.samples`, `netcode.tests`, `netcode.package` |
 | `UnityDots/` (unitydots) | `unitydots.runtime`, `unitydots.editor`, `unitydots.samples`, `unitydots.tests`, `unitydots.package` |
 | `UIToolkit/` (uitoolkit) | `uitoolkit.runtime`, `uitoolkit.editor`, `uitoolkit.codegen-cli`, `uitoolkit.samples`, `uitoolkit.tests`, `uitoolkit.package` |
+| `UnityVFX/` (unityvfx) | `unityvfx.runtime`, `unityvfx.editor`, `unityvfx.sandbox`, `unityvfx.tests`, `unityvfx.package`, fallback `unityvfx.root`; untagged and unpinned (no pin-bump yet) |
 
 Hand-offs: `wire-contract` drives `netcode.protocol` (Wire.cs, `WireProtocolVersion`);
-`pin-bump` after a tag; `client-integration` for client call sites. None of the three repos
+`pin-bump` after a tag; `client-integration` for client call sites. None of the four repos
 has a CLAUDE.md: read the package's `README.md` and the `Documentation~` pages named in
 `references/packages.md` instead.
 
 ## Workflow delta
 
 1. **Branch base differs per repo.** Netcode integrates on `develop` (GitHub default; the local
-   `origin/HEAD` still says `main` - trust `gh repo view`). UnityDots and UIToolkit integrate on
-   `main`; their local `develop` has no upstream. Branch from the integration branch.
+   `origin/HEAD` still says `main` - trust `gh repo view`). UnityDots and UIToolkit integrate on `main`;
+   their local `develop` has no upstream. UnityVFX: `main`, no remote yet. Branch from the integration branch.
 2. **Read before edit:** the package map in `references/packages.md` (asmdefs, gates, docs,
    generated files) for the repo you touch.
 3. **Implement.** Every new Unity-visible file *and folder* gets a `.meta`. A new optional
@@ -103,7 +104,8 @@ topic name) - never by hand-editing the client.
 - **extended:** UIToolkit codegen drift CLI from a temp copy (registry check `uitoolkit.codegen-cli/uxml-drift`) (trigger: `*.uxml`,
   `*.uxml.g.cs`, `Editor/Codegen/Core/`); Netcode Wire.cs `cmp` (trigger: wire leg).
 - **external:** Unity Test Runner in the client project with the package toggled to the local
-  clone (gate), and the package CI on the PR - count jobs per `references/packages.md`.
+  clone (gate), and the package CI on the PR - count jobs per `references/packages.md`. UnityVFX
+  tests and captures run in its own Sandbox (`references/packages.md`), not the client.
 
 ## Human gates
 
@@ -122,6 +124,8 @@ topic name) - never by hand-editing the client.
 - `dotnet`: Netcode headless tests (`scripts/checks/netcode-headless.sh`); missing = NOT_AVAILABLE.
 - `unity-mcp`: package tests inside the client project (`testables`) and Editor compiles; not reachable =
   HUMAN_REQUIRED / CI.
+- `unity-mcp-cli`: drives the UnityVFX Sandbox on the open path `Tools~/setup-sandbox.py` prints (never
+  `Sandbox~`); missing = `sandbox-capture` and `unity-tests` NOT_RUN with the exact command.
 - `lsp-csharp`: find callers of a public package API before changing it (MISSING here: grep the package,
   the client and the DOTS Sample copy, then compile in the Editor or run the headless build).
 - `context-mode`: keep headless test and Editor logs out of context (fallback: the `.trx` counters only).
