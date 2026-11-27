@@ -343,10 +343,41 @@ cp "$TMP/recipe.bak" "$REC"; mv "$W/done/project/Effects/FireBolt/FireBolt.vfx" 
   && ok "plan: a recipe without its built .vfx makes the recipe step IN_PROGRESS" || no "plan unbuilt recipe: rc=$rc $(steps)"
 mv "$TMP/FireBolt.vfx.bak" "$W/done/project/Effects/FireBolt/FireBolt.vfx"
 CAP="$W/done/project/Captures/FireBolt/seed-1234-gameplay-dusk"
-# A real lint result with a FAIL row (bad budget-alive) saved next to the capture makes the capture step FAIL.
-run "$STYLE" lint --style "$PROFILE" --recipe "$G_R" --inspect "$G_I" --stats "$L/bad-budget-alive.stats.json"
+# The done fixture's vfx-lint.json is what vfx_style.py lint prints on the fixture's own inputs (paths relative to
+# plan/done, so the file names no absolute path): regenerate it with exactly this command when an input changes.
+DONE_LINT=(lint --style authoring/vfx/style/vfx-style.md --recipe project/Effects/FireBolt/FireBolt.vfxrecipe.json
+  --stats project/Captures/FireBolt/seed-1234-gameplay-dusk/stats.json --spec authoring/vfx/specs/fire-bolt.md)
+DONE_LINT_FILE="$P/done/project/Captures/FireBolt/seed-1234-gameplay-dusk/vfx-lint.json"
+(cd "$P/done" && py "$STYLE" "${DONE_LINT[@]}") > "$TMP/o.json" 2>"$TMP/err"; rc=$?
+tr -d '\r' < "$TMP/o.json" | cmp -s - "$DONE_LINT_FILE" && [ $rc -eq 0 ] \
+  && [ "$(q '.inputs.recipe.sha256')" = "$(sha256sum "$P/done/project/Effects/FireBolt/FireBolt.vfxrecipe.json" | cut -d' ' -f1)" ] \
+  && ok "plan fixture: done vfx-lint.json is the vfx_style.py lint output (exit 0), inputs.recipe.sha256 the recipe's SHA-256" \
+  || no "plan fixture lint: rc=$rc $(tr -d '\r' < "$TMP/o.json" | diff - "$DONE_LINT_FILE" | head -5) $(head -c 200 "$TMP/err")"
+# A lint result vfx_style.py prints on the work copy, saved next to the capture, binds the capture step to the recipe.
+run "$STYLE" lint --style "$W/done/authoring/vfx/style/vfx-style.md" --recipe "$REC" --stats "$CAP/stats.json"
+cp "$TMP/o.json" "$CAP/vfx-lint.json"; cp "$TMP/o.json" "$TMP/bound-lint.json"; wplan; rc=$?
+[ $rc -eq 0 ] && [ "$(q '.steps[3].state')" = DONE ] && [ "$(q '.context.lint.recipe_sha256')" = "$(q '.context.recipe.sha256')" ] \
+  && [ "$(q '.context.lint.recipe_sha256 | length')" = 64 ] && q '.steps[3].evidence[-1]' | grep -q '^lint bound to recipe sha256 ' \
+  && ok "plan: a vfx_style.py lint result is bound to its recipe (inputs.recipe.sha256) and the capture step DONE" \
+  || no "plan lint bound: rc=$rc $(steps) lint=$(q .context.lint) recipe=$(q .context.recipe.sha256)"
+# The same lint result bound to another recipe (its inputs.recipe.sha256 differs) makes the capture step STALE.
+jq '.inputs.recipe.sha256 = "0000000000000000000000000000000000000000000000000000000000000000"' "$TMP/bound-lint.json" > "$CAP/vfx-lint.json"
+wplan; rc=$?
+[ $rc -eq 0 ] && [ "$(q '.steps[3].state')" = STALE ] && [ "$(q .current_step)" = capture ] \
+  && q '.steps[3].evidence[-1]' | grep -q 'bound to recipe sha256 000000000000, not the current recipe' \
+  && ok "plan: a lint result whose recipe hash differs makes the capture step STALE" || no "plan lint other recipe: rc=$rc $(steps) $(q '.steps[3].evidence')"
+# A lint result that names no recipe SHA-256 (inputs.recipe a bare path) is not bound: IN_PROGRESS, lint again.
+jq '.inputs.recipe = .inputs.recipe.path' "$TMP/bound-lint.json" > "$CAP/vfx-lint.json"
+wplan; rc=$?
+[ $rc -eq 0 ] && [ "$(q '.steps[3].state')" = IN_PROGRESS ] && [ "$(q '.context.lint.recipe_sha256')" = null ] \
+  && q '.steps[3].evidence[-1]' | grep -q 'names no recipe SHA-256' \
+  && ok "plan: a lint result without inputs.recipe.sha256 is not bound (capture step IN_PROGRESS)" || no "plan lint unbound: rc=$rc $(steps) $(q '.steps[3].evidence')"
+# A bound lint result with a FAIL row (alive.peak above every platform budget) makes the capture step FAIL.
+jq '.alive.peak = 100000' "$CAP/stats.json" > "$TMP/stats-alive.json"
+run "$STYLE" lint --style "$W/done/authoring/vfx/style/vfx-style.md" --recipe "$REC" --stats "$TMP/stats-alive.json"
 cp "$TMP/o.json" "$CAP/vfx-lint.json"; wplan; rc=$?
 [ $rc -eq 0 ] && [ "$(q '.steps[3].state')" = FAIL ] && [ "$(q .current_step)" = capture ] && [ "$(q '.context.lint.fail')" = 1 ] \
+  && q '.steps[3].evidence[-1]' | grep -q 'budget-alive' \
   && ok "plan: a vfx_style.py lint result with a FAIL row makes the capture step FAIL" || no "plan lint FAIL: rc=$rc $(steps) lint=$(q .context.lint)"
 rm -f "$CAP/vfx-lint.json"; wplan; rc=$?
 [ $rc -eq 0 ] && [ "$(q '.steps[3].state')" = IN_PROGRESS ] && ok "plan: a capture without a lint result is IN_PROGRESS" \

@@ -12,10 +12,10 @@
   intensity, palette, texture size, flipbook grid and colour space, output type, blend mode, shader, capacity, system
   count, texture memory and alive peak against each platform budget, capture conditions, recipe hash, spec match),
   each PASS, FAIL, WARN or NOT_AVAILABLE when its input is absent. Exit 0 no FAIL, 1 a FAIL, 3 a required input
-  missing, 2 usage.
+  missing, 2 usage. The result names the recipe it graded (`inputs.recipe` with `path` and `sha256`).
 - **VFX production plan.** `scripts/vfx/vfx_plan.py` (`rpg-factory.vfx-plan/1`, rules in `scripts/vfx/data/plan.json`)
   reports for one effect the state of the five production steps (style profile, texture gen-runs, recipe and built
-  asset, capture and lint, vfx-asset record), the missing inputs and the lead route, and writes nothing. Exit 0 PLAN
+  asset, capture and lint, vfx-asset record; a lint result of another recipe is STALE), the missing inputs and the lead route, and writes nothing. Exit 0 PLAN
   or NOT_VFX, 3 NEEDS_CONTEXT, 2 usage.
 - **VFX Graph adapter.** `scripts/adapters/vfx/vfxgraph.py` reads a text-serialized `.vfx` asset and its `.meta`
   (asset GUID, system capacities, referenced GUIDs) and optional capture statistics, and checks that the statistics

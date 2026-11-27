@@ -10,8 +10,11 @@ matter, a .json artifact (its spec is the profile) or a .json spec body. show pr
 textures.linear_textures [], textures.channel_packing {}). lint reads the com.cuvara.vfx recipe
 (<Name>.vfxrecipe.json, cuvara.vfx-recipe/1) and optionally the inspect result (cuvara.vfx-inspect/1), the capture
 statistics (stats.json, cuvara.vfx-capture/1, or the final capture verb result) and the effect's vfx-spec
-artifact, and prints rpg-factory.vfx-lint/1 {schema, effect, style, inputs, element, tier, status, counts, rows}
-with one row {id, state: PASS|FAIL|WARN|NOT_AVAILABLE, evidence} per rule (scripts/vfx/vfx_lint_rules.py):
+artifact, and prints rpg-factory.vfx-lint/1 {schema, effect, style, inputs, element, tier, status, counts, rows}.
+inputs is {recipe: {path, sha256}, inspect, stats, spec}: the paths as given (null when absent) and the recipe's
+SHA-256 (of the file bytes, as in the recipe-hash rule), the one place that binds a lint result to its recipe
+(scripts/vfx/vfx_plan.py reads it). rows holds one row {id, state: PASS|FAIL|WARN|NOT_AVAILABLE, evidence: [text]}
+per rule (scripts/vfx/vfx_lint_rules.py):
 recipe-schema, vfx-graph-version, timing-sum, timing-ratios, hdr-intensity, palette, texture-size,
 texture-flipbook-grid, texture-color-space, output-type, blend-mode, shader, budget-capacity, budget-systems,
 budget-texture-memory, budget-alive, capture-conditions, recipe-hash, spec-match. A rule is NOT_AVAILABLE when
@@ -157,7 +160,8 @@ def lint(opts):
         "schema": LINT_SCHEMA,
         "effect": recipe.get("id"),
         "style": {"path": opts["--style"], "artifact": info},
-        "inputs": {k: opts.get("--" + k) for k in ("recipe", "inspect", "stats", "spec")},
+        "inputs": {"recipe": {"path": opts["--recipe"], "sha256": rules.recipe_sha256(recipe_bytes)},
+                   "inspect": opts.get("--inspect"), "stats": opts.get("--stats"), "spec": opts.get("--spec")},
         "element": rules.tag_value(recipe, "element"),
         "tier": rules.effect_tier(ctx),
         "status": status,

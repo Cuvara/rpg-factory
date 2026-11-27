@@ -13,8 +13,10 @@ The five steps of an effect (rules and texts: data/plan.json):
   3 recipe    <Name>.vfxrecipe.json (cuvara.vfx-recipe/1, id = the effect id) is in the project and <Name>.vfx is
               built next to it
   4 capture   a stats.json (cuvara.vfx-capture/1) under --captures (default <project>/Captures) whose recipe_sha256
-              is the recipe's SHA-256, and a lint result (rpg-factory.vfx-lint/1: --lint, else vfx-lint.json or
-              lint.json next to stats.json) without FAIL rows
+              is the recipe's SHA-256, and the JSON scripts/vfx/vfx_style.py lint printed (rpg-factory.vfx-lint/1:
+              --lint, else vfx-lint.json or lint.json next to stats.json) bound to the same recipe (its
+              inputs.recipe.sha256) with no FAIL in its rows; a lint result of another recipe is STALE, one that
+              names no recipe SHA-256 is IN_PROGRESS (lint again)
   5 record    the effect's vfx-asset record (its asset_path or delivery path names the recipe's stem or the effect id)
               is approved or later and its hash matches the asset file when that file is in the project
 Step states: DONE, IN_PROGRESS, TODO, NEEDS_APPROVAL, STALE, FAIL, BLOCKED, NOT_AVAILABLE (an input to grade the
@@ -569,14 +571,19 @@ def build(request, effect=None, root=None, project=None, style=None, spec=None, 
                 sc["evidence"].append("no lint result (" + r["schemas"]["lint"] + ") next to the capture"
                                       + (f": {posix(lint_path)} has schema {res.get('schema')!r}" if res else ""))
             else:
-                rows = next((res[k] for k in ("rules", "results", "rows") if isinstance(res.get(k), list)), [])
+                rows = res["rows"] if isinstance(res.get("rows"), list) else []
                 fails = [x.get("id") for x in rows if isinstance(x, dict) and x.get("state") == "FAIL"]
                 bound = lint_recipe_sha(res)
                 ctx["lint"] = {"path": posix(lint_path) if lint else rel(lint_path, cap_dir), "rows": len(rows),
-                               "fail": len(fails)}
-                if bound and bound != sha:
+                               "fail": len(fails), "recipe_sha256": bound}
+                if not bound:
+                    sc["state"] = "IN_PROGRESS"
+                    sc["evidence"].append("lint result names no recipe SHA-256 (inputs.recipe.sha256): run "
+                                          "vfx_style.py lint on the current recipe again")
+                elif bound != sha:
                     sc["state"] = "STALE"
-                    sc["evidence"].append(f"lint result names recipe_sha256 {str(bound)[:12]}, not the current recipe")
+                    sc["evidence"].append(f"lint result is bound to recipe sha256 {bound[:12]}, not the current "
+                                          f"recipe {sha[:12]}: lint again")
                 elif fails:
                     sc["state"] = "FAIL"
                     sc["evidence"].append(f"lint: {len(fails)} FAIL row(s): {', '.join(str(x) for x in fails)}")
@@ -585,7 +592,8 @@ def build(request, effect=None, root=None, project=None, style=None, spec=None, 
                     sc["evidence"].append("lint result has no rows")
                 else:
                     sc["state"] = "DONE"
-                    sc["evidence"].append(f"lint: {len(rows)} row(s), no FAIL; the contact sheet review is HUMAN_REQUIRED")
+                    sc["evidence"].append(f"lint bound to recipe sha256 {sha[:12]}: {len(rows)} row(s), no FAIL; "
+                                          "the contact sheet review is HUMAN_REQUIRED")
 
     # 5 vfx-asset record state
     if sa["state"] is None:
@@ -638,12 +646,12 @@ def build(request, effect=None, root=None, project=None, style=None, spec=None, 
 
 
 def lint_recipe_sha(res):
-    """The recipe SHA-256 a lint result names (top-level recipe_sha256, or inputs.recipe.sha256), else None."""
-    if isinstance(res.get("recipe_sha256"), str):
-        return res["recipe_sha256"]
+    """The recipe SHA-256 a vfx_style.py lint result is bound to (its inputs.recipe.sha256, the only place lint
+    writes it), else None."""
     inputs = res.get("inputs") if isinstance(res.get("inputs"), dict) else {}
     recipe = inputs.get("recipe") if isinstance(inputs.get("recipe"), dict) else {}
-    return recipe.get("sha256") if isinstance(recipe.get("sha256"), str) else None
+    sha = recipe.get("sha256")
+    return sha.lower() if isinstance(sha, str) and re.fullmatch(r"[0-9A-Fa-f]{64}", sha) else None
 
 
 def asset_file(project, asset_path):

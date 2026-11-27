@@ -26,6 +26,19 @@
   },
   "ops": [
     {
+      "op": "add_parameter",
+      "id": "p_tint",
+      "name": "Tint",
+      "type": "Color",
+      "value": [
+        2.0,
+        0.5083,
+        0.0463,
+        1.0
+      ],
+      "exposed": true
+    },
+    {
       "op": "add_context",
       "id": "spawn",
       "type": "VFXBasicSpawner"

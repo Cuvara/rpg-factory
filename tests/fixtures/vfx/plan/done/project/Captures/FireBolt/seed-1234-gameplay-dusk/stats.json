@@ -1,7 +1,7 @@
 {
   "schema": "cuvara.vfx-capture/1",
   "effect": "Assets/Effects/FireBolt/FireBolt.vfx",
-  "recipe_sha256": "62d14bb79ec51512d27bc2e2ad9f65646851b8bca4d76c63c6804c58a37be9f5",
+  "recipe_sha256": "f994b2cbbecfd0304f56ae71073345a01f9be0ef922ae42d9df013d46a43c033",
   "seed": 1234,
   "delta_time": 0.016667,
   "camera": "gameplay",

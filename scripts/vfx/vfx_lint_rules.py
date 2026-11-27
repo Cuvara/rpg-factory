@@ -29,6 +29,11 @@ ACHROMATIC = 0.1
 DEFAULT_SUM_TOLERANCE = 0.01
 
 
+def recipe_sha256(data):
+    """The recipe hash: SHA-256 of the recipe file bytes (the recipe-hash rule and lint inputs.recipe.sha256)."""
+    return hashlib.sha256(data).hexdigest()
+
+
 def row(rule_id, state, evidence):
     return {"id": rule_id, "state": state, "evidence": evidence if isinstance(evidence, list) else [evidence]}
 
@@ -547,7 +552,7 @@ def rule_recipe_hash(ctx):
         sources.append(("inspect recipe.sha256", rec.get("sha256") if isinstance(rec, dict) else None))
     if not sources:
         return row("recipe-hash", "NOT_AVAILABLE", "needs --stats or --inspect (recipe_sha256)")
-    digest = hashlib.sha256(ctx["recipe_bytes"]).hexdigest()
+    digest = recipe_sha256(ctx["recipe_bytes"])
     ev, state = ["recipe file sha256 %s" % digest], "PASS"
     for name, have in sources:
         ok = have == digest
