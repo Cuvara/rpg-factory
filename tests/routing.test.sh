@@ -8,12 +8,13 @@
 #    actually happened. Skipped (not failed) when a repo or commit is absent.
 #
 # Usage: tests/routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]
-# Cases: tasks (task scenarios), task-scope (fixture workspace), history (replayed commits), selector-smoke,
+# Cases: tasks (task scenarios), task-scope (fixture workspace), history (replayed commits), large-paths (thousands of
+# changed paths through context.py resolve(); no workspace needed), selector-smoke,
 # cli-selftest (case selection and the platform default of the workspace).
 # No case-map lines: ALL is the answer for every input. registry/* and root files are global inputs, and the routing code
 # (scripts/factory-context.sh, scripts/lib/context.py, resolve.jq) and registry.json feed every case.
 set -uo pipefail
-CASES='tasks task-scope history selector-smoke cli-selftest'
+CASES='tasks task-scope history large-paths selector-smoke cli-selftest'
 usage() {
   printf '%s\n' 'Usage: routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'     '--no-history skips the replay of real commits (history scenarios print SKIP).'
 }
@@ -387,6 +388,33 @@ history "verify pinned the wrong cluster cert"   server rpg-mmo-server       437
 history "toolkit submodule auto-bump (#137)"  client IndieRPGMMOAdventure  285a5a2 "(.routing.lead == \"pin-bump\")"
 history "toolkit v5.7.0 gitlink + CHANGELOG"  client IndieRPGMMOAdventure  525cf5b "(.routing.lead == \"pin-bump\") and $(nolead client-integration)"
 echo "history replay: $replay_cached cached / $replay_ran replayed"
+fi
+
+# A repo thousands of files ahead of its base: the changed-file list, subst and tools together exceed the 32767-character
+# Windows command-line limit, so resolve() must not pass them through argv (WinError 206). Calls the same function
+# factory-context --json uses; synthetic paths under a real server module prefix, no workspace repo needed.
+if has_case large-paths; then
+  echo "== large path list (context.py resolve, 3000 synthetic paths)"
+  lp_out=$(RPG_FACTORY_REGISTRY="$ROOT/registry.json" python3 -B -c '
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import context
+n = 3000
+files = [{"path": "backend/gateway/server/handlers/generated/sample_%05d_%s.go" % (i, "x" * 24), "status": "C ", "source": "branch"}
+         for i in range(n)]
+subst = {"{dotnet}": "dotnet", "{plugin_root}": "/plugin"}
+tools = {"go": "/usr/bin/go", "dotnet": None}
+payload = len(json.dumps({"files": files, "subst": subst, "tools": tools}))
+reg = json.load(open(context.REGISTRY, encoding="utf-8"))
+res = context.resolve(reg, "server", files, subst, tools)
+print(json.dumps({"payload": payload, "files": len(res["files"]), "touched": res["touched"],
+                  "mapped": sum(1 for f in res["files"] if f.get("module"))}))
+' "$ROOT/scripts/lib" 2>&1); lp_rc=$?
+  if [ "$lp_rc" -eq 0 ] && jq -e '.payload > 32767 and .files == 3000 and .mapped == 3000 and (.touched | length > 0)' <<<"$lp_out" >/dev/null 2>&1; then
+    pass=$((pass + 1)); echo "PASS  3000 changed paths ($(jq -r .payload <<<"$lp_out") JSON chars, over the 32767 argv limit) resolve: all mapped, modules touched"
+  else
+    fail=$((fail + 1)); echo "FAIL  3000 changed paths through resolve(): exit $lp_rc"; head -c 600 <<<"$lp_out" | sed 's/^/      /'
+  fi
 fi
 
 # A cheap successful child case also verifies that repeated selectors are deduplicated.
