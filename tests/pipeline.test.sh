@@ -2941,7 +2941,14 @@ git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TM
 git -C "$S" branch -q -D isolated-qa feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
-NOKILL="kill|taskkill|Stop-Process|--force"
+# "kill" counts only as a word: a checkout path such as .../feat-skills-vfx-graph-touchpoints contains "kill" inside "skills".
+# (^|[^[:alnum:]_]) and ([^[:alnum:]_]|$) are POSIX, the same in bash =~ and grep -E (no \b, no \<).
+NOKILL="(^|[^[:alnum:]_])kill([^[:alnum:]_]|$)|taskkill|Stop-Process|--force"
+if ! has_ere "  git -C /w/feat-skills-vfx-graph-touchpoints worktree remove '/w/skills/srv-gw'" "$NOKILL" \
+  && has_ere "kill -9 4242" "$NOKILL" && has_ere "run: kill" "$NOKILL" && has_ere "taskkill /F /PID 4" "$NOKILL" \
+  && has_ere "git worktree remove --force x" "$NOKILL"
+then pass=$((pass + 1)); echo "PASS  NOKILL matches the word kill, not the letters inside a path containing skills"
+else fail=$((fail + 1)); echo "FAIL  NOKILL word boundary: a skills path matched, or a real kill did not"; fi
 # a plain git task worktree: removed with `git worktree remove` (no --force)
 git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
 opath "plain task worktree: git worktree remove without --force" 1 "^  git -C .* worktree remove [^ ]*srv-gw'?$" cleanup "$G"
