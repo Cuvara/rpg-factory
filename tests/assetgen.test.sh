@@ -376,7 +376,7 @@ AG() {
     echo "AG: the asset-gen server stopped or timed out while serving this call: $*" >&2
     return 1
   }
-  read -r rc < "$f.rc"
+  read -r rc < "$f.rc"; rc=${rc%$'\r'} # agserver.py writes the file in text mode: CRLF on Windows
   if [ -s "$f.out" ]; then IFS= read -r -d '' o < "$f.out"; printf '%s' "$o"; fi
   if [ -s "$f.err" ]; then IFS= read -r -d '' e < "$f.err"; printf '%s' "$e" >&2; fi
   return "$rc"
