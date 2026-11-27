@@ -102,7 +102,7 @@
             "id": "recipe-lint",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
-            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing (pip install jsonschema): report NOT_RUN (tool missing), never PASS.",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
             "parser": "exit"
           },
           {
@@ -230,7 +230,7 @@
             "id": "recipe-lint",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
-            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing (pip install jsonschema): report NOT_RUN (tool missing), never PASS.",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
             "parser": "exit"
           },
           {
@@ -305,7 +305,7 @@
             "id": "recipe-lint",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_recipes.py",
-            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing (pip install jsonschema): report NOT_RUN (tool missing), never PASS.",
+            "evidence": "exit 0: 'check_recipes: OK, N recipe(s) valid against Schemas~/vfx-recipe.schema.json'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
             "parser": "exit"
           },
           {
@@ -326,7 +326,7 @@
             "id": "schemas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_schemas.py",
-            "evidence": "exit 0: 'check_schemas: OK, N schema(s) are valid draft 2020-12 schemas'. Exit 2 = python jsonschema missing: NOT_RUN (tool missing), never PASS.",
+            "evidence": "exit 0: 'check_schemas: OK, N schema(s) are valid draft 2020-12 schemas'. Exit 2 = python jsonschema missing: the exit parser grades it FAIL; pip install jsonschema and rerun.",
             "parser": "exit"
           }
         ],
