@@ -6082,7 +6082,7 @@
         "authoring"
       ],
       "domain": "vfx",
-      "order": 102,
+      "order": 104,
       "paths": [
         "**/*.vfx",
         "**/*.vfxrecipe.json",
