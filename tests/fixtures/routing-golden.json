@@ -532,6 +532,116 @@
       ]
     }
   ],
+  "UnityVFX editor verb -> unity-package leads, tech vfx-graph": [
+    {
+      "checks": [
+        "check-metas",
+        "recipe-lint",
+        "asmdefs",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "recipe-lint",
+        "asmdefs",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "recipe-lint",
+        "sandbox-capture",
+        "asmdefs",
+        "package-json",
+        "unity-tests"
+      ],
+      "repo": "unityvfx",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "vfx-graph"
+        ]
+      },
+      "touched": [
+        "unityvfx.editor"
+      ]
+    }
+  ],
+  "UnityVFX effect recipe and .vfx build -> unity-package leads, tech vfx-graph (never routed)": [
+    {
+      "checks": [
+        "check-metas",
+        "recipe-lint",
+        "sandbox-capture",
+        "asmdefs",
+        "package-json",
+        "unity-tests"
+      ],
+      "repo": "unityvfx",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "vfx-graph"
+        ]
+      },
+      "touched": [
+        "unityvfx.effects"
+      ]
+    }
+  ],
+  "UnityVFX runtime player code -> no tech vfx-graph": [
+    {
+      "checks": [
+        "check-metas",
+        "asmdefs",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "recipe-lint",
+        "asmdefs",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "recipe-lint",
+        "asmdefs",
+        "unity-tests",
+        "sandbox-capture",
+        "check-metas",
+        "recipe-lint",
+        "sandbox-capture",
+        "asmdefs",
+        "package-json",
+        "unity-tests"
+      ],
+      "repo": "unityvfx",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech"
+        ]
+      },
+      "touched": [
+        "unityvfx.runtime"
+      ]
+    }
+  ],
   "absolute path (WSL /mnt/c/ form) routes like repo-relative": [
     {
       "checks": [

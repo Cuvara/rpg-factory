@@ -384,6 +384,20 @@ plan --effect fire-bolt --root "$P/style-only/authoring" --project "$P/style-onl
 plan --json "$(cat "$P/not-vfx/request.txt")"; rc=$?
 [ $rc -eq 0 ] && [ "$(q .status)" = NOT_VFX ] && [ "$(q '.steps | length')" = 0 ] && [ "$(q .lead)" = null ] \
   && ok "plan NOT_VFX: a Nakama request has no VFX signal (exit 0, no steps, no lead)" || no "plan NOT_VFX: rc=$rc status=$(q .status)"
+for req in "shadow strike cooldown" "reduce the shadow strike cooldown" "increase the fire bolt damage by 10%"; do
+  plan --json "$req"; rc=$?
+  [ $rc -eq 0 ] && [ "$(q .status)" = NOT_VFX ] && [ "$(q '.steps | length')" = 0 ] && [ "$(q .lead)" = null ] \
+    && ok "plan NOT_VFX: gameplay wording '$req' has no VFX signal" || no "plan NOT_VFX '$req': rc=$rc status=$(q .status)"
+done
+plan --json "make a shadow strike" --root "$P/empty/authoring" --project "$P/empty/project"; rc=$?
+[ $rc -eq 3 ] && [ "$(q .status)" = NEEDS_CONTEXT ] \
+  && ok "plan: positive control 'make a shadow strike' still plans as VFX (the gameplay lookahead does not hide the visual noun)" \
+  || no "plan positive control: rc=$rc status=$(q .status)"
+plan --json --effect fire-bolt --root "$P/empty/authoring" --project "$P/empty/project"; rc=$?
+[ $rc -eq 0 ] && [ "$(q '[.steps[] | select(.id == "recipe" or .id == "capture") | select(.action | contains("rpg-factory:unity-package"))] | length')" = 2 ] \
+  && [ "$(q '[.steps[] | select(.id == "style" or .id == "textures" or .id == "record") | select(.action | contains("unity-package"))] | length')" = 0 ] \
+  && ok "plan steps: only recipe and capture name the unity-package leg for the com.cuvara.vfx package" \
+  || no "plan unity-package leg: rc=$rc $(q '[.steps[] | .id + ":" + (.action | contains("unity-package") | tostring)] | join(",")')"
 for req in "make a fire burst" "create a burst of lightning for the staff" "add a frost nova"; do
   plan --json "$req" --root "$P/empty/authoring" --project "$P/empty/project"; rc=$?
   [ $rc -eq 3 ] && [ "$(q .status)" = NEEDS_CONTEXT ] && [ "$(q .lead)" != null ] \

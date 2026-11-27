@@ -1,0 +1,6 @@
+---
+type: llm
+weight: 2
+---
+
+Routes through `factory-core` with lead `unity-package` (the effect lives in UnityVFX) and the `vfx` lead for the style profile, lint and record, with `vfx-graph` as supporting skill. Reads the approved `vfx-style` profile first and takes camera, lighting and seed from its `capture` block. Writes or edits the recipe `Effects/<Name>/<Name>.vfxrecipe.json` (names taken from `catalog`, never remembered) and builds it through `python Tools~/vfxcli.py build`; never writes or patches `.vfx`, `.prefab` or `.meta` YAML as text. Opens the Sandbox only through `python Tools~/setup-sandbox.py --open` (the open path, never the `Sandbox~` folder), closes it with `setup-sandbox.py --close`, and never touches the game client's Unity editor. Runs `vfxcli.py capture` with a fixed seed, reads `stats.json` (including `recipe_sha256`) and runs `/rpg-factory:vfx-lint` (or `vfx_style.py lint`) on the recipe, inspect result and `stats.json`; a FAIL row goes back to the recipe. Leaves the contact-sheet review and the Play-mode review (gate `vfx-visual-review`) as `HUMAN_REQUIRED` and never records an approval. Reports every step it did not run (no Unity, no `unity-mcp-cli`) as `NOT_RUN` or `NOT_AVAILABLE` with the exact command, never PASS, and claims no frame time or particle count it did not read.

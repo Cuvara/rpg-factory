@@ -14,7 +14,7 @@ the result and owns the gates; the person's Play-mode review (gate `vfx-visual-r
       is a `catalog` name (an unknown name is a build error, not a warning).
 - [ ] The build result is `ok` with no `compile_errors` and no `compile:` warnings (a `Recorded` bounds warning means
       `boundsMode` was left at its default); `guid_stable` true for an existing asset.
-- [ ] Graph identity is checked by `describe_sha256` (build, inspect, capture's recipe), not by the `.vfx` file hash.
+- [ ] Graph identity is checked by `describe_sha256` (build, apply, inspect), not by the `.vfx` file hash.
 
 ## Graph
 

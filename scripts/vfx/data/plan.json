@@ -15,7 +15,7 @@
   "com\\.cuvara\\.vfx",
   "\\bvfx-(style|spec|asset|direction|lint|capture)\\b",
   "\\b(spell|hit|impact|explosion|fire|frost|ice|lightning|magic|aura|trail|muzzle|smoke|spark|heal|buff|debuff|portal|shield) (effect|fx)s?\\b",
-  "\\b(fire|flame|frost|ice|lightning|magic|arcane|smoke|spark|ember|poison|holy|shadow) (burst|blast|bolt|nova|ring|slash|swirl|puff|flash|wave|beam|orb|strike|storm|splash|trail|cloud|bloom)s?\\b",
+  "\\b(fire|flame|frost|ice|lightning|magic|arcane|smoke|spark|ember|poison|holy|shadow) (burst|blast|bolt|nova|ring|slash|swirl|puff|flash|wave|beam|orb|strike|storm|splash|trail|cloud|bloom)s?\\b(?!\\s+(cooldowns?|damage|dmg|cost|mana|range|radius|scaling|stats?|rank|tooltip|talent|crit|chance|proc|balance|nerf|buff))",
   "\\b(burst|blast|bolt|nova|swirl|puff|flash|cloud|storm)s? of (fire|flame|frost|ice|lightning|magic|smoke|sparks?|embers?)\\b",
   "\\beffects? (recipe|graph|capture|texture|budget|style)s?\\b",
   "\\bfx\\b",
@@ -120,14 +120,14 @@
    "title": "Recipe and built asset",
    "lead_domain": "vfx",
    "lead_skill": "vfx",
-   "action": "write <Name>.vfxrecipe.json (cuvara.vfx-recipe/1, id = the effect id) in the effect folder and build it with com.cuvara.vfx Tools~/vfxcli.py build, which writes <Name>.vfx next to it"
+   "action": "write <Name>.vfxrecipe.json (cuvara.vfx-recipe/1, id = the effect id) in the effect folder and build it with com.cuvara.vfx Tools~/vfxcli.py build, which writes <Name>.vfx next to it (authoring and building use rpg-factory:vfx-graph; a change to the com.cuvara.vfx package itself goes through rpg-factory:unity-package)"
   },
   {
    "id": "capture",
    "title": "Capture and lint",
    "lead_domain": "vfx",
    "lead_skill": "vfx",
-   "action": "capture the built effect with Tools~/vfxcli.py capture at the profile's camera, lighting and seed, then run scripts/vfx/vfx_style.py lint --style <profile> --recipe <recipe> --inspect <inspect> --stats <stats.json> and save its JSON next to stats.json as vfx-lint.json; a person reviews the contact sheet (HUMAN_REQUIRED)"
+   "action": "capture the built effect with Tools~/vfxcli.py capture at the profile's camera, lighting and seed, then run scripts/vfx/vfx_style.py lint --style <profile> --recipe <recipe> --inspect <inspect> --stats <stats.json> and save its JSON next to stats.json as vfx-lint.json; a person reviews the contact sheet (HUMAN_REQUIRED); a capture or catalog defect in the com.cuvara.vfx package goes through rpg-factory:unity-package, not an edit in this step"
   },
   {
    "id": "record",

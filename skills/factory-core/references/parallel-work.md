@@ -64,3 +64,8 @@ slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --i
   integration branch (or checks the topic out) before dispatching. Reason: in plan ci-matrix a task worktree landed
   under the main checkout instead of the run lead's worktree. Dispatch prints a stderr hint; `tests/pipeline.test.sh`
   covers it.
+- `orca terminal read` answering `terminal_handle_stale` is not proof that a task lead ended: check
+  `orca orchestration worker-list --run <its run>` for liveness and read the lead's own Run messages before
+  dispatching a replacement lead. Reason: on 2026-11-27 Orca resumed the first pkg-core lead one minute before a
+  replacement was dispatched, and both started a verify of the same SHA; the first lead's verify noticed the foreign
+  Sandbox editor and stopped.

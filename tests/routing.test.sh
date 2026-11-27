@@ -247,6 +247,10 @@ assert "client measurement tools (measure) -> Unity tech, not dotnet-gameserver"
 assert "server tick change -> no Unity tech skill" server   "$(lead server-realtime) and $(notech unity-dots) and $(notech netcode-client)" backend/gameserver-dotnet/GameServer/Server/TickLoop.cs
 assert "deploy-only change -> no tech skill" server \
   "$(lead server-ops) and (.routing.legs == []) and (.routing.tech == [])" backend/deploy/monitoring/prometheus.yaml
+# UnityVFX effect build (recipe + built graph) -> unity-package leads, tech vfx-graph; runtime-only code -> no vfx-graph
+assert "UnityVFX effect recipe and .vfx build -> unity-package leads, tech vfx-graph (never routed)" unityvfx   "$(lead unity-package) and $(tech vfx-graph) and (any(.suggested_skills[]; .skill == \"vfx-graph\") | not)" Effects/FireBurst/FireBurst.vfxrecipe.json Effects/FireBurst/FireBurst.vfx
+assert "UnityVFX editor verb -> unity-package leads, tech vfx-graph" unityvfx   "$(lead unity-package) and $(tech vfx-graph)" Editor/Cli/VfxCli.cs
+assert "UnityVFX runtime player code -> no tech vfx-graph" unityvfx   "$(lead unity-package) and $(notech vfx-graph)" Runtime/VfxPlayer.cs
 
 # a tech skill can never be forced into ownership, and --explain names it as supporting context
 for t in $(jq -r '.skills | to_entries[] | select(.value.kind == "tech") | .key' "$ROOT/registry.json" | tr -d '\r'); do
@@ -296,6 +300,9 @@ fexpect 'authoring assetgen path -> asset-gen leads, tech comfyui' "jq -e '.repo
 art2d_nocomfy="$(lead art-2d) and $(notech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths art2d/specs/iron-sword.md 2>&1)
 fexpect 'authoring art2d path -> art-2d leads, no tech comfyui (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
+vfx_graph_route="$vfx_lead and $(tech vfx-graph)"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths vfx/assets/fire-burst/asset.md 2>&1)
+fexpect 'authoring vfx/assets path -> vfx leads with tech vfx-graph' "jq -e '.repos[0] | $vfx_graph_route' <<<\"\$out\" >/dev/null"
 out=$(fctx "$FS")
 fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
   'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'

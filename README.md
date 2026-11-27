@@ -99,6 +99,8 @@ Optional tools are detected without launching applications or making provider re
 | `/rpg-factory:ui-screen <request>` | the UI plan for implementing or wiring a screen (including imported UXML) | no |
 | `/rpg-factory:ui-review <request>` | the UI plan for a review, loading only the validation skills | no |
 | `/rpg-factory:assetgen list\|show\|resolve\|lint\|review-cmd [args]` | asset-gen data (purposes, styles, ComfyUI templates; core and game layer), a resolved spec, data lint, the Codex review command (printed, never run) | no |
+| `/rpg-factory:vfx-plan [--effect <id>] [--project <dir>] [--style <file>] <request>` | the VFX production plan: the five steps (style profile, textures, recipe, capture, record) with their state, what is missing, the lead and next steps; NOT_VFX for a gameplay request; see `docs/architecture/vfx-production.md` | no |
+| `/rpg-factory:vfx-lint --style <profile> --recipe <file> [--inspect\|--stats\|--spec <file>]` | one recipe linted against the project's `vfx-style` profile: per-rule PASS/FAIL/WARN/NOT_AVAILABLE rows (timing, HDR intensity, palette, textures, shader, budgets, capture conditions, recipe hash, spec match); writes nothing, exit 1 on a FAIL, 3 on a missing input | no |
 
 Every verb also runs from a shell (Codex, scripts, other agents) as `python3 -B <plugin root>/scripts/factory-cmd.py
 <verb> <args>`; `factory-cmd.py help [--json]` (schema `rpg-factory.commands/1`) lists each verb with its arguments, an
@@ -106,7 +108,8 @@ example and both forms. `--json` output is for agents: `domain` emits `rpg-facto
 
 Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
 works too). The `ui*` commands only plan; the plan names the route and the UI skills to load
-(`docs/architecture/ui-skills.md`). Multi-step delivery in any other repository starts with the `delivery` skill
+(`docs/architecture/ui-skills.md`). The `vfx-plan` and `vfx-lint` verbs cover the VFX production chain (style profile,
+textures, recipe, capture, lint, human review, record; `docs/architecture/vfx-production.md`). Multi-step delivery in any other repository starts with the `delivery` skill
 (next section); `factory-core` calls it for the same flow inside the workspace.
 
 ## Delivery in any project
@@ -190,6 +193,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
                                                   ui-component-selection · ui-figma-import
                                                   ui-toolkit-screen · ui-validation
                                                   asset generation (paths assetgen/): comfyui
+                                                  VFX Graph effects (paths *.vfxrecipe.json, Effects/): vfx-graph
               └────────────────┬─────────────────┘
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
@@ -241,6 +245,7 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `ui-toolkit-screen` | client-integration | screens and popups on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, registration, navigator, codegen, settings, dialogs, theme service |
 | `ui-validation` | client-integration | UI review and evidence: references, bindings, lifecycle, theme, responsive, runtime, tests; the ui-review checklist |
 | `comfyui` | asset-gen, art-2d, art-3d, ui-ux, vfx | comfy-template format and game-layer precedence, comfy-mcp setup and tool sequence, the 9router image node's pitfalls, ComfyUI ports, adding a purpose, style or template |
+| `vfx-graph` | unity-package, vfx | VFX Graph effects with com.cuvara.vfx in UnityVFX: the recipe (`cuvara.vfx-recipe/1`) and its ops, catalog and describe before writing, build and apply, `import-texture`, the agent-owned Sandbox (`Tools~/vfxcli.py`, unity-mcp-cli), deterministic capture with its contact sheet and `stats.json`, the VFX Graph review checklist; the production chain is in `docs/architecture/vfx-production.md` |
 
 **Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry
 `dev_tools` it uses (Unity MCP, Go LSP, C# LSP, pg-aiguide, context-mode, codex, dotnet, go, protoc,
