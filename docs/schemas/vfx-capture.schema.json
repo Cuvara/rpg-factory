@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "com.cuvara.vfx capture statistics (stats.json), lint mirror",
+  "description": "Mirror of the UnityVFX package schema Schemas~/vfx-capture.schema.json (cuvara.vfx-capture/1, Documentation~/CAPTURE.md), restricted to the fields scripts/vfx/vfx_style.py lint and the vfx quality plugin read. Every field named here exists in the package schema with the same name and type; the package schema is the source of truth and holds more fields (frames, contact_sheet, bounds, resolution, ...), so this mirror allows additional properties. The capture records no platform or budget field: budgets come from the vfx-style profile.",
+  "type": "object",
+  "required": [
+    "schema",
+    "effect",
+    "recipe_sha256",
+    "seed",
+    "camera",
+    "lighting",
+    "vfx_graph",
+    "duration_seconds",
+    "alive",
+    "systems"
+  ],
+  "properties": {
+    "schema": {
+      "const": "cuvara.vfx-capture/1"
+    },
+    "effect": {
+      "type": "string",
+      "pattern": "\\.(prefab|vfx)$",
+      "description": "project path of the captured .prefab or .vfx"
+    },
+    "recipe_sha256": {
+      "description": "SHA-256 of the <name>.vfxrecipe.json next to the effect's .vfx, or null when there is none; lint compares it with the recipe file",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "description": "VisualEffect.startSeed; compared with the profile's capture.seed"
+    },
+    "camera": {
+      "enum": [
+        "gameplay",
+        "close",
+        "side"
+      ]
+    },
+    "lighting": {
+      "enum": [
+        "day",
+        "dusk",
+        "night"
+      ]
+    },
+    "vfx_graph": {
+      "type": "string",
+      "minLength": 1,
+      "description": "installed VFX Graph version (17.6.0)"
+    },
+    "duration_seconds": {
+      "description": "simulated time at which the effect ended; null when it did not end by max_seconds or never had a particle",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "number",
+          "minimum": 0
+        }
+      ]
+    },
+    "alive": {
+      "type": "object",
+      "required": [
+        "peak"
+      ],
+      "properties": {
+        "peak": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "largest alive count at any sample or probe; graded against each platform's max_alive_particles"
+        }
+      }
+    },
+    "systems": {
+      "type": "array",
+      "description": "one entry per particle system; capacity is graded against the budgets and peak against capacity",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "capacity",
+          "peak"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "peak": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
