@@ -29,6 +29,7 @@ Usage (via factory-context.sh):
   --toolchain probe tool versions (slow on WSL: dotnet.exe ~5 s)
   --submodules scan uncommitted work inside submodules (the client's com.gdk.* cost ~9 s)
 """
+import functools
 import glob
 import json
 import os
@@ -279,17 +280,11 @@ def repo_state(key, d, rep, args, reg, ws=None):
             "committed_paths": committed, "submodules_scanned": args["submodules"]}
 
 
-_RESOLVE_PROGRAM = None
-
-
+@functools.lru_cache(maxsize=None)
 def _resolve_program():
-    # Constant-size program: binds $files/$subst/$tools from stdin and the registry from --slurpfile, then runs
-    # resolve.jq. Nothing that grows with the path count goes through argv (Windows limit: 32767 characters).
-    global _RESOLVE_PROGRAM
-    if _RESOLVE_PROGRAM is None:
-        with open(RESOLVE, encoding="utf-8") as fh:
-            _RESOLVE_PROGRAM = ". as {files: $files, subst: $subst, tools: $tools} | $__reg[0] | " + fh.read()
-    return _RESOLVE_PROGRAM
+    # Nothing path-sized goes through argv (Windows limit: 32767 characters): stdin binds the inputs, the registry is a file.
+    with open(RESOLVE, encoding="utf-8") as fh:
+        return ". as {files: $files, subst: $subst, tools: $tools} | $__reg[0] | " + fh.read()
 
 
 def resolve(reg, key, files, subst, tools):
