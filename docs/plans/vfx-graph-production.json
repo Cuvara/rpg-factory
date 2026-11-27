@@ -407,6 +407,35 @@
         "the routing scenario and the golden fixture pass",
         "docs name the new skill, verbs, artifact kind and gate with correct counts"
       ]
+    },
+    {
+      "id": "context-argv",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "standard",
+      "grade_reason": "one subprocess call and its test; the jq program keeps its variables",
+      "objective": "Integration QA at b5a544b failed: scripts/lib/context.py resolve() passes the changed-file list, subst and tools to jq through argv (--argjson), so factory-context --json dies with WinError 206 on Windows when a repo is a few hundred files ahead of its base (UnityVFX is 390 files ahead of main; the 32767-character command-line limit). Pass the three JSON values to jq without the command line - for example one JSON object on stdin read with --slurp or input, or temporary files resolved through scripts/lib/fstate.py with --slurpfile - so scripts/lib/resolve.jq keeps $files, $subst and $tools with the same values and every routing result stays byte-identical. Add a test that routes a few thousand synthetic paths through the same code path (it must fail before the change on Windows and pass after; on Linux it must at least exercise the new input path), and keep tests/routing.test.sh, tests/routing-golden.test.sh and the hook speed budget green. One fragment changelog.d/context-argv.md (### Fixed).",
+      "paths": [
+        "scripts/lib/context.py",
+        "scripts/lib/resolve.jq",
+        "tests/routing.test.sh",
+        "tests/routing-golden.test.sh",
+        "changelog.d/context-argv.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "touchpoints"
+      ],
+      "checks": [
+        "tests/routing.test.sh",
+        "tests/routing-golden.test.sh",
+        "tests/hook-perf.test.sh"
+      ],
+      "acceptance": [
+        "factory-context --json succeeds with a few thousand changed paths on Windows",
+        "routing output is unchanged for the golden scenarios",
+        "a test covers the large path list"
+      ]
     }
   ]
 }
