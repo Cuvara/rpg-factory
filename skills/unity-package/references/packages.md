@@ -1,9 +1,9 @@
-# Package map: Netcode, UnityDots, UIToolkit
+# Package map: Netcode, UnityDots, UIToolkit, UnityVFX
 
 Verified 2026-09-30 from each repo's working tree (`git`, `package.json`, `*.asmdef`,
 `.github/`, `Documentation~/`) and `gh repo view`. Re-check versions and pins before quoting them.
 
-## Common to all three
+## Common to Netcode, UnityDots and UIToolkit (not UnityVFX)
 
 - Repo root **is** the package root (`package.json`, `CHANGELOG.md`, `README.md`, each with `.meta`).
 - `unity: "6000.3"`; every Unity CI job uses the Unity version of fact `unity-editor-version` via `game-ci/unity-test-runner`.
@@ -137,3 +137,34 @@ project also installs entities 1.4.8 + inputsystem 1.18.0), `Install probe (bare
 so never trigger it without the user).
 
 `CHANGELOG.md` is mixed UTF-8 / cp1252 (first invalid byte 0x97 at offset 1559).
+
+## UnityVFX - `com.cuvara.vfx`
+
+Verified 2026-11-27 from the `UnityVFX` working tree (branch `feat/skills/vfx-graph`; `main` holds only
+the design commit until the run lead integrates).
+
+| Item | Value |
+|---|---|
+| Repo / integration | `UnityVFX/` (registry key `unityvfx`), release branch **`main`**; no remote yet (target `Cuvara/UnityVFX`). CI on push main/develop, PR into `main` |
+| State | untagged, unpublished, no client pin: pin-bump does not apply until the owner tags (`factory-status.py` reports it untagged and unpinned) |
+| Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py UnityVFX` / `factory-status.py`; `unity: "6000.6"`; Sandbox editor, VFX Graph and Unity-MCP versions: registry facts |
+| Modules | `unityvfx.runtime`, `unityvfx.editor`, `unityvfx.sandbox`, `unityvfx.tests`, `unityvfx.package`, fallback `unityvfx.root` |
+
+Assemblies: `Runtime/Cuvara.VFX`, `Editor/Cuvara.VFX.Editor`, `Editor/Bridge/Unity.Testing.VisualEffectGraph.Editor`
+(the bridge: VFX Graph internals are reached through that friend assembly name, which is in VFX Graph's
+`InternalsVisibleTo` list - `Documentation~/DESIGN.md` "VFX Graph internals"; known issue
+`vfx-graph-internal-api`), tests `Tests/Editor/Cuvara.VFX.Editor.Tests` (EditMode),
+`Tests/Runtime/Cuvara.VFX.Tests` (PlayMode); fixture `Tests/Fixtures/BurstQuads/`.
+
+Sandbox: `Sandbox~/` is the package's own Unity project (URP, VFX Graph, Unity-MCP). Open it
+only through `python Tools~/setup-sandbox.py --open` and pass the open path it prints, never `Sandbox~`
+(`Documentation~/AUTHORING.md` "Sandbox"); close with `--close`. Never open the client's editor for it.
+
+Docs (`Documentation~/`): `AUTHORING.md` (Sandbox, `Tools~/vfxcli.py` verbs, recipe format, pitfalls,
+"Differences from DESIGN.md" - the built formats win), `CAPTURE.md`, `CI.md`, `DESIGN.md`; schemas in
+`Schemas~/`. A recipe change rebuilds its `.vfx` and its capture.
+
+CI (`.github/workflows/ci.yml`, `Documentation~/CI.md` "Jobs"): `validate` (no Unity: `check_package_json.py`,
+`check_changelog.py`, `check_metas.py`, `check_asmdefs.py`, `check_schemas.py`, `check_recipes.py`; the
+last two need `jsonschema`), `licence`, and `editmode` / `playmode` in a copy of the Sandbox, skipped
+(not failed) without the `UNITY_LICENSE` secret. No `release.yml` yet.
