@@ -387,7 +387,8 @@
         "tests/vfx-production.test.sh",
         "tests/pipeline.test.sh",
         "tests/new-skill.test.sh",
-        "skills/factory-core/references/parallel-work.md"
+        "skills/factory-core/references/parallel-work.md",
+        "skills/vfx-graph/SKILL.md"
       ],
       "exclusions": [],
       "deps": [
