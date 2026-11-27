@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VFX style profile (vfx-style) spec",
+  "description": "The spec body of a vfx-style artifact: one per project, binding (binding_values true), stored under the authoring repo's vfx/style/. It fixes the look and the limits every effect of the project is graded against by scripts/vfx/vfx_style.py lint: palette and colour ramps per element, HDR intensity bands per importance tier, phase timing ratios, texture conventions, allowed outputs, blend modes and shaders, per-platform budgets, the capture viewing conditions and the asset-gen style the effect textures are generated with. Field values are compared with the com.cuvara.vfx recipe (cuvara.vfx-recipe/1), inspect output (cuvara.vfx-inspect/1) and capture statistics (cuvara.vfx-capture/1, mirror: docs/schemas/vfx-capture.schema.json).",
+  "type": "object",
+  "required": [
+    "purpose",
+    "assetgen_style",
+    "vfx_graph",
+    "palette",
+    "hdr_intensity",
+    "timing",
+    "textures",
+    "outputs",
+    "budgets",
+    "capture"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "description": "what the profile is for: the game, its art direction and the effects it covers"
+    },
+    "assetgen_style": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "asset-gen style id the effect textures are generated with (templates/assetgen/styles/<id>.json or a game-layer style, for example realistic-pbr)"
+    },
+    "vfx_graph": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "VFX Graph major.minor the project's effects target; compared with the recipe's vfx_graph and the capture's vfx_graph"
+    },
+    "palette": {
+      "type": "object",
+      "required": [
+        "hue_tolerance_degrees",
+        "elements"
+      ],
+      "additionalProperties": false,
+      "description": "named colours and ramps per element (fire, frost, lightning, ...); an effect names its element in the recipe meta.tags as element:<name>",
+      "properties": {
+        "hue_tolerance_degrees": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 180,
+          "description": "largest hue distance in degrees between a colour of the effect and the nearest palette colour of its element"
+        },
+        "elements": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/element"
+          }
+        }
+      }
+    },
+    "hdr_intensity": {
+      "type": "object",
+      "required": [
+        "primary",
+        "secondary",
+        "ambient"
+      ],
+      "additionalProperties": false,
+      "description": "HDR intensity band per importance tier, in the units of Unity's HDR colour picker (log2 of the largest channel, the intensity field of the inspect hdr_colors); an effect names its tier in the recipe meta.tags as tier:<name> or in its vfx-spec",
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/intensity_band"
+        },
+        "secondary": {
+          "$ref": "#/$defs/intensity_band"
+        },
+        "ambient": {
+          "$ref": "#/$defs/intensity_band"
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "required": [
+        "anticipation",
+        "impact",
+        "dissipation"
+      ],
+      "additionalProperties": false,
+      "description": "share of the effect's duration (recipe meta.duration_seconds) each phase of the recipe meta.phases may take, matched by phase name",
+      "properties": {
+        "anticipation": {
+          "$ref": "#/$defs/share_band"
+        },
+        "impact": {
+          "$ref": "#/$defs/share_band"
+        },
+        "dissipation": {
+          "$ref": "#/$defs/share_band"
+        },
+        "sum_tolerance_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "largest difference between the sum of the phase seconds and meta.duration_seconds"
+        }
+      }
+    },
+    "textures": {
+      "type": "object",
+      "required": [
+        "max_size",
+        "flipbook_grids",
+        "color_space"
+      ],
+      "additionalProperties": false,
+      "description": "conventions for the textures an effect references (the inspect textures and the import-texture transform)",
+      "properties": {
+        "max_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "largest width or height in pixels of an imported effect texture"
+        },
+        "flipbook_grids": {
+          "type": "array",
+          "minItems": 1,
+          "description": "allowed flipbook grids as <columns>x<rows>",
+          "items": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*x[1-9][0-9]*$"
+          }
+        },
+        "channel_packing": {
+          "type": "object",
+          "description": "named channel layouts of packed data textures (layout id to the content of each channel)",
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/channel_layout"
+          }
+        },
+        "color_space": {
+          "enum": [
+            "linear",
+            "srgb"
+          ],
+          "description": "colour space of colour textures (the import-texture srgb or linear step; inspect srgb)"
+        },
+        "linear_textures": {
+          "type": "array",
+          "description": "glob patterns of project texture paths that hold data and must be linear whatever color_space says (masks, noise, flow maps)",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "required": [
+        "types",
+        "blend_modes",
+        "shaders"
+      ],
+      "additionalProperties": false,
+      "description": "what an output context of an effect may be (the inspect outputs)",
+      "properties": {
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "description": "allowed output context classes (VFXPlanarPrimitiveOutput, VFXQuadStripOutput, ...)",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "blend_modes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "Opaque",
+              "Alpha",
+              "Additive",
+              "AlphaPremultiplied"
+            ]
+          }
+        },
+        "shaders": {
+          "type": "array",
+          "minItems": 1,
+          "description": "glob patterns an output's shader name or Shader Graph path must match (Hidden/VFX/* for the shaders VFX Graph generates)",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "budget per target platform id (android, webgl, windows, linux); an effect must fit every platform listed",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/budget"
+      }
+    },
+    "capture": {
+      "type": "object",
+      "required": [
+        "camera",
+        "lighting",
+        "seed"
+      ],
+      "additionalProperties": false,
+      "description": "viewing conditions the evidence capture must use; names and values are those of the capture statistics (cuvara.vfx-capture/1)",
+      "properties": {
+        "camera": {
+          "enum": [
+            "gameplay",
+            "close",
+            "side"
+          ]
+        },
+        "lighting": {
+          "enum": [
+            "day",
+            "dusk",
+            "night"
+          ]
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "description": "free-text guidance for authors and reviewers that the lint does not grade",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "hex_color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    },
+    "element": {
+      "type": "object",
+      "required": [
+        "colors",
+        "ramp"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "colors": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "colour name to #RRGGBB (sRGB, LDR; HDR is graded by hdr_intensity)",
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/hex_color"
+          }
+        },
+        "ramp": {
+          "type": "array",
+          "minItems": 2,
+          "description": "colour names of this element in over-life order (birth to death)",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "intensity_band": {
+      "type": "object",
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "share_band": {
+      "type": "object",
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "channel_layout": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "r": {
+          "type": "string",
+          "minLength": 1
+        },
+        "g": {
+          "type": "string",
+          "minLength": 1
+        },
+        "b": {
+          "type": "string",
+          "minLength": 1
+        },
+        "a": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "max_alive_particles",
+        "max_systems",
+        "max_texture_memory_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "max_alive_particles": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "largest alive count (capture alive.peak) and largest sum of system capacities"
+        },
+        "max_systems": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "largest number of particle systems in the effect"
+        },
+        "max_texture_memory_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "largest sum of the estimated GPU bytes of the effect's textures (inspect totals.texture_bytes)"
+        }
+      }
+    }
+  }
+}

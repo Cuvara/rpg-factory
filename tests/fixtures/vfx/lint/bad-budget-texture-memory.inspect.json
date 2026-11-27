@@ -1,0 +1,245 @@
+{
+ "ok": true,
+ "verb": "inspect",
+ "errors": [],
+ "warnings": [],
+ "schema": "cuvara.vfx-inspect/1",
+ "effect": {
+  "path": "Assets/VFX/FireBurst/FireBurst.vfx",
+  "guid": "5b2f0a3c9d8e4f7a8b6c1d2e3f405162",
+  "kind": "vfx"
+ },
+ "asset": {
+  "path": "Assets/VFX/FireBurst/FireBurst.vfx",
+  "guid": "5b2f0a3c9d8e4f7a8b6c1d2e3f405162"
+ },
+ "prefab": null,
+ "recipe": {
+  "path": "Assets/VFX/FireBurst/FireBurst.vfxrecipe.json",
+  "sha256": "90e40473da6c49fe17e07e05c61757033988975b8ac3d845e78e75d26a57fb02"
+ },
+ "vfx_graph": "17.6.0",
+ "unity": "6000.6.0f1",
+ "build_target": "StandaloneWindows64",
+ "describe_sha256": "7cfe81ada92a72434f47126435e006291b584b92cc852843c4377e6817513cfa",
+ "systems": [
+  {
+   "id": "s0",
+   "name": "System",
+   "data_type": "SpawnEvent",
+   "capacity": null,
+   "contexts": [
+    "c0"
+   ],
+   "outputs": []
+  },
+  {
+   "id": "s1",
+   "name": "System (1)",
+   "data_type": "Particle",
+   "capacity": 256,
+   "contexts": [
+    "c1",
+    "c2",
+    "c3"
+   ],
+   "outputs": [
+    "c3"
+   ]
+  }
+ ],
+ "outputs": [
+  {
+   "id": "c3",
+   "system": "s1",
+   "type": "VFXPlanarPrimitiveOutput",
+   "name": "Output Particle Unlit Quad",
+   "label": "",
+   "blend_mode": "Additive",
+   "shader": {
+    "name": "Hidden/VFX/FireBurst/System (1)/Output Particle Unlit Quad",
+    "path": "Assets/VFX/FireBurst/FireBurst.vfx",
+    "guid": "5b2f0a3c9d8e4f7a8b6c1d2e3f405162"
+   },
+   "shader_graph": null,
+   "effective": {
+    "sorted": false,
+    "indirect_draw": false,
+    "shadow_casting": false,
+    "soft_particles": false,
+    "motion_vector": false,
+    "alpha_clipping": false,
+    "flipbook": true,
+    "strips": false,
+    "ray_traced": false
+   },
+   "render_settings": {
+    "sort": "Auto",
+    "useSoftParticle": false,
+    "castShadows": false,
+    "cullMode": "Default",
+    "zWriteMode": "Default",
+    "zTestMode": "Default",
+    "useAlphaClipping": false,
+    "primitiveType": "Quad",
+    "uvMode": "Flipbook"
+   }
+  }
+ ],
+ "textures": [
+  {
+   "path": "Assets/VFX/FireBurst/FireBurst_Flipbook.png",
+   "guid": "4e3d6f4a9ab6ca3b521ae26e2069d174",
+   "name": "FireBurst_Flipbook",
+   "type": "Texture2D",
+   "dimension": "Tex2D",
+   "width": 512,
+   "height": 512,
+   "depth": 1,
+   "format": "R8G8B8A8_SRGB",
+   "texture_format": "RGBA32",
+   "srgb": true,
+   "mip_maps": true,
+   "mip_count": 10,
+   "compression": "Uncompressed",
+   "crunched": false,
+   "compressed_format": false,
+   "max_size": 2048,
+   "readable": false,
+   "importer": "TextureImporter",
+   "estimated_bytes": 1398100,
+   "used_by": [
+    "c3.mainTexture"
+   ]
+  },
+  {
+   "path": "Assets/VFX/FireBurst/FireBurst_Glow.png",
+   "guid": "a380e7bc7a14e5fa43f77338d1afdc9d",
+   "name": "FireBurst_Glow",
+   "type": "Texture2D",
+   "dimension": "Tex2D",
+   "width": 512,
+   "height": 512,
+   "depth": 1,
+   "format": "R8G8B8A8_SRGB",
+   "texture_format": "RGBA32",
+   "srgb": true,
+   "mip_maps": true,
+   "mip_count": 10,
+   "compression": "Uncompressed",
+   "crunched": false,
+   "compressed_format": false,
+   "max_size": 2048,
+   "readable": false,
+   "importer": "TextureImporter",
+   "estimated_bytes": 1398100,
+   "used_by": [
+    "c3.glowTexture"
+   ]
+  },
+  {
+   "path": "Assets/VFX/FireBurst/FireBurst_Mask.png",
+   "guid": "6c8df5ef75870ed3b2f81de9c1941ecb",
+   "name": "FireBurst_Mask",
+   "type": "Texture2D",
+   "dimension": "Tex2D",
+   "width": 256,
+   "height": 256,
+   "depth": 1,
+   "format": "R8_UNorm",
+   "texture_format": "R8",
+   "srgb": false,
+   "mip_maps": true,
+   "mip_count": 9,
+   "compression": "Uncompressed",
+   "crunched": false,
+   "compressed_format": false,
+   "max_size": 2048,
+   "readable": false,
+   "importer": "TextureImporter",
+   "estimated_bytes": 87381,
+   "used_by": [
+    "p1"
+   ]
+  },
+  {
+   "path": "Assets/VFX/FireBurst/FireBurst_Smoke.png",
+   "guid": "a6f09d16b15c37d6b3395c1c14dfb43f",
+   "name": "FireBurst_Smoke",
+   "type": "Texture2D",
+   "dimension": "Tex2D",
+   "width": 512,
+   "height": 512,
+   "depth": 1,
+   "format": "R8G8B8A8_SRGB",
+   "texture_format": "RGBA32",
+   "srgb": true,
+   "mip_maps": true,
+   "mip_count": 10,
+   "compression": "Uncompressed",
+   "crunched": false,
+   "compressed_format": false,
+   "max_size": 2048,
+   "readable": false,
+   "importer": "TextureImporter",
+   "estimated_bytes": 1398100,
+   "used_by": [
+    "c3.smokeTexture"
+   ]
+  }
+ ],
+ "exposed_properties": [
+  {
+   "id": "p0",
+   "name": "Tint",
+   "type": "Color",
+   "category": "",
+   "default": [
+    4.0,
+    1.0166,
+    0.0926,
+    1.0
+   ],
+   "overridden": false,
+   "overrides": []
+  },
+  {
+   "id": "p1",
+   "name": "Mask",
+   "type": "Texture2D",
+   "category": "",
+   "default": {
+    "path": "Assets/VFX/FireBurst/FireBurst_Mask.png",
+    "guid": "6c8df5ef75870ed3b2f81de9c1941ecb"
+   },
+   "overridden": false,
+   "overrides": []
+  }
+ ],
+ "hdr_colors": [
+  {
+   "source": "parameter",
+   "path": "p0",
+   "name": "Tint",
+   "type": "Color",
+   "rgba": [
+    4.0,
+    1.0166,
+    0.0926,
+    1.0
+   ],
+   "peak": 4.0,
+   "intensity": 2.0
+  }
+ ],
+ "totals": {
+  "systems": 2,
+  "capacity": 256,
+  "outputs": 1,
+  "textures": 4,
+  "texture_bytes": 4281681,
+  "exposed_properties": 2,
+  "hdr_colors": 1,
+  "hdr_peak": 4.0
+ }
+}
