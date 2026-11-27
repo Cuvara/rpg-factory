@@ -145,12 +145,19 @@ def recipe_colors(recipe):
 
 # ---- recipe facts used when the inspect result is absent ------------------------------------------------------
 
+def is_render_output(ctx_type):
+    """True for a context type that renders particles (VFX*Output); an output event (VFXOutputEvent) sends events
+    to scripts and renders nothing, so it is not graded as an output."""
+    t = str(ctx_type or "")
+    return "Output" in t and "OutputEvent" not in t
+
+
 def recipe_outputs(recipe):
     """[{id, type, blend_mode}] of the output contexts the recipe adds, blend mode after later ops (None if unset)."""
     outs = {}
     for op in ops(recipe):
         kind = op.get("op")
-        if kind == "add_context" and "Output" in str(op.get("type", "")):
+        if kind == "add_context" and is_render_output(op.get("type")):
             settings = op.get("settings") if isinstance(op.get("settings"), dict) else {}
             outs[op.get("id")] = {"id": op.get("id"), "type": op.get("type"), "blend_mode": settings.get("blendMode")}
         elif kind == "set_output" and op.get("node") in outs and op.get("blend_mode"):
@@ -222,8 +229,13 @@ def rule_recipe_schema(ctx):
 def rule_vfx_graph(ctx):
     want = ctx["profile"]["vfx_graph"]
     have = recipe_ver = ctx["recipe"].get("vfx_graph")
+    if major_minor(want) is None:  # resolve_profile rejects it; a rule never grades against an unparsable target
+        return row("vfx-graph-version", "FAIL", ["profile vfx_graph %r is not a major.minor version" % (want,)])
     if have is None:
         state, ev = "WARN", ["recipe has no vfx_graph; profile targets %s" % want]
+    elif major_minor(have) is None:
+        return row("vfx-graph-version", "FAIL", ["recipe vfx_graph %r is not a major.minor version; profile targets %s"
+                                                 % (recipe_ver, want)])
     elif major_minor(have) == major_minor(want):
         state, ev = "PASS", ["recipe vfx_graph %s matches profile %s" % (recipe_ver, want)]
     else:

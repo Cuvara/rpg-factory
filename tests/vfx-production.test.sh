@@ -197,6 +197,7 @@ G_R="$L/good.vfxrecipe.json"; G_I="$L/good.inspect.json"
 BAD=(
   "bad-recipe-schema.vfxrecipe.json recipe recipe-schema"
   "bad-vfx-graph-version.vfxrecipe.json recipe vfx-graph-version"
+  "bad-vfx-graph-version-unparsable.vfxrecipe.json recipe vfx-graph-version"
   "bad-timing-sum.vfxrecipe.json recipe timing-sum"
   "bad-timing-ratios.vfxrecipe.json recipe timing-ratios"
   "bad-hdr-intensity.vfxrecipe.json recipe hdr-intensity"
@@ -235,6 +236,17 @@ done
 missing_fail=""
 for r in ${RULES//,/ }; do case "$failed_rules" in *",$r,"*) ;; *) missing_fail="$missing_fail $r" ;; esac; done
 [ -z "$missing_fail" ] && ok "every one of the 19 lint rules has a PASS case and a FAIL case" || no "rules without a FAIL case:$missing_fail"
+lint --recipe "$L/bad-vfx-graph-version-unparsable.vfxrecipe.json"
+q '[.rows[] | select(.id == "vfx-graph-version") | .evidence[0]] | .[0]' | grep -q "'latest' is not a major.minor version" \
+  && ok "lint: an unparsable recipe vfx_graph is a FAIL that says so (never PASS by None == None)" \
+  || no "lint unparsable vfx_graph evidence: $(q '[.rows[] | select(.id == "vfx-graph-version")]')"
+
+# Edge: an output event context (VFXOutputEvent) renders nothing and is not graded as an output
+lint --recipe "$L/edge-output-event.vfxrecipe.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(q .status)" = PASS ] \
+  && [ "$(q '[.rows[] | select(.id == ("output-type","blend-mode")) | .state + ":" + (.evidence[1:] | join(";"))] | join(",")')" = "PASS:output: VFXPlanarPrimitiveOutput,PASS:output: Additive" ] \
+  && ok "lint: a VFXOutputEvent context is not an output (output-type and blend-mode grade only the render output)" \
+  || no "lint output event: rc=$rc status=$(q .status) $(q '[.rows[] | select(.id == ("output-type","blend-mode"))]')"
 
 # -- exit 3: a required input missing, unreadable or not of its format
 exit3() {  # exit3 <label> <grep pattern for stderr> -- <vfx_style args...>
@@ -253,6 +265,12 @@ exit3 "--style of another kind (a vfx-spec artifact)" 'style .*kind is' -- lint 
 printf 'not json {' > "$TMP/garbage.vfxrecipe.json"
 exit3 "recipe is not JSON" 'recipe .*not JSON' -- lint --style "$PROFILE" --recipe "$TMP/garbage.vfxrecipe.json"
 exit3 "show: style file missing" 'style .*cannot read' -- show --style "$TMP/missing.json"
+exit3 "style with an unparsable vfx_graph" "missing or malformed: vfx_graph \('latest' is not a major.minor version\)" \
+  -- lint --style "$L/bad-profile-vfx-graph.style.json" --recipe "$G_R"
+exit3 "style whose palette ramp names a colour not in its element's colors" \
+  'missing or malformed: palette.elements.fire.ramp \(names not in its colors: ember_glow\)' \
+  -- lint --style "$L/bad-profile-ramp.style.json" --recipe "$G_R"
+exit3 "show: style whose palette ramp names an unknown colour" 'palette.elements.fire.ramp' -- show --style "$L/bad-profile-ramp.style.json"
 
 # -- exit 2: usage
 exit2() {  # exit2 <label> -- <vfx_style args...>

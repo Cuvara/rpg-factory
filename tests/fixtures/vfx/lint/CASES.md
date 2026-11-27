@@ -2,10 +2,13 @@
 
 Fixtures of `scripts/vfx/vfx_style.py lint`. The style profile is `tests/fixtures/vfx/style/profile.json`
 (`profile.md` is the same profile as a vfx-style artifact). The effect is `fire-burst`: element `fire`, tier
-`primary` (recipe `meta.tags`). All `.json` files validate against the com.cuvara.vfx schemas
-(`Schemas~/vfx-recipe`, `vfx-inspect`, `vfx-capture`) and the `.vfx-spec.md` specs against
-`docs/schemas/kinds/vfx-spec.schema.json`, except `bad-recipe-schema.vfxrecipe.json`, whose `schema` is wrong on
-purpose.
+`primary` (recipe `meta.tags`). All recipe, inspect and stats `.json` files validate against the com.cuvara.vfx
+schemas (`Schemas~/vfx-recipe`, `vfx-inspect`, `vfx-capture`) and the `.vfx-spec.md` specs against
+`docs/schemas/kinds/vfx-spec.schema.json`, except `bad-recipe-schema.vfxrecipe.json` (its `schema` is wrong) and
+`bad-vfx-graph-version-unparsable.vfxrecipe.json` (its `vfx_graph` is not a version), both on purpose. The two
+`bad-profile-*.style.json` files are `profile.json` with one field broken (exit 3 cases):
+`bad-profile-vfx-graph.style.json` also breaks the vfx-style schema pattern, `bad-profile-ramp.style.json` passes it
+(the schema cannot check that ramp names exist in `colors`; `vfx_style.py` does).
 
 `good.inspect.json` and `good.stats.json` carry the SHA-256 of the bytes of `good.vfxrecipe.json`
 (`90e40473da6c49fe17e07e05c61757033988975b8ac3d845e78e75d26a57fb02`). `.gitattributes` keeps every file here
@@ -20,6 +23,7 @@ every `*.stats.json` to match.
 | all inputs | `--recipe good.vfxrecipe.json --inspect good.inspect.json --stats good.stats.json --spec good.vfx-spec.md` | 19 PASS |
 | recipe only | `--recipe good.vfxrecipe.json` | 11 PASS, 8 NOT_AVAILABLE (texture-size, texture-color-space, shader, budget-texture-memory, budget-alive, capture-conditions, recipe-hash, spec-match need their input; hdr-intensity, output-type, blend-mode, budget-capacity, budget-systems fall back to the recipe) |
 | artifact profile | `--style tests/fixtures/vfx/style/profile.md` with the all-inputs arguments minus `--spec` | 18 PASS, 1 NOT_AVAILABLE (spec-match) |
+| output event (edge) | `--recipe edge-output-event.vfxrecipe.json` | as recipe only; the good recipe plus a `VFXOutputEvent` context, which renders nothing: output-type and blend-mode grade only `output` |
 
 ## Bad cases (exit 1, exactly the named rule FAILs)
 
@@ -32,6 +36,7 @@ good.vfxrecipe.json`; a bad stats file also with `--inspect good.inspect.json`. 
 |---|---|---|---|
 | `bad-recipe-schema.vfxrecipe.json` | `--recipe <file>` | `recipe-schema` | `schema` is `cuvara.vfx-recipe/2` |
 | `bad-vfx-graph-version.vfxrecipe.json` | `--recipe <file>` | `vfx-graph-version` | `vfx_graph` 17.4, profile 17.6 |
+| `bad-vfx-graph-version-unparsable.vfxrecipe.json` | `--recipe <file>` | `vfx-graph-version` | `vfx_graph` `latest`, not a major.minor version |
 | `bad-timing-sum.vfxrecipe.json` | `--recipe <file>` | `timing-sum` | phases sum to 0.8 s, duration 1 s (ratios stay inside the bands) |
 | `bad-timing-ratios.vfxrecipe.json` | `--recipe <file>` | `timing-ratios` | anticipation 0.4 of 1 s, band 0..0.25 |
 | `bad-hdr-intensity.vfxrecipe.json` | `--recipe <file>` | `hdr-intensity` | `Tint` is 32 times the flame colour: intensity 5, primary band 1..4 (recipe fallback, no inspect) |
@@ -62,4 +67,6 @@ good.vfxrecipe.json`; a bad stats file also with `--inspect good.inspect.json`. 
 | `lint --style missing.json --recipe good.vfxrecipe.json` | 3 |
 | `lint --style good.vfxrecipe.json --recipe good.vfxrecipe.json` (not a profile) | 3 |
 | `lint ... --stats good.inspect.json` (wrong schema id) or `--spec <a vfx-style artifact>` (wrong kind) | 3 |
+| `lint --style bad-profile-vfx-graph.style.json --recipe good.vfxrecipe.json` (profile `vfx_graph` `latest`, not a major.minor version) | 3 |
+| `lint` or `show` with `--style bad-profile-ramp.style.json` (`palette.elements.fire.ramp` names `ember_glow`, not in fire's `colors`) | 3 |
 | no command, an unknown command, an unknown option, an option without a value, `lint` without `--recipe`, `show` without `--style` | 2 |

@@ -29,6 +29,7 @@ import os
 import re
 import sys
 
+sys.dont_write_bytecode = True  # like vfx_plan.py: a run without -B writes no __pycache__ next to the scripts
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import vfx_lint_rules as rules  # noqa: E402
@@ -95,11 +96,21 @@ def resolve_profile(path):
                 missing.append("%s (not an object)" % key)
             else:
                 missing += ["%s.%s" % (key, f) for f in fields if f not in body[key]]
+    if "vfx_graph" in body and rules.major_minor(body["vfx_graph"]) is None:
+        missing.append("vfx_graph (%r is not a major.minor version)" % (body["vfx_graph"],))
     if isinstance(body.get("palette"), dict) and isinstance(body["palette"].get("elements"), dict):
         for name, el in body["palette"]["elements"].items():
             if not isinstance(el, dict) or not isinstance(el.get("colors"), dict) or \
                     not all(isinstance(v, str) and re.match(r"^#[0-9A-Fa-f]{6}$", v) for v in el["colors"].values()):
                 missing.append("palette.elements.%s.colors (#RRGGBB values)" % name)
+                continue
+            ramp = el.get("ramp")
+            if not isinstance(ramp, list) or not all(isinstance(c, str) for c in ramp):
+                missing.append("palette.elements.%s.ramp (a list of colour names)" % name)
+                continue
+            unknown = [c for c in ramp if c not in el["colors"]]
+            if unknown:
+                missing.append("palette.elements.%s.ramp (names not in its colors: %s)" % (name, ", ".join(unknown)))
     budgets = body.get("budgets")
     if "budgets" in body and (not isinstance(budgets, dict) or not budgets):
         missing.append("budgets (one platform at least)")
