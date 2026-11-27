@@ -12,7 +12,9 @@ Sections
                 gamestate-migrations  embedded migrations == deploy copies (normalised like Migrator.cs)
   Wire rollout  server wire change -> Netcode copy -> Netcode release -> client pin
   Packages    per package: latest tag, commits since it (unreleased), package.json vs tag,
-              CHANGELOG section (READY_TO_TAG when bumped + dated + clean)
+              CHANGELOG section (READY_TO_TAG when bumped + dated + clean); untagged = no release tag
+              yet (never READY_TO_TAG: the first tag is the owner's call), absent = no checkout;
+              client_pin_state says whether the client pins it at all
   Pins        client pin vs latest upstream tag (released, not propagated); SGL watchers (package CIs)
   CI pins     package CIs that install another package / SGL at a fixed ref (contract watchers)
               compared with the client pin and the latest tag
@@ -76,15 +78,26 @@ VERSION_FILES = {"server-cs": ("server", "backend/gameserver-dotnet/GameServer/N
                  "server-go": ("server", "backend/shared/messages/messages.go", r"const WireProtocolVersion uint32\s*=\s*(\d+)"),
                  "netcode": ("netcode", "Runtime/Protocol/WireProtocolVersion.cs", r"const uint Current\s*=\s*(\d+)")}
 MIG = ("backend/gameserver-dotnet/GameServer/Persistence/Migrations", "backend/deploy/db/migrations/gamestate", "backend/deploy/db/init-gamestate.sql")
-PACKAGES = {"netcode": "com.cuvara.netcode", "unitydots": "com.cuvara.dots", "uitoolkit": "com.cuvara.uitoolkit"}
+PACKAGES = {"netcode": "com.cuvara.netcode", "unitydots": "com.cuvara.dots", "uitoolkit": "com.cuvara.uitoolkit",
+            "unityvfx": "com.cuvara.vfx"}
+# A package repo the registry does not declare yet (an older registry.json) still gets its status from here.
+PACKAGE_REPO_FALLBACK = {"unityvfx": {"path": "UnityVFX", "default_branch": "main", "protected_branches": ["main"]}}
+
+
+def repo_def(key):
+    return REG["repos"].get(key) or PACKAGE_REPO_FALLBACK[key]
+
+
+def is_repo_key(key):
+    return key in REG["repos"] or key in PACKAGE_REPO_FALLBACK
 
 
 def rdir(key):
-    return os.path.join(WS, REG["repos"][key]["path"])
+    return os.path.join(WS, repo_def(key)["path"])
 
 
 def git(key_or_dir, *args):
-    d = rdir(key_or_dir) if key_or_dir in REG["repos"] else key_or_dir
+    d = rdir(key_or_dir) if is_repo_key(key_or_dir) else key_or_dir
     try:
         r = subprocess.run(["git", "-C", d, *args], capture_output=True, text=True, timeout=60,
                            encoding="utf-8", errors="replace")
@@ -100,7 +113,7 @@ def present(key):
 @lru_cache(maxsize=None)
 def integ(key):
     """Integration ref: origin/<default> if it exists, else the local default branch."""
-    d = REG["repos"][key]["default_branch"]
+    d = repo_def(key)["default_branch"]
     return f"origin/{d}" if git(key, "rev-parse", "--verify", "-q", f"origin/{d}") else d
 
 
@@ -205,6 +218,8 @@ def main():
         client_lock = json.loads(show("client", integ("client"), "Packages/packages-lock.json") or "{}").get("dependencies", {})
     for key, pkg in PACKAGES.items():
         if not present(key):
+            st["packages"].append({"repo": key, "package": pkg, "state": "absent", "path": rdir(key),
+                                   "latest_tag": None, "client_pin": None})
             continue
         ref = integ(key)
         t = tags(key, "v")
@@ -215,13 +230,17 @@ def main():
         cl = (show(key, ref, "CHANGELOG.md") or "")
         dated = bool(re.search(r"^## \[" + re.escape(ver or "x") + r"\]\s*-\s*\d{4}-\d{2}-\d{2}", cl, re.M))
         tagged = bool(ver) and f"v{ver}" in t
-        state = ("released" if ahead == 0 else
+        state = ("untagged" if not latest else  # no release yet: the first tag is the owner's call, never READY_TO_TAG here
+                 "released" if ahead == 0 else
                  "READY_TO_TAG" if (not tagged and dated and ahead) else
                  "unreleased changes" if ahead else "unknown")
-        pin = client_lock.get(pkg, {}).get("version", "")
+        pin = (client_lock.get(pkg) or {}).get("version", "")
         pin_tag = pin.rsplit("#", 1)[-1] if "#" in pin else None
+        pin_state = ("unknown (no client checkout)" if not present("client") else "pinned" if pin_tag else
+                     "not pinned" if not pin else "not pinned to a tag")
         st["packages"].append({"repo": key, "package": pkg, "integration_ref": ref, "latest_tag": latest, "commits_since_tag": ahead,
-                               "package_json": ver, "changelog_dated": dated, "state": state, "client_pin": pin_tag})
+                               "package_json": ver, "changelog_dated": dated, "state": state, "client_pin": pin_tag,
+                               "client_pin_state": pin_state})
         if state == "READY_TO_TAG":
             pend.append({"skill": "unity-package", "repo": key, "what": f"READY_TO_TAG {key} v{ver} ({ahead} commit(s) since {latest}) - the lead tags, then pin-bump"})
         elif state == "unreleased changes":
@@ -430,8 +449,13 @@ def main():
             print(" -> ".join(f"{s['stage']} {'OK' if s['ok'] else 'PENDING'}" for s in st["wire_rollout"]))
         print("\n## Packages")
         for p in st["packages"]:
-            print(f"- {p['repo']}: {p['state']} (latest {p['latest_tag']}, +{p['commits_since_tag']} on {p['integration_ref']}, "
-                  f"package.json {p['package_json']}, client pins {p['client_pin']})")
+            if p["state"] == "absent":
+                print(f"- {p['repo']}: absent (no git checkout at {p['path']})")
+                continue
+            pin = f"client pins {p['client_pin']}" if p["client_pin"] else f"client: {p['client_pin_state']}"
+            print(f"- {p['repo']}: {p['state']} (latest {p['latest_tag'] or 'none: no tag'}, "
+                  + (f"+{p['commits_since_tag']} on {p['integration_ref']}, " if p["latest_tag"] else f"on {p['integration_ref']}, ")
+                  + f"package.json {p['package_json']}, {pin})")
         print("\n## Pins")
         for p in st["pins"]:
             if "refs" in p:
