@@ -10,3 +10,11 @@
 - **Untagged packages in the status scripts.** `factory-status.py`, `pin-plan.py` and `package-ready.py` know
   `com.cuvara.vfx` and report a package with no tag and no client pin as untagged and unpinned, instead of failing
   or reporting it READY.
+
+### Changed
+
+- **`package-ready.py` refuses an unreleased repo.** A package repo with no `v*` tag is NOT READY unless
+  `--first-release` is given, and a repo with no git remote or no `CHANGELOG.md` is NOT READY with that reason
+  (before: READY for an untagged repo, a traceback for a missing changelog).
+- **`pipeline.no_worktree_markers`** gains `Sandbox~/ProjectSettings/ProjectVersion.txt` (also in
+  `skills/delivery/pipeline-defaults.json`), so a package repo with a nested Unity Sandbox project gets no task worktree.
