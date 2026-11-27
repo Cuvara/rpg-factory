@@ -3,7 +3,7 @@
  "title": "3D reference turnaround",
  "description": "Orthographic front/side/back reference sheet for 3D modelling.",
  "handoff_domain": "art3d",
- "default_template": "image-generate",
+ "default_template": "staged-turnaround",
  "default_family": "characters",
  "dimensions": [
   "shape",

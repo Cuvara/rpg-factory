@@ -1,0 +1,67 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "2D prop or item",
+ "description": "A single game item or prop as a clean 2D cut-out on a transparent background, for inventory, pickups and scene dressing.",
+ "handoff_domain": "art2d",
+ "default_template": "staged-icon",
+ "default_family": "props",
+ "dimensions": [
+  "palette",
+  "shape",
+  "line"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1024x1024",
+  "background": "transparent",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "One item or prop, whole and uncropped, centered with an even margin, in a three-quarter or front view.",
+   "Clear silhouette and readable material (wood, metal, cloth) at inventory size; detail supports the shape.",
+   "Transparent background, no ground plane, no cast shadow outside the object, no frame."
+  ],
+  "must_include": [
+   "item or prop",
+   "transparent background",
+   "centered",
+   "whole object"
+  ],
+  "avoid": [
+   "text",
+   "busy background",
+   "cropped object",
+   "multiple objects",
+   "hands holding the object"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt names the material and the view so the prop reads at inventory size."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "The prop is whole and centered with an even margin, with no second object.",
+  "The silhouette and material read at inventory size."
+ ],
+ "qa": {
+  "size": {
+   "mode": "area",
+   "min_side": 512,
+   "min_pixels": 262144
+  },
+  "alpha": "required",
+  "transparent_corners": true,
+  "not_blank": {
+   "min_stddev": 4.0,
+   "min_coverage": 0.02
+  }
+ }
+}

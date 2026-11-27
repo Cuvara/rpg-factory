@@ -98,7 +98,13 @@ rm -rf "$GL"
 [ "$(level Write "$C/Packages/com.gdk.core/s.cs")" = warn ] && ok "first write into the submodule warns" || no "submodule write"
 cf=$(find "$GL" -name '*.json' 2>/dev/null | head -1)
 [ -n "$cf" ] && jq -e '.gitlinks == ["Packages/com.gdk.core"] and (.index | length == 2)' "$cf" >/dev/null && ok "gitlinks cached in the state dir" || no "no gitlinks cache" "$cf"
-jq '.gitlinks += ["Assets/Fake"]' "$cf" > "$cf.new" && mv "$cf.new" "$cf"   # a marker only the cache knows
+# no cache file found: the check above already failed; write nothing (an empty $cf would create ".new" in the cwd) and
+# point the later checks at a path inside the temp dir so they fail without crashing
+if [ -n "$cf" ] && [ -f "$cf" ]; then
+  jq '.gitlinks += ["Assets/Fake"]' "$cf" > "$cf.new" && mv "$cf.new" "$cf"   # a marker only the cache knows
+else
+  no "no gitlinks cache file to mark" "$GL"; cf="$TMP/no-gitlinks-cache.json"
+fi
 [ "$(level Write "$C/Assets/Fake/x.cs")" = warn ] && ok "second write uses the cache (no git ls-files)" || no "cache not used"
 echo b > "$C/Assets/b.cs"; gc "$C" add Assets/b.cs                          # .git/index changes
 [ "$(level Write "$C/Assets/Fake/x.cs")" = allow ] && ok "changed .git/index recomputes the gitlinks" || no "stale gitlinks after an index change"
@@ -112,7 +118,8 @@ alias_path='C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
 out=$(RPG_FACTORY_PYTHON3="$alias_path" python3 -B "$ROOT/scripts/factory-cmd.py" doctor --json 2>/dev/null)
 jq -e '.tools.python3.windows_store_alias == true and (.tools.python3.advice | test("70 ms"))' <<<"$out" >/dev/null && ok "doctor --json names the alias" || no "doctor alias" "$(jq -c .tools.python3 <<<"$out" 2>&1 | head -c 300)"
 out=$(RPG_FACTORY_PYTHON3="$alias_path" python3 -B "$ROOT/scripts/factory-cmd.py" doctor 2>/dev/null)
-grep -q '^- python3: .*Windows Store alias.*70 ms slower' <<<"$out" && ok "doctor text names the alias" || no "doctor text"
+grep -q '^- setup fault python3-store-stub: .*Microsoft Store stub.*70 ms slower' <<<"$out" && ! grep -q '^- python3:' <<<"$out" \
+  && ok "doctor text names the alias and its hook cost once, in the setup fault line" || no "doctor text" "$(grep -E '^- (python3|setup fault)' <<<"$out" | head -c 400)"
 out=$(RPG_FACTORY_PYTHON3="/usr/bin/python3" python3 -B "$ROOT/scripts/factory-cmd.py" doctor --json 2>/dev/null)
 jq -e '.tools.python3.windows_store_alias == false and .tools.python3.advice == null' <<<"$out" >/dev/null && ok "doctor: a real python3 is no alias" || no "doctor false alias"
 

@@ -1,0 +1,76 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "flow-lows",
+  "title": "Backlog lows: delivery.md headroom under its byte cap, and four test and path lows of plugin-flow-5",
+  "topic": "flow-lows",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "delivery-headroom",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "standard",
+      "grade_reason": "a wording trim of the single copy of the delivery policy; a lost rule changes how every plan runs",
+      "objective": "Backlog topics plan-edit-followups and workflow-slim-followups (docs/plans/backlog.md): skills/delivery/references/delivery.md is at 32767 of its 32768-byte cap (counted with LF line ends by tests/delivery-generic.test.sh; tests/line-budget.test.sh also checks it), so the next policy edit cannot land. Bring it to at most 31500 bytes (LF) by tightening wording inside delivery.md only: merge sentences that say the same thing twice, drop restatements of what another section of the same file already says, shorten examples. Never drop a rule, a number, a command form, a section heading another file cites (grep the repo for `delivery.md` section and heading citations, `tests/skills-lint.sh` and `tests/parallel-policy.test.sh` check several of them) or a phrase a test greps for (grep tests/ for literal strings taken from delivery.md before changing a sentence). Do not move text into docs/pipeline-cli.md or skills/factory-core/references/parallel-work.md: another plan owns those files now. Never raise the cap. Second, the low of workflow-slim-followups: tests/README.md section 'QA tiers and run-all flags' restates the QA tiers summary and the one-full-run rule of delivery.md; replace the restatement with a pointer to delivery.md section 10 'QA tiers', keeping the run-all flag documentation that is specific to tests/README.md. Report the byte count before and after, and list every sentence whose meaning you merged. No changelog fragment unless tests/changelog.test.sh asks for one (wording only). The machine is short on memory: run one test command at a time.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "tests/README.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/delivery-generic.test.sh",
+        "tests/line-budget.test.sh",
+        "tests/skills-lint.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "delivery.md is at most 31500 bytes with LF line ends",
+        "no rule, number, command form, cited heading or test-grepped phrase was lost",
+        "tests/README.md points to delivery.md section 10 instead of restating the tiers",
+        "the four check suites pass"
+      ]
+    },
+    {
+      "id": "test-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "four small independent fixes in tests and one helper, each with its own case",
+      "objective": "Lows of backlog topic plugin-flow-5-followups (docs/plans/backlog.md). Fix each, with a test case where the item names a behaviour; first check whether main already fixed it and say so if it did. (1) tests/hook-perf.test.sh (around line 101, the gitlinks cache case): `jq ... \"$cf\" > \"$cf.new\" && mv` runs even when `$cf` is empty and then creates `.new` in the cwd; guard it so an empty `$cf` fails that check without writing anywhere. (2) tests/git-env-isolation.test.sh calls `gitcfg_snapshot` a second time (scripts/lib/gitcfg-guard.sh) without removing the earlier snapshot copy; make a re-snapshot replace the earlier one (fix it in the helper if the helper is where the copy leaks, with a case that two snapshots leave one copy). (3) scripts/checks/netcode-headless.sh: on a failed run its EXIT trap removes the work copy and the .trx, so the cause of a one-off failure (seen once in integration QA: 1 failed, 0 passed, then 720/720 on rerun) is lost. On FAIL keep the evidence: copy the .trx files and the run log into a persistent evidence location resolved through scripts/lib/fstate.py (never $TMPDIR directly, never into a product repo) and print that path; a PASS keeps today's cleanup. The check stays read-only toward product repos (.claude/CLAUDE.md rules). Add a case to tests/netcode-headless.test.sh (it uses a fake dotnet; extend the fake if needed) that a failing fake run leaves the evidence and a passing one does not. (4) scripts/lib/plan_paths.py: `native_abs` (around line 57 when the backlog was written) rewrites a not-yet-existing native path that contains a `/mnt/<letter>/` segment as if it were a WSL drive mount; only a path that starts with `/mnt/<letter>/` is a WSL mount. Add cases to tests/plan-paths.test.sh. Changelog fragment changelog.d/flow-lows.md (### Fixed) for (3) and (4). CI runs on Linux: no test may depend on host tools of this Windows machine (no real dotnet). The machine is short on memory: run one test command at a time; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "tests/hook-perf.test.sh",
+        "tests/git-env-isolation.test.sh",
+        "scripts/lib/gitcfg-guard.sh",
+        "scripts/checks/netcode-headless.sh",
+        "scripts/lib/plan_paths.py",
+        "tests/plan-paths.test.sh",
+        "tests/netcode-headless.test.sh",
+        "tests/fixtures/netcode-headless/",
+        "changelog.d/flow-lows.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/hook-perf.test.sh",
+        "tests/git-env-isolation.test.sh",
+        "tests/netcode-headless.test.sh",
+        "tests/plan-paths.test.sh",
+        "tests/parallel-policy.test.sh --case portable-plans"
+      ],
+      "acceptance": [
+        "hook-perf never writes .new into the cwd when the cache file is missing",
+        "a second gitcfg snapshot replaces the first",
+        "a failed netcode-headless run keeps its trx and log under the Factory state dir and prints the path; a pass cleans up",
+        "native_abs treats only a leading /mnt/<letter>/ as a WSL mount",
+        "the named suites pass"
+      ]
+    }
+  ]
+}

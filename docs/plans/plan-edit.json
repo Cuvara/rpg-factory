@@ -1,0 +1,66 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "plan-edit",
+  "title": "Backlog plan-edit-verb and plan-edit-commit-guard: an atomic plan-edit verb; run-lead-waiter-reaped lesson",
+  "topic": "plan-edit",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "plan-edit-verb",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a new pipeline verb that replaces and commits the plan file; a wrong exit path commits an invalid plan",
+      "objective": "Backlog topics plan-edit-verb and plan-edit-commit-guard (docs/plans/backlog.md). `skills/delivery/references/delivery.md` section 8 says 'Plan edits are atomic. Edit a copy, validate it, replace the plan.' and nothing enforces it; in plan workflow-slim the run lead committed an invalid plan because `validate | grep && git commit` took grep's exit code. Add a verb `factory-pipeline.py plan-edit <plan.json> --from <edited copy> [--commit [--message <text>]]`: it validates the copy with the same code path as `validate` (same registry, the copy read as if it were at the plan's path, so relative `repos.*.path` resolve the same), and only when validation has no error it replaces the plan atomically (write a temp file in the plan's directory, then `os.replace`), and with `--commit` stages only the plan file and commits it in the plan's checkout (default message `docs(plans): edit plan <id>`; never `git add -A`, never push). On any validation error it prints the errors, leaves the plan and the index untouched and exits 1; a missing or unreadable copy, a copy whose `id` differs from the plan's, or a plan path outside a git checkout with `--commit` exits 2. Print what changed at task level (tasks added, removed, and tasks whose paths, acceptance or deps changed) and the staleness note `validate` already gives for changed paths or acceptance (docs/pipeline-cli.md section 'validate'). Hook the verb into the usage text, docs/pipeline-cli.md (a section next to 'validate') and the one delivery.md line (replace the rule sentence, do not add lines: delivery.md is near its 32768-byte cap, checked by tests/delivery-generic.test.sh and tests/line-budget.test.sh). Tests in tests/pipeline.test.sh as a new case (register it in the case map of tests/affected.py if the case map needs it): a valid edit replaces the plan; an invalid copy never replaces the plan and with `--commit` never creates a commit (assert HEAD and the index are unchanged); an id mismatch exits 2; `--commit` stages only the plan file when other files are dirty; the commit message. Changelog fragment changelog.d/plan-edit-verb.md (### Added). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "docs/pipeline-cli.md",
+        "skills/delivery/references/delivery.md",
+        "tests/pipeline.test.sh",
+        "tests/affected.py",
+        "changelog.d/plan-edit-verb.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/delivery-generic.test.sh",
+        "tests/line-budget.test.sh"
+      ],
+      "acceptance": [
+        "plan-edit replaces the plan only when the edited copy validates with no error",
+        "an invalid copy leaves the plan file, HEAD and the index unchanged, with or without --commit",
+        "--commit stages and commits only the plan file",
+        "delivery.md and docs/pipeline-cli.md point to the verb; delivery.md stays under its byte cap"
+      ]
+    },
+    {
+      "id": "waiter-lesson",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "light",
+      "grade_reason": "one lesson paragraph in the RPG parallel-work notes",
+      "objective": "Backlog topic run-lead-waiter-reaped (docs/plans/backlog.md): Claude Code stops the run lead's background waiter (`scripts/orca-wait.sh --run <id>`) under memory pressure (twice in plan workflow-slim, again in plans path-audit and owner-policy), and the harness rule is not to restart it on its own; messages then wait until the owner nudges the session. Write the lesson into skills/factory-core/references/parallel-work.md, in its Orca notes next to the waiter line (around line 83), with its reason, in at most four lines: on every wake (a task notification, an owner message, a 'You have N orchestration messages' line) the run lead runs `orca orchestration check --run <id>` and `factory-pipeline.py status <plan>` instead of relying on the waiter; it restarts the waiter only when the owner asks; on a loaded machine it keeps fewer task leads open at once. Keep the file inside the limits tests/skills-lint.sh and tests/line-budget.test.sh enforce, and keep the policy single-copy (tests/parallel-policy.test.sh: do not restate generic delivery.md policy). No changelog fragment unless tests/changelog.test.sh asks for one.",
+      "paths": [
+        "skills/factory-core/references/parallel-work.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/skills-lint.sh",
+        "tests/line-budget.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "parallel-work.md states the wake-time check and the restart rule with their reason",
+        "tests/skills-lint.sh, tests/line-budget.test.sh and tests/parallel-policy.test.sh pass"
+      ]
+    }
+  ]
+}

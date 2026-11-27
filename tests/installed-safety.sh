@@ -74,6 +74,34 @@ t() { # tool expected cwd command
   fi
 }
 echo "installed plugin $VER loaded from $PR (install record $REC)"
+echo "== english-only advisories through the installed hook"
+vi_msg='sửa lỗi đăng nhập của người dùng'
+lang() { # tool expected text (command for Bash, prompt for Agent)
+  local tool="$1" expect="$2" value="$3" input out rc got=no ok=yes count=0 h
+  if [ "$tool" = Agent ]; then
+    input=$(jq -nc --arg s "$SID" --arg d "$S" --arg p "$value" '{session_id:$s,hook_event_name:"PreToolUse",tool_name:"Agent",tool_input:{prompt:$p,description:"delegate work"},cwd:$d}')
+  else
+    input=$(payload PreToolUse "$tool" "$value" "$S")
+  fi
+  while IFS= read -r h; do
+    count=$((count + 1))
+    out=$(printf '%s\n' "$input" | (cd "$S" && bash -c "$h") 2>/dev/null); rc=$?
+    [ "$rc" -eq 0 ] && [[ "$out" != *permissionDecision* ]] || ok=no
+    if [[ "$out" == *english-only* ]]; then
+      got=yes
+      [[ "$out" == *'rpg-factory advisory (warn)'* ]] || ok=no
+    fi
+  done < <(hooks PreToolUse "$tool")
+  if [ "$count" -gt 0 ] && [ "$ok" = yes ] && [ "$got" = "$expect" ]; then
+    pass=$((pass + 1)); row PASS "$tool" "english-only: $value" "$expect" "$got" ""
+  else
+    fail=$((fail + 1)); row FAIL "$tool" "english-only: $value" "$expect" "$got" "hook count=$count checks=$ok"
+  fi
+}
+lang Bash yes "git commit -m '$vi_msg'"
+lang Bash no "git commit -m 'fix login'"
+lang Agent yes "$vi_msg"
+lang Agent no 'fix login'
 echo "== tags / releases (advisory high)"
 t Bash high "$S" "git tag v9.9.9"
 t Bash high "$S" "git tag -a v9.9.9 -m x"
@@ -98,6 +126,8 @@ t Bash high "$S" "echo v9 | xargs git tag"
 t Bash high "$S" "eval 'git tag v9'"
 t Bash high "$S" "find . -maxdepth 0 -exec git tag v9 \\;"
 t Bash high "$S" "cmd.exe /c git tag v9"
+t Bash high "$S" "cmd //c git tag v9"
+t Bash high "$S" "cmd.exe //k git tag v9"
 t Bash high "$S" "powershell.exe -Command \"git tag v9\""
 t Bash high "$S" "cd $S && git tag v9"
 t Bash high "$WS" "git -C rpg-mmo-server tag v9"
@@ -137,6 +167,7 @@ t Bash warn "$S" "git push origin develop"
 t Bash warn "$S" "git push --force origin develop"
 t Bash warn "$S" "git reset --hard HEAD"
 t Bash warn "$S" "git reset HEAD~1"
+t Bash warn "$S" "git reset origin/develop"                    # a revision reset moves develop (#155)
 t Bash warn "$S" "git merge feat/x"
 t Bash warn "$S" "git cherry-pick feat/x"
 t Bash warn "$S" "git revert HEAD"
@@ -154,6 +185,7 @@ t Bash warn "$S" "python3 -c \"import os; os.system('git tag v9')\""
 echo "== negative paths (allowed, executed)"
 t Bash allow "$S" "git status --short"
 t Bash allow "$S" "git log --oneline -1"
+t Bash allow "$S" "git reset -q a.txt"                         # path-only: updates the index, moves no branch (#155)
 t Bash allow "$S" "echo 'git tag v9'"
 t Bash allow "$S" "git switch -c feat/safety-probe"
 t Bash allow "$S" "git commit --allow-empty -m 'mentions git tag v9 and git push --tags'"

@@ -103,11 +103,11 @@
     },
     "comfyui": {
       "probe": "tcp://127.0.0.1:8188",
-      "purpose": "ComfyUI started headless (main.py, default port). asset-gen runs workflows on it through comfy-mcp; reachable only while ComfyUI runs."
+      "purpose": "ComfyUI started headless (main.py, default port 8188, a hint only). asset-gen runs workflows on it through comfy-mcp; reachable only while ComfyUI runs."
     },
     "comfyui-desktop": {
       "probe": "tcp://127.0.0.1:8189",
-      "purpose": "ComfyUI Desktop session (its own port). Either this or the headless comfyui service is enough for comfy-mcp."
+      "purpose": "ComfyUI Desktop session. 8189 is only a hint: Desktop picks a free port per start (8188 when nothing else holds it), read from <Comfy Desktop data dir>/comfy-procs/<installationId>.json (rpg-factory:comfy-desktop-setup). Either this or the headless comfyui service is enough for comfy-mcp."
     }
   },
   "dev_tools": [
@@ -366,7 +366,8 @@
       "provides": "ComfyUI from the agent through the official Comfy-Org comfy-mcp server (tool ids mcp__comfy-mcp__<tool>): server_info, validate_workflow against the live node list, run_workflow, job, fetch_outputs into a run directory, upload_file for reference images, nodes, workflow slots and launch_comfyui.",
       "used_by": [
         "asset-gen",
-        "comfyui"
+        "comfyui",
+        "comfy-desktop-setup"
       ],
       "required": false,
       "fallback": "render the workflow with assetgen.py render and leave the generation step NOT_RUN (a person runs workflow.json in ComfyUI and drops the PNGs into outputs/); never claim a generation that did not run"
@@ -460,7 +461,7 @@
     "qa_tiers": {
       "task": "affected",
       "integration": "ci+workspace",
-      "description": "Task QA runs affected and explicit check suites once; integration runs tests/run-all.sh --workspace-only locally; CI runs the affected suites per change and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
+      "description": "Task QA runs tests/run-all.sh --affected --base <review base> --within <check suites> -j 1 once (only the named check suites the change selects; the rest is left to CI); integration runs tests/run-all.sh --workspace-only --base <plan base> locally (only the workspace checks the change reaches); CI runs the affected suites per change and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
     },
     "available_agents": [
       "claude",
@@ -5919,6 +5920,33 @@
       ],
       "summary": "How asset-gen's ComfyUI side works: the comfy-template format and game-layer overrides, the comfy-mcp tool sequence, the 9router image node's behaviour and pitfalls, ComfyUI ports, and how to add a purpose, style or template."
     },
+    "comfy-desktop-setup": {
+      "kind": "tech",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 102,
+      "used_by": [
+        "asset-gen"
+      ],
+      "summary": "How to set up Comfy Desktop, the 9router image node and comfy-mcp for Claude and Codex on a machine, and the traps of that setup."
+    },
+    "asset-style": {
+      "kind": "tech",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 103,
+      "paths": [
+        "assetgen/"
+      ],
+      "used_by": [
+        "asset-gen"
+      ],
+      "summary": "How a game project's asset-gen art style is created, versioned and tuned: project.json and game styles over core styles, structured style fields, anchors, rejections, drift and the style QA rows."
+    },
     "game-design": {
       "kind": "repo",
       "repos": [
@@ -6054,7 +6082,7 @@
         "authoring"
       ],
       "domain": "vfx",
-      "order": 102,
+      "order": 104,
       "paths": [
         "**/*.vfx",
         "**/*.vfxrecipe.json",

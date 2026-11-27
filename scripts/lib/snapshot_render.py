@@ -80,11 +80,18 @@ def intent_domain(reg, args, ws):
     return domain_result(reg, candidates[0], ws)
 
 
-def print_domain(result, as_json):
+def language_line(reg):
+    lang = (reg.get("workspace") or {}).get("report_language")
+    return ("write everything in English (files, plans, briefs, messages, commits, PR text); report to the owner in "
+            + (lang.strip() if isinstance(lang, str) and lang.strip() else "the user's language") + ".")
+
+
+def print_domain(result, as_json, reg):
     if as_json:
-        print(json.dumps({"domain": result}))
+        print(json.dumps({"domain": result, "language": language_line(reg)}))
         return
     print("Domain")
+    print("Language: " + language_line(reg))
     for key in ("id", "status", "summary"):
         print(f"{key}: {result.get(key) or ''}")
     print("lead: " + (result["lead"] if result["lead"] else "routes by --repo/--paths (module ownership)"))
@@ -202,9 +209,7 @@ def render(snap, reg, args, views):
     add("")
     add("**Rules:** " + "; ".join(f"**{g['id']}** {g['rule']}" if args["full"] else f"**{g['id']}**" for g in reg["global_rules"])
         + ("" if args["full"] else " (full text: `--full` or registry `global_rules`)"))
-    lang = (reg.get("workspace") or {}).get("report_language")
-    add("**Language:** write everything in English (files, plans, briefs, messages, commits, PR text); report to the owner in "
-        + (lang.strip() if isinstance(lang, str) and lang.strip() else "the user's language") + ".")
+    add("**Language:** " + language_line(reg))
     add("**Human gates:** " + ", ".join(g["id"] + (" (high)" if g.get("decision") == "deny" else "") for g in reg["human_gates"])
         + " - no tag or release without explicit release authorization in this task; otherwise stop at READY_TO_TAG.")
     if snap.get("services"):

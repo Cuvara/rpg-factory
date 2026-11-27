@@ -1,0 +1,115 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "qa-reach-followups",
+  "title": "Structured slot progress in status, the diff base for every case selection, a narrow dollar rule, a neutral generic explorer name",
+  "topic": "qa-reach-followups",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "pipeline",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "the status schema every run lead reads and the task QA case selection",
+      "objective": "Backlog topic qa-reach-followups (docs/plans/backlog.md), three items in scripts/factory-pipeline.py and tests/pipeline.test.sh. (1) `status --json` carries the test slot progress (from plan qa-reach: each slot holder's last check, result, counts and the age of its last update) only in the stderr 'Slots:' text line, because docs/schemas/pipeline-status.schema.json has no slots field. Add a structured `slots` field to the status JSON and to the schema (one entry per held slot: slot number, pid, alive, checkout, started, and the progress fields or null when there is none yet), keep the text output as it is, and keep 'the user decides, the run never stops it'. (2) `affected_selection` calls `tests/affected.py cases` without `--base`, so the dispatch and QA case lists get the per-symbol reach only when its file list equals the default-base changed set: pass the base it diffs against. (3) Any scripts/assetgen/assetgen.py change selects every case group of tests/pipeline.test.sh: the import closure of the changed file reaches files that no pipeline case-map group maps (scripts/checks/domains/assetgen.py, scripts/factory-cmd.py, tests/fixtures/assetgen/*.py), and an unmapped reached file gives ALL. Find with evidence (tests/affected.py cases on a one-function assetgen.py change) which pipeline groups really run those files and map them, so such a change selects only those groups; leave a file on ALL when unsure. Report the group count before and after. Cases in tests/pipeline.test.sh (status --json slots from a fake slot directory, the schema validates; affected_selection passes the base). Changelog fragment changelog.d/qa-reach-followups-pipeline.md. Update docs/pipeline-cli.md only where it describes the status output. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "docs/schemas/pipeline-status.schema.json",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/qa-reach-followups-pipeline.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "status --json has a schema-valid slots field with each holder's progress",
+        "affected_selection passes the diff base to affected.py cases",
+        "a one-function assetgen.py change no longer selects every pipeline case group, or the report says with evidence why not",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "ci-base",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "the CI suite plan of every PR; a narrower selection must never drop a reached case",
+      "objective": "Backlog topic qa-reach-followups (docs/plans/backlog.md). (1) scripts/ci-plan.py calls `tests/affected.py cases <file> <suites>` without `--base`, so CI gets the per-symbol case reach from plan qa-reach only when its file list equals the default-base changed set, otherwise file-level: pass the base it already resolved (keep every full-plan fallback: no base, all-zero base, --changed-file without a base keeps today's file-level answer). (2) The `hashes.py` stand-in for affected.py in tests/run-all-parallel.test.sh reads the `cases` arguments positionally and only tolerates `--base`: make it parse the options so a reordered or new option cannot shift the suites. Cases in tests/ci-plan.test.sh (the base reaches affected.py cases; a symbol-level answer narrows the matrix cases; the fallbacks stay full). Changelog fragment changelog.d/qa-reach-followups-ci.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/ci-plan.py",
+        "tests/ci-plan.test.sh",
+        "tests/run-all-parallel.test.sh",
+        "changelog.d/qa-reach-followups-ci.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/ci-plan.test.sh",
+        "tests/run-all-parallel.test.sh"
+      ],
+      "acceptance": [
+        "ci-plan.py passes its base to affected.py cases and keeps every full fallback",
+        "the hashes.py stand-in parses its options",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "dollar",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one regex branch of the style lock external path rule",
+      "objective": "Backlog topic external-path-dollar (docs/plans/backlog.md). The `$NAME` branch of `EXTERNAL_URI_OR_ENV` in scripts/assetgen/stylelock.py refuses a dollar sign followed by a letter even with no path separator after it, so prose such as 'priced in $USD' in an `origin` or `rights_note` is refused. Narrow the branch to `$NAME` followed by a path separator (slash or backslash) or `${NAME}` (braced form, with or without a separator), keep `file:` and `%NAME%` as they are. Cases in tests/assetgen.test.sh: 'priced in $USD' passes; '$HOME/x', '$HOME\\\\x' and '${HOME}' are still refused. Changelog fragment changelog.d/external-path-dollar.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/assetgen/stylelock.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/external-path-dollar.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "prose with a dollar word passes and $NAME paths and ${NAME} are still refused",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "explorer-name",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "the generic defaults and policy text name a plugin agent; the RPG registry keeps it",
+      "objective": "Backlog topic generic-explorer-name (docs/plans/backlog.md). skills/delivery/pipeline-defaults.json (`pipeline.subagents.models.claude.agent`) and the generic policy skills/delivery/references/delivery.md (section on subagents, 'Default model: ... via the rpg-factory:factory-explorer agent') name the RPG plugin's agent type, although they serve projects without that plugin. Make the generic defaults name a neutral Claude Code subagent type that exists without the plugin (choose with evidence, e.g. the built-in `Explore` or `general-purpose`), and make delivery.md say the subagent type comes from the registry (`pipeline.subagents.models.claude.agent`) without naming the plugin agent. The RPG registry (registry/core.json) keeps `rpg-factory:factory-explorer`; skills/factory-core/references/parallel-work.md may say so if it describes subagents. Check scripts/lib/subagent_policy.py still validates both. Cases in tests/delivery-generic.test.sh (a --registry none dispatch names the neutral type, never rpg-factory:). Changelog fragment changelog.d/generic-explorer-name.md (### Changed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "skills/delivery/pipeline-defaults.json",
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/references/parallel-work.md",
+        "scripts/lib/subagent_policy.py",
+        "tests/delivery-generic.test.sh",
+        "changelog.d/generic-explorer-name.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/delivery-generic.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "a --registry none dispatch names a neutral subagent type",
+        "delivery.md names no plugin agent type",
+        "the named suites pass"
+      ]
+    }
+  ]
+}

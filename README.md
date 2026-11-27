@@ -192,7 +192,8 @@ Game Design may draft and propose gameplay values; binding them requires verifie
                                                   UI (paths-scoped, entry ui-orchestrator): ui-orchestrator
                                                   ui-component-selection · ui-figma-import
                                                   ui-toolkit-screen · ui-validation
-                                                  asset generation (paths assetgen/): comfyui
+                                                  asset generation (paths assetgen/): comfyui · comfy-desktop-setup
+                                                  · asset-style
                                                   VFX Graph effects (paths *.vfxrecipe.json, Effects/): vfx-graph
               └────────────────┬─────────────────┘
                                ▼
@@ -244,6 +245,8 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `ui-figma-import` | client-integration | Figma frame to UI Toolkit through the official connector and com.cuvara.uitoolkit 0.8: preflight, env check, headless import, validator, diagnostics, profile, bridge, preset |
 | `ui-toolkit-screen` | client-integration | screens and popups on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, registration, navigator, codegen, settings, dialogs, theme service |
 | `ui-validation` | client-integration | UI review and evidence: references, bindings, lifecycle, theme, responsive, runtime, tests; the ui-review checklist |
+| `comfy-desktop-setup` | asset-gen | setting up Comfy Desktop, the vendored 9router image node and comfy-mcp for Claude and Codex through `scripts/comfy-desktop-setup.py` (read-only `--check`, `--apply`), the human steps and the traps |
+| `asset-style` | asset-gen | how a game project's asset-gen art style is created, versioned and tuned: `project.json` and game styles over core styles, structured style fields, anchors, rejections, drift and the style QA rows |
 | `comfyui` | asset-gen, art-2d, art-3d, ui-ux, vfx | comfy-template format and game-layer precedence, comfy-mcp setup and tool sequence, the 9router image node's pitfalls, ComfyUI ports, adding a purpose, style or template |
 | `vfx-graph` | unity-package, vfx | VFX Graph effects with com.cuvara.vfx in UnityVFX: the recipe (`cuvara.vfx-recipe/1`) and its ops, catalog and describe before writing, build and apply, `import-texture`, the agent-owned Sandbox (`Tools~/vfxcli.py`, unity-mcp-cli), deterministic capture with its contact sheet and `stats.json`, the VFX Graph review checklist; the production chain is in `docs/architecture/vfx-production.md` |
 

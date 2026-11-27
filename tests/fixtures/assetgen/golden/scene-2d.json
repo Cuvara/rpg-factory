@@ -1,0 +1,68 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for scene-2d: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate wide image"
+  },
+  "class_type": "NineRouterImage",
+  "inputs": {
+   "background": "opaque",
+   "model": "cx/gpt-5.6-sol-image",
+   "quality": "high",
+   "size": "1536x1024",
+   "user_prompt": [
+    "1",
+    0
+   ]
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Thumbnail for the readability check"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "disabled",
+   "height": 256,
+   "image": [
+    "2",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 0
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Preview thumbnail (silhouette at small size)"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "3",
+    0
+   ]
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Save full-size image"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-scene-2d-001-final",
+   "images": [
+    "2",
+    0
+   ]
+  }
+ }
+}

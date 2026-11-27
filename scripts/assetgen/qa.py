@@ -16,6 +16,7 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       (workflow.json, else spec params); "auto" = any (orientation auto with expect auto too).
                       The 9router image service ignores the requested size (e2e: 1672x941 returned for 1536x1024
                       and 1024x1024 requests), so the core purposes grade orientation or area plus these floors.
+                      For qa.size.fit pad, grades the file finalize fitted; fit is not a QA row and QA never pads.
   png-alpha           qa.alpha: required (alpha channel and some transparent pixels), forbidden (fully opaque), any
   png-corners         qa.transparent_corners: the four corner pixels have alpha <= 8
   png-tileable        qa.tileable.max_seam_error: wrap-around edge difference minus the interior
@@ -42,6 +43,7 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       one in runfiles.required_checks), so the gen-run quality plugin rejects a qa.json without the
                       row: FAIL makes the qa state FAIL like any other row; NOT_AVAILABLE (no alpha) comes with a
                       png-alpha FAIL anyway. assetgen.py defringe repairs it.
+  png-pixel-grid      when pixelgrid.json exists: grades recorded pixels and palette limit
   purpose-qa          FAIL (one row for outputs/, nothing graded) when the purpose qa block is malformed
                       (runfiles.qa_errors; the same rules lint reports)
 Style consistency rows (only for a spec with style_lock; consistency.check_all over the style data spec.style.data,
@@ -53,12 +55,14 @@ of spec.style_lock.references; a missing or undecodable copy is left out, so ton
 A spec without style_lock (resolved before the style lock) gets no style rows: its qa.json is what it was.
 """
 import hashlib
+import json
 import math
 import os
 
 import consistency
 import imaging
 import png
+import pixelgrid
 import runfiles
 
 SAMPLES = 256  # rows/columns sampled per statistic; keeps the stdlib path fast on 1536x1024 outputs
@@ -330,12 +334,28 @@ def run_qa(run_dir, spec, requested_size):
     out_dir = os.path.join(run_dir, "outputs")
     files = sorted(n for n in os.listdir(out_dir) if n.lower().endswith(".png")) if os.path.isdir(out_dir) else []
     results, outputs = [], []
+    pixel_path = os.path.join(run_dir, "pixelgrid.json")
+    pixel_present = os.path.exists(pixel_path)
+    pixel_record = None
+    pixel_rows = {}
+    if pixel_present:
+        try:
+            with open(pixel_path, encoding="utf-8") as f:
+                pixel_record = json.load(f)
+            if not isinstance(pixel_record, dict):
+                raise ValueError("record is not an object")
+            rows = pixel_record.get("outputs", [])
+            if isinstance(rows, list):
+                pixel_rows = {row.get("output"): row for row in rows if isinstance(row, dict)}
+        except (OSError, ValueError, UnicodeError) as exc:
+            results.append({"output": "pixelgrid.json", "check": "png-pixel-grid", "state": "FAIL",
+                            "reasons": ["cannot read pixelgrid.json: %s" % exc]})
     if not files:
-        return [{"output": "outputs/", "check": "png-present", "state": "FAIL", "reasons": ["no outputs/*.png in the run"]}], []
+        return results + [{"output": "outputs/", "check": "png-present", "state": "FAIL", "reasons": ["no outputs/*.png in the run"]}], []
     malformed = runfiles.qa_errors(qa) if isinstance(data, dict) else ["spec.json purpose data must be an object"]
     if malformed:  # grade nothing against a qa block that cannot be read; the outputs are still hashed
         outputs = [{"path": "outputs/" + n, "sha256": sha256(os.path.join(out_dir, n))} for n in files]
-        return [{"output": "outputs/", "check": "purpose-qa", "state": "FAIL",
+        return results + [{"output": "outputs/", "check": "purpose-qa", "state": "FAIL",
                  "reasons": ["the purpose qa block is malformed: " + "; ".join(malformed)]}], outputs
 
     def add(rel, check, verdict):
@@ -358,7 +378,19 @@ def run_qa(run_dir, spec, requested_size):
             continue
         item.update(width=img.width, height=img.height)
         add(rel, "png-valid", ("PASS", ["%dx%d, decoder %s" % (img.width, img.height, img.decoder)]))
-        checks = {"png-size": lambda: check_size(img, qa.get("size", {"mode": "any"}), requested_size),
+        pixel_row = pixel_rows.get(rel, {})
+        pixels_hash = hashlib.sha256(b"%dx%d:" % (img.width, img.height) + img.rgba).hexdigest()
+        matching = (pixel_row.get("state") == "pixelated" and pixel_row.get("after_pixels_sha256") == pixels_hash)
+        source_size = parse_size(pixel_row.get("source_size")) if matching else None
+        def size_check():
+            if source_size is None:
+                return check_size(img, qa.get("size", {"mode": "any"}), requested_size)
+            size_img = type("SourceSize", (), {"width": source_size[0], "height": source_size[1]})()
+            state, reasons = check_size(size_img, qa.get("size", {"mode": "any"}), requested_size)
+            suffix = " (pixel grid %dx%d, graded at source size %dx%d from pixelgrid.json)" % (
+                img.width, img.height, source_size[0], source_size[1])
+            return state, [reason + suffix for reason in reasons]
+        checks = {"png-size": size_check,
                   "png-alpha": lambda: check_alpha(img, qa.get("alpha", "any")),
                   "png-corners": lambda: check_corners(img),
                   "png-tileable": lambda: check_tileable(img, qa["tileable"].get("max_seam_error", 0.06),
@@ -369,6 +401,23 @@ def run_qa(run_dir, spec, requested_size):
                   "png-edge-fringe": lambda: imaging.edge_fringe(img)}
         for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
             add(rel, name_, checks[name_]())
+        if pixel_present and pixel_record is not None:
+            if pixel_row.get("state") == "skipped":
+                verdict = ("WARN", ["pixel grid skipped: %s" % pixel_row.get("reason", "no reason recorded")])
+            elif not pixel_row:
+                verdict = ("FAIL", ["output missing from pixelgrid.json"])
+            elif not matching:
+                verdict = ("FAIL", ["pixels do not match pixelgrid.json"])
+            else:
+                params = pixel_record.get("params") if isinstance(pixel_record.get("params"), dict) else {}
+                colors = pixelgrid.count_colors(img.rgba)
+                palette = params.get("palette_colors")
+                limit = len(palette) if isinstance(palette, list) else params.get("max_colors")
+                valid_limit = isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+                verdict = ("PASS" if valid_limit and colors <= limit else "FAIL", [
+                    "scale %s, grid %s, source %s, %d colors (limit %s)" % (
+                        pixel_row.get("scale"), pixel_row.get("size"), pixel_row.get("source_size"), colors, limit)])
+            add(rel, "png-pixel-grid", verdict)
         if lock is not None:
             family = lock.get("family") if isinstance(lock.get("family"), str) else None
             for row, state, details in consistency.check_all(img, style_data, data, family, anchors):

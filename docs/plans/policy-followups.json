@@ -1,0 +1,122 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "policy-followups",
+  "title": "Backlog language-policy-followups: english-only allowlist and guard lows, Language line in every snapshot view, Orca worker-list and leftover-child fixes, Codex trust step",
+  "topic": "policy-followups",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "file-guard-allowlist",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one lookup in the file guard and its test cases",
+      "objective": "Backlog topic language-policy-followups item 5. scripts/file-guard.py honours only `path:*` entries of the english-only allowlist (tests/fixtures/english-allow.txt, near line 245) because an Edit fragment has no file line; a `path:line` entry is ignored, so an advisory fires on a write that CI (scripts/checks/english-only.py) accepts. For a Write (whole file) map each offending line to its file line and honour `path:line`; for an Edit, locate the fragment in the current file (or the resulting text) to recover the line numbers, and when the line cannot be known stay with the current behaviour. Keep the hook fast (no repository scan, one file read at most) and never crash (guard errors mean no opinion). Tests in tests/file-guard.test.sh: a `path:line` entry silences the advisory for that line on Write and on Edit, and not for another line. Changelog fragment changelog.d/policy-file-guard-allowlist.md (### Fixed).",
+      "paths": [
+        "scripts/file-guard.py",
+        "tests/file-guard.test.sh",
+        "changelog.d/policy-file-guard-allowlist.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/file-guard.test.sh"
+      ],
+      "acceptance": [
+        "a path:line allowlist entry silences the english-only advisory for that line on Write and Edit",
+        "other lines still raise it; path:* still works",
+        "the hook stays fast and never fails the tool call"
+      ]
+    },
+    {
+      "id": "git-guard-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "git guard parsing and hook matching; every new bypass needs a test and must fail independently",
+      "objective": "Backlog topic language-policy-followups items 2 and 6 (read docs/plans/language-policy/report.md for context). In the git guard (scripts/lib/gitguard.py facade over scripts/lib/rpgf_guard/): (a) the `orca` command parse that finds the subcommand and the message text (`orca orchestration send --body`, `orca agent launch --prompt`) treats every token after a global option as positional, so a global option that takes a value (for example `--environment <selector>` or `--pairing-code <code>`) hides the subcommand and the english-only check is skipped: skip the value of known value-taking global options. (b) The `Agent|Task` hook matcher in hooks/hooks.json fires for any tool named Task; the english-only prompt check must apply only when the tool input has the Agent-tool shape (a prompt field), and give no opinion otherwise. (c) The plugin-checkout rule (find it in rpgf_guard; it currently applies to every plugin checkout) must be scoped as the report describes; if the report leaves the intended scope unclear, keep behaviour and record the question in the task report instead of guessing. Tests in tests/git-guard.test.sh for each, and english-only cases in tests/installed-safety.sh for a commit message and an Agent prompt (item 2). Changelog fragment changelog.d/policy-git-guard-lows.md (### Fixed).",
+      "paths": [
+        "scripts/lib/gitguard.py",
+        "scripts/lib/rpgf_guard/",
+        "hooks/hooks.json",
+        "tests/git-guard.test.sh",
+        "tests/installed-safety.sh",
+        "changelog.d/policy-git-guard-lows.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/git-guard.test.sh",
+        "tests/english-only.test.sh"
+      ],
+      "acceptance": [
+        "an orca command with a value-taking global option is still checked for English text",
+        "a non-Agent tool named Task gets no english-only opinion; an Agent prompt still does",
+        "tests/installed-safety.sh has english-only cases for a commit message and an Agent prompt",
+        "the plugin-checkout rule scope is fixed or the open question is recorded"
+      ]
+    },
+    {
+      "id": "language-line-docs",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one line in two snapshot views and doc text",
+      "objective": "Backlog topic language-policy-followups items 1, 3, 4 and 10. (a) The `--domain` and `--graph` views of the snapshot (scripts/factory-context.sh, rendered by scripts/lib/snapshot_render.py; the default view prints a `Language:` line near line 206) print no `Language:` line: add the same line to both views (text and JSON forms where the view has one) and a test in the suite that covers those views (find it: tests/factory-status.test.sh or the snapshot/routing suite that asserts the default view's Language line). (b) changelog.d/language-policy.md (unreleased) does not name the Agent-tool prompt check (hooks/hooks.json matcher `Agent|Task`): add one sentence. (c) skills/factory-core/references/plugin-review.md still has the short 'English only' bullet near line 14: state the full policy in one bullet as .claude/CLAUDE.md does (everything written is English; only the report to the owner uses the registry workspace.report_language), within the skill line budget. (d) docs/codex.md: document the one-time 'Hooks need review' trust step Codex shows in a checkout whose hooks it has not seen (the session stops there while `agents` still reports Codex available) and what the run lead does about it. Changelog fragment changelog.d/policy-language-line.md (### Fixed).",
+      "paths": [
+        "scripts/lib/snapshot_render.py",
+        "scripts/factory-context.sh",
+        "tests/factory-status.test.sh",
+        "changelog.d/language-policy.md",
+        "changelog.d/policy-language-line.md",
+        "skills/factory-core/references/plugin-review.md",
+        "docs/codex.md",
+        "scripts/lib/context.py",
+        "tests/domains-routing.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/factory-status.test.sh",
+        "tests/skills-lint.sh",
+        "tests/domains-routing.test.sh"
+      ],
+      "acceptance": [
+        "the --domain and --graph snapshot views print the Language line",
+        "changelog.d/language-policy.md names the Agent prompt check",
+        "plugin-review.md states the full language policy",
+        "docs/codex.md documents the Codex hooks trust step"
+      ]
+    },
+    {
+      "id": "pipeline-orca",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "status and cleanup decide what the run lead removes; a wrong leftover call deletes another plan's worktree",
+      "objective": "Backlog topic language-policy-followups items 7 and 8. (a) scripts/factory-pipeline.py calls `orca orchestration worker-list --run RUN --limit 100 --full --json` (near line 3625); Orca 1.4.244 rejects --full ('Unknown flag --full'), Orca 1.4.250 accepts it. When the call fails with an unknown-flag error, retry once without --full and use the concise rows for what they carry (say which check could not run when a needed field is missing), so status and cleanup run the unreleased-worker check on both versions. (b) `status` (and cleanup) list a sibling integration worktree of another plan as a 'leftover child' of this plan's integration checkout when its Orca parent is the main checkout (seen with `feat/skills/vfx-graph` while the main checkout held `fix/core/language-policy`): only a worktree whose branch belongs to this plan (the plan topic or `<topic>-<task>` branches, or recorded by this plan's dispatch) is a child of the plan; a worktree of another topic is never listed as this plan's leftover. Tests in tests/pipeline.test.sh with a stubbed orca for both worker-list forms and for the sibling worktree case. Document in docs/pipeline-cli.md (status and cleanup section). Changelog fragment changelog.d/policy-pipeline-orca.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/policy-pipeline-orca.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "status and cleanup run the unreleased-worker check with and without Orca support for --full",
+        "a worktree of another topic is never a leftover child of this plan",
+        "this plan's own leftover children are still listed"
+      ]
+    }
+  ]
+}

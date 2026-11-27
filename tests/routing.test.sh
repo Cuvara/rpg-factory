@@ -44,16 +44,8 @@ if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
 all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
 has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-# default_workspace: an explicit (non-empty) RPG_FACTORY_WORKSPACE wins; otherwise the drive form /c/... on Git Bash,
-# MSYS and Cygwin, the WSL form /mnt/c/... elsewhere. `uname` is looked up at call time, so a test can stub it.
-default_workspace() {
-  if [ -n "${RPG_FACTORY_WORKSPACE:-}" ]; then printf '%s\n' "$RPG_FACTORY_WORKSPACE"; return; fi
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) printf '%s\n' /c/Workspaces/UnityIndie ;;
-    *) printf '%s\n' /mnt/c/Workspaces/UnityIndie ;;
-  esac
-}
-WS="$(default_workspace)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
+WS="$(rpgf_default_workspace)"
 # The bare factory-context.sh calls below read the workspace from the environment.
 export RPG_FACTORY_WORKSPACE="$WS"
 CTX="$ROOT/scripts/factory-context.sh"
@@ -67,7 +59,17 @@ assert() {
   # history() supplies only previously successful output; still run every assertion
   # (and golden recording) on a hit. Task scenarios never use the persistent cache.
   if [ -n "${history_cached_out:-}" ]; then out="$history_cached_out"
-  else out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1); fi
+  else
+    out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+    # A git timeout under host load is a flake of the host, not of the routing: when the predicate fails
+    # AND the snapshot reports exactly that repo error ("git timed out after <N> s", scripts/lib/context.py),
+    # run the snapshot once more and judge the second output. Any other failure is never retried.
+    if ! jq -e ".repos[0] | $pred" <<<"$out" >/dev/null 2>&1 \
+       && jq -e '.repos[0].error // "" | startswith("git timed out after")' <<<"$out" >/dev/null 2>&1; then
+      echo "RETRY $name (git timed out)"
+      out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+    fi
+  fi
   assert_out="$out"
   # ROUTING_GOLDEN_OUT=<file>: also record the routing contract of this scenario (tests/routing-golden.test.sh)
   if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
@@ -298,9 +300,13 @@ done
 assetgen_route="$(lead asset-gen) and $(tech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/runs/iron-sword-icon-001/run.md assetgen/templates/image-generate.json 2>&1)
 fexpect 'authoring assetgen path -> asset-gen leads, tech comfyui' "jq -e '.repos[0] | $assetgen_route' <<<\"\$out\" >/dev/null"
-art2d_nocomfy="$(lead art-2d) and $(notech comfyui)"
+fexpect 'authoring assetgen path -> tech comfy-desktop-setup too (used_by asset-gen)' "jq -e '.repos[0] | $(tech comfy-desktop-setup)' <<<\"\$out\" >/dev/null"
+fexpect 'authoring assetgen path -> tech asset-style too (used_by asset-gen)' "jq -e '.repos[0] | $(tech asset-style)' <<<\"\$out\" >/dev/null"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/project.json assetgen/styles/game-pixel.json 2>&1)
+fexpect 'authoring assetgen style path -> asset-gen leads, tech comfyui and asset-style' "jq -e '.repos[0] | $assetgen_route and $(tech asset-style)' <<<\"\$out\" >/dev/null"
+art2d_nocomfy="$(lead art-2d) and $(notech comfyui) and $(notech asset-style)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths art2d/specs/iron-sword.md 2>&1)
-fexpect 'authoring art2d path -> art-2d leads, no tech comfyui (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
+fexpect 'authoring art2d path -> art-2d leads, no tech comfyui or asset-style (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
 vfx_graph_route="$vfx_lead and $(tech vfx-graph)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths vfx/assets/fire-burst/asset.md 2>&1)
 fexpect 'authoring vfx/assets path -> vfx leads with tech vfx-graph' "jq -e '.repos[0] | $vfx_graph_route' <<<\"\$out\" >/dev/null"
@@ -437,17 +443,20 @@ if has_case cli-selftest; then
     else fail=$((fail + 1)); echo "FAIL  default workspace: $1 gave '$2', want '$3'"; fi
   }
   ws_expect "MINGW64_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MINGW64_NT-10.0-26200; }; default_workspace)" /c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MINGW64_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
   ws_expect "MSYS_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MSYS_NT-10.0-26200; }; default_workspace)" /c/Workspaces/UnityIndie
-  ws_expect "CYGWIN_NT -> /c/ drive form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo CYGWIN_NT-10.0; }; default_workspace)" /c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo MSYS_NT-10.0-26200; }; rpgf_default_workspace)" /c/Workspaces/UnityIndie
+  # cygpath is hidden (empty PATH dir): Git Bash ships a real one whose answer is the drive form, Linux CI has none.
+  nocyg=$(mktemp -d)
+  ws_expect "CYGWIN_NT without cygpath -> /cygdrive/c/ form" \
+    "$(unset RPG_FACTORY_WORKSPACE; PATH="$nocyg"; hash -r; uname() { echo CYGWIN_NT-10.0; }; rpgf_default_workspace)" /cygdrive/c/Workspaces/UnityIndie
+  rmdir "$nocyg" 2>/dev/null; hash -r
   ws_expect "Linux -> /mnt/c/ WSL form" \
-    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo Linux; }; default_workspace)" /mnt/c/Workspaces/UnityIndie
+    "$(unset RPG_FACTORY_WORKSPACE; uname() { echo Linux; }; rpgf_default_workspace)" /mnt/c/Workspaces/UnityIndie
   ws_expect "empty RPG_FACTORY_WORKSPACE counts as unset" \
-    "$(RPG_FACTORY_WORKSPACE=; uname() { echo Linux; }; default_workspace)" /mnt/c/Workspaces/UnityIndie
+    "$(RPG_FACTORY_WORKSPACE=; uname() { echo Linux; }; rpgf_default_workspace)" /mnt/c/Workspaces/UnityIndie
   ws_expect "explicit RPG_FACTORY_WORKSPACE wins on MINGW64_NT" \
-    "$(RPG_FACTORY_WORKSPACE=/x/explicit-ws; uname() { echo MINGW64_NT-10.0-26200; }; default_workspace)" /x/explicit-ws
+    "$(RPG_FACTORY_WORKSPACE=/x/explicit-ws; uname() { echo MINGW64_NT-10.0-26200; }; rpgf_default_workspace)" /x/explicit-ws
   ws_expect "resolved workspace is exported" "$(bash -c 'printf %s "$RPG_FACTORY_WORKSPACE"')" "$WS"
   bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown case exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown case exited $rc, want 2"; }

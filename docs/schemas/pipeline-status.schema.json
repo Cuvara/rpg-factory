@@ -75,7 +75,9 @@
           "qa",
           "children",
           "next",
-          "notes"
+          "notes",
+          "lead_report",
+          "ready_for_pr"
         ],
         "properties": {
           "id": {
@@ -183,6 +185,82 @@
             "items": {
               "type": "string"
             }
+          },
+          "lead_report": {
+            "description": "The task lead's durable `report` record (`<task>__lead-report.json`), the same facts as the `lead report:` note; null when there is none (an Orca 'task done' message alone is only a note).",
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "at",
+                  "sha",
+                  "summary",
+                  "current"
+                ],
+                "properties": {
+                  "at": {
+                    "description": "When the lead recorded it (UTC, as written); null when the record has no time.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  },
+                  "sha": {
+                    "type": "string",
+                    "description": "The full commit the report is for."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "description": "The report's first line as stored (at most 200 characters)."
+                  },
+                  "current": {
+                    "type": "boolean",
+                    "description": "The report counts for the task HEAD: its commit is the HEAD (or, in a no-worktree repo in the integrated or qa phase, an ancestor of it); false is the note's `(stale: task HEAD is <sha10>)`."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "ready_for_pr": {
+            "description": "The `READY_FOR_PR:` note as a field, computed with it: null when no such note applies (a tier XS plan, or a phase before candidate).",
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "ready",
+                  "missing"
+                ],
+                "properties": {
+                  "ready": {
+                    "type": "boolean",
+                    "description": "Lead report, PASS review and PASS QA at the task HEAD, nothing stale and no subtask FAIL."
+                  },
+                  "missing": {
+                    "description": "The first missing thing the note names (`READY_FOR_PR: no (<missing>)`); null when ready.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "const": null
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -253,6 +331,164 @@
         "type": "string"
       },
       "description": "Plan-level commands (validate when invalid, gate when every task has QA)."
+    },
+    "slots": {
+      "description": "Test slots (`<state dir>/locks/run-all-slots/<n>/`, written by tests/run-all.sh) held by a run in one of the plan's checkouts, one entry per held slot, the same entries as `cleanup --json`; empty when none (and for an invalid plan). Always present in `status --json` output; optional so an older output still validates. Read-only: the user decides, the run never stops a holder. The stderr `Slots:` lines carry the same facts as text.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "slot",
+          "pid",
+          "winpid",
+          "checkout",
+          "started",
+          "progress",
+          "alive"
+        ],
+        "properties": {
+          "slot": {
+            "type": "string",
+            "description": "The slot directory name (a number as tests/run-all.sh writes it)."
+          },
+          "pid": {
+            "type": "string",
+            "description": "The holder's PID as the slot's pid file names it (an MSYS PID on Windows)."
+          },
+          "winpid": {
+            "type": "string",
+            "description": "The holder's Windows PID; empty when the slot has none."
+          },
+          "checkout": {
+            "type": "string",
+            "description": "The checkout the run holds the slot for."
+          },
+          "started": {
+            "type": "string",
+            "description": "When the run took the slot (UTC, as written); empty when unknown."
+          },
+          "alive": {
+            "description": "Whether the holder process runs: null when the process listing failed or there is no usable PID.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "progress": {
+            "description": "What the run last reported in the slot's progress file; null when it has none yet (no file, or no check in it).",
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "check",
+                  "result",
+                  "passed",
+                  "failed",
+                  "updated",
+                  "age_seconds"
+                ],
+                "properties": {
+                  "check": {
+                    "type": "string",
+                    "description": "The suite or check the run last reported."
+                  },
+                  "result": {
+                    "type": "string",
+                    "description": "Its result as written (PASS, FAIL, running, ...); empty when missing."
+                  },
+                  "passed": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  },
+                  "failed": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  },
+                  "updated": {
+                    "type": "string",
+                    "description": "When the run last updated the file (UTC, %Y-%m-%dT%H:%M:%SZ as written); empty when missing."
+                  },
+                  "age_seconds": {
+                    "description": "Seconds since `updated`; null when it does not parse. A live run keeps it small, an orphan does not.",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "const": null
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "const": null
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "model_scope_widen": {
+      "description": "The plan's valid model scope widenings (`model_scope_widen` entries that pass the model policy; invalid ones are left out, also for an invalid plan), in plan order; empty when none. Always present in `status --json` output, also for an invalid plan. Optional like `models` and `slots`: the `status` command adds these three around the status core, whereas the core sets every required field (the per-task `lead_report` and `ready_for_pr` included) on each output. The stderr `model scope widening:` lines carry the same `text`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "agent",
+          "model",
+          "efforts",
+          "basis",
+          "reason",
+          "text"
+        ],
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "efforts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "basis": {
+            "enum": [
+              "owner-approved",
+              "necessary"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "The line status prints for it: `<agent> <model> [<efforts>] (basis <basis>: <reason>)`."
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "models": {
       "type": "object",

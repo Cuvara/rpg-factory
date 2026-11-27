@@ -23,11 +23,13 @@
   ui-figma | ui-components | ui-screen | ui-review  [same options] <request...>
                                           the same plan with the intent family forced (Figma import,
                                           component selection, screen implementation, review)
-  assetgen list|show|resolve|lint|review-cmd|drift [args]
+  assetgen list|show|resolve|lint|review-cmd|drift|style report [args]
                                           scripts/assetgen/assetgen.py, read-only verbs: asset-gen purposes, styles
                                           and ComfyUI templates (core + game layer), a resolved spec, data lint,
                                           the Codex review command (printed, never run), style drift of gen-runs
-                                          and anchors; --authoring defaults to the workspace authoring repo when
+                                          and anchors, the style report (spread and QA rates over approved runs,
+                                          suggested thresholds with their data; other style verbs stay refused);
+                                          --authoring defaults to the workspace authoring repo when
                                           it has assetgen/ (also where a review-cmd --run <run-id> resolves);
                                           resolve prints a summary, --verbose adds the field sources
   vfx-plan [--json] [--effect ID] [--root DIR] [--project DIR] [--style FILE] [--spec ID|FILE] [--asset ID|FILE]
@@ -56,6 +58,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 from shells import find_bash  # noqa: E402
+from workspace import default_workspace  # noqa: E402
 
 BASH = find_bash() or "bash"  # never the System32 WSL launcher on Windows
 CODEX = "python3 -B " + os.path.join(ROOT, "scripts", "factory-cmd.py").replace(os.sep, "/")  # the shell form of a verb
@@ -147,7 +150,32 @@ def capture(argv):
 
 
 def workspace(reg):
-    return os.environ.get(reg["workspace"]["root_env"]) or reg["workspace"]["root_default"]
+    return default_workspace(registry=reg)
+
+
+def setup_faults(alias, jq_path):
+    """Machine-setup faults that make test suites and task QA report NOT_RUN: a list of {id, detail, fix}.
+    `alias` is hookspeed.python_alias() (the Windows Store `python3` stub, or None), `jq_path` the jq on PATH."""
+    faults = []
+    if alias:
+        import hookspeed
+        real = sys.executable if sys.executable and not hookspeed.is_store_alias(sys.executable) else None
+        target = f"the real interpreter ({real})" if real else "the real interpreter"
+        faults.append({
+            "id": "python3-store-stub",
+            "detail": f"`python3` in Git Bash resolves to the Microsoft Store stub {alias}: test suites and task QA run "
+                      f"`python3` from Git Bash and the stub may not run, so task QA reports NOT_RUN",
+            "fix": f"put a `python3` PATH shim first on PATH that execs {target} (a one-line sh script named python3 in "
+                   f"a directory before WindowsApps), or turn off the python3 app execution alias in Windows settings "
+                   f"(nothing was changed)"})
+    if not jq_path:
+        faults.append({
+            "id": "jq-missing",
+            "detail": "`jq` is not on PATH: checks and test suites need jq and fail with 'jq: command not found' or "
+                      "report NOT_RUN",
+            "fix": "install jq 1.7 or newer (for example `winget install jqlang.jq`, then reopen Git Bash), or put a "
+                   "`jq` PATH shim that execs an installed jq.exe first on PATH (nothing was changed)"})
+    return faults
 
 
 def cmd_doctor(args):
@@ -181,6 +209,7 @@ def cmd_doctor(args):
     import hookspeed
     alias = hookspeed.python_alias()  # detection only: doctor never changes PATH
     py3 = {"path": alias or shutil.which("python3"), "windows_store_alias": bool(alias), "advice": hookspeed.alias_advice()}
+    faults = setup_faults(alias, shutil.which("jq"))
     hooks = json.load(open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]
     hooks = {e: [h.get("matcher") or "*" for h in v] for e, v in hooks.items()}
     import devtools
@@ -199,7 +228,8 @@ def cmd_doctor(args):
         print(json.dumps({"schema": "rpg-factory.doctor/1", "install": install_state, "registry": registry_state,
                           "workspace": {"path": ws, "markers_ok": ok_ws, "scratch_state": fstate.scratch(),
                                         "persistent_state": fstate.persistent(), "tmpdir": os.environ.get("TMPDIR")},
-                          "repos": repos, "tools": {"required": ["git", "jq", "python3", "bash"], "missing": missing, "python3": py3},
+                          "repos": repos, "tools": {"required": ["git", "jq", "python3", "bash"], "missing": missing, "python3": py3,
+                                    "setup_faults": faults},
                           "hooks": hooks, "dev_tools": tools, "skill_gaps": gaps, "exit": rc}, indent=2))
         return rc
     print("\n## Workspace and state")
@@ -209,8 +239,12 @@ def cmd_doctor(args):
     print(f"- scratch state: {fstate.scratch()}  (TMPDIR={os.environ.get('TMPDIR', '<unset>')!r})")
     print(f"- persistent state: {fstate.persistent()}")
     print(f"- tools: {'all present' if not missing else 'MISSING ' + ', '.join(missing)}")
-    if py3["advice"]:
+    stub_fault = any(f["id"] == "python3-store-stub" for f in faults)
+    if py3["advice"] and not stub_fault:  # the stub fault below already carries the fix: one line per fault
         print(f"- python3: {py3['advice']}")
+    for f in faults:
+        extra = ". The stub also makes every hook call start about 70 ms slower." if f["id"] == "python3-store-stub" else ""
+        print(f"- setup fault {f['id']}: {f['detail']}. Fix: {f['fix']}{extra}")
     print("- hooks: " + "; ".join(f"{e} [{', '.join(m)}]" for e, m in hooks.items()))
     print("\n## Dev tools (registry dev_tools; names only are read from MCP/plugin config)")
     for t in tools:
@@ -266,17 +300,24 @@ def cmd_ui(verb, raw):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "ui", "ui_plan.py"), "--verb", verb, *opts, text])
 
 
-ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd", "drift")
+ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd", "drift", "style report")
 
 
 def cmd_assetgen(raw):
-    """Read-only assetgen.py verbs; render, defringe, embed, qa and manifest write into a run directory, promote-anchor
-    and reject write style-lock records into the authoring repo, approve-record writes a person's approval record and
-    publish uploads to ComfyUI: they stay with the asset-gen skill."""
+    """Read-only assetgen.py verbs; render, defringe, embed, qa, finalize and manifest write into a run directory,
+    promote-anchor and reject write style-lock records into the authoring repo, approve-record writes a person's
+    approval record, publish uploads to ComfyUI and the style verbs other than `style report` (init, bump, derive)
+    write or propose style data: they stay with the asset-gen skill."""
     args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
-    if not args or args[0] not in ASSETGEN_VERBS:
+    if args and args[0] == "style" and not (len(args) >= 2 and args[1] == "report"):
+        sub = args[1] if len(args) >= 2 and not args[1].startswith("-") else ""
+        raise ValueError("assetgen needs %s (style %s writes into the authoring repo or proposes and merges style data: "
+                         "only `style report` is read-only; the asset-gen skill runs scripts/assetgen/assetgen.py directly)"
+                         % ("|".join(ASSETGEN_VERBS), sub or "without `report`"))
+    verb = "style report" if args and args[0] == "style" else (args[0] if args else "")
+    if not args or (args[0] != "style" and args[0] not in ASSETGEN_VERBS):
         hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
-                if args and args[0] in ("render", "defringe", "embed", "qa", "manifest") else
+                if args and args[0] in ("render", "defringe", "embed", "qa", "finalize", "manifest") else
                 " (%s writes a style-lock record into the authoring repo: the asset-gen skill runs "
                 "scripts/assetgen/assetgen.py directly)" % args[0]
                 if args and args[0] in ("promote-anchor", "reject") else
@@ -291,7 +332,7 @@ def cmd_assetgen(raw):
     if any(len(a.split("=", 1)[0]) >= 3 and "--out".startswith(a.split("=", 1)[0]) for a in args):
         raise ValueError("assetgen --out (or an abbreviation of it) writes a file: run scripts/assetgen/assetgen.py directly "
                          "(the asset-gen skill)")
-    if args[0] in ("list", "show", "resolve", "lint", "drift", "review-cmd") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
+    if verb in ("list", "show", "resolve", "lint", "drift", "review-cmd", "style report") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
         reg = registry()
         game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
         if os.path.isdir(os.path.join(game, "assetgen")):
@@ -564,9 +605,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "UI plan forced to screen implementation"},
     {"verb": "ui-review", "args": "[ui options] <request>", "read_only": True, "example": "ui-review Review the HUD",
      "summary": "UI plan forced to review"},
-    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd|drift [args]", "read_only": True,
+    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd|drift|style report [args]", "read_only": True,
      "example": "assetgen list --kind purpose",
-     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed), style drift"},
+     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed), style drift, style report (read-only; style init|bump|derive stay with the skill)"},
     {"verb": "vfx-plan", "args": "[--json] [--effect <id>] [--root <authoring>] [--project <dir>] [--style <file>] [--spec <id|file>] "
                                  "[--asset <id|file>] [--gen-run <id>]... [--captures <dir>] [--lint <file>] <request>",
      "read_only": True, "example": "vfx-plan --json --effect fire-burst --project C:/Game/Packages/vfx",

@@ -1,6 +1,7 @@
 """Orca and Claude Code agent dispatch commands, shared by factory-workflow.py and factory-pipeline.py.
 
-Nothing here runs Orca: it builds the exact argv the lead runs (or prints). Placement follows the worktree rule in
+Nothing here runs Orca: it builds the exact argv the lead runs (or prints); send_message() builds the argv of one
+`orca orchestration send` that factory-pipeline.py sync --send runs itself. Placement follows the worktree rule in
 skills/delivery/references/delivery.md section 4 (RPG specifics: skills/factory-core/references/parallel-work.md):
 a repo with registry `worktrees: false`, or whose root holds a
 `pipeline.no_worktree_markers` file (a Unity project), never gets a new worktree - the worker runs in the existing
@@ -11,6 +12,7 @@ Flags match `orca orchestration worker-start --help` (Orca 1.4): (--task <id> | 
 Printed commands use POSIX quoting (Claude Code's Bash tool, Git Bash); PowerShell needs its own quoting.
 in_orca_session() and orca_reachable() tell whether the caller runs inside a reachable Orca (Orca first,
 skills/delivery/references/delivery.md section 5); orca_reachable() is the only call here that runs `orca` (read-only status).
+terminal_list(), terminal_read() and terminal_send() build the argv of `factory-pipeline.py nudge`; it runs them.
 """
 import json
 import os
@@ -113,6 +115,28 @@ def worker_start(spec, agent, place, title=None, model=None, effort=None):
     if title:
         argv += ["--task-title", title]
     return argv + model_flags(model, effort) + ["--json"]
+
+
+def send_message(to, subject, body, msg_type="status"):
+    """argv for `orca orchestration send` of one message (factory-pipeline.py sync runs it with --send)."""
+    return ["orca", "orchestration", "send", "--to", to, "--type", msg_type, "--subject", subject, "--body", body,
+            "--json"]
+
+
+def terminal_list(worktree):
+    """argv for `orca terminal list` of the terminals bound to one worktree (read-only; factory-pipeline.py nudge)."""
+    return ["orca", "terminal", "list", "--worktree", f"path:{worktree}", "--limit", "100", "--json"]
+
+
+def terminal_read(handle):
+    """argv for `orca terminal read` of the visible screen of one terminal (read-only; factory-pipeline.py nudge)."""
+    return ["orca", "terminal", "read", "--terminal", handle, "--screen", "--json"]
+
+
+def terminal_send(handle):
+    """argv for `orca terminal send` of one carriage return (the Enter that submits a start prompt left in the input
+    box; factory-pipeline.py nudge --send runs it once per stuck terminal)."""
+    return ["orca", "terminal", "send", "--terminal", handle, "--text", "\r", "--json"]
 
 
 def _toplevel(path):

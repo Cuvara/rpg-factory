@@ -7,7 +7,7 @@
 #
 # Usage: netcode-headless.sh [--netcode DIR] [--server DIR] [--keep] [--resolve-server]
 # The Shared.GameLogic tag is read from rpg-mmo-server: --server DIR, else the first of
-# <dirname of the Netcode dir>/rpg-mmo-server and $RPG_FACTORY_WORKSPACE/rpg-mmo-server that has the
+# <dirname of the Netcode dir>/rpg-mmo-server and the resolved workspace/rpg-mmo-server that has the
 # tag (a Netcode worktree outside the workspace has no sibling server repo). --resolve-server prints
 # the server repo it would use and exits.
 # Exit 0 = executed > 0 and failed == 0; 1 = failures or nothing executed; 2 = setup error.
@@ -15,6 +15,8 @@ set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/workspace.sh"
+workspace="$(rpgf_default_workspace)"
 src=""
 if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] || [ -z "${RPG_FACTORY_REPO_KEY:-}" ]; then
   src="${RPG_FACTORY_REPO_DIR:-}"
@@ -23,7 +25,7 @@ if [ -z "$src" ]; then
   cwd_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   if [ -n "$cwd_top" ] && [ -f "$cwd_top/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj" ]; then src="$cwd_top"; fi
 fi
-if [ -z "$src" ] && [ -n "${RPG_FACTORY_WORKSPACE:-}" ]; then src="$RPG_FACTORY_WORKSPACE/Netcode"; fi
+if [ -z "$src" ]; then src="$workspace/Netcode"; fi
 keep=false
 server_arg=""; resolve_only=false
 while [ $# -gt 0 ]; do
@@ -50,7 +52,7 @@ resolve_server() {
     return 1
   fi
   local c
-  for c in "$(dirname "$src")/rpg-mmo-server" "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server"; do
+  for c in "$(dirname "$src")/rpg-mmo-server" "$workspace/rpg-mmo-server"; do
     is_worktree_root "$c" || continue
     git -C "$c" rev-parse -q --verify "refs/tags/$1" >/dev/null 2>&1 && { echo "$c"; return 0; }
   done
@@ -58,7 +60,7 @@ resolve_server() {
 }
 srv=""
 if [ -n "$sgl_tag" ]; then
-  srv=$(resolve_server "$sgl_tag") || { echo "NOT-RUN(blocked): Shared.GameLogic tag $sgl_tag not found in ${server_arg:-$(dirname "$src")/rpg-mmo-server or ${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server} (pass --server, or fetch its tags)"; exit 2; }
+  srv=$(resolve_server "$sgl_tag") || { echo "NOT-RUN(blocked): Shared.GameLogic tag $sgl_tag not found in ${server_arg:-$(dirname "$src")/rpg-mmo-server or $workspace/rpg-mmo-server} (pass --server, or fetch its tags)"; exit 2; }
 fi
 if $resolve_only; then echo "server: ${srv:-<none needed: no Shared.GameLogic pin>} tag: ${sgl_tag:-<none>}"; exit 0; fi
 
@@ -136,6 +138,63 @@ if bad:
 sys.exit(0)
 PY
 counters_rc=$?
-if [ "$dotnet_rc" -eq 124 ]; then echo "FAIL: dotnet test timed out after ${NETCODE_HEADLESS_TIMEOUT:-900} s"; exit 1; fi
-if [ "$dotnet_rc" -ne 0 ]; then echo "FAIL: dotnet test exited $dotnet_rc"; exit 1; fi
-exit "$counters_rc"
+
+# On FAIL the EXIT trap removes the work copy with the .trx files and the run log, and a one-off failure
+# would lose its cause. Keep them under the Factory state dir (lib/fstate.py persistent(): never $TMPDIR,
+# never a product repo) and print the path. A PASS keeps today's cleanup; --keep keeps the work copy itself.
+# A state dir that cannot be resolved or written is a warning: the exit code stays the check's verdict.
+#
+# Only the newest few evidence directories are kept (RPG_FACTORY_NETCODE_EVIDENCE_KEEP, default 10; a value that
+# is not a positive integer falls back to 10). Pruning touches only real directories directly inside the evidence
+# root that match this script's own name pattern <YYYYmmddTHHMMSS>-<pid>, never follows a symlink, never removes
+# the directory just saved, and never changes the exit status.
+prune_evidence() { # root current-dir-name
+  local root="$1" current="$2" limit="${RPG_FACTORY_NETCODE_EVIDENCE_KEEP:-10}" d n kept=1 removed=0
+  case "$limit" in ''|*[!0-9]*|0) limit=10 ;; esac
+  [ -d "$root" ] && [ ! -L "$root" ] || return 0
+  local names=()
+  for d in "$root"/*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    n="${d##*/}"
+    [[ "$n" =~ ^[0-9]{8}T[0-9]{6}-[0-9]+$ ]] && names+=("$n")
+  done
+  [ "${#names[@]}" -gt 0 ] || return 0
+  # newest first by the full timestamp in the name, then numerically by pid (pid 10 is newer than pid 9 of the same
+  # second); the new directory counts as one kept
+  while IFS= read -r n; do
+    [ "$n" = "$current" ] && continue
+    if [ "$kept" -lt "$limit" ]; then kept=$((kept + 1)); continue; fi
+    rm -rf "$root/$n" 2>/dev/null || true
+    [ -e "$root/$n" ] || removed=$((removed + 1))
+  done < <(printf '%s\n' "${names[@]}" | LC_ALL=C sort -t- -k1,1r -k2,2nr 2>/dev/null)
+  [ "$removed" -eq 0 ] || echo "pruned $removed old netcode-headless evidence directories (keeping the newest $limit)"
+  return 0
+}
+
+save_evidence() {
+  $keep && return 0
+  local state ev shown
+  state=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate; print(fstate.persistent())" "$PLUGIN_ROOT/scripts/lib" 2>/dev/null | tr -d '\r')
+  if [ -z "$state" ]; then echo "WARNING: evidence not saved: Factory state dir not resolved"; return 0; fi
+  if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then state=$(cygpath -u "$state"); fi
+  is_abs "$state" || { echo "WARNING: evidence not saved: Factory state dir is not absolute: $state"; return 0; }
+  ev="$state/evidence/netcode-headless/$(date +%Y%m%dT%H%M%S)-$$"
+  if mkdir -p "$ev" 2>/dev/null \
+     && cp "$run_log" "$ev/dotnet.log" 2>/dev/null \
+     && { [ ! -d "$work/Tests~/Headless/results" ] || cp -r "$work/Tests~/Headless/results" "$ev/results" 2>/dev/null; }; then
+    # mkdir/cp used the POSIX form; print the form a Windows user and Windows tools can open (C:/...)
+    shown="$ev"
+    if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then shown=$(cygpath -m "$ev" 2>/dev/null || echo "$ev"); fi
+    echo "evidence: $shown"
+    prune_evidence "$state/evidence/netcode-headless" "${ev##*/}" || true
+  else
+    echo "WARNING: evidence not saved under $ev"
+  fi
+  return 0
+}
+
+rc="$counters_rc"
+if [ "$dotnet_rc" -eq 124 ]; then echo "FAIL: dotnet test timed out after ${NETCODE_HEADLESS_TIMEOUT:-900} s"; rc=1
+elif [ "$dotnet_rc" -ne 0 ]; then echo "FAIL: dotnet test exited $dotnet_rc"; rc=1; fi
+[ "$rc" -eq 0 ] || save_evidence
+exit "$rc"

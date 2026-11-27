@@ -17,7 +17,7 @@
 # case-map: orca-lineage skills/delivery/references/delivery.md scripts/lib/compat.sh
 # case-map: agents-roles scripts/lib/compat.sh
 # case-map: plan-paths scripts/lib/plan_paths.py scripts/lib/compat.sh
-# case-map: portable-plans docs/plans/* scripts/lib/compat.sh
+# case-map: portable-plans docs/plans/* scripts/lib/plan_paths.py scripts/lib/compat.sh
 # case-map: cli-selftest scripts/lib/compat.sh
 # scripts/lib/compat.sh is sourced by the suite itself (temp dirs, copies), so it maps to every case. Inputs with no line run ALL:
 # the suite's own file, root files (AGENTS.md, README.md: agents-roles reads AGENTS.md, so it only runs with ALL), registry.json,
@@ -77,10 +77,39 @@ no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head 
 
 if has_case orca-wait; then
 # Keep the waiter standalone while including it in run-all and CI through this suite.
+# nested_failure_report <rc> <output>: what a failed nested suite prints. Every 'FAIL  <name>' line comes first (a
+# failing case early in a long run is otherwise lost to the tail), then the tail; a non-zero exit without any FAIL line
+# says so. Not passed through `no`, whose detail is cut to 15 lines.
+nested_failure_report() {
+  local fails
+  fails=$(grep -E '^FAIL  ' <<<"$2")
+  if [ -n "$fails" ]; then printf 'failing cases:\n%s\n' "$fails"
+  else printf 'exit code %s but no FAIL line in the nested output\n' "$1"; fi
+  printf 'tail:\n%s\n' "$(tail -n 15 <<<"$2")"
+}
 wait_out=$(bash "$ROOT/tests/orca-wait.test.sh" 2>&1); wait_rc=$?
 if [ "$wait_rc" -eq 0 ]; then
   ok "$(tail -n 1 <<<"$wait_out")"
-else no "orca-wait suite (rc=$wait_rc)" "$(tail -n 15 <<<"$wait_out")"; fi
+else no "orca-wait suite (rc=$wait_rc)"; nested_failure_report "$wait_rc" "$wait_out" | sed 's/^/      /'; fi
+# The report names a failing case that is not in the last 15 lines of a stub nested suite, and says so when the
+# nested suite fails without a FAIL line.
+STUB="$TMP/nested-stub.sh"
+{ echo '#!/usr/bin/env bash'
+  echo 'for i in 1 2 3; do echo "PASS  early case $i"; done'
+  echo 'echo "FAIL  stub-failing-case"; echo "      detail of the stub failure"'
+  echo 'for i in $(seq 1 30); do echo "PASS  late case $i"; done'
+  echo 'echo "stub: 34 checks, 33 passed, 1 failed"; exit 1'; } > "$STUB"
+stub_out=$(bash "$STUB" 2>&1); stub_rc=$?
+stub_report=$(nested_failure_report "$stub_rc" "$stub_out")
+if [ "$stub_rc" -ne 0 ] && grep -qx 'FAIL  stub-failing-case' <<<"$stub_report" && grep -qx 'failing cases:' <<<"$stub_report" \
+  && grep -qx 'stub: 34 checks, 33 passed, 1 failed' <<<"$stub_report" && ! grep -qF 'PASS  early case' <<<"$stub_report"; then
+  ok "nested suite failure report names the failing case outside the last 15 lines"
+else no "nested suite failure report lost the failing case (stub rc=$stub_rc)" "$stub_report"; fi
+nofail_report=$(nested_failure_report 3 "$(printf 'PASS  a\nsome crash text\n')")
+if grep -qF 'exit code 3 but no FAIL line' <<<"$nofail_report" && grep -qF 'some crash text' <<<"$nofail_report" \
+  && ! grep -qF 'failing cases:' <<<"$nofail_report"; then
+  ok "nested suite failure without a FAIL line says so and keeps the tail"
+else no "nested suite failure without a FAIL line is not reported" "$nofail_report"; fi
 
 fi
 if has_case lint-mutations; then
@@ -209,7 +238,7 @@ if has_case policy-markers; then
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
-  child-merge-remove child-no-run-all which-model subagents-read-only single-verify)
+  child-merge-remove child-no-run-all which-model subagents-read-only single-verify stacked-dispatch)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files, except in a tier XS task (section 10 step 1); an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
@@ -222,6 +251,7 @@ declare -A POLICY_SENTENCE=(
   [which-model]='| Role or kind | Model | Registry |'
   [subagents-read-only]='In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.'
   [single-verify]='One verify session reviews the whole task diff: a prose subtask written by the verifier'"'"'s model is covered, and a code subtask written by the verifier'"'"'s model is listed by the gate as `SAME_MODEL (single verify)`, never blocking.'
+  [stacked-dispatch]="A dependent task with exactly one in-flight dependency starts from that dependency's tip as a sibling <topic>-<id> worktree, implements in parallel, never verifies before the dependency's review PASS SHA is in its HEAD, merges (never rebases) the dependency branch when told, and is integrated after the dependency."
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
 PLACEMENT_ROWS=('| shared (default) |' '| child |')
@@ -315,6 +345,8 @@ s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence change
   'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
 s_mutate "canonical sentence changed (single verify blocks on a code subtask)" "sentence changed under policy:single-verify" \
   'sed -i "s/, never blocking\.\$/, blocking until its own review passes./" "$F"'
+s_mutate "canonical sentence changed (stacked dependent may rebase)" "sentence changed under policy:stacked-dispatch" \
+  'sed -i "s/, merges (never rebases) the dependency branch when told,/, rebases onto the dependency branch when told,/" "$F"'
 s_mutate "canonical sentence changed (subagents may write)" "sentence changed under policy:subagents-read-only" \
   'sed -i "s/^In-session subagents are read-only scouts;/In-session subagents are scouts;/" "$F"'
 s_mutate "placement table removed" "marker missing: policy:placement-table" \
@@ -680,15 +712,17 @@ fi
 if has_case portable-plans; then
 # Check every file, including untracked plans; use the same checker on injected copies.
 portable_plans() {
-  python3 -B - "$1" <<'PY'
-import re
+  python3 -B - "$1" "$ROOT" <<'PY'
+import os
 import sys
 from pathlib import Path
 
-machine_path = re.compile(r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/|/mnt/[A-Za-z](?:/|$)|/Users/|/home/|AppData', re.I | re.M)
+sys.path.insert(0, os.path.join(sys.argv[2], 'scripts', 'lib'))
+from plan_paths import machine_path_hit
+
 bad = []
 for path in sorted(Path(sys.argv[1]).rglob('*')):
-    if path.is_file() and machine_path.search(path.read_bytes().decode('utf-8', errors='replace')):
+    if path.is_file() and machine_path_hit(path.read_bytes().decode('utf-8', errors='replace')):
         bad.append(str(path))
 if bad:
     print('machine-specific absolute path: ' + ', '.join(bad))
@@ -700,10 +734,10 @@ portable_out=$(portable_plans "$ROOT/docs/plans" 2>&1); portable_rc=$?
   || no "docs/plans portable paths (rc=$portable_rc)" "$portable_out"
 PLAN_COPY="$TMP/plans-portable"; mkdir -p "$PLAN_COPY"
 if [ -d "$ROOT/docs/plans" ]; then cp -r "$ROOT/docs/plans/." "$PLAN_COPY/"; fi
-printf '%s\n' 'see https://example.com/x and https://example.com/c/workspace/example' 'docs/plans/x and docs/plans/c/example' > "$PLAN_COPY/zz-url.md"
+printf '%s\n' 'see https://example.com/x and https://example.com/c/workspace/example' 'https://example.com/Users/person and https://example.com/home/person' 'docs/plans/x and docs/plans/c/example' > "$PLAN_COPY/zz-url.md"
 portable_out=$(portable_plans "$PLAN_COPY" 2>&1) && ok "docs/plans check allows URLs and repo-relative paths" || no "docs/plans check rejects URLs or repo-relative paths" "$portable_out"
 rm -f "$PLAN_COPY/zz-url.md"
-for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/mnt/c' '/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
+for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/mnt/c' '/mnt/c,' '/mnt/c)' '/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
   printf '%s\n' "$machine_path" > "$PLAN_COPY/zz-machine-path.md"
   portable_out=$(portable_plans "$PLAN_COPY" 2>&1); portable_rc=$?
   if [ "$portable_rc" -ne 0 ] && grep -qF 'machine-specific absolute path:' <<<"$portable_out"; then

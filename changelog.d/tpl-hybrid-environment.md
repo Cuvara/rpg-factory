@@ -1,0 +1,3 @@
+### Added
+
+- Added the core template hybrid-environment for scene-2d, concept-2d and texture-tileable under the local-8gb profile: the 9router image node makes the API base, a local SDXL refine at 1024 px adds the IPAdapter style anchors (the template's anchor_target) and one Canny ControlNet at strength 0.45, then a tiled VAE decode, a 4x model upscale, previews and one SaveImage, with no cut-out; one reviewed prompt feeds the image node and the positive local encoder. The local branch is UNTESTED on the RTX 5060 8 GB target machine: nothing was generated or measured, peak_vram_gb and the sampler values are declared starting points, and the user tests it on that machine after the merge.

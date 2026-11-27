@@ -1,7 +1,16 @@
 {
  "1": {
   "_meta": {
-   "title": "Generate image"
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for ref-3d-turnaround: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate turnaround sheet"
   },
   "class_type": "NineRouterImage",
   "inputs": {
@@ -10,19 +19,6 @@
    "quality": "high",
    "size": "1536x1024",
    "user_prompt": [
-    "3",
-    0
-   ]
-  }
- },
- "2": {
-  "_meta": {
-   "title": "Save image"
-  },
-  "class_type": "SaveImage",
-  "inputs": {
-   "filename_prefix": "assetgen/golden-ref-3d-turnaround-001",
-   "images": [
     "1",
     0
    ]
@@ -30,11 +26,42 @@
  },
  "3": {
   "_meta": {
-   "title": "Prompt (Claude, Codex review NOT_RUN)"
+   "title": "Sharpen view edges"
   },
-  "class_type": "PrimitiveStringMultiline",
+  "class_type": "ImageSharpen",
   "inputs": {
-   "value": "Test prompt for ref-3d-turnaround: one subject, centered."
+   "alpha": 0.5,
+   "image": [
+    "2",
+    0
+   ],
+   "sharpen_radius": 1,
+   "sigma": 1.0
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Preview raw sheet"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ]
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Save turnaround sheet"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-ref-3d-turnaround-001-turnaround",
+   "images": [
+    "3",
+    0
+   ]
   }
  }
 }

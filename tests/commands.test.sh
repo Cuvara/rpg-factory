@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json" \
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen finalize --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json" "assetgen style" "assetgen style init --id x --extends pixel-art" "assetgen style bump --id x" "assetgen style derive --style x --apply" \
          "vfx-plan" "vfx-plan --effect" "vfx-plan --bogus x" "vfx-lint" "vfx-lint --style x.md" "vfx-lint --recipe r.json" "vfx-lint --style x.md --recipe r.json --out o.json" "vfx-lint --style x.md --recipe r.json --output=o.json" "vfx-lint --style x.md --recipe r.json --wr o.json" "vfx-lint --style x.md --recipe r.json --bogus"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
@@ -80,6 +80,49 @@ jsonok "doctor --json: install, registry, workspace, repos, tools, hooks, dev_to
   '.schema == "rpg-factory.doctor/1" and ([keys[]] | contains(["install","registry","workspace","repos","tools","hooks","dev_tools"]))
    and .registry.ok and .repos.server.present and (.repos.authoring.present | not) and .hooks.PreToolUse and (.dev_tools | type) == "array"' \
   "$(cd "$WS" && python3 -B "$CMD" doctor --json 2>/dev/null)"
+# -- doctor: machine-setup faults that make task QA report NOT_RUN (python3 Store stub, jq absent); host-independent
+FAKE_STUB='C:\Users\x\AppData\Local\Microsoft\WindowsApps\python3.exe'
+out=$(cd "$WS" && RPG_FACTORY_PYTHON3="$FAKE_STUB" python3 -B "$CMD" doctor 2>&1 | tr -d '\r')
+grep -q '^- setup fault python3-store-stub: .*Microsoft Store stub .*WindowsApps.*task QA reports NOT_RUN. Fix: .*`python3` PATH shim first on PATH.*app execution alias' <<<"$out" \
+  && ok "doctor: names the python3 Store stub with the PATH shim fix hint" || no "doctor python3 stub: $(grep -i 'setup fault' <<<"$out" | head -c 300)"
+[ "$(grep -c 'WindowsApps' <<<"$out")" -eq 1 ] && ! grep -q '^- python3:' <<<"$out" && [ "$(grep '^- setup fault python3-store-stub:' <<<"$out" | grep -o 'PATH shim' | wc -l)" -eq 1 ] \
+  && grep -q '^- setup fault python3-store-stub: .*Fix: .*The stub also makes every hook call start about 70 ms slower' <<<"$out" \
+  && ok "doctor: the python3 Store stub fault and its fix hint print once (no second python3 advice line)" \
+  || no "doctor python3 stub printed twice: $(grep -iE 'WindowsApps|^- python3:|PATH shim' <<<"$out" | head -c 400)"
+out=$(cd "$WS" && RPG_FACTORY_PYTHON3="$FAKE_STUB" python3 -B "$CMD" doctor --json 2>/dev/null)
+jsonok "doctor --json: tools.setup_faults carries the python3 Store stub with detail and fix" \
+  '.tools.setup_faults | any(.[]; .id == "python3-store-stub" and (.detail | test("NOT_RUN")) and (.fix | test("PATH shim")))' "$out"
+out=$(cd "$WS" && RPG_FACTORY_PYTHON3="" python3 -B "$CMD" doctor --json 2>/dev/null)
+jsonok "doctor --json: a real python3 raises no python3-store-stub fault" '.tools.setup_faults | all(.[]; .id != "python3-store-stub")' "$out"
+# jq absence: the function itself (every host), then end to end on a PATH without jq (POSIX only: wrappers for the other tools)
+out=$(cd "$ROOT/scripts" && python3 -B - <<'EOF'
+import importlib.util
+spec = importlib.util.spec_from_file_location("factory_cmd", "factory-cmd.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print("none", m.setup_faults(None, "/usr/bin/jq"))
+f = m.setup_faults(None, None)
+print("jq", [x["id"] for x in f], all(x["detail"] and x["fix"] for x in f), "winget install jqlang.jq" in f[0]["fix"], "jq: command not found" in f[0]["detail"])
+g = m.setup_faults("C:/x/WindowsApps/python3.exe", None)
+print("both", [x["id"] for x in g])
+EOF
+)
+grep -q "^none \[\]$" <<<"$out" && grep -q "^jq \['jq-missing'\] True True True$" <<<"$out" && grep -q "^both \['python3-store-stub', 'jq-missing'\]$" <<<"$out" \
+  && ok "setup_faults: none with python3 real and jq present; jq-missing names the fix and the error; both in order" || no "setup_faults: $out"
+if [ -z "$RPGF_WINDOWS" ]; then
+  NJ="$TMP/nojq-bin"; mkdir -p "$NJ"
+  for t in git bash sh python3 env dirname basename cat grep sed tr head tail ls mkdir date sort uniq wc uname readlink; do
+    p=$(command -v "$t") || continue; printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" > "$NJ/$t"; chmod +x "$NJ/$t"
+  done
+  PY=$(command -v python3)
+  out=$(cd "$WS" && PATH="$NJ" "$PY" -B "$CMD" doctor 2>&1)
+  grep -q '^- setup fault jq-missing: .*jq: command not found.*Fix: install jq 1.7 or newer.*winget install jqlang.jq.*jq. PATH shim' <<<"$out" \
+    && ok "doctor: a PATH without jq names the missing jq with an install and shim fix hint" || no "doctor without jq: $(grep -i 'setup fault' <<<"$out" | head -c 300)"
+  out=$(cd "$WS" && PATH="$NJ" "$PY" -B "$CMD" doctor --json 2>/dev/null)
+  "$PY" -B -c 'import json,sys; d=json.loads(sys.stdin.read()); f=d["tools"]["setup_faults"]; assert [x["id"] for x in f]==["jq-missing"] and "jq" in d["tools"]["missing"], f' <<<"$out" \
+    && ok "doctor --json: setup_faults lists jq-missing and tools.missing names jq" || no "doctor --json without jq: $(head -c 300 <<<"$out")"
+else
+  ok "doctor without jq end to end: POSIX only (the function case above covers Windows)"
+fi
 # -- domain: overview and detail, without and with the optional authoring repo
 out=$(cd "$WS" && python3 -B "$CMD" domain --json); rc=$?
 reg_domains=$(jq -c '[.domains | keys[]] | sort' "$ROOT/registry.json")
@@ -192,6 +235,8 @@ python3 -B "$CMD" assetgen embed --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=
 # defringe rewrites outputs and approve-record writes a person's approval record: never factory-cmd verbs
 python3 -B "$CMD" assetgen defringe --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -q "defringe writes into a run directory" "$TMP/err" && ok "assetgen defringe is not exposed through factory-cmd (exit 2)" || no "assetgen defringe rc=$rc: $(head -2 "$TMP/err")"
+python3 -B "$CMD" assetgen finalize --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "finalize writes into a run directory" "$TMP/err" && ok "assetgen finalize is not exposed through factory-cmd (exit 2)" || no "assetgen finalize rc=$rc: $(head -2 "$TMP/err")"
 python3 -B "$CMD" assetgen "approve-record --run $TMP/x-001 --by Dana" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -q "approve-record writes a person's approval record: the asset-gen skill runs it only on that person's explicit word" "$TMP/err"   && ok "assetgen approve-record is not exposed through factory-cmd (exit 2, only on the person's explicit word)" || no "assetgen approve-record rc=$rc: $(head -2 "$TMP/err")"
 # style lock: drift is read-only and forwarded (--authoring defaults to the workspace authoring repo);
@@ -222,6 +267,23 @@ for v in promote-anchor reject; do
     && grep -q "$v writes a style-lock record into the authoring repo: the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err" \
     && ok "assetgen $v is not exposed through factory-cmd (exit 2, nothing written)" || no "assetgen $v rc=$rc: $(head -2 "$TMP/err")"
 done
+# style report is the only read-only style verb: forwarded (--authoring defaulted), writes nothing; the other style verbs
+# (init and bump write into the authoring repo, derive proposes and merges style data) stay refused, also with --apply
+ga="$WS/game-authoring"
+before=$(find "$ga" | sort | md5sum); gbefore=$(git -C "$ga" status --porcelain 2>/dev/null | md5sum)
+out=$(python3 -B "$CMD" assetgen style report --json); rc=$?
+after=$(find "$ga" | sort | md5sum); gafter=$(git -C "$ga" status --porcelain 2>/dev/null | md5sum)
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-style-report/1"' <<<"$out" >/dev/null && [ "$before" = "$after" ] && [ "$gbefore" = "$gafter" ]   && ok "assetgen style report forwarded (exit 0, style report JSON, --authoring defaulted, nothing written)" || no "assetgen style report rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" assetgen "style report --json"); rc=$?
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-style-report/1"' <<<"$out" >/dev/null   && ok "assetgen style report as one quoted string (exit 0)" || no "assetgen style report (quoted) rc=$rc: $(head -c 300 <<<"$out")"
+for sv in "style" "style init --id x --extends pixel-art" "style bump --id x" "style derive --style x" "style derive --style x --apply" "style --apply"; do
+  before=$(find "$ga" | sort | md5sum)
+  python3 -B "$CMD" assetgen $sv >/dev/null 2>"$TMP/err"; rc1=$?
+  python3 -B "$CMD" assetgen "$sv" >/dev/null 2>>"$TMP/err"; rc2=$?
+  after=$(find "$ga" | sort | md5sum)
+  [ $rc1 -eq 2 ] && [ $rc2 -eq 2 ] && [ "$before" = "$after" ]     && grep -q "only .style report. is read-only; the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err"     && ok "assetgen $sv is not exposed through factory-cmd (exit 2, nothing written)" || no "assetgen $sv rc=$rc1/$rc2" "$(head -2 "$TMP/err")"
+done
+python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen") | (.args | test("style report")) and (.args | test("style (init|bump|derive)") | not) and .read_only' >/dev/null   && ok "help lists style report as the only style verb of assetgen (read-only)" || no "help assetgen args name a writing style verb or lack style report"
 python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen") | (.args | test("publish|embed|promote-anchor|reject") | not) and (.args | test("drift")) and .read_only' >/dev/null \
   && ! grep -qE "publish|embed|promote-anchor|reject" "$ROOT/commands/assetgen.md" && grep -q "|drift " "$ROOT/commands/assetgen.md" \
   && ok "help and /rpg-factory:assetgen list assetgen as read-only with drift, without publish, embed, promote-anchor or reject" \

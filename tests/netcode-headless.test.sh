@@ -7,6 +7,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
+# Every run of the check in this suite keeps its evidence under a test dir, never in the real persistent state dir
+# (the evidence cases below set their own). The check writes nothing outside $TMP.
+export RPG_FACTORY_STATE_DIR="$TMP/state-default"
 chk() { if [ "$2" = "$3" ]; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1: expected '$2' got '$3'"; fi; }
 
 netcode() { # dir - a Netcode checkout pinning sgl-v9.9.9
@@ -43,13 +46,17 @@ chk "no server anywhere -> NOT-RUN(blocked)" "2 blocked" "$rc $(grep -o 'blocked
 
 # ---- the dotnet test status decides together with the TRX counters (a failed or timed-out run can
 # leave a zero-failure TRX behind). A fake `dotnet` first on PATH writes a TRX, then exits/sleeps.
+# Fake-run timeout: generous so a loaded host never trips it on the passing cases; it must stay below the fake sleep mode (20 s) so the timeout case still times out.
+FAKE_TIMEOUT=8
 FAKE="$TMP/fakebin"; mkdir -p "$FAKE"
 cat > "$FAKE/dotnet" <<'SH'
 #!/usr/bin/env bash
 mkdir -p results
 executed=3; [ "${FAKE_DOTNET_MODE:-ok}" = empty ] && executed=0
-printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Completed"><Counters total="3" executed="%s" passed="%s" failed="0" error="0" timeout="0" aborted="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$executed" > results/results.trx
-case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 10 ;; esac
+failed=0; [ "${FAKE_DOTNET_MODE:-ok}" = counters ] && failed=1
+printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Completed"><Counters total="3" executed="%s" passed="%s" failed="%s" error="0" timeout="0" aborted="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$((executed - failed))" "$failed" > results/results.trx
+echo "fake dotnet log mode=${FAKE_DOTNET_MODE:-ok}"
+case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 20 ;; esac
 exit 0
 SH
 chmod +x "$FAKE/dotnet"
@@ -57,7 +64,7 @@ NC="$TMP/nc-nosgl"; mkdir -p "$NC/Runtime" "$NC/Tests" "$NC/Tests~/Headless"; : 
 echo '{"name":"com.cuvara.netcode"}' > "$NC/package.json"
 git -C "$NC" init -q; git -C "$NC" add package.json Runtime Tests 'Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj'
 git -C "$NC" -c user.email=t@t -c user.name=t commit -qm fixture
-run_fake() { FAKE_DOTNET_MODE="$1" NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" \
+run_fake() { FAKE_DOTNET_MODE="$1" NETCODE_HEADLESS_TIMEOUT="$FAKE_TIMEOUT" TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" \
   bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$NC" >"$TMP/out.txt" 2>&1; echo $?; }
 chk "dotnet test passes and the TRX has executed tests -> 0" 0 "$(run_fake ok)"
 chk "dotnet test exits 1 with a zero-failure TRX -> 1" 1 "$(run_fake fail)"
@@ -65,6 +72,71 @@ grep -q "dotnet test exited 1" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$(
 chk "dotnet test times out with a zero-failure TRX -> 1" 1 "$(run_fake sleep)"
 grep -q "timed out" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  timeout not reported"; cat "$TMP/out.txt"; }
 chk "dotnet test passes but nothing executed -> 1" 1 "$(run_fake empty)"
+# the default runs above (two failing, one empty) left their evidence under the suite's temp state dir, not elsewhere
+DEFAULT_EV="$RPG_FACTORY_STATE_DIR/evidence/netcode-headless"
+n=$(find "$DEFAULT_EV" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+[ "${n:-0}" -ge 1 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  default failing runs left no evidence under \$TMP/state-default"; }
+
+# ---- a FAIL keeps its .trx files and the run log under the Factory state dir (persistent, never $TMPDIR or the
+# Netcode repo) and prints the path; a PASS cleans up and writes no evidence. The state dir is a test dir.
+STATE="$TMP/state"; EVROOT="$STATE/evidence/netcode-headless"
+run_ev() { rm -rf "$STATE"; mkdir -p "$STATE"; RPG_FACTORY_STATE_DIR="$STATE" run_fake "$1"; }
+ev_dirs() { find "$EVROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' '; }
+for mode in fail counters sleep; do
+  chk "failing run ($mode) -> 1" 1 "$(run_ev "$mode")"
+  chk "failing run ($mode) keeps one evidence dir" 1 "$(ev_dirs)"
+  ev=$(sed -n 's/^evidence: //p' "$TMP/out.txt" | tr -d '\r')
+  chk "failing run ($mode) prints the evidence path under the state dir" "$(fwd "$EVROOT")" "$(fwd "$(dirname "$ev")")"
+  [ -f "$ev/results/results.trx" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  evidence ($mode) has no results.trx"; }
+  grep -q "fake dotnet log mode=$mode" "$ev/dotnet.log" 2>/dev/null && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  evidence ($mode) has no dotnet.log"; }
+done
+chk "passing run -> 0" 0 "$(run_ev ok)"
+chk "passing run writes no evidence" 0 "$(ev_dirs)"
+grep -q "^evidence:" "$TMP/out.txt" && { fail=$((fail + 1)); echo "FAIL  passing run printed an evidence path"; } || pass=$((pass + 1))
+[ -z "$(find "$TMP" -maxdepth 1 -name '.tmp-netcode-headless-*' 2>/dev/null)" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  work copy left behind"; }
+# an unwritable state dir (a file where the directory must be) warns and keeps the verdict
+rm -rf "$STATE"; : > "$STATE"
+chk "failing run with an unusable state dir keeps exit 1" 1 "$(RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+grep -q "WARNING: evidence not saved" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  no warning for an unusable state dir"; cat "$TMP/out.txt"; }
+rm -f "$STATE"
+
+# ---- old evidence directories are pruned to the newest few (default 10) after a FAIL saves a new one: only real
+# directories directly inside the evidence root that match <YYYYmmddTHHMMSS>-<pid> are removed, the new one is always
+# kept, anything else is left alone, and pruning never changes the verdict.
+seed_old_ev() { # 12 old evidence dirs 20200101T0000NN-1 (NN = 01..12) + entries that do not match the pattern
+  rm -rf "$STATE"; mkdir -p "$EVROOT"
+  local i; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do mkdir -p "$EVROOT/20200101T0000$i-1"; echo old > "$EVROOT/20200101T0000$i-1/dotnet.log"; done
+  : > "$EVROOT/unrelated-file"; mkdir -p "$EVROOT/unrelated-dir"; echo x > "$EVROOT/unrelated-dir/keep.txt"
+  mkdir -p "$EVROOT/20200101T000000-x"                              # near miss: the pid part is not numeric
+  : > "$EVROOT/20200101T000001-9"                                   # matches the name but is a file, not a directory
+}
+seed_old_ev
+chk "failing run with old evidence -> 1" 1 "$(RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+ev=$(sed -n 's/^evidence: //p' "$TMP/out.txt" | tr -d '\r'); evname=$(basename "$ev")
+chk "default prune keeps the newest 10 evidence dirs including the new one" 10 "$(find "$EVROOT" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*' | wc -l | tr -d ' ')"
+[ -d "$EVROOT/$evname" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune removed the evidence dir it just saved"; }
+gone=""; for i in 01 02 03; do [ -e "$EVROOT/20200101T0000$i-1" ] && gone="$gone $i"; done
+chk "default prune removes the oldest three" "" "$gone"
+kept=""; for i in 04 05 06 07 08 09 10 11 12; do [ -d "$EVROOT/20200101T0000$i-1" ] || kept="$kept $i"; done
+chk "default prune keeps the newer old dirs" "" "$kept"
+[ -f "$EVROOT/unrelated-file" ] && [ -f "$EVROOT/unrelated-dir/keep.txt" ] && [ -d "$EVROOT/20200101T000000-x" ] && [ -f "$EVROOT/20200101T000001-9" ] \
+  && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune touched an entry that does not match the evidence name pattern"; }
+grep -q "pruned 3 old netcode-headless evidence directories" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune count not printed"; cat "$TMP/out.txt"; }
+# a lower limit through the env knob; an invalid value falls back to 10
+seed_old_ev
+chk "failing run with RPG_FACTORY_NETCODE_EVIDENCE_KEEP=3 -> 1" 1 "$(RPG_FACTORY_NETCODE_EVIDENCE_KEEP=3 RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+chk "KEEP=3 keeps the new dir and the two newest old ones" 3 "$(find "$EVROOT" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*' | wc -l | tr -d ' ')"
+[ -d "$EVROOT/20200101T000012-1" ] && [ -d "$EVROOT/20200101T000011-1" ] && [ ! -e "$EVROOT/20200101T000010-1" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  KEEP=3 kept the wrong dirs"; }
+seed_old_ev
+chk "failing run with an invalid KEEP -> 1" 1 "$(RPG_FACTORY_NETCODE_EVIDENCE_KEEP=abc RPG_FACTORY_STATE_DIR="$STATE" run_fake fail)"
+chk "an invalid KEEP falls back to 10" 10 "$(find "$EVROOT" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*' | wc -l | tr -d ' ')"
+# a pattern-named symlink is never followed or removed (skipped when the platform cannot make symlinks)
+seed_old_ev; OUTSIDE="$TMP/outside-target"; mkdir -p "$OUTSIDE"; echo precious > "$OUTSIDE/keep.txt"
+if ln -s "$OUTSIDE" "$EVROOT/20190101T000000-1" 2>/dev/null && [ -L "$EVROOT/20190101T000000-1" ]; then
+  RPG_FACTORY_NETCODE_EVIDENCE_KEEP=2 RPG_FACTORY_STATE_DIR="$STATE" run_fake fail >/dev/null
+  [ -L "$EVROOT/20190101T000000-1" ] && [ -f "$OUTSIDE/keep.txt" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  prune followed or removed a symlink"; }
+fi
+rm -rf "$STATE"
 
 # Candidate identity must follow a linked worktree's distinct commit for both selectors.
 LINKED="$TMP/linked-netcode"; git -C "$NC" worktree add -qb linked-candidate "$LINKED"
@@ -73,11 +145,11 @@ echo linked > "$LINKED/Runtime/candidate-marker"
 git -C "$LINKED" add Runtime/candidate-marker
 git -C "$LINKED" -c user.email=t@t -c user.name=t commit -qm candidate
 LINKED_SHA=$(git -C "$LINKED" rev-parse HEAD)
-linked_explicit() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$LINKED" >"$TMP/linked-explicit.log" 2>&1; }
+linked_explicit() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT="$FAKE_TIMEOUT" TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$LINKED" >"$TMP/linked-explicit.log" 2>&1; }
 chk "explicit linked Netcode candidate passes -> 0" 0 "$(linked_explicit; echo $?)"
 grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-explicit.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode source SHA"; }
 grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-explicit.log" && { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode used main fixture SHA"; } || pass=$((pass + 1))
-linked_env() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" RPG_FACTORY_REPO_KEY=netcode RPG_FACTORY_REPO_DIR="$LINKED" bash "$ROOT/scripts/checks/netcode-headless.sh" >"$TMP/linked-env.log" 2>&1; }
+linked_env() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT="$FAKE_TIMEOUT" TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" RPG_FACTORY_REPO_KEY=netcode RPG_FACTORY_REPO_DIR="$LINKED" bash "$ROOT/scripts/checks/netcode-headless.sh" >"$TMP/linked-env.log" 2>&1; }
 chk "environment linked Netcode candidate passes -> 0" 0 "$(linked_env; echo $?)"
 grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-env.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  environment linked Netcode source SHA"; }
 grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-env.log" && { fail=$((fail + 1)); echo "FAIL  environment linked Netcode used main fixture SHA"; } || pass=$((pass + 1))

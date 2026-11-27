@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# scripts/comfy-desktop-setup.py (Comfy Desktop + 9router node + comfy-mcp setup) and the vendored 9router node
+# (templates/assetgen/comfy-node/): the node's signature equals scripts/assetgen/data/known-nodes.json and it reads its
+# gateway and credential only from the Codex provider config at run time (stub numpy/torch/PIL, loopback fake gateway);
+# the script against a temp fake Comfy Desktop data dir, a fake ComfyUI on a loopback port and fake claude/codex CLIs:
+# --check writes nothing (exit 1 on a missing provider, 3 on gaps), cloud-only is ACTION, --apply copies the node, registers
+# both CLIs with the port read from comfy-procs/port-locks, is idempotent, replaces a registration on a changed port, a
+# not-yet-loaded node is ACTION (restart), --generate-test posts the low-quality graph with the template's model, and
+# hardware profiles, advisory missing assets, comfy-cli and COMFY_BIN registration, the SKILL.md save-the-profile step run
+# as documented into a temp state dir (exit 3, valid profile, nothing else written); no output ever carries the key.
+# No network, no real ComfyUI, no real CLI.
+# Usage: tests/comfy-desktop-setup.test.sh   (standalone; own temp dir)
+set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1
+SRV=""; trap '[ -n "$SRV" ] && kill "$SRV" 2>/dev/null; rm -rf "$TMP"' EXIT
+export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"
+pass=0; fail=0
+ok() { pass=$((pass + 1)); echo "PASS  $1"; }
+no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      /'; return 0; }
+PY="$(python3 -c 'import sys; print(sys.executable.replace(chr(92), "/"))')"
+FX="$ROOT/tests/fixtures/comfy-desktop-setup"
+SETUP="$ROOT/scripts/comfy-desktop-setup.py"
+KEY="test-placeholder-not-a-key"
+
+echo "-- vendored node"
+python3 -B "$FX/node-check.py" "$ROOT" "$TMP" > "$TMP/node.out" 2>&1
+while IFS= read -r l; do
+  case "$l" in "ok "*) ok "node: ${l#ok }" ;; *) no "node: ${l#not ok }" "$(cat "$TMP/node.out")" ;; esac
+done < "$TMP/node.out"
+[ "$(grep -c '^ok ' "$TMP/node.out")" -eq 9 ] && ok "node: all 9 checks ran" || no "node: expected 9 ok lines" "$(cat "$TMP/node.out")"
+
+echo "-- fake Desktop data dir, ComfyUI and CLIs"
+D="$TMP/desktop"; INST="$TMP/installs/9router"; CN="$INST/ComfyUI/custom_nodes"
+mkdir -p "$D/comfy-procs" "$D/port-locks" "$CN"
+printf 'nonode' > "$TMP/mode"; : > "$TMP/http.log"
+python3 -B "$FX/fake-comfy.py" "$TMP/port" "$TMP/mode" "$TMP/http.log" & SRV=$!
+for _ in $(seq 1 50); do [ -s "$TMP/port" ] && break; sleep 0.1; done
+PORT="$(cat "$TMP/port")"
+cloud='{"id":"inst-cloud","name":"Comfy Cloud","sourceId":"cloud","remoteUrl":"x"}'
+loc="{\"id\":\"inst-1\",\"name\":\"9router\",\"sourceId\":\"standalone\",\"installPath\":\"$INST\",\"status\":\"installed\"}"
+printf '[%s]' "$cloud" > "$D/installations.json"
+GOOD="$TMP/codex.toml"; BAD="$TMP/codex-bad.toml"
+printf '[model_providers.9router]\nbase_url = "gw-placeholder"\nhttp_headers = { Authorization = "%s" }\n' "$KEY" > "$GOOD"
+printf '[model_providers.other]\nname = "x"\n' > "$BAD"
+export FAKE_CLI_LOG="$TMP/cli.log" FAKE_CLI_STATE_CLAUDE="$TMP/st-claude.json" FAKE_CLI_STATE_CODEX="$TMP/st-codex.json"
+export COMFY_SETUP_CLAUDE_CMD="'$PY' '$FX/fake-cli.py' claude" COMFY_SETUP_CODEX_CMD="'$PY' '$FX/fake-cli.py' codex"
+: > "$FAKE_CLI_LOG"
+VENV="$TMP/venv"; mkdir -p "$VENV/Scripts" "$VENV/bin"; : > "$VENV/Scripts/comfy-mcp.exe"; : > "$VENV/bin/comfy-mcp"
+export COMFY_SETUP_NVIDIA_SMI_CMD="'$PY' '$FX/fake-nvidia-smi.py'" FAKE_GPU=none
+export COMFY_SETUP_RAM_GB=32 COMFY_SETUP_FREE_DISK_GB=200
+export COMFY_SETUP_PIP_CMD="'$PY' '$FX/fake-pip.py' '$VENV'"
+python3 -B "$FX/fake-pip.py" "$VENV" install 'comfy-cli>=1.14.0'
+: > "$FAKE_CLI_LOG"
+S() { python3 -B "$SETUP" --desktop-dir "$D" --venv "$VENV" --codex-config "$GOOD" "$@"; }
+snap() { find "$TMP/installs" "$VENV" "$D" -type d -print 2>/dev/null | sort; find "$TMP/installs" "$VENV" "$D" -type f -exec sha256sum {} + 2>/dev/null | sort; }
+
+S --check --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 3 ] && jq -e '.steps[] | select(.step=="instance" and .state=="ACTION" and (.detail | test("Comfy Cloud")))' "$TMP/o" >/dev/null \
+  && ok "only Comfy Cloud: instance ACTION (New Instance), exit 3" || no "cloud only rc=$rc" "$(cat "$TMP/o")"
+
+printf '[%s,%s]' "$cloud" "$loc" > "$D/installations.json"
+printf '{"installationId":"inst-1","port":%s}' "$PORT" > "$D/comfy-procs/inst-1.json"
+s0=$(snap)
+S --check --codex-config "$BAD" --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && jq -e '.steps[] | select(.step=="provider" and .state=="FAIL" and (.hint | test("model_providers.9router")))' "$TMP/o" >/dev/null \
+  && ok "no provider section: FAIL (exit 1) naming what to add" || no "bad provider rc=$rc" "$(cat "$TMP/o")"
+S --check > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 3 ] && grep -q "^node  *MISSING" "$TMP/o" && grep -q "^port  *OK  *$PORT" "$TMP/o" && grep -q "^node-live  *ACTION" "$TMP/o" \
+  && grep -q "^mcp-claude  *MISSING" "$TMP/o" && grep -q "^mcp-codex  *MISSING" "$TMP/o" \
+  && ok "--check: node and registrations MISSING, port read from comfy-procs, node not live ACTION, exit 3" || no "check rc=$rc" "$(cat "$TMP/o")"
+[ "$(snap)" = "$s0" ] && ok "--check changed nothing (no files, no CLI call but get)" || no "--check wrote" "$(diff <(echo "$s0") <(snap))"
+if grep -qv "mcp get" "$FAKE_CLI_LOG"; then no "--check called a CLI other than mcp get" "$(cat "$FAKE_CLI_LOG")"; else ok "--check only ran mcp get"; fi
+S --generate-test > "$TMP/o" 2>&1; [ $? -eq 2 ] && ok "--generate-test without --apply is a usage error (exit 2)" || no "generate-test usage" "$(cat "$TMP/o")"
+
+S --apply --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 3 ] && jq -e '[.steps[] | select(.step=="node-live" and .state=="ACTION" and (.hint | test("Stop, then Launch")))] | length == 1' "$TMP/o" >/dev/null \
+  && cmp -s <(tr -d '\r' < "$ROOT/templates/assetgen/comfy-node/comfyui_9router/__init__.py") <(tr -d '\r' < "$CN/comfyui_9router/__init__.py") \
+  && ok "--apply: node copied identical to the vendored copy; node not loaded yet is ACTION (Stop + Launch), exit 3" || no "apply rc=$rc" "$(cat "$TMP/o")"
+grep -q "^claude mcp add comfy-mcp --scope user -e COMFY_LOCAL_URL=http://127.0.0.1:$PORT -e COMFY_BIN=.*\(Scripts.comfy[.]exe\|bin/comfy\) -- " "$FAKE_CLI_LOG" \
+  && grep -q "^codex mcp add comfy-mcp --env COMFY_LOCAL_URL=http://127.0.0.1:$PORT --env COMFY_BIN=.*\(Scripts.comfy[.]exe\|bin/comfy\) -- " "$FAKE_CLI_LOG" \
+  && ok "--apply registered comfy-mcp for Claude (user scope) and Codex with the running port" || no "registration" "$(cat "$FAKE_CLI_LOG")"
+
+printf 'node' > "$TMP/mode"
+S --apply > "$TMP/o" 2>&1; rc=$?; n_add=$(grep -c "mcp add" "$FAKE_CLI_LOG")
+[ $rc -eq 0 ] && tail -1 "$TMP/o" | grep -q READY && [ "$n_add" -eq 2 ] && ok "second --apply with the node loaded: READY (exit 0), nothing added again (idempotent)" || no "idempotent rc=$rc adds=$n_add" "$(cat "$TMP/o")"
+S --check > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && ok "--check on a finished setup: exit 0" || no "check after apply rc=$rc" "$(cat "$TMP/o")"
+
+echo "-- port change, port-locks fallback, outdated node"
+rm "$D/comfy-procs/inst-1.json"
+printf '{"pid":1,"installationName":"9router"}' > "$D/port-locks/port-$PORT.json"
+echo '{"url":"http://127.0.0.1:1","exe":"x"}' > "$FAKE_CLI_STATE_CLAUDE"
+echo "stale" >> "$CN/comfyui_9router/__init__.py"
+S --check > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 3 ] && grep -q "^port  *OK  *$PORT" "$TMP/o" && grep -q "^node  *OUTDATED" "$TMP/o" && grep -q "^mcp-claude  *OUTDATED" "$TMP/o" \
+  && ok "port found through port-locks; changed node OUTDATED; stale registration port OUTDATED" || no "port-locks rc=$rc" "$(cat "$TMP/o")"
+: > "$FAKE_CLI_LOG"; S --apply > "$TMP/o" 2>&1; rc=$?
+grep -q "^claude mcp remove comfy-mcp --scope user" "$FAKE_CLI_LOG" && grep -q "^claude mcp add .*COMFY_LOCAL_URL=http://127.0.0.1:$PORT" "$FAKE_CLI_LOG" \
+  && ! grep -q "^codex mcp remove" "$FAKE_CLI_LOG" && [ $rc -eq 0 ] \
+  && ok "a changed port is remove + add for that CLI only; the outdated node is replaced" || no "re-register rc=$rc" "$(cat "$FAKE_CLI_LOG" "$TMP/o")"
+
+echo "-- --generate-test and credentials"
+: > "$TMP/http.log"; S --apply --generate-test --json > "$TMP/o" 2>&1; rc=$?
+model=$(jq -r .params.model.default "$ROOT/templates/assetgen/workflows/image-generate.json")
+[ $rc -eq 0 ] && jq -e '.steps[] | select(.step=="generate" and .state=="OK" and (.detail | test("8x6")))' "$TMP/o" >/dev/null \
+  && jq -e -s --arg m "$model" '[.[] | select(.method=="POST" and .path=="/prompt")] | length == 1 and ((.[0].body.prompt | [.[]] | map(.class_type) | sort) == ["NineRouterImage","PrimitiveStringMultiline","SaveImage"])
+       and ((.[0].body.prompt | [.[]] | map(select(.class_type=="NineRouterImage"))[0].inputs) | .quality == "low" and .model == $m)' "$TMP/http.log" >/dev/null \
+  && ok "--generate-test: one POST /prompt (Primitive -> NineRouterImage low quality, the template's model -> SaveImage), result size read from the PNG" || no "generate rc=$rc" "$(cat "$TMP/o" "$TMP/http.log")"
+if grep -rq "$KEY" "$TMP/o" "$TMP/http.log" "$FAKE_CLI_LOG" "$CN" "$D" 2>/dev/null; then no "the credential value leaked into output, requests, CLI calls or the instance"; else ok "the credential value appears in no output, request, CLI call or written file"; fi
+[ "$(grep -c "$KEY" "$GOOD")" -eq 1 ] && ok "the provider config was left untouched" || no "provider config changed"
+
+echo "-- hardware profile"
+TORCH="$INST/ComfyUI/.venv/Lib/site-packages/torch"
+mkdir -p "$TORCH" "$TMP/hardware-output"
+torch_version() {
+  printf "__version__ = '%s'\ncuda: Optional[str] = %s\n" "$1" "$2" > "$TORCH/version.py"
+}
+hardware_check() {
+  local name="$1" before rc
+  before=$(snap); : > "$FAKE_CLI_LOG"
+  S --check --json > "$TMP/hardware-output/$name" 2>&1; rc=$?
+  [ "$(snap)" = "$before" ] && ! grep -q '^pip ' "$FAKE_CLI_LOG" \
+    && ok "$name: hardware check writes nothing and runs no pip" || no "$name: hardware check wrote or ran pip" "$(cat "$FAKE_CLI_LOG")"
+  return "$rc"
+}
+FAKE_GPU=none hardware_check no-gpu; rc=$?
+[ $rc -eq 0 ] && jq -e '(.steps[] | select(.step=="gpu" and .state=="NOT_AVAILABLE")) and (.profile.id == "api-only") and (.profile.reasons["local-4gb"] | any(contains("no NVIDIA GPU")))' "$TMP/hardware-output/no-gpu" >/dev/null \
+  && ok "no GPU: NOT_AVAILABLE and api-only with reason" || no "no GPU rc=$rc" "$(cat "$TMP/hardware-output/no-gpu")"
+torch_version '2.5.1+cu121' "'12.1'"
+FAKE_GPU=gtx1650 hardware_check gtx1650; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "local-4gb"' "$TMP/hardware-output/gtx1650" >/dev/null \
+  && ok "GTX 1650 and CUDA 12.1: local-4gb" || no "GTX 1650 rc=$rc" "$(cat "$TMP/hardware-output/gtx1650")"
+torch_version '2.7.1+cu128' "'12.8'"
+FAKE_GPU=rtx5060 hardware_check rtx5060; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "local-8gb" and any(.steps[]; .step=="profile" and (.detail | contains("UNTESTED on RTX 5060")))' "$TMP/hardware-output/rtx5060" >/dev/null \
+  && ok "RTX 5060 and CUDA 12.8: local-8gb, untested" || no "RTX 5060 rc=$rc" "$(cat "$TMP/hardware-output/rtx5060")"
+jq -e 'any(.steps[]; .step=="packs" and .state=="MISSING" and (.hint | contains("never downloads"))) and any(.steps[]; .step=="models" and .state=="MISSING" and (.hint | contains("never downloads")))' "$TMP/hardware-output/rtx5060" >/dev/null \
+  && ok "missing packs and models are advisory with no-download hint" || no "missing assets" "$(cat "$TMP/hardware-output/rtx5060")"
+torch_version '2.5.1+cu124' "'12.4'"
+FAKE_GPU=rtx5060 hardware_check no-sm120; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "api-only" and (.profile.reasons["local-4gb"] | any(contains("no sm_120 kernels")))' "$TMP/hardware-output/no-sm120" >/dev/null \
+  && ok "RTX 5060 CUDA 12.4: api-only, no sm_120 kernels" || no "sm_120 rc=$rc" "$(cat "$TMP/hardware-output/no-sm120")"
+FAKE_GPU=oldsmi5060 hardware_check old-smi; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "api-only" and (.profile.reasons["local-4gb"] | any(contains("no sm_120 kernels"))) and any(.steps[]; .step=="gpu" and (.detail | contains("inferred from the name")))' "$TMP/hardware-output/old-smi" >/dev/null \
+  && ok "old nvidia-smi: inferred compute capability refuses missing sm_120" || no "old smi rc=$rc" "$(cat "$TMP/hardware-output/old-smi")"
+torch_version '2.5.1+cpu' None
+FAKE_GPU=rtx5060 hardware_check cpu; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "api-only" and (.profile.reasons["local-4gb"] | any(contains("CPU build")))' "$TMP/hardware-output/cpu" >/dev/null \
+  && ok "CPU torch: api-only with reason" || no "CPU torch rc=$rc" "$(cat "$TMP/hardware-output/cpu")"
+torch_version '2.7.1+cu128' "'12.8'"
+FAKE_GPU=rtx5060 COMFY_SETUP_RAM_GB=16 hardware_check low-ram; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "local-4gb" and (.profile.reasons["local-8gb"] | any(contains("RAM 16")))' "$TMP/hardware-output/low-ram" >/dev/null \
+  && ok "16 GiB RAM: local-4gb with RAM reason" || no "low RAM rc=$rc" "$(cat "$TMP/hardware-output/low-ram")"
+rm "$TORCH/version.py"
+printf '{"torch_version":"2.7.1+cu128"}' > "$INST/manifest.json"
+FAKE_GPU=rtx5060 hardware_check manifest; rc=$?
+[ $rc -eq 0 ] && jq -e '.profile.id == "local-8gb" and any(.steps[]; .step=="torch" and (.detail | contains("12.8")))' "$TMP/hardware-output/manifest" >/dev/null \
+  && ok "manifest-only torch: CUDA 12.8" || no "manifest rc=$rc" "$(cat "$TMP/hardware-output/manifest")"
+mkdir -p "$CN/ComfyUI_IPAdapter_plus" "$CN/comfyui_controlnet_aux" "$CN/ComfyUI-RMBG" "$INST/ComfyUI/models/checkpoints"
+: > "$INST/ComfyUI/models/checkpoints/put_checkpoints_here"
+FAKE_GPU=rtx5060 hardware_check placeholder; rc=$?
+[ $rc -eq 0 ] && jq -e 'any(.steps[]; .step=="models" and .state=="MISSING" and (.detail | contains("checkpoints")))' "$TMP/hardware-output/placeholder" >/dev/null \
+  && ok "checkpoint placeholder does not count as a model" || no "placeholder rc=$rc" "$(cat "$TMP/hardware-output/placeholder")"
+for kind in checkpoints controlnet ipadapter clip_vision upscale_models; do
+  mkdir -p "$INST/ComfyUI/models/$kind"; : > "$INST/ComfyUI/models/$kind/example.safetensors"
+done
+FAKE_GPU=rtx5060 hardware_check assets-present; rc=$?
+[ $rc -eq 0 ] && jq -e 'any(.steps[]; .step=="packs" and .state=="OK") and any(.steps[]; .step=="models" and .state=="OK")' "$TMP/hardware-output/assets-present" >/dev/null \
+  && ok "installed packs and model kinds: OK; advisory gaps do not change exit" || no "assets rc=$rc" "$(cat "$TMP/hardware-output/assets-present")"
+
+echo "-- comfy-cli and COMFY_BIN"
+rm -f "$VENV/Scripts/comfy.exe" "$VENV/bin/comfy"
+: > "$FAKE_CLI_LOG"; S --check > "$TMP/hardware-output/cli-missing" 2>&1; rc=$?
+[ $rc -eq 3 ] && grep -q '^comfy-cli  *MISSING' "$TMP/hardware-output/cli-missing" && ! grep -q '^pip ' "$FAKE_CLI_LOG" \
+  && ok "missing comfy-cli: MISSING, exit 3, no pip" || no "missing comfy-cli rc=$rc" "$(cat "$TMP/hardware-output/cli-missing")"
+echo "-- save the profile (SKILL.md step 6) and the model hashes (step 7)"
+SKILL="$ROOT/skills/comfy-desktop-setup/SKILL.md"
+SAVE='comfy-desktop-setup.py --check --json > ~/.local/state/rpg-factory/assetgen/hardware-profile.json'
+grep -qF "$SAVE" "$SKILL" && grep -q '^  6\. \*\*Save the profile\*\*' "$SKILL" \
+  && ok "SKILL.md: the ordered steps end with the documented save command" || no "SKILL.md lost the save step or its command"
+grep -qF 'assetgen.py model-hashes' "$SKILL" && grep -q '^  7\. \*\*Save the model hashes\*\*' "$SKILL" \
+  && grep -qF '**Save the model hashes (step 7, local profiles only):**' "$SKILL" \
+  && ! grep -qF 'No command writes the model-hash cache' "$SKILL" && ! grep -qF 'no command in this repo' "$SKILL" \
+  && ok "SKILL.md: step 7 names the model-hashes command; the old 'no command' item is gone" || no "SKILL.md lost the model-hashes step 7 or still says no command writes the cache"
+PROFILE="$RPG_FACTORY_STATE_DIR/assetgen/hardware-profile.json"
+rm -rf "$RPG_FACTORY_STATE_DIR"; before=$(snap)
+mkdir -p "$RPG_FACTORY_STATE_DIR/assetgen" && S --check --json > "$PROFILE" 2>/dev/null; rc=$?
+ids=$(jq -c '[.profiles[].id]' "$ROOT/scripts/assetgen/data/hardware.json")
+[ $rc -eq 3 ] && jq -e --argjson ids "$ids" '(.profile.id | IN($ids[])) and (.steps | any(.state != "OK"))' "$PROFILE" >/dev/null \
+  && ok "saved profile: exit 3 (a step needs action), valid JSON, profile.id is a hardware.json profile" || no "saved profile rc=$rc" "$(cat "$PROFILE")"
+[ "$(snap)" = "$before" ] && [ "$(find "$RPG_FACTORY_STATE_DIR" -type f | wc -l | tr -d ' ')" -eq 1 ] \
+  && ok "the save step wrote only hardware-profile.json (no model-hash cache, nothing in the machine)" || no "save step wrote more than the profile" "$(find "$RPG_FACTORY_STATE_DIR" -type f)"
+[ ! -e "$RPG_FACTORY_STATE_DIR/comfy/model-hashes.json" ] && ok "no model-hash cache after steps 1-6 (only step 7 writes it)" || no "model-hashes.json exists"
+: > "$VENV/Scripts/comfy.exe"; : > "$VENV/bin/comfy"
+rm -rf "$VENV/Lib/site-packages/comfy_cli-"*.dist-info "$VENV/lib/python3.12/site-packages/comfy_cli-"*.dist-info
+mkdir -p "$VENV/Lib/site-packages/comfy_cli-1.13.0.dist-info"
+S --check > "$TMP/hardware-output/cli-old" 2>&1; rc=$?
+[ $rc -eq 3 ] && grep -q '^comfy-cli  *OUTDATED' "$TMP/hardware-output/cli-old" \
+  && ok "comfy-cli 1.13.0: OUTDATED" || no "old comfy-cli rc=$rc" "$(cat "$TMP/hardware-output/cli-old")"
+: > "$FAKE_CLI_LOG"; S --apply > "$TMP/hardware-output/cli-apply" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(grep -c '^pip .*comfy-cli>=1.14.0' "$FAKE_CLI_LOG")" -eq 1 ] && grep -q '^comfy-cli  *OK' "$TMP/hardware-output/cli-apply" \
+  && ok "apply installs comfy-cli once and reports OK" || no "install comfy-cli rc=$rc" "$(cat "$TMP/cli.log" "$TMP/hardware-output/cli-apply")"
+printf '{"url":"http://127.0.0.1:%s","exe":"x"}' "$PORT" > "$FAKE_CLI_STATE_CLAUDE"
+printf '{"url":"http://127.0.0.1:%s","exe":"x"}' "$PORT" > "$FAKE_CLI_STATE_CODEX"
+S --check > "$TMP/hardware-output/bin-missing" 2>&1; rc=$?
+[ $rc -eq 3 ] && grep -q '^mcp-claude  *OUTDATED.*COMFY_BIN' "$TMP/hardware-output/bin-missing" && grep -q '^mcp-codex  *OUTDATED.*COMFY_BIN' "$TMP/hardware-output/bin-missing" \
+  && ok "registrations without COMFY_BIN: both OUTDATED" || no "missing COMFY_BIN rc=$rc" "$(cat "$TMP/hardware-output/bin-missing")"
+: > "$FAKE_CLI_LOG"; S --apply > "$TMP/hardware-output/bin-apply" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^claude mcp add .*COMFY_LOCAL_URL=.*COMFY_BIN=' "$FAKE_CLI_LOG" && grep -q '^codex mcp add .*COMFY_LOCAL_URL=.*COMFY_BIN=' "$FAKE_CLI_LOG" \
+  && ok "apply re-registers both CLIs with URL and COMFY_BIN" || no "register COMFY_BIN rc=$rc" "$(cat "$FAKE_CLI_LOG" "$TMP/hardware-output/bin-apply")"
+rm -f "$VENV/Scripts/comfy.exe" "$VENV/bin/comfy"
+FAKE_PIP_FAIL=1 S --apply > "$TMP/hardware-output/cli-fail" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q '^comfy-cli  *FAIL' "$TMP/hardware-output/cli-fail" \
+  && ok "failed comfy-cli install: FAIL, exit 1" || no "pip failure rc=$rc" "$(cat "$TMP/hardware-output/cli-fail")"
+if grep -rq "$KEY" "$TMP/hardware-output" "$FAKE_CLI_LOG" 2>/dev/null; then no "credential leaked in hardware or comfy-cli outputs"; else ok "hardware and comfy-cli outputs contain no credential"; fi
+
+echo "-- venv apply fails cleanly offline"
+rm -rf "$TMP/venv2"
+COMFY_SETUP_PIP_CMD= PIP_INDEX_URL="http://127.0.0.1:9/simple" PIP_RETRIES=0 PIP_TIMEOUT=3 python3 -B "$SETUP" --desktop-dir "$D" --venv "$TMP/venv2" --codex-config "$GOOD" --targets none --apply > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "^venv  *FAIL  *pip install comfy-mcp failed" "$TMP/o" && ok "venv created, pip install failure is FAIL (exit 1), no traceback" || no "venv offline rc=$rc" "$(cat "$TMP/o")"
+
+echo "comfy-desktop-setup: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

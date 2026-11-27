@@ -16,10 +16,13 @@ suites / skipped. Exit 0 on a plan (a full plan included), 2 when no plan can be
 tests/ci-windows-suites.txt line is not a runnable suite).
 
 The runnable suites are the lines of `tests/run-all.sh --list-suites --no-workspace --no-claude`. The selection is
-`tests/affected.py cases`, called once; this file never selects by itself. Anything unsure plans every suite (cases ALL):
---full, a schedule event, no base and no --changed-file, a base that is all zeros or not a commit, an affected.py error, a
-changed CI-plumbing file (.github/workflows/**, .github/actions/**, tests/run-all.sh, tests/affected.py, this file,
-tests/ci-windows-suites.txt) and an affected.py answer that already selects every suite with ALL.
+`tests/affected.py cases`, called once; this file never selects by itself. With a usable base the call is
+`cases --base BASE`, so affected.py measures symbol reach from the same base (it narrows a suite's cases only when the
+changed list equals its changed set from BASE); --changed-file without a base calls `cases` without --base (file-level).
+Anything unsure plans every suite (cases ALL): --full, a schedule event, no base and no --changed-file, a base that is
+all zeros or not a commit, an affected.py error, a changed CI-plumbing file (.github/workflows/**, .github/actions/**,
+tests/run-all.sh, tests/affected.py, this file, tests/ci-windows-suites.txt) and an affected.py answer that already selects every suite
+with ALL.
 
 A suite runs on ubuntu-24.04, plus windows-2025 when tests/ci-windows-suites.txt names it (one suite path per line,
 '#' comments). Read-only: it writes only the files named by --summary and --github-output.
@@ -120,13 +123,14 @@ def forces_full(files):
     return None
 
 
-def affected_cases(files, suites):
-    """{suite: cases} from one `tests/affected.py cases` call, or None when affected.py fails."""
+def affected_cases(files, suites, base=None):
+    """{suite: cases} from one `tests/affected.py cases [--base BASE]` call, or None when affected.py fails."""
     handle, tmp = tempfile.mkstemp(prefix="ci-plan-", suffix=".txt")
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("".join(path + "\n" for path in files))
-        result = run([sys.executable, "-B", "tests/affected.py", "cases", tmp] + suites)
+        option = ["--base", base] if base is not None else []
+        result = run([sys.executable, "-B", "tests/affected.py", "cases"] + option + [tmp] + suites)
     finally:
         try:
             os.unlink(tmp)
@@ -175,7 +179,7 @@ def plan(args):
         if trigger:
             full, reason = True, "changed " + trigger
     if not full:
-        found = affected_cases(files, suites)
+        found = affected_cases(files, suites, base if base_ok else None)
         if found is None:
             full, reason = True, "affected.py cases failed"
         elif len(found) == len(suites) and all(cases == "ALL" for cases in found.values()):

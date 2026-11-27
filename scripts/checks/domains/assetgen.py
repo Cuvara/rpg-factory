@@ -23,8 +23,12 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        Claude's own visual review, review-image-claude.json (same schema and binding as the image
                        review, by claude), recorded as spec.claude_image_review. It never replaces the independent
                        image review and never grades PASS for it. run.md must equal the file (else FAIL: re-run
-                       manifest); a missing, invalid, unbound or stale file, or a reviewer other than claude, is a
-                       WARN; a FAIL verdict is missing work (the agent regenerates or the run stays draft).
+                       manifest); an invalid, unbound or stale file, or a reviewer other than claude, is a WARN; a
+                       FAIL verdict is missing work (the agent regenerates or the run stays draft). A missing file is
+                       a WARN only in the full review tier: review_tier computes the tier at check time from
+                       scripts/assetgen/data/review-tiers.json (light purposes icon, ui-element, texture-tileable; any
+                       other purpose is full; a run with selected style-lock anchors is always full) and never records
+                       it. In the light tier a missing file grades PASS; a present file is graded as in the full tier.
   gen-run-qa           qa.json is the evidence: it hashed the recorded output bytes, run.md's qa equals its state and
                        results (else FAIL: re-run manifest), its state is PASS, and every recorded output has a PASS
                        row for each check the purpose requires (runfiles.required_checks of the run's spec.json
@@ -37,23 +41,38 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        style inputs it graded with (style_binding = runfiles.qa_style_binding of spec.json and the run's
                        anchor copies: style ref, effective style data hash, family, anchor copy hashes), else FAIL as
                        stale (re-run qa and manifest); a report without style_binding counts as stale.
-  gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
+  gen-run-outputs      outputs recorded, inside the run directory and under outputs/, on disk, sha256 equal; discarded
+                       outputs have a reason and matching bytes under outputs-rejected/ in spec.trace.discarded. No
+                       unrecorded PNGs in either directory (previews/ is never listed: preview files are not deliverables).
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present; run.md spec.params equal the rendered params
-                       (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest)
+                       (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest).
+                       UNTESTED on RTX 5060: local generation records must match the workflow; unverified model
+                       hashes WARN, and each sampler seed must be an integer rendered from a template param.
+                       An IPAdapterUnifiedLoader preset names no model file, so it always stays unverified and WARNs;
+                       the approver weighs it. verified and sha256 are checked for consistency only, never against
+                       the machine-local cache (CI has none).
   gen-run-style        the style lock (spec.style_lock, resolve with project.json, anchors and rejections): the style ref
                        is well formed, names the run's style and resolves (a newer version or another hash is a WARN:
                        anchors of the recorded version stay valid), run.md equals spec.json, an override carries a
                        reason (WARN, the approver weighs it). Every recorded reference names an anchor that exists, is
                        well formed and active (retired since the run: WARN), approved by a person (not an agent or
                        model name), whose image bytes equal image_sha256, the run's pick and the source output, and
-                       whose source gen-run is approved in run.md and by its signed approval (ctx.approval). An active
+                       whose source gen-run is approved in run.md and by its signed approval (ctx.approval). An anchor
+                       from existing art (external_source) has no gen-run; it is valid only when active and attested by
+                       the person who activated it (attested_by = approved_by, never an agent). An active
                        anchor promoted from this run FAILS while this run is not approved. With the style lock the
                        image reviews also bind the style ref and the anchors shown (else stale). A run recorded before
                        the style lock with no anchor promoted from it gets no row.
   gen-run-refs         purpose, style and template resolve in the core + game layers (content drift = WARN, the
                        record keeps what was used), prompt_sha256 and prompt.md match the recorded prompt, and a
                        handoff contract assetgen-to-<handoff_domain> is registered
+  gen-run-workflow-style
+                       the quality plugin check workflow-style: the run's workflow.ui.json against the workflow style
+                       guide (scripts/assetgen/graphstyle.py ui_violations, node types from
+                       scripts/assetgen/data/known-nodes.json, SaveImage suffixes against assetgen/<run_id>). A first phase: every violation and an unreadable file
+                       are WARN, never FAIL, whatever the run status; no violation is PASS. A run directory without
+                       workflow.ui.json gets no row.
 
 Integrity violations (hash or prompt mismatch, path escape, unmarked same-model review, unresolved ref) always FAIL.
 Missing work (a review, QA, an output file or the model not recorded yet) FAILS once the run claims completeness
@@ -75,11 +94,15 @@ LENIENT = {"draft", "rejected", "blocked", "superseded", "deprecated"}
 FALLBACK = "SAME_MODEL:"
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
 CLAUDE_REVIEW = "review-image-claude.json"
+REVIEW_TIERS = ROOT / "scripts" / "assetgen" / "data" / "review-tiers.json"
+KNOWN_NODES = ROOT / "scripts" / "assetgen" / "data" / "known-nodes.json"
 _engine = {}
+_review_tiers = []
 
 
 def engine(name):
-    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules; stylelock: anchors and style refs),
+    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules; stylelock: anchors and style refs;
+    graphstyle: the workflow style guide),
     loaded once under a private name. stylelock's `import layers` is bound to the private layers module for the load
     only, so sys.modules keeps no engine module under its plain name."""
     if name not in _engine:
@@ -99,6 +122,34 @@ def engine(name):
             spec.loader.exec_module(module)
         _engine[name] = module
     return _engine[name]
+
+
+def review_tiers():
+    """data/review-tiers.json, loaded once; None when it is unreadable or not JSON (every run is then full)."""
+    if not _review_tiers:
+        try:
+            _review_tiers.append(json.loads(REVIEW_TIERS.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            _review_tiers.append(None)
+    return _review_tiers[0]
+
+
+def review_tier(spec, table=None):
+    """The review tier of a run, "light" or "full", computed at check time and never recorded: a run with selected
+    style-lock anchors is full; else the tier table[purposes][spec.purpose.id] (table defaults to
+    data/review-tiers.json). Anything other than "light" (unknown or missing purpose, malformed table) is full."""
+    try:
+        if not isinstance(spec, dict) or engine("runfiles").style_lock_references(spec):
+            return "full"
+        table = review_tiers() if table is None else table
+        purpose = spec.get("purpose")
+        pid = purpose.get("id") if isinstance(purpose, dict) else None
+        tiers = table.get("purposes") if isinstance(table, dict) else None
+        if isinstance(pid, str) and isinstance(tiers, dict) and tiers.get(pid) == "light":
+            return "light"
+    except Exception:
+        pass
+    return "full"
 
 
 def layers():
@@ -239,8 +290,9 @@ def check(artifact, ctx):
     rv = spec.get("claude_image_review") if isinstance(spec.get("claude_image_review"), dict) else None
     rf = resolve(CLAUDE_REVIEW)
     if rf is None or not rf.is_file():
-        warns.append("%s is missing: record Claude's own visual review (review schema, by claude, the binding of "
-                     "review-cmd --phase image --json), then assetgen.py manifest" % CLAUDE_REVIEW)
+        if review_tier(spec) != "light":  # light tier: Claude's own review is optional, a present file is still graded
+            warns.append("%s is missing: record Claude's own visual review (review schema, by claude, the binding of "
+                         "review-cmd --phase image --json), then assetgen.py manifest" % CLAUDE_REVIEW)
         if rv is not None and rv.get("state") not in (None, "NOT_RUN"):
             fails.append("run.md claude_image_review is %s but %s is missing; re-run assetgen.py manifest"
                          % (rv.get("state"), CLAUDE_REVIEW))
@@ -265,19 +317,53 @@ def check(artifact, ctx):
     fails, todo = [], []
     if not outputs:
         todo.append("no outputs recorded (fetch_outputs into outputs/, then assetgen.py manifest)")
+    out_dir = resolve("outputs")
     for path, digest in recorded.items():
         full = resolve(path) if isinstance(path, str) else None
         if full is None:
             fails.append("output %r is not a path inside the run directory" % path)
+        elif out_dir is None or out_dir not in full.parents:
+            fails.append("output %s is not under outputs/: previews/ files are never deliverables; re-run finalize "
+                         "and manifest" % path)
         elif not full.is_file():
             todo.append("output %s is missing on disk" % path)
         elif sha256_file(full) != digest:
             fails.append("output %s: sha256 on disk differs from the record; re-run qa and manifest" % path)
-    out_dir = resolve("outputs")
     if out_dir is not None and out_dir.is_dir():
         for name in sorted(os.listdir(out_dir)):
             if name.lower().endswith(".png") and "outputs/" + name not in recorded:
                 fails.append("outputs/%s is not recorded; re-run qa and manifest" % name)
+    trace = spec.get("trace") if isinstance(spec.get("trace"), dict) else {}
+    discarded = trace.get("discarded", [])
+    if not isinstance(discarded, list):
+        fails.append("spec.trace.discarded must be a list")
+        discarded = []
+    rejected_paths = set()
+    run_dir, rejected_dir = resolve("."), resolve("outputs-rejected")
+    for entry in discarded:
+        if not isinstance(entry, dict):
+            fails.append("spec.trace.discarded entries must be objects")
+            continue
+        path, output = entry.get("path"), entry.get("output")
+        if isinstance(path, str):
+            rejected_paths.add(path)
+        if isinstance(output, str) and recorded.get(output) is not None and recorded.get(output) == entry.get("sha256"):
+            fails.append("output %s is both recorded and discarded (same bytes)" % output)
+        if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
+            fails.append("discarded %s must have a non-empty reason" % path)
+        full = resolve(path) if isinstance(path, str) else None
+        if (full is None or run_dir is None or rejected_dir is None or run_dir not in rejected_dir.parents
+                or run_dir not in full.parents or rejected_dir not in full.parents):
+            fails.append("discarded %r is not a path inside the run directory under outputs-rejected/" % path)
+        elif not full.is_file():
+            todo.append("discarded %s is missing on disk: moved back to outputs/? re-run qa and manifest" % path)
+        elif sha256_file(full) != entry.get("sha256"):
+            fails.append("discarded %s: sha256 on disk differs from the record" % path)
+    if rejected_dir is not None and run_dir is not None and run_dir in rejected_dir.parents and rejected_dir.is_dir():
+        for name in sorted(os.listdir(rejected_dir)):
+            if name.lower().endswith(".png") and "outputs-rejected/" + name not in rejected_paths:
+                fails.append("outputs-rejected/%s is not recorded in spec.trace.discarded; record discards with "
+                             "assetgen.py discard, then manifest" % name)
     grade("gen-run-outputs", fails, todo)
 
     fails, todo = [], []
@@ -363,7 +449,7 @@ def check(artifact, ctx):
 
     prov = artifact.get("provenance") if isinstance(artifact.get("provenance"), dict) else {}
     gen = spec.get("generation") if isinstance(spec.get("generation"), dict) else {}
-    fails, todo = [], []
+    fails, todo, warns = [], [], []
     if prov.get("tool") != "comfyui":
         fails.append("provenance.tool must be comfyui, found %r" % prov.get("tool"))
     for key in ("generated_by", "model"):
@@ -391,7 +477,56 @@ def check(artifact, ctx):
                       if (recorded_params or {}).get(k, "<absent>") != rendered.get(k, "<absent>"))
         fails.append("run.md spec.params differ from the rendered params (workflow.json over spec.json) in %s; re-run "
                      "assetgen.py manifest" % (", ".join(diff) or "type"))
-    grade("gen-run-provenance", fails, todo)
+    expected = runfiles.local_generation(workflow, spec_json if isinstance(spec_json, dict) else spec, None) \
+        if workflow is not None else None
+    local = gen.get("local")
+    if workflow is not None and expected is None and local is not None:
+        fails.append("run.md spec.generation.local is recorded but workflow.json runs no local node; re-run "
+                     "assetgen.py manifest")
+    elif expected is not None and not isinstance(local, dict):
+        fails.append("workflow.json runs local nodes (KSampler or a model loader) but run.md records no "
+                     "spec.generation.local; re-run assetgen.py manifest")
+    elif expected is not None and isinstance(local, dict):
+        def comparable(value, key):
+            if key not in ("models", "loras", "samplers") or not isinstance(value, list):
+                return value
+            omitted = {"sha256", "verified"} if key in ("models", "loras") else set()
+            if key == "samplers" and not isinstance(spec_json, dict):
+                omitted.add("seed_param")
+            return [{k: v for k, v in row.items() if k not in omitted} if isinstance(row, dict) else row
+                    for row in value]
+
+        missing = object()
+        for key in ("models", "loras", "samplers", "requires_sha256"):
+            if key == "requires_sha256" and not isinstance(spec_json, dict):
+                continue
+            if comparable(local.get(key, missing), key) != comparable(expected.get(key, missing), key):
+                fails.append("run.md spec.generation.local differs from workflow.json in %s; re-run assetgen.py "
+                             "manifest" % key)
+    if isinstance(local, dict):
+        for group in ("models", "loras"):
+            rows = local.get(group)
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                name = row.get("name")
+                label = runfiles.local_record_key(row)
+                if label is None:
+                    label = "%s/%r" % ("loras" if group == "loras" else row.get("kind"), name)
+                verified, digest = row.get("verified"), row.get("sha256")
+                if (verified is True and (not isinstance(digest, str) or not runfiles.SHA256.fullmatch(digest))) \
+                        or (verified is False and digest is not None):
+                    fails.append("spec.generation.local %s claims a verified sha256 it does not carry" % label)
+                if verified is False:
+                    warns.append("model %s sha256 unverified (no comfy-desktop-setup model hash cache entry): "
+                                 "the approver weighs it" % label)
+    if expected is not None and isinstance(spec_json, dict):
+        for sampler in expected["samplers"]:
+            seed = sampler.get("seed")
+            if sampler.get("seed_param") is None or not isinstance(seed, int) or isinstance(seed, bool):
+                todo.append("KSampler %s seed is not a rendered param (the template must place it as a {{param}}; "
+                            "a random seed widget cannot be reproduced)" % sampler.get("node"))
+    grade("gen-run-provenance", fails, todo, warns)
 
     fails, todo, warns = [], [], []
     lay = layers()
@@ -419,7 +554,29 @@ def check(artifact, ctx):
         fails.append("no handoff contract assetgen-to-%s is registered for handoff_domain %r" % (target, target))
     grade("gen-run-refs", fails, todo, warns)
     style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade)
+    ui_file = resolve("workflow.ui.json")
+    if ui_file is not None and ui_file.is_file():
+        grade("gen-run-workflow-style", [], warns=workflow_style_warnings(ui_file, run_id or ui_file.parent.name))
     return results
+
+
+def workflow_style_warnings(ui_file, run_id):
+    """The quality plugin check workflow-style: graphstyle.ui_violations of the run's workflow.ui.json, each a WARN
+    (never FAIL in this first phase, whatever the run status). SaveImage suffixes are checked against the prefix of
+    the run's run_id (assetgen/<run_id>), not the file's own extra.assetgen.run_id."""
+    try:
+        ui = json.loads(ui_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ["workflow.ui.json is not readable JSON"]
+    try:
+        known = json.loads(KNOWN_NODES.read_text(encoding="utf-8"))["nodes"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ["scripts/assetgen/data/known-nodes.json is not readable; the workflow style is not checked"]
+    try:
+        style = engine("graphstyle")
+        return list(style.ui_violations(ui, known, style.RUN_PREFIX + run_id))
+    except Exception as exc:  # a quality check never crashes the run: a graphstyle bug is a WARN naming it
+        return ["the workflow style check failed (%s: %s)" % (type(exc).__name__, exc)]
 
 
 def _git(root, *args):
@@ -471,24 +628,39 @@ def anchor_problems(rec, stylelock, ctx, authoring):
         fails.append("anchor %s image %s is missing" % (aid, data["image"]))
     elif sha256_file(image) != data["image_sha256"]:
         fails.append("anchor %s image %s: sha256 on disk differs from image_sha256" % (aid, data["image"]))
-    if data["image_sha256"] != data["source_run"]["sha256"]:
-        fails.append("anchor %s image_sha256 is not the sha256 of its source output %s"
-                     % (aid, data["source_run"]["output"]))
-    source = data["source_run"]["run_id"]
-    status = stylelock.run_status(authoring, source)
-    if status != "approved":
-        fails.append("anchor %s: source gen-run %s is %s, not approved" % (aid, source, status or "missing (no run.md)"))
+    external = data.get("external_source")
+    if external is not None:
+        if data["image_sha256"] != external.get("sha256"):
+            fails.append("anchor %s image_sha256 is not the sha256 its external source records" % aid)
+        if data["status"] == "active":
+            attester = external.get("attested_by")
+            if (not isinstance(attester, str) or not attester.strip() or stylelock.is_agent_name(attester)
+                    or attester != data.get("approved_by")):
+                fails.append("anchor %s is an external anchor attested by %r: only a person attests an external "
+                             "anchor, and the attester is the person who activates it (approved_by)" % (aid, attester))
+            attested_on = external.get("attested_on")
+            if not isinstance(attested_on, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", attested_on):
+                fails.append("anchor %s external source attested_on must be a YYYY-MM-DD string" % aid)
     else:
-        verdict = ctx.approval("AGEN-" + source)
-        state = (verdict or {}).get("state", "missing") if isinstance(verdict, dict) else "missing"
-        if state != "verified":
-            pending = pending_approval(authoring, source)
-            if pending and (not pending[1] or state in ("missing", "untrusted")):
-                human.append("anchor %s: the approval of source gen-run AGEN-%s is present but not committed/signed (%s): "
-                             "the person commits run.md and the record in one signed commit" % (aid, source, pending[0]))
-            else:
-                fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
-                    aid, source, state, "; ".join((verdict or {}).get("reasons") or [] if isinstance(verdict, dict) else [])))
+        source_run = data.get("source_run", {})
+        if data["image_sha256"] != source_run.get("sha256"):
+            fails.append("anchor %s image_sha256 is not the sha256 of its source output %s"
+                         % (aid, source_run.get("output")))
+        source = source_run.get("run_id")
+        status = stylelock.run_status(authoring, source)
+        if status != "approved":
+            fails.append("anchor %s: source gen-run %s is %s, not approved" % (aid, source, status or "missing (no run.md)"))
+        else:
+            verdict = ctx.approval("AGEN-" + source)
+            state = (verdict or {}).get("state", "missing") if isinstance(verdict, dict) else "missing"
+            if state != "verified":
+                pending = pending_approval(authoring, source)
+                if pending and (not pending[1] or state in ("missing", "untrusted")):
+                    human.append("anchor %s: the approval of source gen-run AGEN-%s is present but not committed/signed (%s): "
+                                 "the person commits run.md and the record in one signed commit" % (aid, source, pending[0]))
+                else:
+                    fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
+                        aid, source, state, "; ".join((verdict or {}).get("reasons") or [] if isinstance(verdict, dict) else [])))
     return fails, warns, human
 
 

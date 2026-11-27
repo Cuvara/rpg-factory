@@ -1,0 +1,65 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "2D scene or environment",
+ "description": "Wide environment or scene image (location, backdrop, establishing shot); feeds art2d scene and environment artifacts.",
+ "handoff_domain": "art2d",
+ "default_template": "staged-environment",
+ "default_family": "environment",
+ "dimensions": [
+  "palette",
+  "lighting",
+  "composition",
+  "texture"
+ ],
+ "max_references": 3,
+ "params": {
+  "size": "1536x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name the place, time of day and mood before details.",
+   "Name the camera (wide establishing shot, eye level or elevated three-quarter view) and the depth layers (foreground, midground, background).",
+   "Keep one focal area and a clear read for the eye, no characters unless the brief asks for them."
+  ],
+  "must_include": [
+   "location",
+   "camera",
+   "lighting",
+   "mood"
+  ],
+  "avoid": [
+   "text",
+   "watermark",
+   "UI overlay",
+   "characters in the foreground"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt names the location, the camera and the depth layers (foreground, midground, background)."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "The focal area and the depth layers read at thumbnail size.",
+  "Perspective and horizon are consistent across the scene."
+ ],
+ "qa": {
+  "size": {
+   "mode": "area",
+   "min_side": 768,
+   "min_pixels": 1000000
+  },
+  "alpha": "forbidden",
+  "not_blank": {
+   "min_stddev": 4.0
+  }
+ }
+}

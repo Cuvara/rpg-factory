@@ -2,7 +2,8 @@
 # scripts/ci-plan.py: the CI matrix. Selection is tests/affected.py's (never re-implemented here): one skill file gives
 # exactly affected.py's suites; a registry, workflow or CI-plumbing change, a missing or unusable base, a schedule event
 # and --full give every suite; every runnable suite is run or skipped with a reason; the OS list follows
-# tests/ci-windows-suites.txt, which names only runnable suites; --summary and --github-output are written.
+# tests/ci-windows-suites.txt, which names only runnable suites; --summary and --github-output are written; a usable
+# base reaches `affected.py cases --base` and a symbol-level answer narrows the matrix cases (section 9, a stand-in).
 # Changed paths come from --changed-file stand-ins; the base cases use the real repository and explicit shas.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -171,6 +172,84 @@ else no "ci-plan.py selects through tests/affected.py only"; fi
 # usage error
 python3 -B "$PLAN" --bogus > /dev/null 2>&1; rc=$?
 if [ "$rc" = 2 ]; then good "an unknown option exits 2"; else no "an unknown option exits 2 (rc=$rc)"; fi
+
+# 9. the base reaches `affected.py cases`: a copy of the scripts (a git repo, so a base is a commit there) with a
+# stand-in tests/affected.py that records each argv and answers `changed` and `cases` from the environment
+ST="$TMP/stub"; mkdir -p "$ST/scripts/lib" "$ST/tests"
+cp "$PLAN" "$ST/scripts/ci-plan.py"; cp "$ROOT/scripts/lib/shells.py" "$ST/scripts/lib/"
+printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in --list-suites) printf "%s\n" tests/a.test.sh tests/b.test.sh tests/c.test.sh ;; esac' > "$ST/tests/run-all.sh"
+printf '%s\n' '# no windows suite' > "$ST/tests/ci-windows-suites.txt"
+cat > "$ST/tests/affected.py" <<'PY'
+import json, os, sys
+with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")
+if sys.argv[1] == os.environ.get("STUB_FAIL"):
+    sys.exit(1)
+if sys.argv[1] == "changed":
+    sys.stdout.write("scripts/tool.py\n")
+elif sys.argv[1] == "cases":
+    sys.stdout.write(os.environ.get("STUB_CASES", ""))
+PY
+(cd "$ST" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m base) \
+  && good "a stand-in copy of the scripts in a temp git repo" || no "a stand-in copy of the scripts in a temp git repo"
+STUB_BASE=$(git -C "$ST" rev-parse HEAD | tr -d '\r')
+STUB_SUITES="tests/a.test.sh tests/b.test.sh tests/c.test.sh"
+# stub CASES-ANSWER FAIL-VERB PLAN-ARGS...: the copy's plan in $TMP/stub.json, the stand-in's calls in $TMP/stub.log
+stub() {
+  local cases="$1" failverb="$2"; shift 2
+  rm -f "$TMP/stub.log"
+  env STUB_LOG="$TMP/stub.log" STUB_CASES="$cases" STUB_FAIL="$failverb" python3 -B "$ST/scripts/ci-plan.py" "$@" > "$TMP/stub.json"
+}
+# calls VERB: each recorded stand-in call of VERB on one line, the changed-list temp file shown as FILE
+calls() {
+  [ -f "$TMP/stub.log" ] || return 0
+  python3 -B -c '
+import json, os, sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    a = json.loads(line)
+    if a[0] == sys.argv[2]:
+        print(" ".join("FILE" if os.path.basename(x).startswith("ci-plan-") else x for x in a))
+' "$TMP/stub.log" "$1" | tr -d '\r'
+}
+SYMBOL=$'tests/a.test.sh\tcase-one,case-two\ntests/b.test.sh\tALL\n'
+stub "$SYMBOL" "" --base "$STUB_BASE" --event pull_request; rc=$?
+if [ "$rc" = 0 ] && [ "$(calls changed)" = "changed $STUB_BASE" ] && [ "$(calls cases)" = "cases --base $STUB_BASE FILE $STUB_SUITES" ]; then
+  good "a usable base reaches affected.py cases as --base (one cases call)"
+else no "a usable base reaches affected.py cases as --base (rc=$rc)" "changed [$(calls changed)] cases [$(calls cases)]"; fi
+if [ "$(pj "$TMP/stub.json" 'd["full"]')" = False ] \
+   && [ "$(pj "$TMP/stub.json" '[(e["suite"], e["cases"]) for e in d["matrix"]["include"]]')" = "[('tests/a.test.sh', 'case-one,case-two'), ('tests/b.test.sh', 'ALL')]" ] \
+   && [ "$(pj "$TMP/stub.json" '[s["suite"] for s in d["skipped"]]')" = "['tests/c.test.sh']" ]; then
+  good "a symbol-level cases answer narrows the matrix cases (base plan)"
+else no "a symbol-level cases answer narrows the matrix cases (base plan)" "$(cat "$TMP/stub.json")"; fi
+changed "$TMP/stubfiles" scripts/tool.py
+stub "$SYMBOL" "" --changed-file "$TMP/stubfiles"; rc=$?
+if [ "$rc" = 0 ] && [ -z "$(calls changed)" ] && [ "$(calls cases)" = "cases FILE $STUB_SUITES" ] \
+   && [ "$(pj "$TMP/stub.json" 'd["full"]')" = False ]; then
+  good "--changed-file without a base calls affected.py cases without --base"
+else no "--changed-file without a base calls affected.py cases without --base (rc=$rc)" "changed [$(calls changed)] cases [$(calls cases)]"; fi
+stub "$SYMBOL" "" --changed-file "$TMP/stubfiles" --base "$STUB_BASE"; rc=$?
+if [ "$rc" = 0 ] && [ -z "$(calls changed)" ] && [ "$(calls cases)" = "cases --base $STUB_BASE FILE $STUB_SUITES" ]; then
+  good "--changed-file with a usable base passes that base to affected.py cases"
+else no "--changed-file with a usable base passes that base to affected.py cases (rc=$rc)" "changed [$(calls changed)] cases [$(calls cases)]"; fi
+# stub_full NAME REASON CASES-CALL FAIL-VERB PLAN-ARGS...: a full plan of the three stand-in suites (all ALL) with
+# REASON, and the recorded cases call (empty: affected.py cases is never asked)
+stub_full() {
+  local name="$1" reason="$2" want="$3" failverb="$4"; shift 4
+  stub "$SYMBOL" "$failverb" "$@"; local rc=$?
+  local ok; ok=$(pj "$TMP/stub.json" 'd["full"] and len(d["suites"]) == 3 and not d["skipped"] and all(s["cases"] == "ALL" for s in d["suites"])')
+  local r; r=$(pj "$TMP/stub.json" 'd["reason"]')
+  if [ "$rc" = 0 ] && [ "$ok" = True ] && [[ "$r" == *"$reason"* ]] && [ "$(calls cases)" = "$want" ]; then good "$name"
+  else no "$name (rc=$rc full-ALL=$ok)" "reason [$r] want [*$reason*]; cases [$(calls cases)] want [$want]"; fi
+}
+stub_full "no base and no changed list stays full; affected.py is not asked" "no base" "" ""
+stub_full "an all-zero base stays full; affected.py is not asked" "unusable base" "" "" --base 0000000000000000000000000000000000000000
+stub_full "an all-zero base with a changed list stays full" "unusable base" "" "" --base 0000000000000000000000000000000000000000 --changed-file "$TMP/stubfiles"
+stub_full "a failing affected.py changed stays full" "affected.py changed failed" "" changed --base "$STUB_BASE"
+stub_full "a failing affected.py cases (asked with --base) stays full" "affected.py cases failed" "cases --base $STUB_BASE FILE $STUB_SUITES" cases --base "$STUB_BASE"
+stub "" "" --base "$STUB_BASE"
+if [ "$(pj "$TMP/stub.json" 'd["full"]')" = False ] && [ "$(pj "$TMP/stub.json" 'len(d["suites"])')" = 0 ]; then
+  good "an empty cases answer with a base plans no suite (not full)"
+else no "an empty cases answer with a base plans no suite (not full)" "$(cat "$TMP/stub.json")"; fi
 
 echo "ci-plan: $pass passed, $fail failed"
 [ "$fail" = 0 ]

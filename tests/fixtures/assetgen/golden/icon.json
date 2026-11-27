@@ -1,7 +1,7 @@
 {
  "1": {
   "_meta": {
-   "title": "Generate image"
+   "title": "Generate icon"
   },
   "class_type": "NineRouterImage",
   "inputs": {
@@ -17,11 +17,11 @@
  },
  "2": {
   "_meta": {
-   "title": "Save image"
+   "title": "Save icon"
   },
   "class_type": "SaveImage",
   "inputs": {
-   "filename_prefix": "assetgen/golden-icon-001",
+   "filename_prefix": "assetgen/golden-icon-001-icon",
    "images": [
     "1",
     0
@@ -35,6 +35,34 @@
   "class_type": "PrimitiveStringMultiline",
   "inputs": {
    "value": "Test prompt for icon: one subject, centered."
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Downscale to 64 px"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "center",
+   "height": 64,
+   "image": [
+    "1",
+    0
+   ],
+   "upscale_method": "area",
+   "width": 64
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Preview at 64 px"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "4",
+    0
+   ]
   }
  }
 }

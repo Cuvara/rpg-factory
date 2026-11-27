@@ -67,8 +67,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    evidence. Evidence is bound to the tree it ran on: after any further edit, `--status` shows it
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
-11. **Review + QA (M, task lead).** Delivery.md section 10 steps 4-6 own the flow. The registry adds the review input: the lead's
-    checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist).
+11. **Verify session: review, then QA (M, task lead).** One fresh session per candidate; delivery.md section 10 steps 4-6
+    own the flow. The registry adds the review input: the lead's checklist and every `routing.tech` review file
+    (e.g. `unity-dots` ECS checklist).
 12. **Gate, PR, cleanup, report (M, run lead).** Delivery.md section 10 steps 7-9 and section 8 own the gate, PR and cleanup.
     The registry adds the final report (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
     The run report's limitations and follow-ups go to the backlog (in this plugin `docs/plans/backlog.md`, one topic each)
@@ -98,7 +99,7 @@ this touch", "is it validated", "is Factory healthy", "where does this domain st
 
 ## Skills
 
-Generic: `delivery` (kind `core`, any repository: the two-level flow, agent routing, review, QA tiers, plan/verdict/gate pipeline; steps 6, 7, 11, 12 load it). Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`; VFX Graph effects (through `vfx` and `unity-package`): `vfx-graph`.
+Generic: `delivery` (kind `core`, any repository: the two-level flow, agent routing, review, QA tiers, plan/verdict/gate pipeline; steps 6, 7, 11, 12 load it). Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`, `comfy-desktop-setup`, `asset-style`; VFX Graph effects (through `vfx` and `unity-package`): `vfx-graph`.
 
 | Situation | Lead skill |
 |---|---|

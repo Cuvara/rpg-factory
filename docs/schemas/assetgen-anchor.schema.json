@@ -12,7 +12,6 @@
     "strength",
     "image",
     "image_sha256",
-    "source_run",
     "approved_by",
     "approved_on"
   ],
@@ -116,6 +115,21 @@
         }
       }
     },
+    "external_source": {
+      "type": "object",
+      "required": ["origin", "rights_note", "sha256", "attested_by", "attested_on"],
+      "additionalProperties": false,
+      "properties": {
+        "origin": {"type": "string", "minLength": 1},
+        "rights_note": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "attested_by": {
+          "type": ["string", "null"],
+          "description": "A person; never an agent or model name (claude, codex, gpt*, SAME_MODEL:*)."
+        },
+        "attested_on": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}
+      }
+    },
     "approved_by": {
       "type": [
         "string",
@@ -131,6 +145,19 @@
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     }
   },
+  "oneOf": [
+    {"required": ["source_run"], "not": {"required": ["external_source"]}},
+    {"required": ["external_source"], "not": {"required": ["source_run"]}}
+  ],
+  "allOf": [
+    {
+      "if": {"required": ["external_source"], "properties": {"status": {"const": "active"}}},
+      "then": {"properties": {"external_source": {"properties": {
+        "attested_by": {"type": "string", "minLength": 1},
+        "attested_on": {"type": "string"}
+      }}}}
+    }
+  ],
   "if": {
     "properties": {
       "status": {

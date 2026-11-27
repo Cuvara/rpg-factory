@@ -19,7 +19,16 @@ sel 1 "an unrelated script skips the suite" tests/pipeline.test.sh scripts/chang
 sel 0 "registry change runs everything" tests/changelog.test.sh registry/core.json
 sel 0 "library reaches its importer suite" tests/pipeline.test.sh scripts/lib/plan_paths.py
 sel 1 "library skips unrelated suite" tests/changelog.test.sh scripts/lib/plan_paths.py
-sel 0 "dynamic library stays global" tests/changelog.test.sh scripts/lib/gitguard.py
+sel 0 "a scripts/factory-workflow.py change selects the registered workflow suite" tests/workflow.test.sh scripts/factory-workflow.py
+# gitguard.py uses the plugin's static sys.path/spec_from_file_location idiom: it selects its importer suite, not every
+# suite; the "dynamic stays global" property is covered by the computed/importlib/bytes modules of the fixture below
+sel 0 "a static-idiom library selects its importer suite" tests/git-guard.test.sh scripts/lib/gitguard.py
+sel 1 "a static-idiom library skips an unrelated suite" tests/changelog.test.sh scripts/lib/gitguard.py
+# the rpgf_guard package is loaded by gitguard.py through a static spec_from_file_location path: its __init__.py gets an
+# importer edge from the loader, so a change selects the suites that reach the git guard, not every suite
+sel 0 "rpgf_guard/__init__.py selects the git-guard suite" tests/git-guard.test.sh scripts/lib/rpgf_guard/__init__.py
+sel 0 "rpgf_guard/__init__.py selects the file-guard suite" tests/file-guard.test.sh scripts/lib/rpgf_guard/__init__.py
+sel 1 "rpgf_guard/__init__.py skips an unrelated suite" tests/changelog.test.sh scripts/lib/rpgf_guard/__init__.py
 sel 0 "unknown top-level path runs everything" tests/changelog.test.sh new-unknown-file
 sel 0 "skill text reaches skills-lint (EXTRA)" tests/skills-lint.sh skills/vfx/SKILL.md
 sel 0 "an agent file reaches skills-lint (EXTRA)" tests/skills-lint.sh agents/factory-explorer.md
@@ -33,6 +42,47 @@ sel 0 "UI data next to ui_plan.py selects ui-commands (tree rule)" tests/ui-comm
 sel 0 "UI data next to ui_plan.py selects ui-skill-routing (tree rule)" tests/ui-skill-routing.test.sh scripts/ui/data/intents.json
 sel 1 "UI data skips an unrelated suite" tests/changelog.test.sh scripts/ui/data/intents.json
 sel 0 "a testlab scenario selects the testlab unit tests (tree rule)" testlab/tests/test_lab.py testlab/scenarios/S01-bootstrap.json
+# workspace checks (run-all --workspace-only --base B selects them through select/select-many): WORKSPACE_INPUTS decides.
+# A docs file no workspace check names selects none of them; the keys are the paths run-all passes to its run lines, plus
+# the pseudo key claude-plugin-validate (no file).
+WSKEYS=(tests/routing.test.sh tests/routing-properties.test.py tests/facts.test.sh scripts/check-registry.sh
+        tests/orca-commands.test.sh scripts/checks/skill-citations.py scripts/checks/sgl-determinism.py
+        scripts/checks/pin-status.py scripts/checks/wire-parity.sh scripts/checks/pin-plan.py
+        scripts/checks/package-ready.py scripts/checks/netcode-headless.sh scripts/factory-context.sh
+        scripts/factory-status.py claude-plugin-validate)
+wsel() { # <name> <want: space-separated keys, or none | all> <changed files...>
+  local name="$1" want="$2" got exp; shift 2
+  printf '%s
+' "$@" > "$TMP/wsch"
+  got=$(python3 -B "$A" select-many "$TMP/wsch" "${WSKEYS[@]}" | sort | tr '
+' ' ')
+  case "$want" in none) exp="" ;; all) exp=$(printf '%s
+' "${WSKEYS[@]}" | sort | tr '
+' ' ') ;;
+    *) exp=$(tr ' ' '
+' <<<"$want" | sort | tr '
+' ' ') ;; esac
+  if [ "$got" = "$exp" ]; then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name: want [$exp] got [$got]"; fi
+}
+wsel "workspace: a docs-only change selects no workspace check" none docs/hardware.md
+wsel "workspace: a skill change selects routing replay, routing properties and facts"   "tests/routing.test.sh tests/routing-properties.test.py tests/facts.test.sh scripts/check-registry.sh scripts/checks/skill-citations.py claude-plugin-validate"   skills/vfx/SKILL.md
+wsel "workspace: a registry fragment change selects every workspace check, claude-plugin-validate included" all registry/core.json
+wsel "workspace: registry.json (global) selects every workspace check" all registry.json
+wsel "workspace: a top-level file selects every workspace check" all new-unknown-file
+wsel "workspace: an eval scenario selects the routing checks only"   "tests/routing.test.sh tests/routing-properties.test.py" evals/asset-gen-icon/prompt.md
+sel 0 "workspace: scripts/factory_session.py selects routing replay" tests/routing.test.sh scripts/factory_session.py
+sel 0 "workspace: scripts/factory_session.py selects routing properties" tests/routing-properties.test.py scripts/factory_session.py
+sel 1 "workspace: scripts/factory_session.py does not select claude-plugin-validate" claude-plugin-validate scripts/factory_session.py
+sel 1 "workspace: claude-plugin-validate is not selected by a docs-only change" claude-plugin-validate docs/hardware.md
+sel 0 "workspace: claude-plugin-validate is selected by a command change" claude-plugin-validate commands/check.md
+sel 0 "workspace: claude-plugin-validate is selected by a top-level file" claude-plugin-validate README.md
+sel 1 "workspace: facts is not selected by a docs-only change" tests/facts.test.sh docs/hardware.md
+sel 1 "workspace: routing properties is not selected by a docs-only change" tests/routing-properties.test.py docs/hardware.md
+sel 1 "workspace: routing replay is not selected by a docs-only change" tests/routing.test.sh docs/hardware.md
+sel 0 "workspace: a skill change selects routing replay" tests/routing.test.sh skills/vfx/SKILL.md
+sel 0 "workspace: a skill change selects routing properties" tests/routing-properties.test.py skills/vfx/SKILL.md
+sel 1 "workspace: a skill change does not select the pin-status check" scripts/checks/pin-status.py skills/vfx/SKILL.md
 # select-many: the same answer as select for every suite, from one call (one import graph)
 printf '%s\n' scripts/lib/plan_paths.py scripts/ui/data/intents.json skills/vfx/SKILL.md > "$TMP/many"
 many=(tests/pipeline.test.sh tests/changelog.test.sh tests/skills-lint.sh tests/release-check.test.sh tests/ui-commands.test.sh
@@ -59,9 +109,39 @@ if [ "$got" = 'tests/affected.test.sh' ]; then
 else fail=$((fail + 1)); echo "FAIL  selector change selects only selector suite: got [$got]"; fi
 printf '%s\n' tests/affected.test.sh > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
-if [ "$got" = $'scripts/checks/english-only.py\ntests/affected.test.sh' ]; then
-  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English check"
-else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English check: got [$got]"; fi
+if [ "$got" = $'scripts/checks/english-only.py\nscripts/checks/portable-paths.py\nscripts/checks/workspace-readers.sh\ntests/affected.test.sh' ]; then
+  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English, portable-paths and workspace-readers checks"
+else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English, portable-paths and workspace-readers checks: got [$got]"; fi
+# the portable-paths enforce line is global: a docs-only change selects it, and a change to the check selects its suite
+printf '%s\n' docs/releasing.md > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
+if grep -qx scripts/checks/portable-paths.py <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  a docs-only change selects the portable-paths enforce line"
+else fail=$((fail + 1)); echo "FAIL  a docs-only change selects the portable-paths enforce line: got [$(tr '\n' ' ' <<<"$got")]"; fi
+sel 0 "a change to the portable-paths check selects its suite" tests/portable-paths.test.sh scripts/checks/portable-paths.py
+sel 1 "an unrelated script skips the portable-paths suite" tests/portable-paths.test.sh scripts/changelog.py
+# the workspace readers guard greps only scripts/ and tests/ under its ROOT (EXTRA scripts/*, tests/*): a change under
+# either, nested fixtures and the guard itself included, selects its run line; hooks and registry fragments select it
+# through GLOBAL; a docs or skills change does not (the guard reads neither)
+sel 0 "a scripts/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh scripts/changelog.py
+sel 0 "a tests/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh tests/portable-paths.test.sh
+sel 0 "a nested tests/fixtures/ change selects the workspace readers guard" scripts/checks/workspace-readers.sh tests/fixtures/check-registry-p4.sh
+sel 0 "the guard's own change selects the workspace readers guard" scripts/checks/workspace-readers.sh scripts/checks/workspace-readers.sh
+sel 0 "a hooks/ change selects the workspace readers guard (global)" scripts/checks/workspace-readers.sh hooks/hooks.json
+sel 0 "a registry/ fragment change selects the workspace readers guard (global)" scripts/checks/workspace-readers.sh registry/core.json
+sel 1 "a docs-only change does not select the workspace readers guard" scripts/checks/workspace-readers.sh docs/x.md
+sel 1 "a skills/ change does not select the workspace readers guard" scripts/checks/workspace-readers.sh skills/factory-core/SKILL.md
+# the netcode evidence prune case (tests/run-all-parallel.test.sh) sources prune_evidence from the check script by a
+# computed path: the EXTRA mapping selects the suite, not an incidental literal mention
+sel 0 "a netcode-headless.sh change selects the run-all-parallel suite (prune case, EXTRA)" tests/run-all-parallel.test.sh scripts/checks/netcode-headless.sh
+if python3 -B - "$A" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+sys.exit(0 if "scripts/checks/netcode-headless.sh" in m.EXTRA.get("tests/run-all-parallel.test.sh", []) else 1)
+PY
+then pass=$((pass + 1)); echo "PASS  EXTRA maps netcode-headless.sh to the run-all-parallel suite explicitly"
+else fail=$((fail + 1)); echo "FAIL  EXTRA maps netcode-headless.sh to the run-all-parallel suite explicitly"; fi
 printf '%s\n' tests/parallel-policy.test.sh > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
 if [[ "$got" == *tests/parallel-policy.test.sh* ]] && [[ "$got" != *tests/git-guard.test.sh* ]]; then
@@ -80,26 +160,59 @@ cands=("${suites[@]}" tests/delivery-generic.test.sh)
 printf '%s\n' scripts/factory-pipeline.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
 want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh tests/commands.test.sh \
-  tests/skills-lint.sh scripts/checks/english-only.py | sort)
+  tests/skills-lint.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(codex-plugin|compat|parallel-policy)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  factory-pipeline.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  factory-pipeline.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
 printf '%s\n' scripts/lib/pipeline_route.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
-want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py | sort)
+want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py \
+  scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
+# scripts/lib/workspace.sh reaches ~43 suites through transitive callers (factory-cmd.py runs check-registry.sh): a change
+# selects its direct callers and the suites that name it or a direct caller, not that whole fan-out
+sel 0 "workspace.sh selects its default-path suite" tests/workspace-default.test.sh scripts/lib/workspace.sh
+sel 1 "workspace.sh skips git-guard (no caller runs it)" tests/git-guard.test.sh scripts/lib/workspace.sh
+printf '%s\n' scripts/lib/workspace.sh > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
+missing=""
+for s in tests/workspace-default.test.sh tests/routing.test.sh tests/facts.test.sh tests/check-registry.test.sh \
+         tests/netcode-headless.test.sh scripts/checks/netcode-headless.sh scripts/checks/wire-parity.sh \
+         tests/checks-candidate.test.sh tests/domains.test.sh; do
+  grep -qxF "$s" <<<"$got" || missing="$missing $s"
+done
+if [ -z "$missing" ] && ! grep -qxE 'tests/(git-guard|compat|assetgen|changelog)[.]test[.]sh' <<<"$got" \
+   && [ "$(grep -c . <<<"$got")" -lt 25 ]; then
+  pass=$((pass + 1)); echo "PASS  workspace.sh selects every real caller suite, not the runner's whole fan-out"
+else fail=$((fail + 1)); echo "FAIL  workspace.sh selection: missing [$missing] got $(grep -c . <<<"$got") [$(tr '\n' ' ' <<<"$got")]"; fi
+# an asset-gen engine module reaches fixtures run under a computed name (tests/fixtures/assetgen/*_selftest.py): the
+# suite's EXTRA patterns cover them, so the answer is a short named list, not every suite (finalize.py may not exist yet)
+printf '%s\n' scripts/assetgen/assetgen.py scripts/assetgen/finalize.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
+# oracle: the suites whose text names a changed file, the directory itself or its glob; a suite that names only another
+# file under it (scripts/assetgen/data/known-nodes.json in tests/comfy-desktop-setup.test.sh) is rightly not selected
+mention=$(cd "$ROOT" && grep -lE 'scripts/assetgen(/(assetgen|finalize)[.]py|/?[*]|/?[.]?([^A-Za-z0-9_./*-]|$))' "${suites[@]}" 2>/dev/null | sort)
+if grep -qx tests/assetgen.test.sh <<<"$got" && grep -qx tests/commands.test.sh <<<"$got" && [ -z "$(comm -13 <(echo "$got") <(echo "$mention"))" ] \
+   && [ "$(wc -l <<<"$got")" -lt "${#suites[@]}" ] && ! grep -qx tests/changelog.test.sh <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  a scripts/assetgen change selects the suites that mention it (assetgen, commands), not every suite"
+else fail=$((fail + 1)); echo "FAIL  a scripts/assetgen change selects a short named list: got [$(tr '\n' ' ' <<<"$got")] of ${#suites[@]}"; fi
 out=$(python3 -B - "$A" <<'PY'
 import ast, importlib.util, sys
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
-check("a pipeline script runs every case of the pipeline suite", all(m.affected_cases([f], "tests/pipeline.test.sh") == "ALL"
-      for f in ("scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py")))
+pipeline_all = ",".join(sorted(m.case_map("tests/pipeline.test.sh")))
+check("a pipeline script runs every case of the pipeline suite without a base",
+      m.affected_cases(["scripts/factory-pipeline.py"], "tests/pipeline.test.sh") in ("ALL", pipeline_all)
+      and m.affected_cases(["scripts/lib/pipeline_route.py"], "tests/pipeline.test.sh") in ("ALL", pipeline_all))
 import inspect
 check("only selection is narrowed: the import closure still reaches the suites it did, and hashes ignore the table",
       any(m.selects(p, "tests/codex-plugin.test.sh") for p in m.closure("scripts/factory-pipeline.py"))
       and "PIPELINE_SUITES" not in inspect.getsource(m.hashes))
+reach = m.closure("scripts/lib/workspace.sh")
+check("only selection is narrowed for workspace.sh: the import closure still reaches factory-cmd.py, and hashes ignore the table",
+      reach is not None and "scripts/factory-cmd.py" in reach and "CALLER_SUITES" not in inspect.getsource(m.hashes))
 tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
 bare = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value in ("bash", "bash.exe")]
 check("affected.py runs no bare bash subprocess (find_bash resolves it)", not bare
@@ -121,8 +234,10 @@ PY
 )
 [ "$out" = "b,c" ] && { pass=$((pass + 1)); echo "PASS  changed = committed since merge-base + untracked"; } || { fail=$((fail + 1)); echo "FAIL  changed: '$out'"; }
 out=$(python3 -B - "$A" "$TMP" <<'PY'
-import contextlib, importlib.util, io, os, pathlib, subprocess, sys
+import contextlib, importlib.util, io, os, pathlib, subprocess, sys, types
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# hashes() imports find_bash from <fixture>/scripts/lib/shells.py, which the fixture does not have: stub it (no host bash)
+stub = types.ModuleType("shells"); stub.find_bash = lambda: None; sys.modules["shells"] = stub
 root = pathlib.Path(sys.argv[2]) / "hash-fixture"; root.mkdir()
 subprocess.run(["git", "init", "-q", str(root)], check=True)
 files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from inner import VALUE\n",
@@ -146,6 +261,9 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          "scripts/rel-entry.py": "import rpkg\n", "tests/rel.test.sh": "python scripts/rel-entry.py\n",
          # lib -> module nothing imports or names (loaded by a computed path): unsure
          "scripts/lib/hidden.py": "X = 1\n", "scripts/plugins/dyn.py": "import hidden\n",
+         # leaf under tests/<dir>/ that nothing names and no EXTRA covers: unsure; one a suite's EXTRA covers is named by it
+         "scripts/lib/stuff.py": "X = 1\n", "tests/zzdir/leaf_selftest.py": "import stuff\n",
+         "scripts/lib/stuff2.py": "X = 1\n", "tests/fixtures/assetgen/covered_selftest.py": "import stuff2\n",
          # data a script reads next to it without naming the path; an unrelated data file in another tool's tree
          "scripts/ui/plan.py": "import json\n", "scripts/ui/data/intents.json": "{}\n", "tests/ui.test.sh": "python scripts/ui/plan.py\n",
          "scripts/other/tool2.py": "x = 1\n", "scripts/other/data/x.json": "{}\n",
@@ -202,6 +320,13 @@ check("bare file name in a message is not an edge", not m.needed(["scripts/lib/v
 check("relative import reaches package importer", m.needed(["scripts/lib/rpkg/part.py"], "tests/rel.test.sh"))
 check("relative import skips unrelated suite", not m.needed(["scripts/lib/rpkg/part.py"], "tests/other.test.sh"))
 check("library reaching an unnamed module stays global", m.needed(["scripts/lib/hidden.py"], "tests/other.test.sh"))
+check("a leaf nothing names and no EXTRA covers stays unsure", m.reaches("scripts/lib/stuff.py") is None
+      and m.needed(["scripts/lib/stuff.py"], "tests/other.test.sh"))
+check("a leaf a suite's EXTRA patterns cover is named by that suite: no longer unsure",
+      m.reaches("scripts/lib/stuff2.py") is not None and "tests/fixtures/assetgen/covered_selftest.py" in m.reaches("scripts/lib/stuff2.py")
+      and not m.needed(["scripts/lib/stuff2.py"], "tests/other.test.sh"))
+check("only a tests/ suite's EXTRA covers a leaf (the '*' of the global checks does not)",
+      m.extra_covered("tests/fixtures/assetgen/x.py") and not m.extra_covered("tests/zzdir/leaf_selftest.py"))
 reset(); tool_before = h("tests/tool.test.sh")
 (root / "scripts/lib/deep.py").write_text("X = 2\n")
 check("hash changes on a library reached through a helper", tool_before != h("tests/tool.test.sh"))
@@ -214,6 +339,7 @@ check("hash ignores unrelated script", after == h())
 check("hash changes on transitive library", after != h())
 check("unknown suite cannot reuse", h("tests/missing.test.sh") == "-")
 check("wildcard EXTRA cannot reuse", h("scripts/checks/english-only.py") == "-")
+check("the portable-paths wildcard EXTRA cannot reuse either", h("scripts/checks/portable-paths.py") == "-")
 before_delete = h()
 (root / "scripts/entry.py").unlink()
 check("hash changes on missing input", before_delete != h())
@@ -282,12 +408,15 @@ check("hash changes through a relative multiline import", rel_before != h("tests
 reset()
 check("an unparsable Python file makes selection unsure", m.needed(["scripts/lib/leaf.py"], "tests/other.test.sh"))
 check("an unparsable Python file disables reuse", h("tests/other.test.sh") == "-")
+check("the hash-fixture block ran to its end", True)
 PY
 )
 while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# a crash in the heredoc (an import error, a traceback) loses the checks after it: count it as a failure
+grep -qF "PASS  the hash-fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the hash-fixture block crashed before its end"; }
 out=$(python3 -B - "$A" "$TMP" <<'PY'
 import importlib.util, pathlib, subprocess, sys
 spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -331,5 +460,370 @@ while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+# symbol-level case reach (`PATH::NAME` case-map patterns): a throwaway repo with a base commit on main and work-tree
+# edits; the changed line ranges come from `git diff -U0` against the merge-base, mapped with ast to top-level defs
+out=$(python3 -B - "$A" "$TMP" <<'PY'
+import importlib.util, pathlib, subprocess, sys
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+tmp = pathlib.Path(sys.argv[2]); root = tmp / "symbol-fixture"
+def git(*args):
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True, capture_output=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+TOOL = """import functools
+import sys
+
+import helper_lib
+
+LIMIT = 3
+
+
+def shared():
+    return 1
+
+
+def only_a():
+    return shared() + 1
+
+
+def cmd_a(x):
+    return only_a()
+
+
+def cmd_b(x):
+    return shared() + 2
+
+
+def cmd_c(x):
+    main = decorated()   # a local that shadows the top-level main(): no edge to main
+    return main
+
+
+def boot():
+    return 0
+
+
+@functools.lru_cache(None)
+def decorated():
+    return 4
+
+
+def main():
+    boot()
+    return {"a": cmd_a, "b": cmd_b, "c": cmd_c}[sys.argv[1]](None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+DYN = """import sys
+
+
+def helper():
+    return 1
+
+
+def cmd_a(x):
+    return helper()
+
+
+def cmd_b(x):
+    return 2
+
+
+def main():
+    return globals()["cmd_" + sys.argv[1]](None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+files = {
+    "scripts/tool.py": TOOL, "scripts/dyn.py": DYN, "scripts/other.py": "def run():\n    return 1\n",
+    "scripts/lib/helper_lib.py": "VALUE = 1\n",
+    # an importer of tool.py (a caller the import closure reaches); the caller suites name it, so it is no unsure leaf
+    "scripts/caller.py": "import tool\n\n\ndef go():\n    return tool.cmd_a(None)\n",
+    "tests/caller-all.test.sh": "# case-map: ga scripts/tool.py::cmd_a scripts/caller.py\n"
+                                "# case-map: gb scripts/tool.py::cmd_b scripts/caller.py\n"
+                                "python scripts/tool.py scripts/caller.py\n",
+    "tests/caller.test.sh": "# case-map: ga scripts/tool.py::cmd_a scripts/caller.py\n# case-map: gb scripts/tool.py::cmd_b\n"
+                            "# case-map: gc scripts/caller.py\npython scripts/tool.py scripts/caller.py\n",
+    # runs the caller but no group maps it: a narrowed change to tool.py cannot tell which group runs the caller
+    "tests/unmapped-caller.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                                     "python scripts/tool.py scripts/caller.py\n",
+    "tests/sym.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                         "# case-map: gc scripts/tool.py::cmd_c\npython scripts/tool.py\n",
+    "tests/star.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                          "# case-map: gs scripts/tool.py::*\npython scripts/tool.py\n",
+    "tests/glob.test.sh": "# case-map: ga scripts/*.py scripts/tool.py::cmd_a\n# case-map: gb scripts/tool.py::cmd_b\n"
+                          "# case-map: gp scripts/*.py\npython scripts/tool.py scripts/other.py\n",
+    "tests/ghost.test.sh": "# case-map: ga scripts/tool.py::cmd_a\n# case-map: gx scripts/tool.py::no_such\npython scripts/tool.py\n",
+    "tests/dyn.test.sh": "# case-map: ga scripts/dyn.py::cmd_a\n# case-map: gb scripts/dyn.py::cmd_b\npython scripts/dyn.py\n",
+    "tests/badglob.test.sh": "# case-map: ga scripts/*.py::cmd_a\npython scripts/tool.py\n",
+    "tests/badname.test.sh": "# case-map: ga scripts/tool.py::\npython scripts/tool.py\n",
+}
+for path, text in files.items():
+    p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+git("add", "."); git("commit", "-qm", "base"); git("checkout", "-qb", "work")
+m.ROOT = str(root)
+def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
+def reset():
+    for name in [n for n, v in vars(m).items() if hasattr(v, "cache_clear")]:
+        getattr(m, name).cache_clear()
+def edit(path, text):
+    (root / path).write_text(text)
+def restore():
+    for path in ("scripts/tool.py", "scripts/dyn.py", "scripts/other.py", "scripts/lib/helper_lib.py"):
+        edit(path, files[path])
+def cases(suite, tool=None, base="main"):
+    """affected_cases for the work tree against base, the way `cases` calls it (FILE = the changed set)."""
+    if tool is not None:
+        edit("scripts/tool.py", tool)
+    reset()
+    mb, changed = m.merge_base_changed(base)
+    got = m.affected_cases(changed, suite, mb)
+    restore()
+    return got
+FILE_LEVEL = "ga,gb,gc"
+check("symbol reach: a file-level change reaches every group that maps the file (no base)",
+      m.affected_cases(["scripts/tool.py"], "tests/sym.test.sh") == FILE_LEVEL)
+check("symbol reach: a change inside one function selects only the group naming it",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb")
+check("symbol reach: a change to a helper one named entry reaches selects only that group",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga")
+check("symbol reach: a local variable that shadows a top-level function name does not create an edge",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 1", "return shared() + 7")) == "ga"
+      and "main" not in m.symbol_index("scripts/tool.py")[1]["cmd_c"])
+import ast
+scoped = ast.parse("def f(a, *r):\n    global g\n    g = 1\n    h = 2\n    import os as k2\n"
+                   "    def inner():\n        return a + h + n1\n"
+                   "    return a + g + h + k + k2 + [q for q in z] + [lambda w: w + v]\n").body[0]
+check("symbol reach: parameters, locals, imports, nested scopes and comprehension targets shadow; global does not",
+      m.module_refs(scoped) == {"g", "k", "z", "v", "n1"})
+check("symbol reach: a change to a shared helper selects every group whose named entry reaches it",
+      cases("tests/sym.test.sh", TOOL.replace("def shared():\n    return 1", "def shared():\n    return 10")) == "ga,gb")
+check("symbol reach: a decorated function's body change selects the group whose entry calls it",
+      cases("tests/sym.test.sh", TOOL.replace("    return 4\n", "    return 40\n")) == "gc")
+check("symbol reach: a helper only main() reaches (import-time Common) is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("def boot():\n    return 0", "def boot():\n    return 9")) == FILE_LEVEL)
+check("symbol reach: a module-level constant change is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("LIMIT = 3", "LIMIT = 4")) == FILE_LEVEL)
+check("symbol reach: a new import is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("import sys\n", "import os\nimport sys\n")) == FILE_LEVEL)
+check("symbol reach: a decorator change is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("lru_cache(None)", "lru_cache(8)")) == FILE_LEVEL)
+check("symbol reach: a comment between two defs is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("\n\ndef cmd_c", "\n# note\n\ndef cmd_c")) == FILE_LEVEL)
+check("symbol reach: an added def is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("\n\ndef main", "\n\ndef extra():\n    return 0\n\n\ndef main")) == FILE_LEVEL)
+check("symbol reach: a deleted def is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("def boot():\n    return 0\n", "")) == FILE_LEVEL)
+check("symbol reach: a renamed def is file-level",
+      cases("tests/sym.test.sh", TOOL.replace("def only_a():", "def only_b():")) == FILE_LEVEL)
+check("symbol reach: a parse failure selects ALL",
+      cases("tests/sym.test.sh", TOOL.replace("return shared() + 2", "return shared( + 2")) == "ALL")
+check("symbol reach: PATH::* reaches the whole file while the other groups narrow",
+      cases("tests/star.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga,gs")
+check("symbol reach: a PATH:: pattern overrides its own group's plain glob; a plain-glob group stays whole-file",
+      cases("tests/glob.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga,gp")
+edit("scripts/other.py", "def run():\n    return 2\n")
+check("symbol reach: the overridden glob still matches the group's other files",
+      cases("tests/glob.test.sh") == "ga,gp")
+check("symbol reach: a NAME the file does not define makes the file file-level",
+      cases("tests/ghost.test.sh", TOOL.replace("return shared() + 1", "return shared() + 5")) == "ga,gx")
+edit("scripts/dyn.py", DYN.replace("def helper():\n    return 1", "def helper():\n    return 2"))
+check("symbol reach: a dynamic module (globals()) with an unnamed changed helper is file-level",
+      cases("tests/dyn.test.sh") == "ga,gb")
+edit("scripts/dyn.py", DYN.replace("    return 2\n", "    return 3\n"))
+check("symbol reach: a dynamic module still narrows a change to a named entry", cases("tests/dyn.test.sh") == "gb")
+edit("scripts/lib/helper_lib.py", "VALUE = 2\n")
+check("symbol reach: an unchanged file reached through the import closure matches file-level (its :: patterns too)",
+      cases("tests/sym.test.sh") == FILE_LEVEL)
+check("symbol reach: a caller of the changed file that every group naming the file lists does not widen the reach",
+      cases("tests/caller-all.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb")
+check("symbol reach: a group that lists only the caller (no pattern for the changed file) is still selected",
+      cases("tests/caller.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "gb,gc")
+check("symbol reach: a caller of the narrowed file that no group of the map matches gives ALL",
+      cases("tests/unmapped-caller.test.sh", TOOL.replace("return shared() + 2", "return shared() + 3")) == "ALL")
+check("symbol reach: a file-level change matches the caller file-level too (every group that runs it)",
+      cases("tests/caller.test.sh", TOOL.replace("LIMIT = 3", "LIMIT = 4")) == "ga,gb,gc")
+reset()
+check("symbol reach: a glob in a PATH:: pattern makes the map invalid (ALL)",
+      m.case_map("tests/badglob.test.sh") is None and m.affected_cases(["scripts/tool.py"], "tests/badglob.test.sh") == "ALL")
+check("symbol reach: an empty NAME makes the map invalid (ALL)", m.case_map("tests/badname.test.sh") is None)
+# the cases command: --base REF against the default base (origin/main, else main), and a FILE list that is not the
+# changed set. A commit on work changes cmd_b; the work tree then changes only_a.
+edit("scripts/tool.py", TOOL.replace("return shared() + 2", "return shared() + 3"))
+git("commit", "-qam", "cmd_b"); git("branch", "side")
+edit("scripts/tool.py", TOOL.replace("return shared() + 2", "return shared() + 3").replace("return shared() + 1", "return shared() + 5"))
+runner = ("import importlib.util,sys; s=importlib.util.spec_from_file_location('a',sys.argv[1]); m=importlib.util.module_from_spec(s); "
+          "s.loader.exec_module(m); m.ROOT=sys.argv[2]; sys.exit(m.main(sys.argv[3:]))")
+def cli(*args):
+    r = subprocess.run([sys.executable, "-B", "-c", runner, sys.argv[1], str(root), "cases", *args], capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else f"rc={r.returncode} {r.stderr}"
+listed = tmp / "symbol-changed"; listed.write_text("scripts/tool.py\n")
+check("cases --base REF: line ranges from merge-base(REF, HEAD) (only the work-tree change)",
+      cli("--base", "side", str(listed), "tests/sym.test.sh") == "tests/sym.test.sh\tga\n")
+check("cases without --base: the default base main (the commit and the work-tree change)",
+      cli(str(listed), "tests/sym.test.sh") == "tests/sym.test.sh\tga,gb\n")
+listed.write_text("scripts/tool.py\nscripts/other.py\n")
+check("cases: a FILE list that differs from the recomputed changed set keeps file-level reach",
+      cli("--base", "side", str(listed), "tests/sym.test.sh") == f"tests/sym.test.sh\t{FILE_LEVEL}\n")
+check("cases --base with an unknown ref keeps file-level reach",
+      cli("--base", "no-such-ref", str(tmp / "symbol-changed"), "tests/sym.test.sh") == f"tests/sym.test.sh\t{FILE_LEVEL}\n")
+check("the symbol-reach fixture block ran to its end", True)
+PY
+)
+while IFS= read -r line; do
+  echo "$line"
+  case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
+done <<< "$out"
+# a crash in the heredoc loses the checks after it: count it as a failure
+grep -qF "PASS  the symbol-reach fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the symbol-reach fixture block crashed before its end"; }
+# the plugin's own sys.path idiom (a directory of this repo built from __file__ and string literals) is not unsure for
+# selection; a computed entry, importlib and __import__ stay unsure; the conservative rule (reuse hashes) is unchanged
+out=$(python3 -B - "$A" "$TMP" <<'PY'
+import contextlib, importlib.util, io, pathlib, subprocess, sys, types
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# hashes() imports find_bash from <fixture>/scripts/lib/shells.py, which the fixture does not have: stub it (no host bash)
+stub = types.ModuleType("shells"); stub.find_bash = lambda: None; sys.modules["shells"] = stub
+root = pathlib.Path(sys.argv[2]) / "syspath-fixture"; root.mkdir()
+subprocess.run(["git", "init", "-q", str(root)], check=True)
+files = {
+    # static idiom, directly: dirname/abspath(__file__) and os.path.join with string literals
+    "scripts/lib/stat_base.py": "X = 1\n",
+    "scripts/lib/stat_mod.py": "import os, sys\nsys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib'))\nfrom stat_base import X\n",
+    "scripts/stat-entry.py": "import stat_mod\n", "tests/stat.test.sh": "python scripts/stat-entry.py\n",
+    # static idiom through a module-level name and a name imported from a sibling module, with append
+    "scripts/lib/stat_paths.py": "import os\nLIBDIR = os.path.dirname(os.path.abspath(__file__))\n",
+    "scripts/lib/stat_base2.py": "Y = 1\n",
+    "scripts/lib/stat_mod2.py": "import os, sys\nfrom stat_paths import LIBDIR\nSCRIPTS = os.path.join(LIBDIR, '..')\nsys.path.append(SCRIPTS)\nimport stat_base2\n",
+    "scripts/stat2-entry.py": "import stat_mod2\n", "tests/stat2.test.sh": "python scripts/stat2-entry.py\n",
+    # static idiom with a bare dirname(__file__)
+    "scripts/lib/stat_base3.py": "Z = 1\n",
+    "scripts/lib/stat_mod3.py": "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nimport stat_base3\n",
+    "scripts/stat3-entry.py": "import stat_mod3\n", "tests/stat3.test.sh": "python scripts/stat3-entry.py\n",
+    # computed entries: argv, the environment, a literal join with a computed part, a computed name
+    "scripts/lib/comp_base.py": "W = 1\n",
+    "scripts/lib/comp_argv.py": "import sys\nsys.path.insert(0, sys.argv[1])\nimport comp_base\n",
+    "scripts/lib/comp_env.py": "import os, sys\nsys.path.insert(0, os.environ['X_PATH'])\nimport comp_base\n",
+    "scripts/lib/comp_name.py": "import os, sys\nname = sys.argv[2]\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), name))\nimport comp_base\n",
+    "scripts/lib/comp_fn.py": "import os, sys\nsys.path.append(compute_dir())\nimport comp_base\n",
+    # importlib and __import__, alone and next to a static idiom
+    "scripts/lib/imp_mod.py": "import importlib\nmod = importlib.import_module(NAME)\n",
+    "scripts/lib/imp_dunder.py": "mod = __import__(NAME)\n",
+    # code in a bytes literal is not analysed (only a str constant used to be scanned)
+    "scripts/lib/imp_bytes.py": "import os\nCODE = b\"exec('import sys; sys.path.insert(0, X)')\"\n",
+    "scripts/lib/imp_mixed.py": "import importlib, os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nmod = importlib.import_module(NAME)\n",
+    # a static entry plus a computed one in the same file stays unsure
+    "scripts/lib/two_paths.py": "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\nsys.path.insert(0, sys.argv[1])\n",
+    # an entry script that imports every dynamic module (so only dynamic() can make them unsure), named by a suite
+    "scripts/comp-entry.py": "import comp_argv, comp_env, comp_name, comp_fn, two_paths, imp_mod, imp_dunder, imp_mixed, imp_bytes\n",
+    "tests/comp.test.sh": "python scripts/comp-entry.py\n",
+    # a package loaded by a static spec_from_file_location path: the loader gives its __init__.py and member modules an
+    # importer edge; the same package loaded by a computed file stays unsure
+    "scripts/lib/ld_pkg/__init__.py": "X = 1\n", "scripts/lib/ld_pkg/member.py": "Y = 1\n",
+    "scripts/lib/ld_loader.py": "import importlib.util, os\nHERE = os.path.dirname(os.path.abspath(__file__))\n"
+                                "PKG = os.path.join(HERE, 'ld_pkg')\n"
+                                "spec = importlib.util.spec_from_file_location('ld_pkg', os.path.join(PKG, '__init__.py'),\n"
+                                "                                              submodule_search_locations=[PKG])\n"
+                                "mod = importlib.util.module_from_spec(spec)\n"
+                                "from ld_pkg.member import Y\n",
+    "scripts/ld-entry.py": "import ld_loader\n", "tests/ld.test.sh": "python scripts/ld-entry.py\n",
+    "scripts/lib/cp_pkg/__init__.py": "X = 1\n",
+    "scripts/lib/cp_loader.py": "import importlib.util, sys\nspec = importlib.util.spec_from_file_location('cp_pkg', sys.argv[1])\n"
+                                "mod = importlib.util.module_from_spec(spec)\n",
+    "scripts/cp-entry.py": "import cp_loader\n", "tests/cp.test.sh": "python scripts/cp-entry.py\n",
+    # an unrelated suite
+    "scripts/unrel/unrelated.py": "x = 1\n", "tests/other.test.sh": "python scripts/unrel/unrelated.py\n",
+}
+for path, text in files.items():
+    p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+m.ROOT = str(root)
+def reset():
+    for name in [n for n, v in vars(m).items() if hasattr(v, "cache_clear")]:
+        getattr(m, name).cache_clear()
+def h(suite):
+    reset(); output = io.StringIO()
+    with contextlib.redirect_stdout(output): m.hashes([suite])
+    return output.getvalue().strip().split()[-1]
+def check(name, ok): print(("PASS  " if ok else "FAIL  ") + name)
+reset()
+static = ["scripts/lib/stat_mod.py", "scripts/lib/stat_mod2.py", "scripts/lib/stat_mod3.py"]
+check("the static sys.path idiom is not dynamic for selection", all(m.dynamic(p, conservative=False) is False for p in static))
+check("a static-idiom module imported by a suite's script is reached from its imported module",
+      m.needed(["scripts/lib/stat_base.py"], "tests/stat.test.sh") and m.needed(["scripts/lib/stat_base3.py"], "tests/stat3.test.sh"))
+check("a change to a module the static-idiom module imports skips an unrelated suite",
+      not m.needed(["scripts/lib/stat_base.py"], "tests/other.test.sh") and not m.needed(["scripts/lib/stat_base3.py"], "tests/other.test.sh")
+      and not m.needed(["scripts/lib/stat_base.py"], "tests/stat2.test.sh"))
+check("a static-idiom module's own change selects its importer's suite and skips an unrelated suite",
+      m.needed(["scripts/lib/stat_mod.py"], "tests/stat.test.sh") and not m.needed(["scripts/lib/stat_mod.py"], "tests/other.test.sh"))
+check("a module-level name and a name imported from a sibling module resolve (append)",
+      m.needed(["scripts/lib/stat_base2.py"], "tests/stat2.test.sh") and not m.needed(["scripts/lib/stat_base2.py"], "tests/other.test.sh"))
+check("the sibling module that defines the path name selects the importer's suite only",
+      m.needed(["scripts/lib/stat_paths.py"], "tests/stat2.test.sh") and not m.needed(["scripts/lib/stat_paths.py"], "tests/other.test.sh"))
+computed = ["scripts/lib/comp_argv.py", "scripts/lib/comp_env.py", "scripts/lib/comp_name.py", "scripts/lib/comp_fn.py", "scripts/lib/two_paths.py"]
+check("a computed sys.path entry stays dynamic", all(m.dynamic(p, conservative=False) is True for p in computed))
+check("a computed sys.path entry stays unsure: it selects an unrelated suite", all(m.needed([p], "tests/other.test.sh") for p in computed))
+dyn = ["scripts/lib/imp_mod.py", "scripts/lib/imp_dunder.py", "scripts/lib/imp_mixed.py", "scripts/lib/imp_bytes.py"]
+check("importlib, __import__ and code in a bytes literal stay dynamic, next to a static idiom too", all(m.dynamic(p, conservative=False) is True for p in dyn))
+check("importlib and __import__ stay unsure: they select an unrelated suite", all(m.needed([p], "tests/other.test.sh") for p in dyn))
+check("the conservative rule keeps every sys.path/importlib/__import__ mention dynamic, the static idiom too",
+      all(m.dynamic(p, conservative=True) is True for p in static + computed + dyn))
+check("the conservative rule leaves the static-idiom module unsure (no reach set)",
+      all(m.reaches(p, True) is None for p in static) and all(m.reaches(p, False) is not None for p in static))
+check("the conservative closure of a module the static-idiom module imports is unsure too, the narrow one is not",
+      m.closure("scripts/lib/stat_base.py", True) is None and m.closure("scripts/lib/stat_base.py") is not None)
+stat_before, other_before = h("tests/stat.test.sh"), h("tests/other.test.sh")
+(root / "scripts/lib/stat_mod.py").write_text((root / "scripts/lib/stat_mod.py").read_text() + "# touched\n")
+check("hashes stay conservative: a change to a static-idiom module changes the hash of every suite",
+      stat_before != h("tests/stat.test.sh") and other_before != h("tests/other.test.sh"))
+check("the static loader is not dynamic for selection and is dynamic for the conservative rule",
+      m.dynamic("scripts/lib/ld_loader.py", conservative=False) is False and m.dynamic("scripts/lib/ld_loader.py", conservative=True) is True)
+check("a package __init__.py loaded by a static path selects the loader's suite",
+      m.needed(["scripts/lib/ld_pkg/__init__.py"], "tests/ld.test.sh"))
+check("a package __init__.py loaded by a static path skips an unrelated suite",
+      not m.needed(["scripts/lib/ld_pkg/__init__.py"], "tests/other.test.sh") and not m.needed(["scripts/lib/ld_pkg/__init__.py"], "tests/cp.test.sh"))
+check("a package member imported by the loader selects the loader's suite and skips an unrelated suite",
+      m.needed(["scripts/lib/ld_pkg/member.py"], "tests/ld.test.sh") and not m.needed(["scripts/lib/ld_pkg/member.py"], "tests/other.test.sh"))
+check("a package loaded by a computed file stays dynamic", m.dynamic("scripts/lib/cp_loader.py", conservative=False) is True)
+check("a package __init__.py loaded by a computed file stays unsure: it selects an unrelated suite",
+      m.needed(["scripts/lib/cp_pkg/__init__.py"], "tests/other.test.sh"))
+ld_before, other_before = h("tests/ld.test.sh"), h("tests/other.test.sh")
+(root / "scripts/lib/ld_pkg/__init__.py").write_text("X = 2\n")
+check("hashes stay conservative: a change to a statically loaded package __init__.py changes the hash of every suite",
+      ld_before != h("tests/ld.test.sh") and other_before != h("tests/other.test.sh"))
+check("the sys.path fixture block ran to its end", True)
+PY
+)
+while IFS= read -r line; do
+  echo "$line"
+  case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
+done <<< "$out"
+# a crash in the heredoc loses the checks after it: count it as a failure
+grep -qF "PASS  the sys.path fixture block ran to its end" <<<"$out" || { fail=$((fail + 1)); echo "FAIL  the sys.path fixture block crashed before its end"; }
+# the real repository: scripts/lib/workspace.py is imported by scripts/lib/fstate.py and the guard modules after a sys.path
+# insert of their own directory; a change selects the suites of those importers, not every suite
+printf '%s\n' scripts/lib/workspace.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort -u)
+missing=""
+for s in tests/workspace-default.test.sh tests/routing.test.sh tests/session-state.test.sh tests/file-guard.test.sh; do
+  grep -qxF "$s" <<<"$got" || missing="$missing $s"
+done
+if [ -z "$missing" ] && ! grep -qxE 'tests/(changelog|release-check)[.]test[.]sh' <<<"$got" && [ "$(grep -c . <<<"$got")" -lt "${#suites[@]}" ]; then
+  pass=$((pass + 1)); echo "PASS  workspace.py selects its importers' suites (workspace-default, routing, session-state, file-guard), not every suite"
+else fail=$((fail + 1)); echo "FAIL  workspace.py selection: missing [$missing] got $(grep -c . <<<"$got") of ${#suites[@]} [$(tr '\n' ' ' <<<"$got")]"; fi
+# the real repository: scripts/lib/rpgf_guard/ is loaded by path from scripts/lib/gitguard.py; a change to its __init__.py
+# or to a member module selects the suites that reach the git guard (git-guard, file-guard), not every suite
+for f in scripts/lib/rpgf_guard/__init__.py scripts/lib/rpgf_guard/shell.py; do
+  printf '%s\n' "$f" > "$TMP/many"
+  got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort -u)
+  missing=""
+  for s in tests/git-guard.test.sh tests/file-guard.test.sh; do
+    grep -qxF "$s" <<<"$got" || missing="$missing $s"
+  done
+  if [ -z "$missing" ] && ! grep -qxE 'tests/(changelog|release-check)[.]test[.]sh' <<<"$got" && [ "$(grep -c . <<<"$got")" -lt "${#suites[@]}" ]; then
+    pass=$((pass + 1)); echo "PASS  $f selects the git-guard and file-guard suites, not every suite"
+  else fail=$((fail + 1)); echo "FAIL  $f selection: missing [$missing] got $(grep -c . <<<"$got") of ${#suites[@]} [$(tr '\n' ' ' <<<"$got")]"; fi
+done
 total=$((pass + fail)); echo "affected tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

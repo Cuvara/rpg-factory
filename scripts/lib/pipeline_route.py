@@ -1,4 +1,5 @@
 """Model routing and best-effort per-run availability for the delivery pipeline."""
+import hashlib
 import json
 import os
 import re
@@ -116,15 +117,30 @@ _cache = {}
 
 
 def _codex_auth():
+    """The reason codex is authenticated through its API configuration, or None; never exposes a credential value.
+    OPENAI_API_KEY set, or the active provider (the profile's model_provider first) has an Authorization http header,
+    an env_key whose variable is set, or is a non-openai provider with a base_url. A login (codex login status) is
+    checked by the caller."""
     if os.environ.get('OPENAI_API_KEY'):
         return 'OPENAI_API_KEY set'
-    data = codexconfig.config()
-    provider = data.get('model_provider')
-    providers = data.get('model_providers')
-    if isinstance(provider, str) and provider != 'openai' and isinstance(providers, dict):
-        details = providers.get(provider)
-        if isinstance(details, dict) and isinstance(details.get('base_url'), str) and details['base_url']:
-            return 'codex API provider ' + provider + ' in config.toml'
+    try:
+        data = codexconfig.config()
+        profile = data.get('profiles', {}).get(data.get('profile'), {})
+        name = profile.get('model_provider', data.get('model_provider')) if isinstance(profile, dict) else None
+        if not isinstance(name, str) or not name:
+            return None
+        provider = data.get('model_providers', {}).get(name, {})
+        if not isinstance(provider, dict):
+            return None
+        headers = provider.get('http_headers', {})
+        header = isinstance(headers, dict) and any(str(k).lower() == 'authorization' for k in headers)
+        env_key = provider.get('env_key')
+        keyed = isinstance(env_key, str) and bool(os.environ.get(env_key))
+        base_url = name != 'openai' and isinstance(provider.get('base_url'), str) and bool(provider['base_url'])
+        if header or keyed or base_url:
+            return 'api provider ' + name + ' in config.toml'
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
     return None
 
 
@@ -134,16 +150,16 @@ def available(pipe, plan):
     # content, not mtime: two writes within the timer resolution (Windows) share an mtime
     stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
     override = os.environ.get('RPG_FACTORY_AGENTS')
-    config_stamp = None
+    config_digest = None
     if override is None:
         try:
-            stat = os.stat(codexconfig.config_path())
-            config_stamp = (stat.st_mtime_ns, stat.st_size)
+            # a digest, so the memo never holds the config's header or key values
+            config_digest = hashlib.sha256(Path(codexconfig.config_path()).read_bytes()).digest()
         except OSError:
             pass
     key = (id(pipe), plan.get('id') if plan is not None else None, override, os.environ.get('PATH'), stamp,
-           os.environ.get('CODEX_HOME') if override is None else None,
-           bool(os.environ.get('OPENAI_API_KEY')) if override is None else None, config_stamp)
+           (os.environ.get('CODEX_HOME'), os.environ.get('HOME'), os.environ.get('USERPROFILE'), config_digest,
+            frozenset(k for k, v in os.environ.items() if v)) if override is None else None)
     if key in _cache:
         return _cache[key]
     chosen = {x.strip() for x in override.split(',')} if override is not None else None
@@ -156,7 +172,10 @@ def available(pipe, plan):
         yes = agent in chosen if chosen is not None else bool(shutil.which(cfg['bin']))
         out[agent] = {'available': yes, 'why': 'RPG_FACTORY_AGENTS override' if chosen is not None else
                       (cfg['bin'] + (' on PATH' if yes else ' missing from PATH'))}
+    codex_orca = False
+    orca_reason = 'Orca not running'
     if chosen is None and any(k.startswith('ORCA_') for k in os.environ) and shutil.which('orca'):
+        orca_reason = 'no Orca account'
         try:
             p = subprocess.run(['orca', 'account', 'list', '--json'], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=5)
@@ -164,14 +183,30 @@ def available(pipe, plan):
             accounts = data.get('result', {})
             for agent in candidates:
                 row = accounts.get(agent)
+                if agent == 'codex':
+                    codex_orca = (isinstance(row, dict) and
+                                  (bool(row.get('accounts')) or
+                                   isinstance(row.get('systemDefault'), dict) and
+                                   row['systemDefault'].get('hasAuth') is True))
+                    continue
                 if (isinstance(row, dict) and row.get('accounts') == []
                         and isinstance(row.get('systemDefault'), dict)
                         and row['systemDefault'].get('hasAuth') is False):
-                    reason = _codex_auth() if agent == 'codex' and out[agent]['available'] else None
-                    out[agent] = ({'available': True, 'why': reason} if reason else
-                                  {'available': False, 'why': 'Orca account unavailable'})
+                    out[agent] = {'available': False, 'why': 'Orca account unavailable'}
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             pass
+    if chosen is None and out.get('codex', {}).get('available'):
+        codex_bin = pipe['agents']['codex']['bin']
+        source = 'orca account' if codex_orca else _codex_auth()
+        if not source:
+            try:
+                login = subprocess.run([shutil.which(codex_bin), 'login', 'status'], capture_output=True,
+                                       stdin=subprocess.DEVNULL, timeout=5).returncode == 0
+            except (OSError, TypeError, subprocess.TimeoutExpired):
+                login = False
+            source = 'codex login' if login else None
+        out['codex'] = {'available': bool(source), 'why': codex_bin + ' on PATH; ' +
+                        (source or orca_reason + ', codex login missing, no authenticated api provider')}
     for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
         if agent in out:
             out[agent] = {'available': False, 'why': 'MODEL_UNAVAILABLE' + (': ' + reason if reason else '')}
@@ -284,9 +319,11 @@ RUNALL_PLAIN = re.compile(r'(?:env -u TMPDIR[ \t]+)?(?:bash[ \t]+)?(?:\./)?tests
 DO_NOT_RUN = ('DO NOT RUN (run-all inside a check that is not one plain scoped run-all over known suites; full runs '
               'belong to integration QA; report it NOT_RUN): ')
 # run-all flags (tests/run-all.sh's argument loop) a plain scoped check may carry; --release and --list-suites are no
-# task QA. RUNALL_VALUE_FLAGS take the next word as their value.
+# task QA. RUNALL_VALUE_FLAGS take the next word as their value; --within names suites like --only-suites (the scoped
+# task QA form).
 RUNALL_FLAGS = frozenset({'--no-workspace', '--no-claude', '--reuse', '--no-wait', '--no-reuse'})
-RUNALL_VALUE_FLAGS = frozenset({'--only-suites', '--base', '-j', '--jobs'})
+RUNALL_VALUE_FLAGS = frozenset({'--only-suites', '--within', '--base', '-j', '--jobs'})
+RUNALL_SUITE_FLAGS = ('--only-suites', '--within')
 SUITE_PATH = re.compile(r'tests/[\w.-]+\.(?:sh|py)')
 # a suite path verdict --failed-suites accepts without run-all's list (run-all itself excluded: RUNALL_WORD)
 FAILED_SUITE_PATH = re.compile(r'(?:tests|testlab|scripts)/(?:[\w.-]+/)*[\w.-]+\.(?:sh|py)')
@@ -334,9 +371,9 @@ def strip_comments(check):
 
 def runall_args(words):
     """run-all's own argument loop over the words after tests/run-all.sh (tests/run-all.sh's `case "$1"`): a flag that
-    takes a value consumes the next word, as there. Returns (affected, only-suites value or None, unknown words); a
-    word run-all ignores (`--only-suitesXYZ`, `--affected=1`) is unknown, and a value that is itself a flag (`--base
-    --affected`) is unknown too: run-all would take it as the value, never as the flag."""
+    takes a value consumes the next word, as there. Returns (affected, suites value (--only-suites or --within) or
+    None, unknown words); a word run-all ignores (`--only-suitesXYZ`, `--affected=1`) is unknown, and a value that is
+    itself a flag (`--base --affected`) is unknown too: run-all would take it as the value, never as the flag."""
     affected, only, unknown, i = False, None, [], 0
     while i < len(words):
         w = words[i]
@@ -344,13 +381,14 @@ def runall_args(words):
             value = words[i + 1] if i + 1 < len(words) else ''
             if not value or value.startswith('-'):
                 unknown.append(w)
-            elif w == '--only-suites':
+            elif w in RUNALL_SUITE_FLAGS:
                 only = value
             i += 2
             continue
-        if w.startswith('--only-suites='):
-            if w[len('--only-suites='):]:
-                only = w[len('--only-suites='):]
+        flag = next((f for f in RUNALL_SUITE_FLAGS if w.startswith(f + '=')), None)
+        if flag:
+            if w[len(flag) + 1:]:
+                only = w[len(flag) + 1:]
             else:
                 unknown.append(w)
         elif w == '--affected':
@@ -362,9 +400,9 @@ def runall_args(words):
 
 
 def runall_words(check):
-    """The --only-suites entries of a check that is exactly one plain, scoped run-all invocation (RUNALL_PLAIN, only
-    flags run-all knows, with --affected or a non-empty --only-suites list), else None. An empty list: --affected
-    alone."""
+    """The --only-suites or --within entries of a check that is exactly one plain, scoped run-all invocation
+    (RUNALL_PLAIN, only flags run-all knows, with --affected or a non-empty suite list), else None. An empty list:
+    --affected alone."""
     match = RUNALL_PLAIN.fullmatch(check.strip(' \t'))
     if not match:
         return None
@@ -447,7 +485,7 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
 
 def full_run(check):
     """A check that starts a full run-all: one command of it (standalone or a part of a compound command) runs
-    tests/run-all.sh without --affected or --only-suites. Shell operators and redirections split words even without
+    tests/run-all.sh without --affected or a suite list (--only-suites, --within). Shell operators and redirections split words even without
     spaces (`tests/run-all.sh>qa.log`, `2>&1`, `|tee`); a redirection target is no argument; a quoted word (`bash -c
     '...'`) or an assignment value is checked as a command of its own. A comment ends at its line end: the next line
     stays a command of its own. Unbalanced quotes (anything unparsable): any run-all inside is full."""
@@ -486,16 +524,31 @@ def full_run(check):
     return False
 
 
-def qa_warnings(task):
+def names_test_suite(checks):
+    """Whether any check names a test suite or runs a test command: a tests/ suite script, a scoped run-all (with
+    --affected or a suite list) or a product repo's own test runner."""
+    return any(SUITE_CHECK.search(c) or mentions_runall(c) or
+               re.search(r'\b(?:dotnet test|go test|pytest|npm test|cargo test)\b', c)
+               for c in checks)
+
+
+def qa_warnings(task, names_suite=None):
+    """Plan warnings of one task's checks and acceptance. names_suite: whether its checks name a test suite (default:
+    read from the checks; task_qa_warnings passes the answer for the whole list, as it hides the scoped run-all checks
+    from this call)."""
     out = []
-    if any(SUITE_CHECK.search(c) or mentions_runall(c) or
-           re.search(r'\b(?:dotnet test|go test|pytest|npm test|cargo test)\b', c)
-           for c in task.get('checks', [])):
-        out.append(f"task {task.get('id')}: checks contain test suites; implementers run syntax checks only, verify runs suites")
+    if names_suite is None:
+        names_suite = names_test_suite(task.get('checks', []))
+    raw_paths = task.get('paths')
+    # Malformed paths (not a list, non-string entries) are ignored for this rule; validate reports them elsewhere.
+    paths = [p for p in raw_paths if isinstance(p, str)] if isinstance(raw_paths, list) else []
+    if paths and not all(prose_path(p.replace('\\', '/')) for p in paths) and not names_suite:
+        out.append(f"task {task.get('id')}: checks name no test suite; name the suites that test the changed behaviour "
+                   "(task QA runs only them with --within)")
     if any(full_run(c) for c in task.get('checks', [])):
         out.append(f"task {task.get('id')}: full run in checks; full runs belong to integration QA")
     for text in task.get('acceptance', []):
-        scoped = '--affected' in text or '--only-suites' in text
+        scoped = '--affected' in text or '--only-suites' in text or '--within' in text
         if not scoped and re.search(r'full.*run-all|run-all\.sh.*0 failed'
                                     r'|\b(?:full|whole|entire|complete)\s+(?:test\s+)?suites?\b|\ball\s+(?:the\s+)?suites\b',
                                     text, re.I):

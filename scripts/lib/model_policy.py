@@ -16,6 +16,7 @@ re-checked, so a profile left outside the narrowed scope is an error, never sile
 
 `scope` replaces the scope of each agent it names (models and efforts must already be in the registry scope);
 `profiles` replaces the profile of each agent/role it names. A missing file is no override.
+An individual plan may then widen scope with documented owner approval or necessity; profiles remain unchanged.
 """
 import copy
 import json
@@ -26,6 +27,8 @@ import fstate
 GRADES = ("light", "standard", "heavy")
 ROLES = ("planner", "lead", "review", "qa") + GRADES
 OVERRIDE_KEYS = ("scope", "profiles", "description")
+WIDEN_BASES = ("owner-approved", "necessary")
+WIDEN_KEYS = ("agent", "model", "efforts", "basis", "reason")
 
 
 class PolicyError(Exception):
@@ -126,6 +129,78 @@ def in_scope(policy, agent, model, effort):
     """True when model and effort are allowed for agent by the policy's scope."""
     models = (policy.get("scope") or {}).get(agent)
     return isinstance(models, dict) and isinstance(models.get(model), list) and effort in models[model]
+
+
+def widen_problems(policy, entries):
+    """Validate plan scope additions and note entries already covered by the base policy."""
+    errors, notes = [], []
+    if entries is None:
+        return errors, notes
+    if not isinstance(entries, list):
+        return ["model_scope_widen: must be an array"], notes
+    for i, entry in enumerate(entries):
+        prefix = f"model_scope_widen[{i}]: "
+        if not isinstance(entry, dict):
+            errors.append(prefix + "must be an object")
+            continue
+        problems = []
+        for key in sorted(set(entry) - set(WIDEN_KEYS)):
+            problems.append(f"unknown key {key}")
+        for key in WIDEN_KEYS:
+            if key not in entry:
+                problems.append(f"missing key {key}")
+        agent, model, efforts = entry.get("agent"), entry.get("model"), entry.get("efforts")
+        if not isinstance(agent, str) or agent not in policy.get("scope", {}):
+            problems.append("unknown agent")
+        if not isinstance(model, str) or not model.strip():
+            problems.append("model must be a non-empty string")
+        if not isinstance(efforts, list) or not efforts or not all(isinstance(e, str) and e.strip() for e in efforts):
+            problems.append("efforts must be a non-empty list of non-empty strings")
+        if entry.get("basis") not in WIDEN_BASES:
+            problems.append("unknown basis")
+        if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
+            problems.append("empty reason")
+        errors.extend(prefix + problem for problem in problems)
+        if not problems and all(in_scope(policy, agent, model, effort) for effort in efforts):
+            notes.append(prefix + f"{agent} {model} / {', '.join(efforts)} is already in the model scope (no widening needed)")
+    return errors, notes
+
+
+def widen(policy, entries):
+    """Return a checked copy of policy with the plan's additions to scope."""
+    errors, _ = widen_problems(policy, entries)
+    if errors:
+        raise PolicyError("; ".join(errors))
+    result = copy.deepcopy(policy)
+    for entry in entries or []:
+        efforts = result["scope"][entry["agent"]].setdefault(entry["model"], [])
+        for effort in entry["efforts"]:
+            if effort not in efforts:
+                efforts.append(effort)
+    errors = check(result)
+    if errors:
+        raise PolicyError("model policy: " + "; ".join(errors))
+    return result
+
+
+def load_for_plan(reg, plan, override=None):
+    """Load the personal policy and apply only this plan's scope additions."""
+    policy = load(reg, override)
+    return widen(policy, plan.get("model_scope_widen")) if "model_scope_widen" in plan else policy
+
+
+def widening_for(base_policy, entries, agent, model, effort):
+    """Find the first valid entry granting a choice absent from the base policy."""
+    if in_scope(base_policy, agent, model, effort) or not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not widen_problems(base_policy, [entry])[0] and entry["agent"] == agent and entry["model"] == model and effort in entry["efforts"]:
+            return entry
+    return None
+
+
+def widening_text(entry):
+    return f"{entry['agent']} {entry['model']} [{', '.join(entry['efforts'])}] (basis {entry['basis']}: {entry['reason']})"
 
 
 def check(policy):

@@ -175,11 +175,7 @@ def workspace_root(reg):
     if env:  # an explicit workspace is authoritative: no fallback that could pick up a real workspace on the host
         env = wsl.native_abs(env)
         return os.path.abspath(env) if all(os.path.exists(os.path.join(env, m)) for m in markers) else None
-    found = wsl.find_workspace(os.getcwd(), reg)
-    if found:
-        return found
-    default = wsl.native_abs(ws.get("root_default") or "")
-    return default if default and all(os.path.exists(os.path.join(default, m)) for m in markers) else None
+    return wsl.find_workspace(os.getcwd(), reg, use_default=True)  # cwd search, then the registry default via the shared helper
 
 
 def default_root(reg, r):

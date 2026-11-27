@@ -6,12 +6,17 @@ cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Se
 skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
 file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
 script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`
-and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE). Plan format: docs/schemas/pipeline-plan.schema.json.
+and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE).
+`model_scope_widen` records plan-specific model scope additions and their basis. Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
         pipeline.tiers.XS): every file prose (*.md, changelog.d/, skills/ directories), within max_files and
-        max_changed_lines; `above XS:` names why not.
+        max_changed_lines; `above XS:` names why not. The changed lines are those of the snapshot's files in each repo
+        with a checkout: `git diff --numstat` against the merge-base with HEAD of the repo's branch_diff_base (the
+        branch scan), else of the `--base` of the args (`--paths` leaves branch_diff_base null), else against HEAD,
+        plus the lines of untracked ones; without a checkout they are not measured (count 0). `changed lines:`
+        (--json: facts lines_basis, and changed_lines when measured) says what was measured.
   tier --plan <plan.json> --repo KEY --paths FILE... [--json]
         the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
         from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts. With a
@@ -30,6 +35,14 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         paths alone: XS and S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy
         work: the heavy profile) and QA sessions. Tier XS (plan or task tier): exactly one task, every owned path prose,
         at most max_files paths, else an error naming the reason; its implementer is the run lead (pipeline.lead_agent).
+  plan-edit <plan.json> --from <edited copy> [--commit [--message TEXT]]
+        the atomic plan edit: validates the copy exactly like `validate` (same registry; the copy is read as if it were at
+        the plan's path, so relative `repos.*.path` resolve the same) and only with no error replaces the plan (temp file
+        in the plan's directory, then os.replace). With --commit it stages only the plan file and commits only that path in
+        the plan's checkout (default message `docs(plans): edit plan <id>`; never `git add -A`, never pushes). Prints the
+        task-level change (added, removed, changed paths/acceptance/deps) and, for changed paths or acceptance, that
+        recorded verdicts of those tasks go STALE. Exit 0 OK, 1 validation errors (plan, HEAD and index untouched),
+        2 usage: a missing or unreadable copy, a copy whose `id` differs from the plan's, --commit outside a git checkout.
   subplan validate <subplan.json> [--plan PATH] [--json]
         a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
@@ -45,8 +58,16 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
           [--grade light|standard|heavy] [--model ID] [--effort LEVEL]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
-        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
-        planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
+        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec or misread
+        parentheses and quotes. The one-line prompt carries only the pointer ('Read your task spec at <path> and
+        follow it.'): the planner's request (the spec's own "Request:" line) and every dispatch note ("Session note"
+        lines and sections) live in the spec, which the file name's digest covers (two dispatches differing only in a
+        note write two spec files).
+  dispatch ... [--note TEXT]... [--note-file FILE]...
+        --note TEXT (whitespace collapsed) and RPG_FACTORY_SESSION_NOTE become "Session note:" lines of the spec;
+        --note-file FILE (repeatable) adds the file's text verbatim as its own "Session note file <path>:" section
+        (nothing collapsed, so parentheses, quotes, & | and newlines survive). A missing, unreadable or blank file
+        exits 2 before anything is written or printed. A lead forwards both to every session it dispatches.
   dispatch ... [--grade light|standard|heavy] [--model ID] [--effort LEVEL]   (every phase, and planner)
         every session runs with the model and effort of its role in the model policy: planner, lead, implement (the
         subtask's grade, else the task's), review (heavy work: heavy, else review) and qa. Orca commands (worker-start,
@@ -59,31 +80,61 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print]
           [--orca-unavailable REASON] [--agent ID]
         the run lead starts ONE task-lead session per task, always a registry pipeline.lead_agent (Claude) session
-        whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task worktree: created here
+        whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task
+        worktree: created here
         from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
-        exists, it carries the earlier waves; status still compares against the base), or resumed when that branch is
-        already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
+        exists, it carries the earlier waves; status still compares against the base; stacked: when exactly one
+        dependency in the same repo is candidate or reviewed and not yet merged into <topic>, and every other one is
+        integrated, from that dependency's branch tip, recorded by SHA in <task>__stack.json (not part of the task
+        fingerprint; a dependency whose branch tip is already on <topic> counts as settled, so a task whose
+        dependencies are all merged starts from <topic> and gets no stack record); its review
+        and QA base is then the newest dependency SHA in HEAD, and status names the merge when the dependency moves;
+        tier XS and a no-worktree repo never stack), or resumed when that branch is already checked out; in a no-worktree
+        repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
         own Orca Run, split into subtasks with disjoint paths (`subplan validate`), one fresh session per subtask in the
         same worktree, sub-sessions do not commit, the task lead commits per subtask, cross-model review and QA sessions
         there, release each session, report a `status` message (to Orca run RUN_ID: worker_done needs a dispatch,
         which the task lead has not) with branch and HEAD; never push, merge or remove the worktree. Orca forbids
         nested workers, so --runner orca prints a handoff, not a worker-start:
         `git worktree add --no-track -b <branch> <path> <base>` for a new task worktree, followed by
-        `orca worktree set` with its parent, then `orca agent launch --worktree path:<dir> --prompt ...`;
-        existing worktrees use only the launch command.
+        `<pipeline> orca-wait --worktree <path> && orca worktree set ...` with its parent (Orca lists a worktree it did
+        not create only after a while, and a set before that changes nothing), then
+        `orca agent launch --worktree path:<dir> --prompt ...`; existing worktrees use only the launch command.
+        A stacked task's handoff is the same three lines: the worktree
+        add cuts <topic>-<id> from the dependency's full tip SHA, the new worktree is a sibling beside the integration
+        checkout (never a child of the dependency's worktree, never a `<dep branch>--*` name) and `orca worktree set`
+        names the integration checkout as parent, else the main checkout; its lead prompt says to implement now, in
+        parallel with the dependency's verify, and to run no verify, review or QA dispatch before `status` clears it.
+        A fresh dispatch (no task branch yet) removes a leftover <task>__stack.json and <task>__sync.json first.
+        A task branch that exists and was cut from (or merged) <topic> ahead of the base starts at <topic>: its review
+        and QA base is the newest <topic> commit in its HEAD, so the tier command and the review see only its own
+        delta. A stack record whose dependency was integrated into <topic> before the task branch was cut is ignored
+        by status, verify/review/qa dispatch and the gate (no `stacked on` note, no `integrated before its
+        dependency` blocker).
         A tier XS task starts no task lead: it prints the run lead's own steps (edit on plan.topic, commit with explicit
         paths, `dispatch --phase review --sha <sha>`, the task tier command, the `tier XS: lead ran task suites` QA
         verdict, gate); `--phase implement` on it is a usage error. Its review and QA read the topic checkout.
+  orca-wait --worktree PATH [--gone] [--timeout SECONDS] [--interval SECONDS]
+        polls the read-only `orca worktree list --json` every --interval seconds (default 2) until PATH is listed
+        (with --gone: no longer listed); exit 0 once it holds. Exit 1 after --timeout seconds (default 60) with what to
+        do (the worktree stays hidden in Orca, or its branch is still in use: retry, or run the next command by hand once
+        `orca worktree list` shows, or no longer shows, the path), and exit 1 when orca is not on PATH or the list
+        fails. The lead handoff chains it before `orca worktree set`; cleanup prints it before `git branch -d`.
   dispatch <plan.json> --task ID --phase lead --placement shared|child ...
         Both placements create a task worktree beside the integration checkout (or the repo checkout if absent).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
-  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID]
+  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID] [--suite-warn N]
         implement records the model it started per task/subtask (<task>[@<subtask>]__implementer.model.json); review
         and QA pair against it (else the planned routing), never current availability. review records its reviewer
         and any SAME_MODEL fallback per candidate SHA: the only source `verdict` stamps a fallback from.
         --runner print is a preview that writes no implementer or reviewer record. A print dispatch (the default
         outside Orca) leaves verdict nothing to pair against or stamp a SAME_MODEL fallback from: dispatch
         with --runner orca or --runner agent for a recorded session.
+  ... [--orca-run RUN_ID]
+        the printed `orca orchestration worker-start` carries `--run RUN_ID`: --orca-run, else the task's recorded
+        `orca_run` (the task lead's Run; not for --phase lead); no Run known: no --run.
+        review, QA and verify diff `<base>...<sha>`: a task branch cut from the base that merged <topic> (another
+        integrated task) diffs from the newest <topic> commit in it, so the foreign files are no scope findings.
   ... [--subplan FILE --subtask ID] [--placement shared|child]
         --subplan/--subtask (a valid subplan of the task) default --paths to the subtask's paths, --agent to its
         implementer (implement) or reviewer (review), and --placement to its placement. --placement child runs the
@@ -96,16 +147,34 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         branch in `git worktree list`, `--worktree path:<it>`), never a new one: no such worktree is an error (exit 1;
         run `--phase lead` first). implement: a sub-session that edits only the owned paths, or the subtask's --paths
         (inside them; it may then name its model with --agent), and does not commit. review/qa need --sha, the frozen
-        candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
+        candidate the task lead keeps at HEAD, and are read-only. A stacked task's verify, review and qa dispatch exit 2
+        (nothing printed, recorded or launched) until its dependency has a current review PASS whose SHA is an ancestor
+        of --sha; the reason names the merge (git merge <dependency branch>, never rebase). The reviewer is the implementer's pair (another
         model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
         no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
-        run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
+        run: `tests/run-all.sh --affected --base <review base> --within <the checks' suites> -j 1`: only the suites
+        the task checks name run, each with its affected cases; the other affected suites are left to CI. Without
+        check suites the safe form `tests/run-all.sh --affected --base <review base> -j 1` runs the whole affected
+        closure and the spec says to name the suites in the task checks to scope it; without a base only the check
+        suites run (`--only-suites`), else NONE. A check
         is folded into it only when it is one standalone suite or run-all command and its suite is one
         `tests/run-all.sh --list-suites` prints in the task checkout (no such flag: none is; a release-only suite
         never is); other checks, compound commands included, are extra commands, each suite once. Re-QA after a QA
-        FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
+        FAIL that recorded --failed-suites: --base <that FAIL's candidate>, --within only those suites plus the task
+        check suites the fix delta reaches. The WITHIN_GUARDS scripts --within runs are never left to CI. A tier-S task (plan or
         task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
         run the command after the review PASS.
+        verify and qa print on stderr `selected N of M suites (tests/affected.py; K affected suites left to CI)` (N:
+        the suites the tier command runs, the check suites under --within, else the whole affected closure; M:
+        `--list-suites`; K: the affected suites outside the checks, omitted without check suites; `selected suites:
+        not computed (<reason>)` when there is no selection) and, when N > --suite-warn N (default 40), a warning to
+        narrow the task paths or its checks. Advisory: the prompt and the exit code are unchanged; --suite-warn
+        below 1 is a usage error (exit 2).
+        The verify spec ends with VERIFY_RUN_STOP: before any verdict or report the session stops every
+        tests/run-all.sh run it started by that PID (`kill <pid>`; Windows Git Bash `taskkill //PID <winpid> //T //F`),
+        never by pattern, then confirms no slot under `<persistent state dir>/locks/run-all-slots/` (the resolved path
+        is printed) names its checkout, or `status <plan>` prints no `Slots:` line for it; a slot still held is QA
+        NOT_RUN or BLOCKED with the slot and PID, never PASS.
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
@@ -118,14 +187,26 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
-        `tests/run-all.sh --workspace-only`; after the PR opens, CI runs the affected suites and ci-ok must be
-        green before merging (every suite through workflow_dispatch with full=true).
-  verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
+        `tests/run-all.sh --workspace-only --base <plan base>` (the workspace checks the change reaches; without a
+        known base `--workspace-only`); exit 6 from that command means no workspace check was reached: NOT_RUN,
+        never PASS; then run `tests/run-all.sh --workspace-only` without --base and grade that run. After the PR
+        opens, CI runs the affected suites and ci-ok must be green before merging (every suite through
+        workflow_dispatch with full=true).
+  verdict <plan.json> --task ID --phase review|qa|verify --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
-        records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
-        --model ID / --effort LEVEL record the session model and effort as run.
+          [--failed-at review|qa] [--model ID] [--effort LEVEL]
+        records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py).
+        --model ID / --effort LEVEL record the session model and effort as run. A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
-        --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
+        --phase verify (per plan task, never integration:<repo>) records what one verify session ran, review and QA
+        at the same SHA: the review record first (it takes --implementer and --fallback), then the QA record with the
+        same --state. A FAIL needs --failed-at: review (the review blocked the candidate, no test ran: only the review
+        FAIL is written, no QA record, so the next verify keeps the previous QA base and the task checks; never with
+        --failed-suites) or qa (the review passed and a test failed: review PASS and QA FAIL; --failed-suites alone
+        implies it). --failed-at goes with --state FAIL only.
+        --subtask records to the subtask's own file, never the task review the gate reads; it is optional (one task
+        review covers every subtask), and a current subtask review or QA that is not PASS blocks the task and the
+        gate until a PASS on a commit containing it. Every verdict is also kept
         per candidate (<task>__<phase>__<sha12>__<by>.json). A task review by a model other than the task's paired
         reviewer never replaces the pair's record for the same SHA (stderr note). A subtask review pairs against the
         subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
@@ -136,19 +217,32 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
         scripts)/ .sh or .py paths; never tests/run-all.sh), the next QA dispatch reruns them.
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
+        A stacked task: a review or QA PASS (task or --subtask; verify through its review and QA) on a SHA that lacks
+        its dependency's current review PASS is refused (exit 2, nothing written); FAIL and the other states are recorded.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
         a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
         paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
-        and are never stray), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
-        was created for the plan. A subtask
-        whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
-        model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
+        and are never stray, nor is a file a merge of the default branch brought in), verdicts match the current
+        plan (fingerprint), and no worktree of a no-worktree repo was created for the plan.
+        One task review covers every subtask: a code subtask implemented by the task reviewer's own model is a note
+        (`subtask <id> SAME_MODEL (single verify)`), never a blocker, and a subtask needs no review of its own; a
+        current subtask review or QA that is not PASS on the integration HEAD (or an ancestor of it) is a blocker.
+        A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
         starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
-        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. With
+        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. A stacked
+        task whose review PASS lacks its dependency's review PASS, or that was integrated before or together with its
+        dependency (the order is: git merge --no-ff the dependency, then the task), is a blocker; both checks use the
+        newest review PASS of the dependency (current or kept per candidate) that the dependent contains, so a later
+        delta review of the dependency at the integration HEAD does not report it integrated first (that PASS counts
+        only when it is the dependency's current one or the current one contains the dependent's reviewed commit); a
+        clean merge of the dependency into the dependent is a sync merge and never makes the dependency's review
+        STALE. A task review recorded at a later SHA of an already reviewed task (a delta review, `verdict --phase
+        review`) keeps the fallback that dispatch recorded for the earlier review by the same model, so SAME_MODEL
+        stays an accepted note; a task never reviewed before still needs its dispatch record. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push, `gh pr create`, and `gh pr checks <pr> --watch` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -158,6 +252,38 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         first line capped at 200 characters, the full body). The lead runs it before its Orca `status` message, so the
         run lead's `status` shows completion even when the message never arrives. Exit 2 on an unknown task, a bad
         --sha or an empty body.
+  sync <plan.json> --task ID [--send]
+        after task ID moved (its task branch tip, else its review PASS), per stacked dependent whose HEAD lacks that SHA:
+        prints the `git merge` it needs and records <dependent>__sync.json, which status shows until the dependent's
+        HEAD contains the SHA (a message is only a nudge). --send also runs `orca orchestration send --type status` to
+        the dependent's lead (task orca_run, else its Orca worktree). Exit 0, 1 when a send failed, 2 usage.
+  nudge <plan.json> [--task ID] [--idle SECONDS] [--stall SECONDS] [--orca-run RUN_ID]... [--send]
+        finds start prompts that stayed unsubmitted in a task session's terminal. Per task with a task worktree it lists
+        the Orca terminals of that worktree (`orca terminal list --json`, read-only) and reads each screen (`orca
+        terminal read --screen --json`). A terminal is STUCK only when its screen still shows `Read your task spec at
+        <a spec file of this plan>` on a composer line, alone or after a composer marker (`>`, `|` and the like; an
+        echoed command that carries the pointer is no pointer; a wrapped pointer is joined). When horizontal rules are
+        present, the pointer must start in the composer region; activity after it indicates submission. Its last output is older
+        than --idle seconds (default 120) and the task made no progress since the spec file was written (no new commit
+        on the task branch, no new lead report, no new review or QA verdict). An implement spec
+        (`<task>-implement-<digest>.md`) counts only its own subtask's progress (a review or QA verdict of the subtask
+        whose implementer record names that spec, or a commit on its child branch); an unmapped one counts none.
+        One row per terminal: task, handle, idle seconds, ok or STUCK, reason, and for a STUCK one the exact send
+        command. --send runs `orca terminal send --terminal H --text <CR>` once per STUCK terminal and writes <task>__nudge.json (handle, time, spec path); a spec that was already nudged is never
+        sent again: `nudged, still stuck: relaunch the session`. Without --send nothing is written. Orca missing or
+        unreachable: a note, exit 0. Exit 1 when a send failed, 2 usage. status shows a `stuck?:` note on a task whose
+        last nudge record shows it still stuck and which made no progress since.
+        It then checks the Orca workers of the task leads' Runs (task `orca_run` of the listed tasks, plus --orca-run,
+        repeatable; none: `nudge: no Orca Run named ...: stalled workers not checked`) for STALLED sessions, read-only.
+        Per Run `orca orchestration worker-list --full`; a settled or released worker is skipped. Per running worker
+        `orca orchestration worker-show --dispatch <id> --full --json` and the last output of its agent terminal
+        (agentTerminalHandle in `orca terminal list` of its worktree). A worker whose observation.agentWait is set is
+        `ok  waiting on a human`; a terminal silent for less than --stall seconds (default 900) is `ok  active`; missing
+        data is `ok ... (no opinion)`. Otherwise one row `<run>  <dispatch>  idle <n>s  STALLED  <reason>`: `no turn
+        start` (the last dispatch_input effect is `turn_unobserved`, or lastError says the turn start was not observed)
+        or `turn ended without worker_done`, then a `re-dispatch:` line (read the terminal, `worker-stop`, dispatch a
+        fresh session with the same phase, `worker-release`). --send never sends anything for a STALLED row and nothing
+        is written for it; a STALLED row does not change the exit code.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -172,16 +298,39 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         their `orca orchestration worker-release --dispatch <id>` first in `next`; a running worker is no finding;
         no orca or a failing call is a NOT_AVAILABLE line, never an error. With --json the "Workers:" lines go to
         stderr (stdout stays the status schema). The worker-list call asks for --full rows (the concise row lacks the
-        resource); a worker counts as released by terminalState, resource.releaseState or ownershipState `released`, a
-        releaseCompletedAt, or the projection's resource state.
-        Per task (notes, so the schema is unchanged): `lead report: <at> @<sha10> <summary>` from the `report` record
+        resource); on an unknown --full flag it retries without it for the remaining pages. Concise rows use only
+        terminalState for release and state for settledness (a row released through terminalState needs no state);
+        missing fields are noted as checks that could not run.
+        Full rows also use resource release/ownership state, releaseCompletedAt, and projection resource state.
+        Lineage-only children must have the topic or a <topic>-* branch (also with an Orca prefix);
+        foreign and detached siblings are excluded.
+        Per task notes: `lead report: <at> @<sha10> <summary>` from the `report` record
         (plus `(stale: task HEAD is <sha10>)` when the task HEAD moved on), and once the task has commits
         `READY_FOR_PR: yes` (lead report, PASS review and PASS QA at the task HEAD) or `READY_FOR_PR: no (<first
-        missing thing>)`. With an Orca Run (read-only `orca orchestration check --run R --all --json`, never marks a
+        missing thing>)`. With --json each task row also carries them as fields, computed with the notes:
+        `lead_report` ({at, sha, summary, current}, null without a record) and `ready_for_pr` ({ready, missing}, null
+        when no READY_FOR_PR note applies); the top-level `model_scope_widen` lists the plan's valid model scope
+        widenings (the entry fields plus `text`, [] when none) whose `model scope widening:` lines go to stderr.
+        With an Orca Run (read-only `orca orchestration check --run R --all --json`, never marks a
         message read; any failure is no opinion) a `task done: <id>` message is shown as a note when no durable record
         exists. Test slots held by a run in one of the plan's checkouts (`<state dir>/locks/run-all-slots/<n>/`, written
         by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
-        PID is alive (stderr with --json); status never stops the process and prints no command that would.
+        PID is alive and the slot's last progress (stderr with --json, where `slots` also carries them: slot, pid,
+        winpid, alive, checkout, started and progress, null before the first one, the same entries as cleanup --json);
+        status never stops the process. It prints a stop command only for a slot left by a verify dispatch: a slot
+        whose holder is alive (or cannot be checked) in a task worktree of the plan (the task branch's worktree or one
+        of its children) where, at or after the slot's start, that task's verify reported (a `qa` verdict or a
+        `review` FAIL of the task or a subtask) or a worker of the task's Orca Run in that checkout was released
+        (releaseCompletedAt, else releaseRequestedAt of a released row). It prints `Slots: LEFT BY VERIFY slot <n>
+        held by PID <pid> ... in <checkout> since <start>: task <id>: <what reported or was released, when> ...; stop
+        that PID only: <command>` (`kill <pid>`, or `taskkill //PID <winpid> //T //F` when the slot has a Windows PID;
+        stderr with --json, a text line only: the schema's slot entries take no extra field), a note on the task row
+        and the command first in `next`; status never runs it.
+        Stacked siblings (a dependency D and the tasks stacked on it, while one of their branches exists and one of
+        them is not integrated) get the note `stacked siblings <ids> on D: sibling worktrees, not children of D's
+        worktree; merge order <D branch>, then <dependent branch> ... into <topic> (dependency first, git merge
+        --no-ff); git branch -d a branch only after its merge` on D's and each dependent's row (a branch already merged
+        or gone is marked so). A `sync:` note shows only for the task's current dependency.
 
   cleanup <plan.json> [--after-merge] [--orca-run RUN_ID]... [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
@@ -189,7 +338,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         lists local and origin branch deletion for plan branches contained in main. Otherwise prints removal commands and
         `orca orchestration worker-release --dispatch <id>` per unreleased worker, names each leftover child worktree
         as "child of <task>" (`orca worktree rm` once merged), names the rest, and reminds to
-        release every worker session. Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
+        release every worker session. `orca worktree rm` removes asynchronously: before the first `git branch -d` of a
+        repo it prints one `<pipeline> orca-wait --gone --worktree <path>` per path it removes through
+        `orca worktree rm` (a branch is deleted only once its worktree record is gone). The same concise worker
+        fallback and plan-branch lineage filter as status apply.
+        Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
         A task worktree git lists as prunable (its directory is gone), a leftover task directory (empty or not, named
         <topic>-<id> with / as -, no longer a git worktree) and an Orca record of such a removed worktree are
         LEFTOVER, never CLEAN: `git -C <repo> worktree prune`, then `orca worktree rm --worktree path:<dir>` once the
@@ -201,11 +354,16 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         an orphaned `wsl.exe ... sleep infinity` (its parent is gone), with PID, command and start time; the user decides,
         no kill command is ever printed, and a failing probe names nothing. It also prints `SLOT` lines for held test
         slots in the plan's checkouts, as status does (`slots` in --json).
+        Stacked siblings print as `STACK <repo>: stacked siblings ... merge order ...` after the KEPT lines (`stacked`
+        in --json: repo, dep, dependents, order, states merged|not merged|gone, text); they never change the state. A
+        stacked dependent's worktree is a task worktree, never "child of <dependency>".
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
 """
 import argparse
+import bisect
+import glob
 import hashlib
 import json
 import os
@@ -215,6 +373,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -272,20 +431,53 @@ def settings(reg):
     return p
 
 
+# One verb run, one answer: `rev-parse` and `worktree list` repeat across the status/gate/dispatch/verdict helpers, so
+# main() keeps their results for the duration of the verb (never in a file, never across processes). The memo is off
+# by default: a caller that imports this module (a test, a library user) changes git between calls and always gets a
+# fresh answer. Every git call that can move a ref or a worktree (anything outside GIT_READ_VERBS: add, commit, ...)
+# drops the memo, so a later read sees the write.
+GIT_MEMO_VERBS = (("rev-parse",), ("worktree", "list"))
+GIT_READ_VERBS = {"rev-parse", "rev-list", "diff", "merge-base", "status", "show", "diff-tree", "for-each-ref",
+                  "remote", "ls-tree", "ls-files", "log", "cat-file", "hash-object"}
+_GIT_MEMO = {}
+_GIT_MEMO_ON = False
+
+
 def git(repo, *args):
+    memo_key = None
+    if _GIT_MEMO_ON and any(args[:len(v)] == v for v in GIT_MEMO_VERBS):
+        memo_key = (os.path.normcase(os.path.normpath(repo)), args)
+        if memo_key in _GIT_MEMO:
+            return _GIT_MEMO[memo_key]
+    elif _GIT_MEMO_ON and args[:1] and args[0] not in GIT_READ_VERBS:
+        _GIT_MEMO.clear()  # a possible write: no cached ref or worktree list survives it
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60,
+        r = subprocess.run(["git", "-c", "core.quotePath=false", "-C", repo, *args], capture_output=True,
+                           text=True, timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None, 1  # a failed launch or a timeout is not an answer: never kept
+    # ASCII whitespace only: str.strip() also drops Unicode spaces (U+00A0), which a raw path name may end in
+    out = (r.stdout.strip(" \t\r\n\f\v"), r.returncode)
+    if memo_key is not None:
+        _GIT_MEMO[memo_key] = out
+    return out
+
+
+def git_blob(repo, head, path):
+    """`git show <head>:<path>` unstripped (line numbers must match the file), or None when it cannot be read."""
+    try:
+        r = subprocess.run(["git", "-C", repo, "show", f"{head}:{path}"], capture_output=True, text=True, timeout=60,
                            encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
-        return None, 1
-    return r.stdout.strip(), r.returncode
+        return None
+    return r.stdout if r.returncode == 0 else None
 
 
 # ---------------------------------------------------------------- tier
 
 def tier_of(ctx, pipe, lines=None):
     """lines: the changed-line count of the change when known (tier --plan with a checkout), else None (counts as 0)."""
-    repos = [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
+    repos = tier_repos(ctx)
     modules = sorted({m for r in repos for m in r.get("touched", [])})
     files = sum(1 for r in repos for f in r.get("files", []) if f.get("source") in ("given", "branch"))
     # XS judges every file of the change, uncommitted ones included: one path that is not prose is above XS
@@ -349,19 +541,22 @@ def plain_context(key, paths):
 
 def cmd_tier(a, reg):
     pipe = settings(reg)
-    lines = None  # the changed-line count, known only for tier --plan with a checkout
+    lines = basis = None  # tier --plan: the changed lines of the given paths against HEAD (None without a checkout)
     if a.plan:
         if not a.repo or not a.paths:
             die("tier --plan needs --repo <plan repo key> and --paths <files>")
         plan = read_plan(a.plan, reg)
         plan["_path"] = a.plan
         info = repo_info(plan, reg, a.repo)
-        lines = changed_lines(info["path"], a.paths)
+        checkout = bool(info["path"]) and os.path.isdir(info["path"])
+        lines = changed_lines(info["path"], a.paths) if checkout else None  # nothing measured: no changed_lines fact
+        basis = lines_basis(["HEAD"] if checkout else None, len(set(a.paths)))
         if not info["registry"]:
             if not info["path"]:
                 die(f"repo `{a.repo}` is neither a registry repo nor in plan.repos with a path")
             out = tier_of(plain_context(a.repo, a.paths), pipe, lines)
             out["basis"] = "paths (repo not in the registry)"
+            out["facts"]["lines_basis"] = basis
             return print_tier(a, out)
         a.rest = ["--repo", info["registry"], "--paths", *a.paths, *a.rest]
     elif a.repo or a.paths:
@@ -375,7 +570,11 @@ def cmd_tier(a, reg):
         if r.returncode != 0:
             die("factory-context.sh failed: " + (r.stderr or r.stdout).strip()[:400], 1)
         ctx = json.loads(r.stdout)
-    return print_tier(a, tier_of(ctx, pipe, lines))
+    if basis is None:  # the plain form: the changed lines of the snapshot's files in each repo checkout
+        lines, basis = snapshot_lines(ctx, rest_base(a.rest))
+    out = tier_of(ctx, pipe, lines)
+    out["facts"]["lines_basis"] = basis
+    return print_tier(a, out)
 
 
 def numstat_lines(out):
@@ -387,21 +586,77 @@ def numstat_lines(out):
     return n
 
 
-def changed_lines(repo_path, paths):
-    """Changed lines of a working change in `paths` (tier --plan): `git diff --numstat HEAD` plus the lines of the
-    untracked given files. 0 when unknown (no checkout, git fails)."""
+def diff_lines(repo_path, paths, ref="HEAD"):
+    """Changed lines of `paths` in a checkout: `git diff --numstat <ref>` (the working tree against `ref`) plus the lines
+    of the untracked ones. 0 when unknown (no checkout, git fails)."""
     if not repo_path or not paths or not os.path.isdir(repo_path):
         return 0
-    out, rc = git(repo_path, "diff", "--numstat", "--no-renames", "HEAD", "--", *paths)
-    n = numstat_lines(out) if rc == 0 else 0
-    untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *paths)
-    for f in (untracked or "").splitlines() if rc == 0 else []:
-        try:
-            with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
-                n += sum(1 for _ in fh)
-        except OSError:
-            pass
+    n = 0
+    for i in range(0, len(paths), 200):  # chunks keep the command line short
+        chunk = list(paths[i:i + 200])
+        out, rc = git(repo_path, "diff", "--numstat", "--no-renames", ref, "--", *chunk)
+        n += numstat_lines(out) if rc == 0 else 0
+        untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *chunk)
+        for f in (untracked or "").splitlines() if rc == 0 else []:
+            try:
+                with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
+                    n += sum(1 for _ in fh)
+            except OSError:
+                pass
     return n
+
+
+def changed_lines(repo_path, paths):
+    """Changed lines of a working change in `paths` (tier --plan): diff_lines against HEAD."""
+    return diff_lines(repo_path, paths, "HEAD")
+
+
+def lines_basis(refs, nfiles):
+    """What a tier measured as changed lines: the diff refs and the number of files, or `not measured` (refs None)."""
+    if refs is None:
+        return "not measured (no checkout)"
+    return f"git diff --numstat {', '.join(refs)} plus untracked, {nfiles} file(s)"
+
+
+def tier_repos(ctx):
+    """The repo entries of a routing snapshot that tier_of judges: touched ones and those with given files."""
+    return [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
+
+
+def rest_base(rest):
+    """The `--base B` or `--base=B` of the factory-context.sh args (the last one), or None."""
+    base = None
+    for i, x in enumerate(rest or []):
+        if x == "--base" and i + 1 < len(rest):
+            base = rest[i + 1]
+        elif x.startswith("--base="):
+            base = x.split("=", 1)[1]
+    return base or None
+
+
+def snapshot_lines(ctx, given_base=None):
+    """(lines, basis) of a routing snapshot (plain tier): for every judged repo with a checkout (`path` is a directory),
+    the changed lines of its files against the merge-base of a base and HEAD, plus untracked ones. The base is the
+    repo's `branch_diff_base` (the branch scan of factory-context.sh), else `given_base` (the `--base` of the args:
+    with --paths factory-context.sh leaves branch_diff_base null), else none: against HEAD. lines is None when no repo
+    has a checkout."""
+    total, refs, nfiles = None, [], 0
+    for r in tier_repos(ctx):
+        path = r.get("path")
+        files = sorted({f.get("path") for f in r.get("files", []) if f.get("path")})
+        if not path or not os.path.isdir(path):
+            continue
+        ref, label = "HEAD", "HEAD"
+        base = r.get("branch_diff_base") or given_base
+        if base:
+            mb, rc = git(path, "merge-base", base, "HEAD")
+            if rc == 0 and mb:
+                ref, label = mb.split()[0], f"$(git merge-base {base} HEAD)"
+        total = (total or 0) + diff_lines(path, files, ref)
+        nfiles += len(files)
+        if label not in refs:
+            refs.append(label)
+    return total, lines_basis(refs if total is not None else None, nfiles)
 
 
 def print_tier(a, out):
@@ -414,6 +669,9 @@ def print_tier(a, out):
               + f"contracts: {', '.join(f['contracts']) or 'none'}, generated: {', '.join(f['generated']) or 'none'})")
         if out.get("basis"):
             print(f"  basis: {out['basis']}; modules: {', '.join(f['modules'])}")
+        if f.get("lines_basis"):
+            measured = f"{f['changed_lines']} (" if "changed_lines" in f and not f["lines_basis"].startswith("not ") else ""
+            print(f"  changed lines: {measured}{f['lines_basis']}{')' if measured else ''}")
         for t, why in out["above"].items():
             if why:
                 print(f"  above {t}: " + "; ".join(why))
@@ -641,29 +899,38 @@ def session_model(a, agent, role):
         allowed = "; ".join(f"{m}: {', '.join(e)}" for m, e in (policy["scope"].get(agent) or {}).items()) or "none"
         die(f"--model/--effort: {agent} {model} / {effort} is outside the model scope (registry pipeline.models.scope "
             f"plus override; {agent}: {allowed}). Nothing was dispatched.")
+    entry = model_policy.widening_for(getattr(a, "base_policy", policy), getattr(a, "widen_entries", None),
+                                      agent, model, effort)
+    if entry:
+        print(f"model scope widened by plan {a.plan_id}: {model_policy.widening_text(entry)}")
     return {"model": model, "effort": effort, "role": role}
 
 
 # ---------------------------------------------------------------- plan
 
-def read_json_file(path, what):
-    """A JSON object from a file; utf-8-sig, since PowerShell's `Out-File`/`Set-Content` write a UTF-8 BOM."""
+def read_json_file(path, what, raw=False):
+    """A JSON object from a file; utf-8-sig, since PowerShell's `Out-File`/`Set-Content` write a UTF-8 BOM. With
+    raw=True, (object, the bytes read): a caller that writes the file elsewhere writes exactly what it parsed."""
     try:
-        with open(path, encoding="utf-8-sig") as fh:
-            doc = json.load(fh)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        doc = json.loads(data.decode("utf-8-sig"))
     except (OSError, ValueError) as e:
         die(f"cannot read {what} {path}: {e}")
     if not isinstance(doc, dict):
         die(f"{what} must be a JSON object")
-    return doc
+    return (doc, data) if raw else doc
 
 
-def read_plan(path, reg):
-    plan = read_json_file(path, "plan")
+def read_plan(path, reg, what="plan", raw=False):
+    """A plan (read_json_file) whose no_worktree_markers replace the registry's for this run; `what` names the file in
+    a read error (plan-edit: "edited copy")."""
+    got = read_json_file(path, what, raw)
+    plan = got[0] if raw else got
     markers = plan.get("no_worktree_markers")
     if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
         reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
-    return plan
+    return got
 
 
 def repo_info(plan, reg, key):
@@ -797,12 +1064,15 @@ def serialize(waves, tasks, reg, plan):
 
 def task_qa_warnings(task):
     """pr.qa_warnings without the verify tier command: a scoped run-all check is what the verify session runs, not a
-    suite an implementer would run; a suite named next to it still warns."""
+    suite an implementer would run; a suite named next to it still warns. Whether the checks name a test suite is
+    read from every check, the scoped run-all ones included (they are what names the suites task QA runs)."""
     def tier_only(c):
         rest = re.sub(r"(?:\./)?tests/run-all\.sh", "", c)
-        rest = re.sub(r"--only-suites(?:=|\s+)\S+", "", rest)  # the suites a scoped run-all names are its scope
+        # the suites a scoped run-all names are its scope
+        rest = re.sub(r"--(?:only-suites|within)(?:=|\s+)\S+", "", rest)
         return pr.mentions_runall(c) and not pr.full_run(c) and not pr.SUITE_CHECK.search(rest)
-    return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]))
+    return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]),
+                          names_suite=pr.names_test_suite(task.get("checks", [])))
 
 
 def xs_implementer(pipe):
@@ -855,6 +1125,16 @@ def xs_plan_errors(plan, reg, pipe, tasks):
 def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
+    notes = []
+    if "model_scope_widen" in plan and plan["model_scope_widen"] is None:
+        errors.append("model_scope_widen: must be an array")  # the schema requires an array: null is no 'absent'
+    elif "model_scope_widen" in plan:
+        try:
+            base_policy = model_policy.load(reg)
+            widen_errors, notes = model_policy.widen_problems(base_policy, plan["model_scope_widen"])
+            errors.extend(widen_errors)
+        except model_policy.PolicyError as e:
+            errors.append(str(e))
     if plan.get("schema") != SCHEMA:
         errors.append(f"schema must be {SCHEMA}")
     for k in ("id", "title", "topic", "tasks"):
@@ -878,9 +1158,11 @@ def validate(plan, reg):
                 if not (isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k].strip() for k in ("check", "reason"))):
                     errors.append(f"known_failing[{i}]: needs non-empty string check and reason")
                     continue
-                for k in sorted(set(e) - {"check", "reason"}):
+                unknown = sorted(set(e) - {"check", "reason"})
+                for k in unknown:
                     errors.append(f"known_failing[{i}]: unknown key {k}")
-                warnings.append(f"known failing at base: {e['check']} - {e['reason']}")
+                if not unknown:  # an entry in error gets the error only, not also the known-failing warning
+                    warnings.append(f"known failing at base: {e['check']} - {e['reason']}")
     tasks = plan.get("tasks") or []
     ids = [t.get("id") for t in tasks]
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
@@ -958,7 +1240,7 @@ def validate(plan, reg):
             if len(users) > 1:
                 warnings.append(f"wave {n + 1}: {', '.join(users)} share `{res['id']}` - {res['rule']}")
     no_wt = sorted({t["repo"] for t in tasks if t.get("repo") and not repo_info(plan, reg, t["repo"])["worktrees"]})
-    return {"errors": errors, "warnings": warnings, "waves": planned, "order": order,
+    return {"errors": errors, "warnings": warnings, "notes": notes, "waves": planned, "order": order,
             "no_worktree_repos": no_wt}
 
 
@@ -976,9 +1258,11 @@ def plan_models(plan, reg, errors):
     lead sees the cost before any dispatch. A broken policy or a role it cannot resolve is an error."""
     pipe = settings(reg)
     try:
-        policy = model_policy.load(reg)
+        policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
-        errors.append(str(e))
+        # a malformed model_scope_widen entry is already an error of validate() (PolicyError joins those with "; ")
+        if str(e) not in errors and not all(part in errors for part in str(e).split("; ")):
+            errors.append(str(e))
         return None
     out = {"lead": None, "tasks": {}}
 
@@ -1013,12 +1297,27 @@ def model_text(m):
     return f"{m['agent']} {m['model']} {m['effort']}" if m else "unresolved"
 
 
+def valid_widenings(plan, reg):
+    """Entries safe to display even when the plan or personal policy is invalid."""
+    entries = plan.get("model_scope_widen")
+    if not isinstance(entries, list):
+        return []
+    try:
+        policy = model_policy.load(reg)
+    except model_policy.PolicyError:
+        return []
+    return [entry for entry in entries if not model_policy.widen_problems(policy, [entry])[0]]
+
+
 def cmd_validate(a, reg):
     plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     out = validate(plan, reg)
     out.pop("order")
     out["models"] = plan_models(plan, reg, out["errors"])
+    out["model_scope_widen"] = plan.get("model_scope_widen", [])
+    if not out["errors"]:
+        out["notes"].extend(stale_verdict_notes(plan, reg))
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -1026,6 +1325,10 @@ def cmd_validate(a, reg):
             print("ERROR " + e)
         for w in out.get("warnings", []):
             print("WARN  " + w)
+        for note in out["notes"]:
+            print("NOTE  " + note)
+        for entry in valid_widenings(plan, reg):
+            print("Model scope widening: " + model_policy.widening_text(entry))
         for n, w in enumerate(out["waves"], 1):
             print(f"Wave {n}: {', '.join(w)}")
         if out["no_worktree_repos"]:
@@ -1037,6 +1340,114 @@ def cmd_validate(a, reg):
                       f"review {model_text(m['review'])}, qa {model_text(m['qa'])}")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
+
+
+def stale_verdict_notes(plan, reg):
+    """One note per recorded review or QA verdict (a task's, or integration:<repo> QA) whose fingerprint no longer
+    matches the plan: its objective, paths, acceptance, checks or agents changed since. Read-only; no record, none."""
+    tasks = [t for t in plan.get("tasks") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)]
+    phases = [(t["id"], phase) for t in tasks for phase in ("review", "qa")]
+    repos = dict.fromkeys(t.get("repo") for t in tasks if isinstance(t.get("repo"), str))
+    phases += [(f"integration:{key}", "qa") for key in repos]
+    notes = []
+    for tid, phase in phases:
+        if verdict_of(plan, reg, tid, phase)[1]:
+            notes.append(f"recorded {phase} verdict of {tid} is stale: the task's objective, paths, acceptance, checks "
+                         "or agents changed since it was recorded; re-run review/QA (status shows it)")
+    return notes
+
+
+def plan_task_changes(old, new):
+    """Task-level difference of two plans: (added ids, removed ids, {id: [changed keys among paths/acceptance/deps]})."""
+    def by_id(plan):
+        return {t["id"]: t for t in plan.get("tasks") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)}
+    before, after = by_id(old), by_id(new)
+    added = [i for i in after if i not in before]
+    removed = [i for i in before if i not in after]
+    changed = {}
+    for tid in after:
+        if tid in before:
+            keys = [k for k in ("paths", "acceptance", "deps") if before[tid].get(k) != after[tid].get(k)]
+            if keys:
+                changed[tid] = keys
+    return added, removed, changed
+
+
+def cmd_plan_edit(a, reg):
+    """Replace a plan by an edited copy, only when the copy validates with no error (delivery.md section 8)."""
+    plan_path = a.plan
+    plan_old = read_json_file(plan_path, "plan")
+    copy_path = a.from_file
+    # exit 2: missing, unreadable, not JSON. Read once: the bytes validated are the bytes written to the plan
+    plan, data = read_plan(copy_path, reg, "edited copy", raw=True)
+    if plan.get("id") != plan_old.get("id"):
+        die(f"the edited copy has id {json.dumps(plan.get('id'))} but the plan has id {json.dumps(plan_old.get('id'))}: "
+            "a plan edit never changes the plan id")
+    if a.message is not None and not a.commit:
+        die("--message needs --commit")
+    plan_dir = os.path.dirname(os.path.abspath(plan_path))
+    top = None
+    if a.commit:  # decided before anything is replaced
+        top, rc = git(plan_dir, "rev-parse", "--show-toplevel")
+        if rc != 0 or not top:
+            die(f"--commit: {plan_path} is not inside a git checkout")
+    plan["_path"] = plan_path  # the copy is read as if it were the plan: relative repos.*.path resolve the same
+    out = validate(plan, reg)
+    out.pop("order", None)
+    plan_models(plan, reg, out["errors"])
+    for e in out["errors"]:
+        print("ERROR " + e)
+    for w in out.get("warnings", []):
+        print("WARN  " + w)
+    for note in out["notes"]:
+        print("NOTE  " + note)
+    if out["errors"]:
+        print(f"INVALID ({len(out['errors'])} error(s)): {plan_path} not replaced" + (", nothing committed" if a.commit else ""))
+        return 1
+    fd, tmp = tempfile.mkstemp(prefix=".plan-edit-", suffix=".tmp", dir=plan_dir)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        shutil.copymode(plan_path, tmp)  # mkstemp creates 0600; keep the plan's mode
+        os.replace(tmp, plan_path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(f"cannot replace {plan_path}: {e}")
+    added, removed, changed = plan_task_changes(plan_old, plan)
+    for tid in added:
+        print(f"Task added: {tid}")
+    for tid in removed:
+        print(f"Task removed: {tid}")
+    for tid, keys in changed.items():
+        print(f"Task changed: {tid} ({', '.join(keys)})")
+    if not (added or removed or changed):
+        print("No task-level change (paths, acceptance, deps)")
+    stale = [tid for tid, keys in changed.items() if "paths" in keys or "acceptance" in keys]
+    if stale:
+        print(f"NOTE  changed paths or acceptance make recorded verdicts of {', '.join(stale)} stale: re-run `status` "
+              "after the plan edit")
+    if a.commit:
+        rel = os.path.relpath(os.path.abspath(plan_path), top).replace("\\", "/")
+        message = a.message or f"docs(plans): edit plan {plan.get('id')}"
+        _, rc = git(top, "add", "--", rel)
+        if rc != 0:
+            die(f"git add {rel} failed in {top}", 1)
+        _, unchanged = git(top, "diff", "--quiet", "HEAD", "--", rel)
+        if unchanged == 0:
+            print(f"Nothing to commit: {rel} equals HEAD")
+            print("OK: plan replaced")
+            return 0
+        out_text, rc = git(top, "commit", "-m", message, "--", rel)  # only this path, whatever else is staged
+        if rc != 0:
+            print(f"ERROR git commit failed in {top}: {out_text}")
+            return 1
+        head, _ = git(top, "rev-parse", "--short", "HEAD")
+        print(f"Committed {rel} in {top} at {head}")
+    print("OK: plan replaced")
+    return 0
 
 
 # ---------------------------------------------------------------- subplan
@@ -1208,7 +1619,7 @@ def subplan_models(sub, plan, reg, errors):
     if task is None or not isinstance(task.get("repo"), str) or not isinstance(task.get("paths"), list)             or not task["paths"] or any(path_problem(p) for p in task["paths"]):
         return None  # validation names what is wrong with the parent task
     try:
-        policy = model_policy.load(reg)
+        policy = model_policy.load_for_plan(reg, plan)
     except model_policy.PolicyError as e:
         errors.append(str(e))
         return None
@@ -1257,15 +1668,310 @@ def task_branch(plan, info, task):
     return plan["topic"] if not info["worktrees"] else f"{plan['topic']}-{task['id']}"
 
 
-def start_base(plan, info, task):
+def start_base(plan, info, task, reg=None):
     """Where a task branch starts: a later-wave task (deps) of a worktree repo starts from the integration branch
     plan.topic when it exists (it carries the earlier waves); otherwise the base. repos.<key>.base stays the
-    comparison base of `status` and the gate."""
-    base = info["base_sha"] or info["base"]
-    if task.get("deps") and info["worktrees"] and info["path"]:
-        if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]:
+    comparison base of `status` and the gate.
+
+    A task branch that exists and whose fork point with the topic is not in the base (cut from or merged into the
+    topic ahead of the base) also starts at the topic, with or without deps: its own delta is what the topic does not
+    have before it. A fresh dispatch (no task branch yet) of a no-deps task keeps the base.
+
+    Stacked (a worktree repo, not tier XS): once the task branch exists, a live stack record (<task>__stack.json; see
+    stack_record_live: not one whose dependency was integrated before the branch was cut) means it was cut from that
+    dependency SHA. Before it exists and with `reg`, a task that is stackable() starts from the tip of its one
+    in-flight dependency (`dispatch --phase lead` records it)."""
+    def unstacked():
+        topic_ok = (info["worktrees"] and info["path"]
+                    and bool(git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]))
+        if topic_ok and task.get("deps"):
             return plan["topic"]
-    return base
+        if topic_ok and not pr.xs_plan(plan, task) and cut_from_topic():
+            return plan["topic"]
+        return info["base_sha"] or info["base"]
+
+    def cut_from_topic():
+        # the task branch exists and its fork point with the topic is ahead of the base
+        path, base = info["path"], info["base_sha"] or info["base"]
+        if not base or not git(path, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")[0]:
+            return False
+        tip = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]
+        if not tip:
+            return False
+        mb, rc = git(path, "merge-base", f"refs/heads/{plan['topic']}", tip)
+        return rc == 0 and bool(mb) and not is_ancestor(path, mb, base)
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not info["path"]:
+        return unstacked()
+    if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
+        rec = stack_record_live(plan, info, task)
+        return rec["sha"] if rec else unstacked()
+    if reg is not None:
+        stk = stackable(plan, reg, info, task)
+        if stk:
+            return stk["sha"]
+    return unstacked()
+
+
+# ---------------------------------------------------------------- stacked dispatch
+
+STACK_PHASES = ("candidate", "reviewed")  # a dependency a task may stack on: committed, not yet integrated
+SETTLED_PHASES = ("integrated", "qa")
+
+
+def stack_file(plan, task_id):
+    """The stack record of a task: <task>__stack.json beside its verdicts. It names the dependency SHA the task branch
+    was cut from (never a branch name as the base) and is not part of task_fingerprint, so verdicts stay valid."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__stack.json")
+
+
+def stack_record(plan, task_id):
+    """{dep, branch, sha, at} of a stacked task, or None."""
+    rec = fstate.read_json(stack_file(plan, task_id))
+    return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
+
+
+def stack_record_live(plan, info, task, head=None):
+    """stack_record() unless it is stale: its dependency was already integrated into plan.topic before the task branch
+    was cut (a leftover of an earlier dispatch). `head` is the task's commit (default: the task branch tip; none to
+    judge by: the record stays). fork = the first commit of head's first-parent history that is on the topic's
+    first-parent chain; the record is stale when its SHA is an ancestor of fork. True stacking is unaffected: the
+    first-parent history of a task stacked on an in-flight dependency runs through the dependency's own commits (not on
+    the topic's chain) down to a topic commit older than the dependency's merge. A head on the topic chain itself
+    cannot be judged: the record stays."""
+    rec = stack_record(plan, task["id"])
+    path = info["path"]
+    if not rec or not info["worktrees"] or not path:
+        return rec
+    topic = f"refs/heads/{plan['topic']}"
+    if not git(path, "rev-parse", "--verify", "--quiet", topic)[0]:
+        return rec
+    head = head or f"refs/heads/{task_branch(plan, info, task)}"
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{head}^{{commit}}")[0]
+    if not full:
+        return rec
+    chain = set((git(path, "rev-list", "--first-parent", topic)[0] or "").split())
+    if full in chain:
+        return rec
+    fork = next((c for c in (git(path, "rev-list", "--first-parent", full)[0] or "").split() if c in chain), None)
+    if fork and is_ancestor(path, rec["sha"], fork):
+        return None
+    return rec
+
+
+def sync_file(plan, task_id):
+    """The sync record of a stacked dependent: <task>__sync.json beside its verdicts, written by `sync` when its
+    dependency moved past the dependent's HEAD. It is the durable signal (an Orca message is only a nudge); status
+    shows it until the dependent's HEAD contains the SHA."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__sync.json")
+
+
+def sync_record(plan, task_id):
+    """{plan, task, dep, ref, sha, command, to, sent, at} of a dependent told to merge its dependency, or None."""
+    rec = fstate.read_json(sync_file(plan, task_id))
+    return rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
+
+
+def nudge_file(plan, task_id):
+    """The nudge record of a task: <task>__nudge.json beside its verdicts, written only by `nudge --send` (one entry per
+    spec file whose unsubmitted start prompt got a carriage return). status reads it for the `stuck?` note."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task_id)}__nudge.json")
+
+
+def stacked_dependents(plan, reg, dep_id):
+    """The plan tasks stacked on dep_id, in plan order: their stack record names it, same repo key, not tier XS, a
+    worktree repo with a checkout, and their task branch exists. A stale record (stack_record_live) names no one."""
+    dep = find_task(plan, dep_id)
+    out = []
+    for t in plan.get("tasks", []):
+        rec = stack_record(plan, t.get("id"))
+        if not rec or rec.get("dep") != dep_id or t.get("repo") != dep.get("repo") or pr.xs_plan(plan, t):
+            continue
+        info = repo_info(plan, reg, t["repo"])
+        if not info["worktrees"] or not info["path"]:
+            continue
+        if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, t)}")[0]:
+            if stack_record_live(plan, info, t):
+                out.append(t)
+    return out
+
+
+def stack_groups(plan, reg):
+    """The stacked siblings of the plan, in plan order of their dependency: [{repo, dep, dependents, order, states,
+    text}] per plan task D with at least one dependent t (stack record naming D, same repo key, t not tier XS, a
+    worktree repo with a checkout). `order` is the merge order into plan.topic: D's task branch, then each
+    dependent's (plan order); `states` per branch: gone (no refs/heads/<branch>), merged (in refs/heads/<topic>) or
+    not merged. A group is listed only while one of its branches exists. Read-only (git only)."""
+    tasks = plan.get("tasks", [])
+    by_id = {t.get("id"): t for t in tasks}
+    on = {}
+    for t in tasks:
+        rec = stack_record(plan, t.get("id"))
+        d = by_id.get(rec.get("dep")) if rec else None
+        if not d or d is t or d.get("repo") != t.get("repo") or pr.xs_plan(plan, t):
+            continue
+        tinfo = repo_info(plan, reg, t["repo"])
+        if tinfo["worktrees"] and tinfo["path"] and not stack_record_live(plan, tinfo, t):
+            continue  # stale: its dependency was integrated before the task branch was cut
+        on.setdefault(d["id"], []).append(t["id"])
+    out, topic = [], plan["topic"]
+    for d in tasks:
+        dependents = on.get(d.get("id"))
+        if not dependents:
+            continue
+        info = repo_info(plan, reg, d["repo"])
+        path = info["path"]
+        if not info["worktrees"] or not path:
+            continue
+        order = [task_branch(plan, info, by_id[x]) for x in [d["id"], *dependents]]
+        heads = {b: git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{b}")[0] for b in order}
+        if not any(heads.values()):
+            continue
+        has_topic = bool(git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0])
+        states = {b: "gone" if not heads[b] else
+                  "merged" if has_topic and is_ancestor(path, f"refs/heads/{b}", f"refs/heads/{topic}") else
+                  "not merged" for b in order}
+        items = ", then ".join(b + ("" if states[b] == "not merged" else f" ({states[b]})") for b in order)
+        text = (f"stacked siblings {', '.join(dependents)} on {d['id']}: sibling worktrees, not children of "
+                f"{d['id']}'s worktree; merge order {items} into {topic} (dependency first, git merge --no-ff); "
+                "git branch -d a branch only after its merge")
+        out.append({"repo": d["repo"], "dep": d["id"], "dependents": dependents, "order": order, "states": states,
+                    "text": text})
+    return out
+
+
+def plan_has_task(plan, task_id):
+    return any(t.get("id") == task_id for t in plan.get("tasks", []))
+
+
+def stackable(plan, reg, info, task, phases=None):
+    """{dep, branch, sha} when the task may start from the tip of one dependency, else None: a worktree repo, not tier
+    XS, the task has deps, exactly one dependency D in the same repo key is candidate or reviewed with its task branch
+    present (sha: its full tip), and every other dependency is integrated or qa. Two in-flight dependencies, or a
+    pending or implementing one, keep the task waiting. A candidate or reviewed dependency whose task branch tip is
+    already on plan.topic was merged (its verdicts may be STALE after the plan changed): it counts as settled, so a task
+    whose dependencies are all merged is not stackable and starts from the topic. `phases` (id -> phase, e.g. status
+    rows) spares task_status."""
+    deps = task.get("deps") or []
+    if not deps or not info["worktrees"] or not info["path"] or pr.xs_plan(plan, task):
+        return None
+    inflight = []
+    topic = f"refs/heads/{plan['topic']}"
+    for did in deps:
+        d = find_task(plan, did)
+        if phases is not None and did in phases:
+            phase = phases[did]
+        else:
+            phase = task_status(plan, reg, d, serial_count(plan, reg, d["repo"]))[0]["phase"]
+        if phase in STACK_PHASES:
+            if d["repo"] == task["repo"] and not pr.xs_plan(plan, d):
+                dtip = git(info["path"], "rev-parse", "--verify", "--quiet",
+                           f"refs/heads/{task_branch(plan, info, d)}")[0]
+                if dtip and is_ancestor(info["path"], dtip, topic):
+                    continue  # merged into the topic: settled
+            inflight.append(did)
+        elif phase not in SETTLED_PHASES:
+            return None
+    if len(inflight) != 1:
+        return None
+    dep = find_task(plan, inflight[0])
+    if dep["repo"] != task["repo"] or pr.xs_plan(plan, dep):
+        return None
+    branch = task_branch(plan, info, dep)
+    sha = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0]
+    return {"dep": dep["id"], "branch": branch, "sha": sha} if sha else None
+
+
+def stack_base(plan, reg, info, task, sha):
+    """(base, note) of a stacked task's own delta at `sha`, or None when the task is not stacked (no live record - none,
+    or one whose dependency was integrated before the branch was cut -, no task branch, tier XS or a no-worktree repo).
+    Once the recorded dependency SHA is on plan.topic, the task is a later wave
+    cut from the topic: review_base. Before, the base is the newest dependency SHA contained in `sha`: the dependency's
+    current review PASS, the merge-base with its branch, or the record (the PASS SHA when it is the same commit); with
+    none contained, the record's SHA and a note."""
+    path = info["path"]
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
+        return None
+    if not git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, task)}")[0]:
+        return None
+    rec = stack_record_live(plan, info, task)
+    if not rec:
+        return None
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")[0] or sha
+    topic = plan["topic"]
+    if is_ancestor(path, rec["sha"], f"refs/heads/{topic}"):
+        return review_base(info, topic, topic, full)
+    cands = []
+    if plan_has_task(plan, rec.get("dep")):
+        rv = verdict_of(plan, reg, rec["dep"], "review")[0]
+        if rv and rv.get("state") == "PASS":
+            cands.append(rv["sha"])
+    dbranch = rec.get("branch")
+    if dbranch and git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{dbranch}")[0]:
+        mb, rc = git(path, "merge-base", full, f"refs/heads/{dbranch}")
+        if rc == 0 and mb:
+            cands.append(mb)
+    cands.append(rec["sha"])
+    kept = [c for c in cands if is_ancestor(path, c, full)]
+    if not kept:
+        return rec["sha"], f"stack base {rec['sha'][:10]} is not in {full[:10]}"
+    # the newest: every other kept SHA is its ancestor (the first wins a tie, so the PASS SHA for the same commit)
+    return max(kept, key=lambda c: sum(1 for o in kept if is_ancestor(path, o, c))), None
+
+
+def stack_notes(plan, reg, info, task, row):
+    """status of a stacked task (record and branch) at its HEAD: 'stacked on D@X', and when D moved past HEAD (its
+    branch tip, else its review PASS) a note and the merge command as next."""
+    sb = stack_base(plan, reg, info, task, row["sha"])
+    if sb is None:
+        return
+    path, rec = info["path"], stack_record_live(plan, info, task)
+    if not rec:
+        return
+    x = sb[0]
+    if not re.fullmatch(r"[0-9a-f]{40}", str(x)):  # review_base may answer plan.topic: name its fork point
+        x = git(path, "merge-base", x, row["sha"])[0] or x
+    row["notes"].append(f"stacked on {rec['dep']}@{x[:10]}")
+    target = rec.get("branch")
+    y = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{target}")[0] if target else None
+    if not y and plan_has_task(plan, rec.get("dep")):
+        rv = verdict_of(plan, reg, rec["dep"], "review")[0]
+        if rv and rv.get("state") == "PASS":
+            y = target = rv["sha"]
+    if y and not is_ancestor(path, y, row["sha"]):
+        row["notes"].append(f"{rec['dep']} now at {y[:10]} not in HEAD: merge it (never rebase), then continue")
+        row["next"] = orca_cmd.quote(["git", "-C", row["worktree"], "merge", target] if row["worktree"]
+                                     else ["git", "merge", target])
+
+
+def stack_gate(plan, reg, info, task, sha):
+    """Why a stacked task may not be verified (or pass) at `sha`, or None: {dep, reason, merge}. A stacked task's
+    verify, review and QA dispatch and its review/QA PASS wait until its dependency D has a current review PASS whose
+    SHA X is an ancestor of `sha`; `merge` is what to merge to get there (D's branch when it contains X, else X), None
+    while D has no PASS. Not stacked (tier XS, a no-worktree repo, no stack record, a stale one - its dependency was
+    integrated into the topic before the commit's branch was cut, stack_record_live -, or a record whose dependency is no
+    plan task): None. The task branch need not exist (the gate runs after it may be deleted)."""
+    path = info["path"]
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
+        return None
+    rec = stack_record_live(plan, info, task, sha)
+    if not rec or not plan_has_task(plan, rec.get("dep")):
+        return None
+    dep = rec["dep"]
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")[0] or sha
+    rv = verdict_of(plan, reg, dep, "review")[0]
+    if not rv or rv.get("state") != "PASS":
+        return {"dep": dep, "merge": None,
+                "reason": f"stacked on {dep}: {dep} has no current review PASS; verify waits until it passes and its "
+                          "PASS SHA is merged in"}
+    x = rv["sha"]
+    if is_ancestor(path, x, full):
+        return None
+    branch = rec.get("branch")
+    target = (branch if branch and git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0]
+              and is_ancestor(path, x, f"refs/heads/{branch}") else x)
+    return {"dep": dep, "merge": target,
+            "reason": f"stacked on {dep}: {dep}'s review PASS {x[:10]} is not in {full[:10]}: merge it "
+                      f"(git merge {target}, never rebase), then verify"}
 
 
 AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
@@ -1273,14 +1979,18 @@ AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions o
 
 def orca_prompt(a, prompt, plan=None, note=None):
     """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state.
-    `note` is appended after the pointer with every whitespace run collapsed to one space."""
+    `note` goes into the spec file as a 'Run lead notes:' section (text unchanged), before the digest is computed, so
+    the file name covers it; the command line carries only the pointer (cmd.exe misreads parentheses and quotes)."""
     root = os.path.join(fstate.persistent(), "pipeline", PLANNER_DIR) if plan is None else verdict_dir(plan)
     task = fstate.session_key(getattr(a, "task", None) or "planner")
     phase = getattr(a, "phase", None) or "plan"
+    if note:
+        prompt = prompt + ("" if prompt.endswith("\n") else "\n") + "Run lead notes:\n" + note + "\n"
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     path = os.path.abspath(os.path.join(root, "specs", f"{task}-{phase}-{digest}.md"))
     fstate.write_text(path, prompt)
-    return f"Read your task spec at {path} and follow it." + (f" {' '.join(note.split())}" if note else "")
+    a._spec_path = path  # dispatch --phase implement records it, so nudge maps the spec to its subtask
+    return f"Read your task spec at {path} and follow it."
 
 
 def resolve_runner(a):
@@ -1305,6 +2015,26 @@ def resolve_runner(a):
             "naming why Orca cannot run this session")
 
 
+def run_id(value):
+    """An Orca Run id without the `run:` address prefix; '' for a non-string or blank value."""
+    v = value.strip() if isinstance(value, str) else ""
+    return v[len("run:"):].strip() if v.startswith("run:") else v
+
+
+def dispatch_run(a, plan):
+    """The Orca Run a dispatched worker's `worker-start` joins: dispatch --orca-run, else the task's recorded `orca_run`
+    (the task lead's Run, for its implement, review, QA and verify sessions; never for --phase lead, whose session
+    starts that Run); None when no Run is known."""
+    explicit = run_id(getattr(a, "orca_run", None))
+    if explicit:
+        return explicit
+    tid = getattr(a, "task", None)
+    if not plan or not tid or getattr(a, "phase", None) == "lead":
+        return None
+    task = next((t for t in plan.get("tasks") or [] if isinstance(t, dict) and t.get("id") == tid), None)
+    return run_id((task or {}).get("orca_run")) or None
+
+
 def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
     """Print the session's dispatch: Orca worker-start, Agent-tool call or the plain prompt. `role` (planner, lead,
     review, qa or a grade) picks the model and effort (session_model) before anything is printed or written."""
@@ -1313,6 +2043,9 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
     if a.runner == "orca":
         argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place,
                                      title=title, model=m["model"], effort=m["effort"])
+        run = dispatch_run(a, plan)
+        if run:  # the worker joins that Run (a task lead's sub-session), not a fresh one the lead adds by hand
+            argv[-1:-1] = ["--run", run]  # before the trailing --json
         if place.get("new"):  # worker-start creates the worktree: a hidden repo would list it under "Hidden worktrees"
             show = place_show_line(place)
             if show:
@@ -1402,7 +2135,7 @@ def cmd_planner(a, reg):
               "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.\n"
               + language_line(reg))
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
-    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
+    emit(a, reg, agent, prompt, place, "pipeline planner", role="planner")
     return 0
 
 
@@ -1489,9 +2222,11 @@ def emit_lead_handoff(reg, agent, prompt, place, branch, m):
         if show:  # Orca hides a worktree it did not create when the repo's external worktree visibility is hide
             print(show)
         print(orca_cmd.quote(["git", "-C", checkout, "worktree", "add", "--no-track", "-b", branch, path, place["base"]]))
-        print(orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
-                              f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
-                              "--workspace-status", "in-progress"]))
+        # Orca lists a worktree it did not create only after a while; a set before that changes nothing
+        print(orca_wait_command(reg, path) + " && "
+              + orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
+                                f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
+                                "--workspace-status", "in-progress"]))
         place = {"worktree": f"path:{path}"}
     argv = ["orca", "agent", "launch", "--agent", entry["orca_agent"], "--worktree", place["worktree"], "--prompt", prompt,
             *flags, "--json"]
@@ -1515,6 +2250,13 @@ def known_failing_text(plan):
             + "\n".join(f"- {e.get('check')}: {e.get('reason')}" for e in kf)
             + "\nA failure of a listed check that also fails at the task base is FAIL_AT_BASE: name it on the QA report's "
               "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
+
+
+def known_failing_block(plan):
+    """known_failing_text(plan) on a line of its own for the end of a prompt (computed once); '' when the plan lists
+    none."""
+    text = known_failing_text(plan)
+    return "\n" + text if text else ""
 
 
 def test_env_line():
@@ -1546,6 +2288,33 @@ def session_notes(a):
     if env_note and env_note not in notes:
         notes.append(env_note)
     return notes
+
+
+def session_note_files(a):
+    """Read the --note-file files: [(abs_path, text)] in argument order, deduplicated by absolute path. A missing,
+    unreadable or blank file exits 2 before anything is written or printed. The text is kept verbatim. Read once per
+    dispatch: the result is cached on `a` (cmd_dispatch validates first)."""
+    cached = getattr(a, "_note_files", None)
+    if cached is not None:
+        return cached
+    files, seen = [], set()
+    for raw in getattr(a, "note_file", None) or []:
+        path = os.path.abspath(raw)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            die(f"--note-file {raw}: not found")
+        except (OSError, UnicodeDecodeError) as e:
+            die(f"--note-file {raw}: unreadable: {e}")
+        if not text.strip():
+            die(f"--note-file {raw}: is blank")
+        files.append((path, text))
+    a._note_files = files
+    return files
 
 
 def python_alias_line(platform=None, which=None, exe=None, probe=None):
@@ -1580,6 +2349,8 @@ def language_line(reg):
 def spec_session_lines(a, reg=None):
     """Return the lines to append to a dispatch spec."""
     lines = [language_line(reg)] + [f"Session note: {note}" for note in session_notes(a)]
+    for path, text in session_note_files(a):  # verbatim, not whitespace-collapsed; one trailing newline dropped
+        lines.append(f"Session note file {path}:\n" + (text[:-1] if text.endswith("\n") else text))
     alias = python_alias_line()
     return lines + ([alias] if alias else [])
 
@@ -1590,9 +2361,9 @@ def with_session_lines(a, prompt, reg=None):
     return prompt + ("" if prompt.endswith("\n") else "\n") + "\n".join(lines) + ("\n" if prompt.endswith("\n") else "")
 
 
-def base_health_hint(info, spec):
-    """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
-    git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
+def base_health_cmd(info, spec):
+    """The base health command (`gh run list --branch <base> --limit 1`), or None: only for a repo with a GitHub remote
+    (local git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
     if not info.get("path"):
         return None
     out, rc = git(info["path"], "remote", "-v")
@@ -1600,23 +2371,57 @@ def base_health_hint(info, spec):
         return None
     sha = re.compile(r"^[0-9a-fA-F]{7,40}$")
     branch = next((b for b in (spec.get("base"), info.get("base")) if b and not sha.match(b)), None)
-    if not branch:
-        return None
-    return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
+    return f"gh run list --branch {branch} --limit 1" if branch else None
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None):
+def base_health_hint(info, spec):
+    """The lead dispatch's one-line base health hint (stderr), or None (see base_health_cmd)."""
+    cmd = base_health_cmd(info, spec)
+    return f"factory-pipeline: base health: run `{cmd}` before starting" if cmd else None
+
+
+def base_health_line(info, spec):
+    """The lead spec's base health line (the stderr hint never reaches the task lead); '' when there is none."""
+    cmd = base_health_cmd(info, spec)
+    return (f"\nBase health: run `{cmd}` before starting (print only; a red base is known_failing, not this task's "
+            "failure).") if cmd else ""
+
+
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None, notes=None,
+                note_files=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
     # one token --note=<value>: a note starting with "-" would be read as an option after a bare --note
     note_args = "".join(f" {orca_cmd.quote([f'--note={note}'])}" for note in (notes or []))
+    note_args += "".join(f" {orca_cmd.quote([f'--note-file={path}'])}" for path in (note_files or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
              f"{orca_cmd.CHILD_RULE.split(';')[0]}." if info["worktrees"] else
              "placement is always shared here (no worktree).")
+    # a stacked task (fresh: spec.stacked_on; resumed: its stack record, read only once the task branch exists, so a
+    # leftover record of a removed branch never stacks a fresh dispatch) merges its moved dependency at subtask
+    # boundaries; every worktree-repo lead tells its own stacked dependents after each candidate
+    stacked = None
+    if info["worktrees"]:
+        stacked = spec.get("stacked_on") or (
+            stack_record_live(plan, info, task) if info["path"] and git(info["path"], "rev-parse", "--verify", "--quiet",
+                                                                         f"refs/heads/{spec['branch']}")[0] else None)
+    sync_in = (f" Stacked on {stacked.get('dep')}: at each subtask boundary run `<pipeline> status <plan>`; when it shows "
+               f"`sync: {stacked.get('dep')} moved to <sha>`, run `git merge {stacked.get('branch')}` (never rebase), "
+               "resolve conflicts inside your owned paths, then continue." if stacked else "")
+    stack_rule = ""
+    if stacked:  # the implement-now rule: verify, review and QA wait for the dependency's PASS (stack_gate)
+        sdep, ssha = stacked.get("dep"), str(stacked.get("sha") or "")[:10]
+        stack_rule = (f"Stacked on {sdep}: your worktree is a sibling cut from {sdep}@{ssha}, not a child of its "
+                      f"worktree. Implement now, in parallel with {sdep}'s verify; run no verify, review or QA dispatch "
+                      "before `<pipeline> status <plan>` clears it (no `verify waits:` note on this task: "
+                      f"{sdep}'s review PASS SHA must be in your HEAD; until then those dispatches exit 2). ")
+    sync_out = (f" After each new candidate (a fix included), run `<pipeline> sync <plan> --task {task['id']} --send`: it "
+                "tells stacked dependents to merge it (no-op without them)." if info["worktrees"] else "")
+    widenings = valid_widenings(plan, reg)  # loads the policy once
     rules = [
         f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}{note_args}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
@@ -1631,12 +2436,12 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "scope (exit 2).",
         f"3. Per subtask ONE fresh session in {where}: `{d} --phase implement --subplan <subplan.json> --subtask <id> "
         "--runner orca`. placement shared (default): it edits only its paths and does NOT commit (one shared index); "
-        f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}",
-        f"4. Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
+        f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}{sync_in}",
+        f"4. {stack_rule}Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
         f"--runner orca` ({reviewer} for {impl}). Keep HEAD at the candidate. Record both results with "
         "`verdict --phase verify` (a FAIL names `--failed-at review`: no test ran, the next verify keeps the original "
         "tests; or `--failed-at qa [--failed-suites ...]`). On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
-        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA.",
+        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA." + sync_out,
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
@@ -1645,17 +2450,20 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "and READY_FOR_PR; a message alone can be lost), then report to the run lead (`orca orchestration send --to "
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <report>`): branch "
         f"{spec['branch']}, HEAD SHA, your Orca Run id, subtasks with commits, review and QA verdicts (state, SHA, model), "
-        "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings.",
+        "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings"
+        + (", the plan's model scope widenings (" + "; ".join(model_policy.widening_text(e) for e in widenings) + ")"
+           if widenings else "") + ".",
         f"7. {subagents}" if subagents else None,
         ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
          "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
-        "9. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch." if notes else None,
+        "9. Session notes: <dispatch> carries the session notes below as --note / --note-file; keep them on every session you dispatch." if (notes or note_files) else None,
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
-            + ("\n" + known_failing_text(plan) if known_failing_text(plan) else "")
+            + base_health_line(info, spec)
+            + known_failing_block(plan)
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
                "worktree. Start after the previous task of this repo has its QA verdict. Subtasks, review and QA run "
@@ -1688,59 +2496,134 @@ def runall_suites(path):
 QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when the registry has no pipeline.qa_tiers
 
 
-def affected_case_lines(path, base, sha, suites, explicit):
-    """Report the checkout's own case selection; failure is advisory, never a dispatch failure."""
+def within_guards(path):
+    """The repo-wide guard scripts `tests/run-all.sh --within` also runs whenever the change reaches them
+    (WITHIN_GUARDS in the checkout's run-all.sh, the one copy): they are never left to CI. Empty when the checkout's
+    run-all has no such line (an older run-all runs only the named suites)."""
+    try:
+        with open(os.path.join(path, "tests", "run-all.sh"), encoding="utf-8", errors="replace") as f:
+            m = re.search(r'^WITHIN_GUARDS="([^"]*)"', f.read(), re.M)
+    except OSError:
+        return set()
+    return {x.strip() for x in m.group(1).split(",") if x.strip()} if m else set()
+
+
+def affected_selection(path, base, sha, suites):
+    """(selected, None) with selected = {suite: cases} for the suites tests/affected.py says the change reaches, or
+    (None, 'Affected cases: not computed (<reason>)'); never a dispatch failure. affected.py gets `--base <base>`: its
+    per-symbol reach applies only when the file list equals the changed set from that base (else every file is
+    file-level), so without it the reach held only when `base` matched affected.py's default base."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
-        return "Affected cases: not computed (tests/affected.py missing)"
+        return None, "Affected cases: not computed (tests/affected.py missing)"
     changed, rc = git(path, "diff", "--name-only", f"{base}...{sha}")
     if rc:
-        return "Affected cases: not computed (git diff failed)"
+        return None, "Affected cases: not computed (git diff failed)"
     if suites is None or suites is False:
-        return "Affected cases: not computed (suite list unavailable)"
+        return None, "Affected cases: not computed (suite list unavailable)"
     try:
         with tempfile.TemporaryDirectory() as tmp:
             names = os.path.join(tmp, "changed.txt")
             with open(names, "w", encoding="utf-8", newline="\n") as f:
                 f.write(changed + "\n" if changed else "")
-            r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
-                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            r = subprocess.run([sys.executable, "-B", script, "cases", "--base", base, names, *sorted(suites)],
+                               cwd=path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode:
-            return "Affected cases: not computed (tests/affected.py cases failed)"
+            return None, "Affected cases: not computed (tests/affected.py cases failed)"
         selected = {}
         for line in r.stdout.splitlines():
             suite, cases = line.split("\t", 1)
             selected[suite] = cases
-        # run-all selects explicit suites even when unaffected, and never passes --case to them.
-        selected.update({suite: "ALL" for suite in explicit})
-        lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
-                 for suite, cases in sorted(selected.items())]
-        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+        return selected, None
     except (OSError, subprocess.SubprocessError, ValueError):
-        return "Affected cases: not computed (tests/affected.py cases failed)"
+        return None, "Affected cases: not computed (tests/affected.py cases failed)"
 
 
-def tier_command(level, base, suites, task=False):
+def affected_case_lines(path, base, sha, suites, explicit, selection=None):
+    """Report the checkout's own case selection; failure is advisory, never a dispatch failure.
+    Returns (text, counts): counts is (N selected suites, M suites run-all lists, K affected suites left to CI), None
+    when not computed. With explicit (the check suites the tier command passes to --within) only those suites run, each
+    with its affected cases (ALL when the change does not reach it): N is their count and K the affected suites outside
+    them, the WITHIN_GUARDS scripts excepted (--within runs those); without explicit N is the whole affected closure
+    and K is 0. selection: the (selected, error) of affected_selection when the caller already has it."""
+    selected, err = selection if selection is not None else affected_selection(path, base, sha, suites)
+    if selected is None:
+        return err, None
+    left = []
+    if explicit:  # --within: only the named suites run; a named suite the change does not reach runs all its cases
+        left = sorted(set(selected) - set(explicit) - within_guards(path))
+        selected = {suite: selected.get(suite, "ALL") for suite in explicit}
+    lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
+             for suite, cases in sorted(selected.items())]
+    text = "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+    if left:
+        text += f"\nLeft to CI ({len(left)} affected suites outside the task checks): " + ", ".join(left)
+    return text, (len(selected), len(suites), len(left))
+
+
+SUITE_WARN = 40  # dispatch --suite-warn default: a task QA selecting more suites than this is wide (slow)
+
+
+def suite_warn_arg(value):
+    """argparse type of dispatch --suite-warn: a positive int (else exit 2, argparse style)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid positive int value: {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
+def selection_preflight(cases, counts, threshold):
+    """Verify/QA dispatch: how wide the case selection is, on stderr, before it costs an hour. Advisory only: the
+    prompt and the exit code do not change. N is what the tier command runs (the check suites under --within, else the
+    whole affected closure), compared with the threshold; K the affected suites it leaves to CI."""
+    if counts is None:
+        reason = cases.split("not computed (", 1)[1].rstrip(")") if "not computed (" in cases else "unknown"
+        print(f"factory-pipeline: selected suites: not computed ({reason})", file=sys.stderr)
+        return
+    n, m, k = counts
+    scope = f"; {k} affected suites left to CI" if k else ""
+    print(f"factory-pipeline: selected {n} of {m} suites (tests/affected.py{scope})", file=sys.stderr)
+    if n > threshold:
+        print(f"factory-pipeline: warning: {n} of {m} suites selected (threshold {threshold}): narrow the task paths "
+              "or its checks before QA", file=sys.stderr)
+
+
+def tier_command(level, base, suites, task=False, plan_base=None):
     """The run-all command of a registry pipeline.qa_tiers level.
-    Task QA never gets a full run, whatever the level: without a base it runs only the check suites."""
-    only = " --only-suites " + shlex.quote(','.join(suites)) if suites else ""
+    Task QA never gets a full run, whatever the level. With a base and check suites it is the scoped form: only the
+    check suites run (--within), each with its affected cases, and the other affected suites are left to CI. With a
+    base and no check suites it keeps the whole affected closure (the safe form; the spec says why). Without a base it
+    runs only the check suites, else NONE. Integration QA (ci+workspace) with the plan's base runs only the workspace
+    checks the change reaches (plan_base: the plan's base branch)."""
     if task or level == "affected":
+        if base and suites:
+            return ("tests/run-all.sh --affected --base " + shlex.quote(base)
+                    + " --within " + shlex.quote(','.join(suites)) + " -j 1")
         if base:
-            return "tests/run-all.sh --affected --base " + shlex.quote(base) + only + " -j 2"
-        return ("tests/run-all.sh" + only + " -j 2" if suites else
+            return "tests/run-all.sh --affected --base " + shlex.quote(base) + " -j 1"
+        return ("tests/run-all.sh --only-suites " + shlex.quote(','.join(suites)) + " -j 1" if suites else
                 "NONE: the review base is missing; the task lead must give one "
-                "(tests/run-all.sh --affected --base <base> -j 2). Never a full run.")
+                "(tests/run-all.sh --affected --base <base> --within <check suites> -j 1). Never a full run.")
     if level == "ci+workspace":
-        return "tests/run-all.sh --workspace-only"
+        return "tests/run-all.sh --workspace-only" + (" --base " + shlex.quote(plan_base) if plan_base else "")
     return "tests/run-all.sh --reuse -j 4"
 
 
+# an unattended QA worker stalls on the permission prompt of an `rm` whose variable may be empty (`rm -f $S/*.log`
+# would expand to /*.log): cleanup names a literal path or a guarded variable
+QA_CLEANUP = ("Cleanup: remove only the files you created, by a literal path or a guarded variable "
+              "(`rm -f -- \"${S:?}\"/*.log`), never by a variable that may be empty or unset.")
+
+
 def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None,
-            tiers=None, subagents=None):
+            tiers=None, subagents=None, plan_base=None):
     head = ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
             + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, ")
     tail = ("regressions, edge and failure cases. A Unity test run waits for the `unity-test` resource; never a second "
-            "Editor.\nReport: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
+            "Editor.\n" + QA_CLEANUP + "\nReport: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
             + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", [])))
     if runall is False:  # no tests/run-all.sh (a product repo): the task checks and the registry fast tier
         return (head + "run the checks (run-checks.py fast tier for registry repos), " + tail
@@ -1750,15 +2633,22 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
     key = "integration" if integration else "task"
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
-                           task=not integration)
-    policy = ("Integration QA: run the workspace checks before the PR; after the PR opens, CI runs the affected suites "
-              "and ci-ok must be green before merging (every suite through workflow_dispatch with full=true)."
+                           task=not integration, plan_base=plan_base if integration else None)
+    policy = ("Integration QA: run the workspace checks the change reaches (--workspace-only --base <plan base>) before "
+              "the PR. Exit 6 from the tier command means no workspace check was reached: that is NOT_RUN, never PASS; "
+              "then run `tests/run-all.sh --workspace-only` without --base and grade that run. After the PR opens, CI "
+              "runs the affected suites and ci-ok must be green before merging (every suite through workflow_dispatch "
+              "with full=true)."
               if integration and ((tiers or {}).get(key) or QA_TIERS[key]) == "ci+workspace" else
               "Integration QA: one full run per batch under the run-all lock; reuse a PASS record of the same clean tree."
               if integration else
               "Task QA: never a full tests/run-all.sh run; CI runs the affected suites per change and ci-ok must be "
               "green before merging. "
-              "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
+              + ("The command runs only the suites the task checks name (--within), each with its affected cases; the "
+                 "other affected suites are left to CI. " if base and suites else
+                 "No check suites: the whole affected closure runs; name the suites that test the changed behaviour "
+                 "in the task checks to scope it (--within). " if base else "")
+              + "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
     if small:
         policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
                    "and record verdict --phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'.")
@@ -1840,18 +2730,41 @@ def xs_lead_steps(a, reg, pipe, plan, task, info, base):
 
 SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something "
                  "the spec does not cover.")
+# a released verify session left its tests/run-all.sh alive and held a machine-wide test slot for hours (plans
+# owner-policy, plan-edit): the verify spec ends with this rule; {slots} is the resolved slot directory, {status} the
+# status command of the plan
+VERIFY_RUN_STOP = ("Before you record any verdict or report, stop every tests/run-all.sh run you started, by the PID "
+                   "you started it with: `kill <pid>` (Windows Git Bash: `taskkill //PID <winpid> //T //F` with the "
+                   "run's Windows PID); never by pattern (no `pkill -f`, no `taskkill /IM`): other sessions' runs "
+                   "share this machine. Then confirm your test slot is free: no directory under {slots} whose "
+                   "`checkout` file names this checkout, or `{status}` prints no `Slots:` line for this checkout. A "
+                   "slot still held means QA NOT_RUN or BLOCKED naming the slot and its PID, never PASS.")
+
+
+def verify_run_stop(reg, plan_path):
+    """The VERIFY_RUN_STOP rule with the resolved test slot directory and this plan's status command."""
+    return VERIFY_RUN_STOP.format(
+        slots=os.path.join(fstate.persistent(), "locks", "run-all-slots"),
+        status=orca_cmd.quote(pipeline_argv(reg) + ["status", os.path.abspath(plan_path)]))
 
 
 def cmd_dispatch(a, reg):
     session_notes(a)  # reject empty --note even when no spec is written
+    session_note_files(a)  # reject a missing, unreadable or blank --note-file before anything is written or printed
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
-    a.policy = load_policy(reg)
+    a.base_policy = load_policy(reg)
     plan["_path"] = a.plan
     v = validate(plan, reg)
     if v["errors"]:
         die("plan is invalid; run `validate` first: " + v["errors"][0], 1)
+    try:
+        a.policy = model_policy.load_for_plan(reg, plan)
+    except model_policy.PolicyError as e:
+        die(str(e), 1)
+    a.widen_entries = plan.get("model_scope_widen")
+    a.plan_id = plan.get("id")
     if a.paths and a.phase != "implement":
         die("--paths (the subtask's paths) goes with --phase implement")
     if a.report_to and a.phase != "lead":
@@ -1902,9 +2815,10 @@ def cmd_dispatch(a, reg):
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
                   + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
-                            tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
+                            tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent),
+                            plan_base=info["base_sha"] or info["base"])
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
-                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+                  + known_failing_block(plan))
         prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
@@ -1926,10 +2840,17 @@ def cmd_dispatch(a, reg):
     if placement == "child" and not info["worktrees"]:
         die(f"--placement child: repo {task['repo']} takes no worktree ({info['reason']}); nothing was printed")
     branch = plan["topic"] if xs else task_branch(plan, info, task)
+    # a new task lead (worktree repo, not XS, no task branch yet) may stack on its one in-flight dependency: decided
+    # once here, recorded below; an existing task branch keeps its record (start_base reads it)
+    fresh = (a.phase == "lead" and not xs and info["worktrees"] and bool(info["path"])
+             and not git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0])
+    stk = stackable(plan, reg, info, task) if fresh else None
     spec = {"plan": plan["id"], "task": task["id"], "repo": task["repo"], "objective": task["objective"],
             "owned_paths": task["paths"], "exclusions": task.get("exclusions", []), "deps": task.get("deps", []),
             "checks": task.get("checks", []), "acceptance": task["acceptance"], "branch": branch,
-            "base": start_base(plan, info, task)}
+            "base": stk["sha"] if stk else start_base(plan, info, task, None if fresh else reg)}
+    if stk:
+        spec["stacked_on"] = {"dep": stk["dep"], "branch": stk["branch"], "sha": stk["sha"]}
     # the task's grade (plan, else derived from its tier) and the grade of this session's work (a subtask's own grade
     # wins): implement runs with that grade's profile, review with heavy for heavy work, else review
     grade = None
@@ -1976,14 +2897,34 @@ def cmd_dispatch(a, reg):
                           f"out, so the Orca parent of the new task worktree falls back to the main checkout "
                           f"{info['path']}; set plan.topic to your own integration branch (or check "
                           f"{plan['topic']} out) before dispatching", file=sys.stderr)
+                if stk:  # a sibling of the dependency's worktree, never its child
+                    place["reason"] = (f"stacked on {stk['dep']}@{stk['sha'][:10]}: a sibling beside "
+                                       f"{parent or main_checkout(info['path'])}")
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
-                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a))
+                             subagent_rule(a, reg, "lead", lead), notes=session_notes(a),
+                             note_files=[p for p, _ in session_note_files(a)])
         prompt = with_session_lines(a, prompt, reg)
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
+        if fresh:  # any runner: the task branch is cut from spec base, which the record names by SHA
+            try:
+                os.remove(sync_file(plan, task["id"]))  # a leftover of an earlier, removed task branch
+            except FileNotFoundError:
+                pass
+            if stk:
+                fstate.write_json(stack_file(plan, task["id"]), {"dep": stk["dep"], "branch": stk["branch"],
+                                                                "sha": stk["sha"], "at": now_utc()}, indent=2)
+                print(f"factory-pipeline: task {task['id']} stacks on {stk['dep']}@{stk['sha'][:10]} "
+                      f"({stk['branch']}): a sibling worktree beside the integration checkout, not a child of "
+                      f"{stk['dep']}'s worktree; merge its later commits, never rebase", file=sys.stderr)
+            else:
+                try:
+                    os.remove(stack_file(plan, task["id"]))  # a leftover of an earlier, removed task branch
+                except FileNotFoundError:
+                    pass
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
             # resolved before orca_prompt writes the spec: outside the scope, nothing is written
             m = session_model(a, lead, "lead")
@@ -1994,6 +2935,12 @@ def cmd_dispatch(a, reg):
         return 0
     if a.phase != "implement" and not a.sha:
         die(f"{a.phase} needs --sha <candidate commit>")
+    if a.phase in ("verify", "review", "qa"):
+        # a stacked task is verified only once its dependency's review PASS is in the candidate: nothing unverified
+        # reaches a PASS through the dependent
+        g = stack_gate(plan, reg, info, task, a.sha)
+        if g:
+            die(f"{a.phase} of {task['id']} at {a.sha[:10]}: {g['reason']}")
     paths = a.paths or ((sub or {}).get("paths") if sub else None)
     if paths:
         bad = [f"{p} {path_problem(p)}" for p in paths if path_problem(p)]
@@ -2067,11 +3014,13 @@ def cmd_dispatch(a, reg):
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
         # an ad hoc --paths session of its own model (no subtask id) is a slice: the task's record keeps its implementer
         if a.runner != "print" and (sub or not (a.paths and a.agent)):
-            pr.record(plan, task["id"], sid, "implementer",
-                      {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
-                       "paths": paths or task["paths"],
-                       "start": start,
-                       "timestamp": now_utc()})
+            rec = {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
+                   "paths": paths or task["paths"],
+                   "start": start,
+                   "timestamp": now_utc()}
+            if a.runner == "orca" and getattr(a, "_spec_path", None):
+                rec["spec"] = a._spec_path  # the implement spec this session got: nudge maps it to the subtask
+            pr.record(plan, task["id"], sid, "implementer", rec)
         child_note(place)
         return 0
     if placement == "child":
@@ -2089,7 +3038,8 @@ def cmd_dispatch(a, reg):
     place = joined or {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
-        base, _ = review_base(info, plan["topic"], spec["base"], a.sha)
+        stacked = stack_base(plan, reg, info, task, a.sha)  # a stacked task: only its own delta past the dependency
+        base, _ = stacked if stacked is not None else review_base(info, plan["topic"], spec["base"], a.sha)
         previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
         stale = previous and previous.get("fingerprint") != scope_fingerprint(plan, reg, task["id"])
         failed = []
@@ -2097,24 +3047,29 @@ def cmd_dispatch(a, reg):
                 and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
             base, failed = previous["sha"], previous["failed_suites"]
         suites = runall_suites(home or info["path"])
-        explicit, _, _ = pr.qa_checks([task], suites, failed)
-        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        qa_task, selection = task, None
+        if failed:  # a re-QA: only the failed suites plus the task check suites the fix delta reaches
+            qa_task, selection = re_qa_task(task, suites, home or info["path"], base, a.sha)
+        explicit, _, _ = pr.qa_checks([qa_task], suites, failed)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit, selection)
+        selection_preflight(cases, counts, a.suite_warn)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n" + SPEC_COMPLETE + "\n"
-                  + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
+                  + qa_body(a.sha, [qa_task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
                             runall=suites, tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
                                       if cases.startswith("Affected cases (tests/affected.py cases):") else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
-                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+                  + known_failing_block(plan))
         prompt = with_session_lines(a, with_test_env(prompt), reg)
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
     if agent == sub_impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
-    base, base_note = review_base(info, plan["topic"], spec["base"], a.sha)
+    stacked = stack_base(plan, reg, info, task, a.sha)  # a stacked task: only its own delta past the dependency
+    base, base_note = stacked if stacked is not None else review_base(info, plan["topic"], spec["base"], a.sha)
     plugin_repo = task["repo"] == "plugin" or (info["path"] and os.path.isfile(
         os.path.join(info["path"], ".claude-plugin", "plugin.json")))
     checklist = ("skills/factory-core/references/plugin-review.md" if plugin_repo
@@ -2141,15 +3096,19 @@ def cmd_dispatch(a, reg):
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
     if a.phase == "verify":
         suites = runall_suites(home or info["path"])
-        selected_task = dict(task, checks=retry_checks(task, suites)) if retry else task
+        selected_task, selection = task, None
+        if retry:  # a re-verify: only the failed suites plus the task check suites the fix delta reaches
+            selected_task, selection = re_qa_task(task, suites, home or info["path"], base, a.sha)
         explicit, _, _ = pr.qa_checks([selected_task], suites, failed)
-        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit, selection)
+        selection_preflight(cases, counts, a.suite_warn)
         prompt += ("\nReview first. If any blocking finding exists, report FAIL and run no tests. "
                    "Otherwise run the following QA once.\n"
                    + qa_body(a.sha, [selected_task], at_head, base=base,
                              failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
                              tiers=pipe.get("qa_tiers")) + "\n" + cases
-                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+                   + known_failing_block(plan))
+        prompt += ("" if prompt.endswith("\n") else "\n") + verify_run_stop(reg, a.plan)
         prompt = with_test_env(prompt)
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
@@ -2176,6 +3135,26 @@ def retry_checks(task, runall=None):
     (`dotnet test ...`) all stay, because a failed_suites list cannot name them."""
     return [c for c in task.get("checks", [])
             if not pr.mentions_runall(c) and not (runall and pr.SUITE_CHECK.search(c))]
+
+
+def re_qa_task(task, suites, path, base, sha):
+    """(task, selection) of a re-QA or re-verify after a QA FAIL that recorded --failed-suites: the task's checks are
+    retry_checks (its other commands stay) plus, as one `--only-suites` check, the task check suites the fix delta
+    reaches (tests/affected.py reaches them: base is the failed candidate). The failed suites join through
+    qa_checks(failed_suites), so the tier command is `--within` the failed suites plus those reached task suites, never
+    all the task check suites. selection is affected_selection's result, handed on to affected_case_lines."""
+    selection = affected_selection(path, base, sha, suites)
+    checks = retry_checks(task, suites)
+    if isinstance(suites, set):
+        if selection[0] is None:
+            # the selection was not computed (affected.py missing or failing, git diff failing): the safe side keeps
+            # every task check suite
+            checks.extend(c for c in task.get("checks", []) if pr.mentions_runall(c) or pr.SUITE_CHECK.search(c))
+            return dict(task, checks=checks), selection
+        reached = [s for s in pr.qa_checks([task], suites)[0] if s in selection[0]]
+        if reached:
+            checks.append("tests/run-all.sh --only-suites " + ",".join(reached))
+    return dict(task, checks=checks), selection
 
 
 def child_branch(parent, sid, phase, sha=None):
@@ -2423,8 +3402,13 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
 
     A first-parent topic merge attributes only its introduced side commits. Direct
     topic edits and conflict resolutions changed against every parent have no owner.
+    A merge's own changes are files whose combined diff keeps a hunk, so a clean merge
+    of a file changed by both sides is not a resolution.
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
+    Path names are read raw (git runs with core.quotePath=false); a name git still quotes
+    (a tab, newline, double quote or backslash) stays quoted, is owned by no later task and so
+    makes the review STALE (fail safe).
     A path whose content at target equals its content at sha is never changed, and the
     side commits of a merge of the repo's default branch (origin/<b>, else <b>, for b the
     plan base unless it is a SHA, the registry default_branch, then main) are nobody's
@@ -2438,6 +3422,10 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     first-parent walk attributes on its own (direct topic commits and task merges), so
     counting it again on the task branch double-attributes it: only the sync merge's own
     conflict resolutions count, and a later task that owns them and depends on the task covers them.
+    The same holds for a merge from a dependency inside a task merge (a stacked task merging its dependency's branch):
+    a merge whose non-first parents are all ancestors of the walked topic merge's first parent brings in only what was
+    on the target before this task merge, so a clean merge of the dependency into the dependent never makes the
+    dependency's review STALE; a conflict resolution in the dependency's files still does.
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2449,6 +3437,17 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     def files(a, b):
         out, rc = git(path, "diff", "--name-only", a, b, "--", *specs(task["paths"]))
         return set(out.splitlines()) if rc == 0 else set(task["paths"])
+    def resolutions(c):
+        out, rc = git(path, "diff-tree", "--cc", "-p", "--no-commit-id", "-r", c, "--", *specs(task["paths"]))
+        if rc != 0:
+            return None
+        result = set()
+        for line in (out or "").splitlines():
+            if line.startswith("diff --cc "):
+                # kept exactly as git prints it: a name git still C-quotes stays quoted, matches the
+                # same quoted form in `git diff --name-only` (net) and no later task owns it (fail safe)
+                result.add(line[len("diff --cc "):])
+        return result
     def owns(t, f):
         return any(norm_path(p).rstrip("/") in ("", ".") or norm_path(f) == norm_path(p).rstrip("/")
                    or norm_path(f).startswith(norm_path(p).rstrip("/") + "/") for p in t["paths"])
@@ -2492,9 +3491,8 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     if net_rc == 0 and not (net_out or "").strip():
         return []
     net = set(net_out.splitlines()) if net_rc == 0 else None
-    branches = [b for b in (info["base"], ((reg.get("repos") or {}).get(info["registry"] or task["repo"]) or {}).get("default_branch"), "main")
-                if b and not re.fullmatch(r"[0-9a-f]{7,40}", b)]
-    default_tip = next((t for b in dict.fromkeys(branches) for r in ("remotes/origin", "heads")
+    branches = default_branch_names(reg, info, task["repo"])
+    default_tip = next((t for b in branches for r in ("remotes/origin", "heads")
                         for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t), None)
     def merges_default(c):
         """c is a merge and all its parents but the first are on the default branch."""
@@ -2525,10 +3523,10 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
         if rc != 0 or not parents:
             return list(task["paths"])
         if len(parents) > 1:
-            evil = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", merge, "--", *specs(task["paths"]))
-            if evil[1] != 0:
+            evil = resolutions(merge)
+            if evil is None:
                 return list(task["paths"])
-            bad.update((evil[0] or "").splitlines())
+            bad.update(evil)
             introduced, rc = git(path, "rev-list", *parents[1:], "--not", parents[0])
             if rc != 0:
                 return list(task["paths"])
@@ -2545,11 +3543,12 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             if from_default(commit):
                 if is_ancestor(path, commit, default_tip):
                     continue
-                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
-                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
-            elif len(ps) > 1 and all(q in topic_chain for q in ps[1:]):
-                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
-                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
+                cc = resolutions(commit)
+                touched = cc if cc is not None else set(task["paths"])
+            elif len(ps) > 1 and (all(q in topic_chain for q in ps[1:])
+                                  or (len(parents) > 1 and all(is_ancestor(path, q, parents[0]) for q in ps[1:]))):
+                cc = resolutions(commit)
+                touched = cc if cc is not None else set(task["paths"])
             else:
                 touched = files(ps[0], commit) if ps else set(task["paths"])
             for f in touched:
@@ -2596,6 +3595,41 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model, cac
             if not paths or not all(pr.prose_path(p) for p in paths):
                 notes.append(f"{t['id']}: subtask {sid} SAME_MODEL (single verify)")
     return blockers, notes
+
+
+def kept_task_reviews(plan, task_id):
+    """The kept per-candidate review records of a task (<task>__review__<sha12>__<agent>.json; never a subtask's
+    <task>@<id>__... file): dicts that are the task's own review records with a string sha, newest first."""
+    prefix = f"{safe_name(task_id)}__review__"
+    vdir = verdict_dir(plan)
+    try:
+        names = sorted(n for n in os.listdir(vdir) if n.startswith(prefix) and n.endswith(".json"))
+    except OSError:
+        return []
+    recs = []
+    for n in names:
+        rec = fstate.read_json(os.path.join(vdir, n))
+        if (isinstance(rec, dict) and rec.get("task") == task_id and not rec.get("subtask")
+                and rec.get("phase") == "review" and isinstance(rec.get("sha"), str) and rec["sha"]):
+            recs.append(rec)
+    return sorted(recs, key=lambda r: str(r.get("timestamp") or ""), reverse=True)
+
+
+def earlier_review_fallback(plan, reg, task, by, fingerprint, full):
+    """(fallback, sha) a delta review of `task` at `full` keeps, or None: the fallback of the reviewer dispatch recorded
+    for the newest earlier review (a kept record of this task, this reviewer and this version of the plan, on an
+    ancestor of `full`) whose dispatch started this reviewer with a recorded fallback. Any git error: None."""
+    path = repo_info(plan, reg, task["repo"])["path"]
+    if not path:
+        return None
+    for old in kept_task_reviews(plan, task["id"]):
+        sha = old["sha"]
+        if sha == full or old.get("by") != by or old.get("fingerprint") != fingerprint or not is_ancestor(path, sha, full):
+            continue
+        d = pr.recorded(plan, task["id"], None, "reviewer", sha)
+        if d and d.get("fallback") and d.get("agent") == by and sha.startswith(str(d.get("sha"))):
+            return d["fallback"], sha
+    return None
 
 
 def cmd_verdict(a, reg):
@@ -2658,6 +3692,11 @@ def cmd_verdict(a, reg):
     full, rc = git(repo_info(plan, reg, key)["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     if rc != 0 or not full:
         die(f"--sha {a.sha} is not a commit of repo {key}")
+    if task is not None and a.phase in ("review", "qa") and a.state == "PASS":
+        # a stacked task: no PASS on a candidate without its dependency's review PASS (FAIL and the rest are recorded)
+        g = stack_gate(plan, reg, repo_info(plan, reg, key), task, full)
+        if g:
+            die(f"refused: {a.phase} PASS of {a.task} at {a.sha[:10]}: {g['reason']}")
     rec = {"plan": plan.get("id"), "task": a.task, "phase": a.phase, "sha": full, "by": a.by, "state": a.state,
            "fingerprint": scope_fingerprint(plan, reg, a.task),
            "report": os.path.abspath(a.report) if a.report else None,
@@ -2744,6 +3783,16 @@ def cmd_verdict(a, reg):
         if (a.fallback is None and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
+        if "fallback" not in rec and a.fallback is None and not a.subtask and a.by == impl and not disp:
+            # a delta review (a later SHA of an already reviewed task) has no dispatch of its own: it keeps the fallback
+            # that dispatch recorded for the task's earlier review by this model. A review dispatch at this SHA (even
+            # one that was not a fallback, e.g. codex available again) decides it alone: no inheritance. A task never
+            # reviewed before has no earlier record, so it still needs its own dispatch record.
+            earlier = earlier_review_fallback(plan, reg, task, a.by, rec["fingerprint"], full)
+            if earlier:
+                rec["fallback"], rec["fallback_from"] = earlier
+                print(f"factory-pipeline: delta review of {a.task} at {full[:10]} keeps the dispatch-recorded fallback of "
+                      f"its review at {earlier[1][:10]}", file=sys.stderr)
     for k in ("model", "effort"):  # what the session ran with (optional), so reports show it
         if getattr(a, k, None):
             rec[k] = getattr(a, k)
@@ -2801,10 +3850,41 @@ def worktree_for(path, branch):
     return home, trees[1:]
 
 
+def default_branch_names(reg, info, key):
+    """Branch names of the repo's default branch, most specific first: the plan base unless it is a SHA, the registry
+    default_branch, then main."""
+    rreg = (reg.get("repos") or {}).get(info["registry"] or key) or {}
+    return list(dict.fromkeys(b for b in (info["base"], rreg.get("default_branch"), "main")
+                              if b and not re.fullmatch(r"[0-9a-f]{7,40}", b)))
+
+
+def default_merge_stray(info, key, reg, head, stray):
+    """The files of `stray` (changed between the plan base and head) that a merge of the default branch did not bring
+    in. A file is credited when head has the content of the merge-base of head and a default branch ref (origin/<b> or
+    <b>, every name of default_branch_names): that change is on the default branch, the topic only merged it. A conflict
+    resolution or a later topic edit leaves the file different from every such merge-base, so it stays stray. A ref
+    that is missing or a git error credits nothing."""
+    path = info["path"]
+    tips = [t for b in default_branch_names(reg, info, key) for r in ("remotes/origin", "heads")
+            for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t]
+    for tip in dict.fromkeys(tips):
+        if not stray:
+            break
+        mb, rc = git(path, "merge-base", tip, head)
+        if rc != 0 or not mb:
+            continue
+        out, rc = git(path, "diff", "--name-only", mb, head)
+        if rc != 0 or out is None:
+            continue
+        differs = set(out.splitlines())
+        stray = [f for f in stray if f in differs]
+    return stray
+
+
 def run_lead_files(plan, repo_path):
     """Repo-relative files the run lead owns on the integration branch: the plan file (its own path when it sits inside
-    the repo, else docs/plans/<id>.json), its report and the backlog.md beside it (follow-ups); never task work and
-    never stray."""
+    the repo, else docs/plans/<id>.json), its report, the backlog.md beside it and docs/plans/backlog.md (follow-ups,
+    wherever the plan file lives); never task work and never stray."""
     names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
     own = plan.get("_path")
     if own and repo_path:
@@ -2815,8 +3895,96 @@ def run_lead_files(plan, repo_path):
         if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
             names.add(rel)
     names |= ({os.path.splitext(n)[0] + "/report.md" for n in names}
-              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names})
+              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names}
+              | {"docs/plans/backlog.md"})
     return {norm_path(n) for n in names}
+
+
+ENGLISH_ALLOWLIST = "tests/fixtures/english-allow.txt"
+
+
+class _GitBlob:
+    """A file of a commit shaped like the Path scripts/lib/english.allowlist reads (exists, read_text, str)."""
+
+    def __init__(self, repo, head, path):
+        self.text = git_blob(repo, head, path)
+        self.label = f"{head[:10]}:{path}"
+
+    def exists(self):
+        return self.text is not None
+
+    def read_text(self, encoding="utf-8"):
+        return self.text or ""
+
+    def __str__(self):
+        return self.label
+
+
+def first_english_breach(english, path, content, allowed):
+    """(line number, reasons) of the first line of a run lead file that is not English and is not allowlisted the way
+    scripts/checks/english-only.py honours `path:line` and `path:*` entries, or None."""
+    if f"{path}:*" in allowed or english.first_offending_line(content) is None:
+        return None
+    for number, line in enumerate(content.splitlines(), 1):
+        reasons = english.classify(line)
+        if reasons and f"{path}:{number}" not in allowed:
+            return number, reasons
+    return None
+
+
+def run_lead_file_blockers(plan, info, key, head):
+    """Blockers of the run lead files on the integration HEAD: unreadable, machine-specific path text, and a line that is
+    not English (rule english-only, allowlist read from the same HEAD). At most one machine-path and one English blocker
+    per file; `status` shows the same blockers as `gate`."""
+    blockers = []
+    entries, rc = git(info["path"], "ls-tree", "-r", "--name-only", "-z", head)
+    if rc != 0 or entries is None:
+        blockers.append(f"{key}: cannot list the integration HEAD tree to check run lead files")
+    lead_files = run_lead_files(plan, info["path"])
+    paths = sorted(p for p in (entries or "").split("\0") if p and norm_path(p) in lead_files)
+    english, allowed, allow_error = None, {}, None
+    for path in paths:
+        content = git_blob(info["path"], head, path)
+        if content is None:
+            blockers.append(f"{key}: cannot read run lead file {path} on integration HEAD")
+            continue
+        hit = plan_paths.machine_path_hit(content)
+        if hit:
+            blockers.append(f"{key}: run lead file {path} has machine-specific path text `{hit}`: "
+                            "write it portable (repo-relative path, ${RPG_FACTORY_WORKSPACE} or ../..)")
+        if english is None:  # lazy: the first run lead file loads scripts/lib/english.py and the allowlist once
+            import english as english_lib
+            english = english_lib
+            try:
+                allowed = english.allowlist(_GitBlob(info["path"], head, ENGLISH_ALLOWLIST))
+            except ValueError as exc:
+                allow_error = f"{key}: english-only allowlist {ENGLISH_ALLOWLIST} on integration HEAD is invalid: {exc}"
+                blockers.append(allow_error)
+        if allow_error:
+            continue
+        # the exact tree path, like scripts/checks/english-only.py: norm_path folds case on Windows (membership only)
+        breach = first_english_breach(english, path, content, allowed)
+        if breach:
+            number, reasons = breach
+            blockers.append(f"{key}: run lead file {path} line {number} is not English ({'; '.join(reasons)}): rule "
+                            f"english-only (scripts/lib/english.py); write it in English or allowlist it in {ENGLISH_ALLOWLIST}")
+    return blockers
+
+
+def qa_covers_head(plan, info, qa_sha, head):
+    """QA covers later commits only when their entire diff consists of run lead files."""
+    if not qa_sha or not head:
+        return False
+    if qa_sha == head:
+        return True
+    _, rc = git(info["path"], "merge-base", "--is-ancestor", qa_sha, head)
+    if rc != 0:
+        return False
+    changed, rc = git(info["path"], "diff", "--name-only", "--no-renames", qa_sha, head)
+    if rc != 0 or changed is None:
+        return False
+    lead_files = run_lead_files(plan, info["path"])
+    return all(norm_path(path) in lead_files for path in changed.splitlines())
 
 
 def xs_diff_above(plan, reg, pipe, task, info, sha):
@@ -2834,11 +4002,40 @@ def xs_diff_above(plan, reg, pipe, task, info, sha):
     return pr.above_xs(rule, paths, numstat_lines("\n".join(rows))) + xs_heavy(plan, reg, rule, task["repo"], paths)
 
 
+def dep_review_pass(plan, reg, path, dep_id, sha):
+    """(pass_sha, current_sha) for a stacked task whose reviewed commit is `sha`. current_sha is the dependency's
+    current review PASS SHA (None when missing, STALE or not PASS). pass_sha is the SHA of the newest review PASS of the
+    dependency that `sha` contains (the current record or a kept per-candidate one of this version of the plan), else
+    None. It is returned only when it is the current PASS, or when the current PASS is a delta review on a tree that
+    already contains `sha` (e.g. the integration HEAD); otherwise a newer PASS the dependent never merged would hide a
+    missing merge, so pass_sha is None. A git error makes is_ancestor false: the blocker stays."""
+    cur, _ = verdict_of(plan, reg, dep_id, "review")
+    current_sha = cur["sha"] if cur and cur.get("state") == "PASS" else None
+    fingerprint = scope_fingerprint(plan, reg, dep_id)
+    current_file = verdict_file(plan, dep_id, "review")
+    candidates = [(fstate.read_json(current_file), 1)] + [(r, 0) for r in kept_task_reviews(plan, dep_id)]
+    best = None
+    for rec, is_current in candidates:
+        if (not isinstance(rec, dict) or rec.get("task") != dep_id or rec.get("subtask") or rec.get("phase") != "review"
+                or rec.get("state") != "PASS" or not isinstance(rec.get("sha"), str) or not rec["sha"]
+                or rec.get("fingerprint") != fingerprint or not is_ancestor(path, rec["sha"], sha)):
+            continue
+        key = (str(rec.get("timestamp") or ""), is_current)
+        if best is None or key > best[0]:
+            best = (key, rec["sha"])
+    pass_sha = best[1] if best else None
+    if pass_sha and pass_sha != current_sha and not (current_sha and is_ancestor(path, sha, current_sha)):
+        pass_sha = None
+    return pass_sha, current_sha
+
+
 def gate(plan, reg, allow_same_model=False, run_checks=True):
     coverage_cache = {}
     pipe = settings(reg)
     v = validate(plan, reg)
     blockers, notes, commands, unverified = list(v["errors"]), [], [], []
+    notes.extend("model scope widened by the plan: " + model_policy.widening_text(entry)
+                 for entry in valid_widenings(plan, reg))
     repos = sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")})
     heads = {}
     for key in repos:
@@ -2851,6 +4048,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: integration branch {plan['topic']} does not exist")
             continue
         heads[key] = head
+        blockers.extend(run_lead_file_blockers(plan, info, key, head))
         home, extra = worktree_for(info["path"], plan["topic"])
         if not info["worktrees"]:
             mine = [t["path"] for t in extra if str(t.get("branch", "")).startswith(plan["topic"])]
@@ -2895,6 +4093,8 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             lead_files = run_lead_files(plan, info["path"])
             stray = [f for f in (changed or "").splitlines() if norm_path(f) not in lead_files
                      and not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
+            if rc == 0 and stray:  # what a merge of the default branch brought in is nobody's task work
+                stray = default_merge_stray(info, key, reg, head, stray)
             if rc != 0 or stray:
                 blockers.append(f"{key}: changes outside every task's owned paths: {', '.join(stray[:5]) or 'git diff failed'}")
         xs_task = next((t for t in plan["tasks"] if t.get("repo") == key and pr.xs_plan(plan, t)), None)
@@ -2907,8 +4107,33 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             pass
         elif qa.get("state") != "PASS":
             blockers.append(f"{key}: QA {qa.get('state')} at {qa.get('sha', '')[:10]}")
-        elif head != qa.get("sha"):
+        elif not qa_covers_head(plan, info, qa.get("sha"), head):
             blockers.append(f"{key}: QA is STALE (ran on {qa.get('sha', '')[:10]}, integration HEAD is {head[:10]})")
+        elif head != qa.get("sha"):
+            notes.append(f"{key}: QA at {qa['sha'][:10]} covers HEAD {head[:10]}: only run lead files changed since")
+    by_id = {t.get("id"): t for t in plan.get("tasks", [])}
+    chains = {}  # repo key -> the integration head's first-parent chain, oldest first
+
+    def merged_at(key, path, c):
+        """Position on the first-parent chain of the integration head of the oldest commit that contains c: containment
+        is monotonic along that chain, so a binary search finds it."""
+        if key not in chains:
+            chains[key] = (git(path, "rev-list", "--first-parent", "--reverse", heads[key])[0] or "").splitlines()
+        chain = chains[key]
+        lo, hi = 0, len(chain) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if is_ancestor(path, c, chain[mid]):
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
+    def on_chain(key, path, c):
+        """True when c is itself a commit of the integration head's first-parent chain (an integration commit, e.g. a
+        delta review's SHA at the integration HEAD): it is never a task's own merge point."""
+        pos = merged_at(key, path, c)
+        return bool(chains[key]) and chains[key][pos] == c
     for t in plan.get("tasks", []):
         key = t.get("repo")
         if key not in heads:
@@ -2965,10 +4190,53 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                     blockers.append(f"{t['id']}: QA ran on {tq['sha'][:10]}, which does not contain the reviewed commit {rv['sha'][:10]}")
                 elif moved:
                     blockers.append(f"{t['id']}: QA is STALE - owned paths changed after {tq['sha'][:10]}")
+        # a stacked task (record of a dependency D in the same repo): its PASS must contain D's review PASS, and D is
+        # integrated first (git merge --no-ff D, then the task)
+        # (a record whose dependency was integrated before the task branch was cut is ignored: head = the task branch
+        # tip, else the reviewed SHA)
+        stk = None
+        if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
+            tip = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{task_branch(plan, info, t)}")[0]
+            stk = stack_record_live(plan, info, t, tip or rv["sha"])
+        dep = by_id.get(stk.get("dep")) if stk else None
+        if dep is not None and dep.get("repo") != key:
+            dep = None
+        dep_pass = None
+        stack_ok = False
+        if dep is not None:
+            # the dependency's review PASS this task contains (a later delta review of the dependency does not hide it)
+            dep_pass, dep_current = dep_review_pass(plan, reg, info["path"], dep["id"], rv["sha"])
+            # a delta review of the task itself (its current review sha is e.g. the integration HEAD) is also judged
+            # by its earlier PASS records contained in it: one that contains a dependency PASS merged strictly earlier
+            # clears both checks (only for an integrated review; any git error keeps the blockers)
+            if is_ancestor(info["path"], rv["sha"], heads[key]):
+                own_fp = scope_fingerprint(plan, reg, t["id"])
+                cands = [rv["sha"]] + [r["sha"] for r in kept_task_reviews(plan, t["id"])
+                                       if r.get("state") == "PASS" and r.get("fingerprint") == own_fp
+                                       and r["sha"] != rv["sha"] and is_ancestor(info["path"], r["sha"], rv["sha"])]
+                for s in cands:
+                    if on_chain(key, info["path"], s):
+                        continue  # an integration commit does not stand for the task's own merge point
+                    d_pass, _ = dep_review_pass(plan, reg, info["path"], dep["id"], s)
+                    if (d_pass and is_ancestor(info["path"], d_pass, s) and is_ancestor(info["path"], d_pass, heads[key])
+                            and merged_at(key, info["path"], d_pass) < merged_at(key, info["path"], s)):
+                        stack_ok = True
+                        break
+            if not stack_ok and (not dep_pass or not is_ancestor(info["path"], dep_pass, rv["sha"])):
+                shown = dep_pass or dep_current
+                blockers.append(f"{t['id']}: stacked on {dep['id']}: review {rv['sha'][:10]} lacks {dep['id']}'s review "
+                                f"PASS {shown[:10] if shown else 'none'}: merge {task_branch(plan, info, dep)} into "
+                                f"{task_branch(plan, info, t)}, then verify again")
         _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], heads[key])
         if rc != 0:
             blockers.append(f"{t['id']}: reviewed commit {rv['sha'][:10]} is not integrated into {plan['topic']}")
             continue
+        if dep is not None and not stack_ok and (
+                not dep_pass or not is_ancestor(info["path"], dep_pass, heads[key])
+                or on_chain(key, info["path"], rv["sha"])
+                or merged_at(key, info["path"], dep_pass) >= merged_at(key, info["path"], rv["sha"])):
+            blockers.append(f"{t['id']}: integrated before its dependency {dep['id']}: integrate {dep['id']} first "
+                            f"(git merge --no-ff {task_branch(plan, info, dep)}), then {t['id']}")
         changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key], cache=coverage_cache)
         if changed:
             blockers.append(f"{t['id']}: review is STALE - owned paths changed after {rv['sha'][:10]}: "
@@ -3019,41 +4287,48 @@ SETTLED_STATES = {"succeeded", "failed", "completed", "cancelled", "canceled", "
 def orca_runs(plan, extra=None):
     """The task leads' Orca Run ids: each task's `orca_run` plus --orca-run, in order, without duplicates."""
     runs = [t.get("orca_run") for t in plan.get("tasks", []) if isinstance(t, dict)] + list(extra or [])
-    runs = [r.strip()[len("run:"):] if r.strip().startswith("run:") else r.strip() for r in runs if isinstance(r, str)]
-    return list(dict.fromkeys(r for r in runs if r))
+    return list(dict.fromkeys(r for r in map(run_id, runs) if r))
 
 
 def orca_workers(run):
-    """(workers, None) from `orca orchestration worker-list --run RUN --full --json` (every page), or (None, why).
+    """(workers, why, concise) from worker-list, falling back to concise rows if --full is unknown.
     --full: the concise row has only state/liveness/terminal/terminalState; the full row adds the resource (release
     state, ownership, release time), the projection and workerState/dispatchStatus."""
     exe = shutil.which("orca")
     if not exe:
-        return None, "orca is not on PATH"
-    workers, cursor = [], None
-    for _ in range(50):
-        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100", "--full", "--json"]
+        return None, "orca is not on PATH", False
+    workers, cursor, concise, pages = [], None, False, 0
+    while pages < 50:
+        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100"]
+        if not concise:
+            argv.append("--full")
+        argv.append("--json")
         if cursor:
             argv += ["--cursor", cursor]
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
                                stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as e:
-            return None, f"orca worker-list failed: {e}"
+            return None, f"orca worker-list failed: {e}", concise
         try:
             doc = json.loads(r.stdout or "")
         except ValueError:
             doc = None
         if r.returncode != 0 or not isinstance(doc, dict) or doc.get("ok") is False or not isinstance(doc.get("result"), dict):
-            why = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())[:200]
-            return None, f"orca worker-list exited {r.returncode}" + (f": {why}" if why else "")
+            error = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())
+            if not concise and re.search(r"unknown\s+(?:option|flag).*?--full\b", error, re.I):
+                concise = True
+                continue  # retry the same cursor in concise form, including later pages
+            why = error[:200]
+            return None, f"orca worker-list exited {r.returncode}" + (f": {why}" if why else ""), concise
         res = doc["result"]
+        pages += 1
         workers += [w for w in res.get("workers") or [] if isinstance(w, dict)]
         page = res.get("page") if isinstance(res.get("page"), dict) else {}
         cursor = page.get("nextCursor") if page.get("hasMore") else None
         if not cursor:
-            return workers, None
-    return workers, None
+            return workers, None, concise
+    return workers, None, concise
 
 
 def worker_settled(w):
@@ -3082,24 +4357,34 @@ def worker_no_terminal(w):
     return isinstance(proj, dict) and proj.get("state") == "absent"
 
 
-def orca_sessions(runs):
+def orca_sessions(runs, rows=None):
     """Per Run: settled workers that are not released, with the release command; NOT_AVAILABLE when orca cannot say.
-    Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here."""
+    Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here. `rows`
+    (a dict), when given, receives each listed Run's worker rows ({run: [row]}) so a caller needs no second call."""
     out = []
     for run in runs:
-        workers, why = orca_workers(run)
+        workers, why, concise = orca_workers(run)
+        if rows is not None and workers is not None:
+            rows[run] = workers
         if workers is None:
             out.append({"run": run, "state": "NOT_AVAILABLE", "reason": why, "unreleased": [], "released": 0, "running": 0})
             continue
         unreleased, released, running = [], 0, 0
+        missing_release = missing_state = 0
         for w in workers:
+            if concise:
+                missing_release += not bool(w.get("terminalState"))
+                # a row released through terminalState is released whatever its state: no settledness to check
+                missing_state += not w.get("state") and w.get("terminalState") != "released"
+                if not w.get("terminalState") or (w.get("terminalState") != "released" and not w.get("state")):
+                    continue
             res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
             term = w.get("terminalState") or res.get("releaseState") or "unknown"
-            if worker_released(w):
+            if (w.get("terminalState") == "released" if concise else worker_released(w)):
                 released += 1
-            elif not worker_settled(w):
+            elif not (str(w.get("state", "")).lower() in SETTLED_STATES if concise else worker_settled(w)):
                 running += 1
-            elif worker_no_terminal(w):
+            elif not concise and worker_no_terminal(w):
                 continue    # settled without ever owning a terminal (terminal_create failed or never materialized): nothing to release
             else:
                 did = str(w.get("dispatchId") or "?")
@@ -3108,7 +4393,8 @@ def orca_sessions(runs):
                 unreleased.append({"dispatch": did, "worker": w.get("workerState") or w.get("state"), "terminal": term, "note": note,
                                    "command": orca_cmd.quote(["orca", "orchestration", "worker-release", "--dispatch", did])})
         out.append({"run": run, "state": "UNRELEASED" if unreleased else "OK", "reason": None, "unreleased": unreleased,
-                    "released": released, "running": running})
+                    "released": released, "running": running, "concise": concise,
+                    "missing_release": missing_release, "missing_state": missing_state})
     return out
 
 
@@ -3119,8 +4405,16 @@ def session_lines(sessions):
         if s["state"] == "NOT_AVAILABLE":
             lines.append(f"NOT_AVAILABLE  run {s['run']}: {s['reason']} (worker release not checked)")
             continue
+        note = ""
+        if s.get("concise"):
+            checks = []
+            if s["missing_release"]:
+                checks.append(f"{s['missing_release']} worker(s) without terminalState, release not checked")
+            if s["missing_state"]:
+                checks.append(f"{s['missing_state']} worker(s) without state, settledness not checked")
+            note = " (concise rows (orca has no --full)" + (": " + "; ".join(checks) if checks else "") + ")"
         lines.append(f"{s['state']}  run {s['run']}: {len(s['unreleased'])} settled worker(s) not released, "
-                     f"{s['released']} released, {s['running']} running")
+                     f"{s['released']} released, {s['running']} running{note}")
         for u in s["unreleased"]:
             lines.append(f"  UNRELEASED {u['dispatch']} ({u['worker']}, terminal {u['terminal']}"
                          + (f", {u['note']}" if u["note"] else "") + f"): {u['command']}")
@@ -3142,6 +4436,61 @@ def orca_worktree_paths():
     if not isinstance(rows, list):
         return None
     return {norm_wt(w["path"]) for w in rows if isinstance(w, dict) and w.get("path")}
+
+
+def orca_wait_command(reg, path, gone=False):
+    """The printed `<pipeline> orca-wait [--gone] --worktree <path>` command (pipeline_argv keeps `--registry none`)."""
+    return orca_cmd.quote(pipeline_argv(reg) + ["orca-wait"] + (["--gone"] if gone else []) + ["--worktree", path])
+
+
+def cmd_orca_wait(a, reg):
+    """Poll the read-only `orca worktree list --json` until the worktree is listed (--gone: no longer listed). Exit 0
+    once it holds, 1 after the timeout or when orca is not on PATH or the list fails; nothing is written."""
+    if a.timeout < 0 or a.interval < 0:
+        die("--timeout and --interval must be 0 or more seconds")
+    path = a.worktree[len("path:"):] if a.worktree.startswith("path:") else a.worktree
+    want = norm_wt(path)
+    deadline = time.monotonic() + a.timeout
+    while True:
+        paths = orca_worktree_paths()
+        if paths is None:
+            why = ("orca is not on PATH" if not shutil.which("orca")
+                   else "`orca worktree list --json` failed or printed no worktree list")
+            print(f"factory-pipeline: orca-wait: {why}: cannot tell whether Orca lists {path}; run the next command by "
+                  "hand once `orca worktree list` " + ("no longer shows" if a.gone else "shows") + " the path",
+                  file=sys.stderr)
+            return 1
+        if (want in paths) != a.gone:
+            print(f"orca-wait: {path} is " + ("no longer listed" if a.gone else "listed") + " by Orca")
+            return 0
+        if time.monotonic() >= deadline:
+            if a.gone:
+                print(f"factory-pipeline: orca-wait: Orca still lists {path} after {a.timeout:g} s: its branch is still "
+                      "in use by the worktree (`git branch -d` would fail with 'used by worktree'); retry this command, "
+                      "or delete the branch by hand once `orca worktree list` no longer shows the path", file=sys.stderr)
+            else:
+                print(f"factory-pipeline: orca-wait: Orca does not list {path} after {a.timeout:g} s: the worktree stays "
+                      "hidden in Orca (an `orca worktree set` now changes nothing); retry this command, or run "
+                      "`orca worktree set` by hand once `orca worktree list` shows the path", file=sys.stderr)
+            return 1
+        time.sleep(min(a.interval, max(0.0, deadline - time.monotonic())))
+
+
+def orca_worktree_ids():
+    """{normalised path: Orca worktree id} from the read-only `orca worktree list --json`; None when orca cannot say
+    (not on PATH, failing: no opinion, never an error)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True,
+                           timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["worktrees"] if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {norm_wt(w["path"]): str(w["id"]) for w in rows if isinstance(w, dict) and w.get("path") and w.get("id")}
 
 
 def orca_terminals(path):
@@ -3219,7 +4568,7 @@ def _canon(p):
 def plan_checkouts(plan, reg):
     """The checkouts of the plan's worktrees (task worktrees and the integration checkout: branch <topic> or <topic>-*;
     their Orca children, as `children_of` and `status` find them: a branch or directory `<task branch>--*` with any
-    Orca prefix, or a child by Orca's lineage in any directory), plus the main checkout of a no-worktree repo.
+    Orca prefix, or a plan-owned child by Orca's lineage in any directory), plus the main checkout of a no-worktree repo.
     {canonical path: path}. Read-only; Orca's lineage is read (once) only when a worktree is not named by the rule."""
     out, topic = {}, plan["topic"]
     tasks = [t for t in plan.get("tasks", []) if isinstance(t, dict) and t.get("repo")]
@@ -3240,7 +4589,7 @@ def plan_checkouts(plan, reg):
                 rest.append(wt)
         if not info["worktrees"] or not rest:
             continue
-        lineage = lineage or Lineage([topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key])
+        lineage = lineage or Lineage([topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key], topic)
         for parent in [topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key]:
             home = next((t["path"] for t in trees if t.get("branch") == parent), None)
             for wt in rest:
@@ -3250,8 +4599,9 @@ def plan_checkouts(plan, reg):
 
 
 def read_slots():
-    """[{slot, pid, winpid, checkout, started}] of the held test slots `tests/run-all.sh` publishes under
-    <persistent state>/locks/run-all-slots/<n>/{pid,checkout,started,winpid}; [] when none."""
+    """[{slot, pid, winpid, checkout, started, progress}] of the held test slots `tests/run-all.sh` publishes under
+    <persistent state>/locks/run-all-slots/<n>/{pid,checkout,started,winpid,progress}; [] when none. `progress` is
+    parse_slot_progress of the slot's progress file (None without a usable one)."""
     root = os.path.join(fstate.persistent(), "locks", "run-all-slots")
     try:
         names = sorted(os.listdir(root), key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
@@ -3269,12 +4619,49 @@ def read_slots():
         d = os.path.join(root, n)
         if os.path.isdir(d) and get(d, "pid"):
             out.append({"slot": n, "pid": get(d, "pid"), "winpid": get(d, "winpid"), "checkout": get(d, "checkout"),
-                        "started": get(d, "started")})
+                        "started": get(d, "started"), "progress": parse_slot_progress(get(d, "progress"))})
     return out
 
 
+def parse_slot_progress(text):
+    """The `progress` file of a test slot (one key=value per line: updated, check, result, passed, failed) as {check,
+    result, passed, failed, updated, age_seconds}; None when the text is empty or has no check. A partial or malformed
+    file never raises: a missing field is "" (counts None), an unparsable `updated` gives age_seconds None."""
+    fields = {}
+    for line in (text or "").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            fields[key.strip()] = value.strip()
+    if not fields.get("check"):
+        return None
+
+    def count(key):
+        try:
+            return int(fields.get(key, ""))
+        except ValueError:
+            return None
+    updated = fields.get("updated", "")
+    try:
+        age = max(0, int((datetime.now(timezone.utc) - datetime.strptime(updated, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)).total_seconds()))
+    except ValueError:
+        age = None
+    return {"check": fields["check"], "result": fields.get("result", ""), "passed": count("passed"),
+            "failed": count("failed"), "updated": updated, "age_seconds": age}
+
+
+def _age_text(seconds):
+    if seconds is None:
+        return "an unknown time"
+    if seconds < 120:
+        return f"{seconds}s"
+    if seconds < 7200:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h"
+
+
 def slot_holders(plan, reg):
-    """Test slots held by a run in one of the plan's checkouts: {slot, pid, checkout, started, alive} with alive True,
+    """Test slots held by a run in one of the plan's checkouts: {slot, pid, winpid, checkout, started, alive} with alive True,
     False or None (cannot say). On Windows the slot's shell PID is an MSYS PID: the liveness check uses its winpid and
     is None without one. Read-only, never stops anything."""
     mine = plan_checkouts(plan, reg)
@@ -3289,12 +4676,137 @@ def slot_holders(plan, reg):
     return held
 
 
+def slot_progress_text(progress):
+    """What the slot's run last reported, with the age of that report: a live run keeps updating it, an orphan does not."""
+    if not progress:
+        return ", no progress yet"
+    counts = ", ".join(f"{progress[k]} {k}" for k in ("passed", "failed") if progress[k] is not None)
+    return (f", last check {progress['check']} {progress['result'] or '?'}" + (f" ({counts})" if counts else "")
+            + f" updated {_age_text(progress['age_seconds'])} ago")
+
+
 def slot_lines(holders):
     return [f"slot {h['slot']} held by PID {h['pid']}"
             + (f" (Windows PID {h['winpid']})" if h["winpid"] and h["winpid"] != h["pid"] else "")
             + f" in {h['checkout']} since {h['started'] or '?'}"
             + {True: " (alive)", False: " (not running)", None: " (liveness unknown)"}[h["alive"]]
+            + slot_progress_text(h.get("progress"))
             + ": the user decides, the run never stops it" for h in holders]
+
+
+def _utc_time(value):
+    """A timestamp as an aware UTC datetime, or None: an ISO form with `T` or a space, with or without `Z`, an offset or
+    fractional seconds (a naive one is UTC, as Orca's releaseCompletedAt `2026-11-26 06:07:45` is), or epoch ms."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if re.fullmatch(r"\d{12,14}", text):  # epoch milliseconds (Orca's observedAt form)
+        try:
+            return datetime.fromtimestamp(int(text) / 1000, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = text.replace(" ", "T", 1)
+    if text[-1:] in ("Z", "z"):
+        text = text[:-1] + "+00:00"
+    try:
+        when = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
+
+
+def _worker_checkout(w):
+    """The checkout an Orca worker ran in: the path part (after `::`) of resource.worktreeId or projection.workspace.id."""
+    res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
+    proj = w.get("projection") if isinstance(w.get("projection"), dict) else {}
+    ws = proj.get("workspace") if isinstance(proj.get("workspace"), dict) else {}
+    wid = str(res.get("worktreeId") or ws.get("id") or "")
+    return wid.partition("::")[2] if "::" in wid else wid
+
+
+def slot_stop_command(h):
+    """The command that stops only this slot's holder: `taskkill //PID <winpid> //T //F` (Windows Git Bash) when the slot
+    has a Windows PID, else `kill <pid>`; None without a usable PID. Printed for the user, never run."""
+    if str(h.get("winpid") or "").isdigit():
+        return orca_cmd.quote(["taskkill", "//PID", h["winpid"], "//T", "//F"])
+    if str(h.get("pid") or "").isdigit():
+        return orca_cmd.quote(["kill", h["pid"]])
+    return None
+
+
+def verify_reports(plan, task_id):
+    """[(at, text)] of the records that say a task's verify session reported: the current `qa` verdict of the task or of
+    one of its subtasks (<task>@<id>__qa.json), and such a `review` verdict that is FAIL; `at` is the record's
+    timestamp (an aware datetime). Read-only."""
+    files = [verdict_file(plan, task_id, "qa"), verdict_file(plan, task_id, "review")]
+    prefix = safe_name(task_id) + SUB_SEP
+    try:
+        files += sorted(os.path.join(verdict_dir(plan), n) for n in os.listdir(verdict_dir(plan))
+                        if n.startswith(prefix) and n.endswith(("__qa.json", "__review.json")))
+    except OSError:
+        pass
+    out = []
+    for f in files:
+        rec = fstate.read_json(f)
+        if not isinstance(rec, dict) or rec.get("task") != task_id or rec.get("phase") not in ("qa", "review"):
+            continue
+        if rec["phase"] == "review" and rec.get("state") != "FAIL":
+            continue
+        at = _utc_time(rec.get("timestamp"))
+        if at:
+            sub = f" (subtask {rec['subtask']})" if rec.get("subtask") else ""
+            out.append((at, f"verify reported {rec['phase']} {rec.get('state')}{sub} at "
+                            f"{str(rec.get('sha') or '?')[:10]} ({rec.get('timestamp')})"))
+    return out
+
+
+def verify_slot_leftovers(plan, rows, slots, run_rows, extra_runs=None):
+    """Held test slots a verify dispatch left behind. A slot whose holder is alive (True) or cannot be checked (None) in a
+    task worktree of the plan (the task branch's worktree or one of its children, as the status rows name them; tier XS
+    has none) is left by verify when, at or after the slot's `started`, that task's verify reported (verify_reports) or
+    a worker of an Orca Run of the task (its orca_run, or extra_runs) running in that checkout had its terminal released
+    (releaseCompletedAt, else releaseRequestedAt of a released row; one without a time flags nothing). `run_rows` are
+    the worker rows orca_sessions already listed: no orca call here. A slot without a parsable start or a usable PID is
+    never flagged. [{slot, task, reason, at, stop}] (slot: the slot_holders entry). Read-only: never stops anything."""
+    out = []
+    for h in slots:
+        start, stop = _utc_time(h.get("started")), slot_stop_command(h)
+        if h.get("alive") is False or not start or not stop:
+            continue
+        where = _canon(h.get("checkout"))
+        for t in plan.get("tasks", []):
+            row = rows.get(t.get("id")) if isinstance(t, dict) else None
+            if not row or pr.xs_plan(plan, t):
+                continue
+            homes = [_canon(p) for p in [row.get("worktree")] + [c.get("path") for c in row.get("children") or []] if p]
+            if not any(where == p or where.startswith(p + "/") for p in homes):
+                continue
+            events = [e for e in verify_reports(plan, t["id"]) if e[0] >= start]
+            for run in dict.fromkeys(r for r in map(run_id, [t.get("orca_run")] + list(extra_runs or [])) if r):
+                for w in run_rows.get(run) or []:
+                    res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
+                    at = _utc_time(res.get("releaseCompletedAt") or res.get("releaseRequestedAt"))
+                    path = _canon(_worker_checkout(w))
+                    if worker_released(w) and at and at >= start and path and (where == path or where.startswith(path + "/")):
+                        events.append((at, f"its Orca worker {w.get('dispatchId') or '?'} was released "
+                                           f"({res.get('releaseCompletedAt') or res.get('releaseRequestedAt')})"))
+            if events:
+                at, reason = min(events, key=lambda e: e[0])
+                out.append({"slot": h, "task": t["id"], "reason": reason,
+                            "at": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "stop": stop})
+            break  # a checkout belongs to one task
+    return out
+
+
+def left_slot_lines(left):
+    """The `Slots: LEFT BY VERIFY ...` text of verify_slot_leftovers, with the stop command for that PID only."""
+    return [f"LEFT BY VERIFY slot {e['slot']['slot']} held by PID {e['slot']['pid']}"
+            + (f" (Windows PID {e['slot']['winpid']})" if e["slot"]["winpid"] and e["slot"]["winpid"] != e["slot"]["pid"]
+               else "")
+            + f" in {e['slot']['checkout']} since {e['slot']['started']}"
+            + {True: " (alive)", None: " (liveness unknown)"}.get(e["slot"]["alive"], "")
+            + f": task {e['task']}: {e['reason']} after the run started; stop that PID only: {e['stop']}"
+            + " (status never runs it)" for e in left]
 
 
 def _names_dir(cmd, form):
@@ -3349,11 +4861,17 @@ BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being 
 
 
 def cleanup(plan, reg, orca_run=None, after_merge=False):
-    """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
-    Orca workers of the task leads' Runs that are not released."""
+    """Worktrees and task branches the run left (the plan's own: Lineage.owns, as in status; never every <topic>-*),
+    with the commands that remove them, and settled
+    Orca workers of the task leads' Runs that are not released. `stacked`: the stacked siblings (stack_groups) with
+    their merge order, information only (no effect on state, left, commands or kept). A stacked dependent's worktree
+    is a sibling task worktree, never "child of <dependency>": is_child and Lineage skip the plan's own task branches."""
     left, commands, kept, leftovers, users = [], [], [], [], []
     orca_paths = []  # the Orca records, read once and only when a task worktree path is no git worktree any more
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
+        # paths this repo removes through `orca worktree rm`, which deletes asynchronously: their branches are deleted
+        # only after an orca-wait --gone per path (printed once, before the repo's first `git branch -d`)
+        orca_removed = []
         info = repo_info(plan, reg, key)
         if not info["path"] or not os.path.isdir(info["path"]):
             left.append(info["path"] or key)
@@ -3375,10 +4893,11 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         parents = [(t["id"], task_branch(plan, info, t)) for t in plan["tasks"] if t.get("repo") == key]
         parents.append((f"integration:{key}", topic))
         parents = [(tid, pb, worktree_for(info["path"], pb)[0]) for tid, pb in parents]
-        lineage = Lineage(pb for _, pb, _ in parents)
+        lineage = Lineage((pb for _, pb, _ in parents), topic)
+        own_extra = lambda b: b != topic and lineage.owns(b)  # a branch of this plan other than the integration branch
         prune = orca_cmd.quote(["git", "-C", command_repo, "worktree", "prune"])
         for wt in trees:
-            if wt.get("prunable") and str(wt.get("branch", "")).startswith(topic + "-"):
+            if wt.get("prunable") and own_extra(str(wt.get("branch", ""))):
                 # the directory is gone but git keeps the record: `git branch -d` of its branch fails ('used by worktree')
                 left.append(wt["path"])
                 leftovers.append({"kind": "prunable", "path": wt["path"], "commands": [prune]})
@@ -3401,9 +4920,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     kept.append(f"{key}: child of {owner[0]}: {child_note_text(c, owner[1])}")
                     if c["merged"]:
                         commands.append(orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{wt['path']}"]))
+                        orca_removed.append(wt["path"])
                 continue
             branch = str(wt.get("branch", ""))
-            if not branch.startswith(topic + "-") and not (merged and branch == topic):
+            if not own_extra(branch) and not (merged and branch == topic):
                 continue
             dirty, rc = git(wt["path"], "status", "--porcelain")
             if rc != 0 or dirty:
@@ -3426,9 +4946,12 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
             beside = list(dict.fromkeys(os.path.dirname(p.rstrip("/\\")) for p in (parent, info["path"], command_repo) if p))
             for t in (t for t in plan["tasks"] if t.get("repo") == key):
                 name = task_branch(plan, info, t).replace("/", "-")
-                for d in dict.fromkeys(os.path.join(b, name) for b in beside):
-                    if norm_wt(d) in registered:
+                # one directory reached through two spellings (forward and back slashes) is listed once
+                seen = set()
+                for d in (os.path.join(b, name) for b in beside):
+                    if norm_wt(d) in registered or norm_wt(d) in seen:
                         continue
+                    seen.add(norm_wt(d))
                     if not orca_paths:
                         orca_paths.append(orca_worktree_paths() or set())
                     on_disk, record = os.path.exists(d), norm_wt(d) in orca_paths[0]
@@ -3441,16 +4964,21 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     what = (f"directory {d} (no git worktree any more" + (", with an Orca record" if record else "") + ")"
                             if on_disk else f"Orca record of the removed task worktree {d}")
                     kept.append(f"{key}: LEFTOVER {what}: `git worktree prune`, then `orca worktree rm` once the "
-                                f"directory is free (check it is the old task worktree first); {BUSY_NOTE}")
+                                f"directory is free (check it is the old task worktree first); its branch is deleted only "
+                                f"once the worktree record is gone (`orca-wait --gone`); {BUSY_NOTE}")
+                    if rm not in commands:
+                        orca_removed.append(d)
                     commands.extend(c for c in (prune, rm) if c not in commands)
                     # a directory the removal may fail on: name the processes that may hold it (read-only; the user decides)
                     procs = busy_processes(d)
                     leftovers[-1]["processes"] = procs
                     kept.extend(f"{key}: BUSY? {line}" for line in busy_lines(d, procs))
-        refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
+        refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*",
+                      f"refs/heads/*/{topic}-*")
+        refs = "\n".join(r for r in (refs or "").splitlines() if own_extra(r))
         if after_merge and integrated:
-            refs = (refs or "") + "\n" + topic
-        for br in (refs or "").splitlines():
+            refs = refs + "\n" + topic
+        for br in refs.splitlines():
             target = main if after_merge else integrated
             _, rc = git(info["path"], "merge-base", "--is-ancestor", br, target) if target else (None, 1)
             if rc == 0:
@@ -3459,16 +4987,19 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                 if home and all(norm_wt(home) != norm_wt(t["path"]) for t in trees):
                     kept.append(f"{key}: branch {br} is checked out in the main checkout {home} - not deleted")
                 else:
+                    commands.extend(orca_wait_command(reg, p, gone=True) for p in orca_removed)
+                    orca_removed = []  # waited for once, before this repo's first branch deletion
                     commands.append(orca_cmd.quote(["git", "-C", command_repo, "branch", "-d", br]))
             else:
                 left.append(br)
                 kept.append(f"{key}: branch {br} is not in {'main' if after_merge else topic} - not deleted (integrate it or name it in the report)")
         if after_merge:
             remote_refs, _ = git(info["path"], "for-each-ref", "--format=%(refname)",
-                                 f"refs/remotes/origin/{topic}", f"refs/remotes/origin/{topic}-*")
+                                 f"refs/remotes/origin/{topic}", f"refs/remotes/origin/{topic}-*",
+                                 f"refs/remotes/origin/*/{topic}-*")
             for ref in sorted((remote_refs or "").splitlines(), key=lambda r: r == f"refs/remotes/origin/{topic}"):
                 br = ref.removeprefix("refs/remotes/origin/")
-                if br != topic and not br.startswith(topic + "-"):
+                if br != topic and not own_extra(br):
                     continue
                 left.append(ref)
                 if main and is_ancestor(info["path"], ref, main):
@@ -3477,8 +5008,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     kept.append(f"{key}: remote branch {br} is not in main - not deleted")
         elif not topic_head:
             remote_refs, _ = git(info["path"], "for-each-ref", "--format=%(refname)",
-                                 f"refs/remotes/origin/{topic}-*")
+                                 f"refs/remotes/origin/{topic}-*", f"refs/remotes/origin/*/{topic}-*")
             for ref in (remote_refs or "").splitlines():
+                if not own_extra(ref.removeprefix("refs/remotes/origin/")):
+                    continue
                 left.append(ref)
                 kept.append(f"{key}: {ref} remains but the integration branch is absent - verify the merge before deletion")
     specs_dir = os.path.join(verdict_dir(plan), "specs")
@@ -3489,7 +5022,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         for u in s["unreleased"]:
             left.append(f"orca:{u['dispatch']}")
             commands.append(u["command"])
-    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
+    stacked = [{k: g[k] for k in ("repo", "dep", "dependents", "order", "states", "text")}
+               for g in stack_groups(plan, reg)]
+    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept,
+            "stacked": stacked, "state_kept": specs_kept,
             "leftovers": leftovers, "terminals": users, "workers": workers, "slots": slot_holders(plan, reg),
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
@@ -3508,6 +5044,8 @@ def cmd_cleanup(a, reg):
             print("  " + c)
         for k in out["kept"]:
             print("  KEPT  " + k)
+        for g in out["stacked"]:
+            print(f"  STACK {g['repo']}: {g['text']}")
         for k in out["state_kept"]:
             print("  STATE " + k)
         for line in session_lines(out["workers"]):
@@ -3546,9 +5084,19 @@ def review_base(info, topic, start, sha):
     `start` is where the task branch was cut (plan.topic for a later wave, else repos.<key>.base). While `sha` is not on
     the topic, `start` is that fork point. Once the topic merged it, topic...sha is empty and repos.<key>.base would add
     the earlier waves' files, so the base is merge-base(M^1, sha) for the oldest first-parent topic commit M containing
-    sha. Returns (base, note); the note says when no such merge is found and the diff may include earlier waves."""
+    sha. Returns (base, note); the note says when no such merge is found and the diff may include earlier waves.
+
+    A branch cut from the base (start != topic) that merged the topic (another integrated task) before it was
+    integrated: start...sha would show that task's files as its own, so the base is the newest topic commit in sha,
+    merge-base(topic, sha), when it is ahead of start."""
     path = info["path"]
-    if start != topic or not is_ancestor(path, sha, topic):
+    on_topic = is_ancestor(path, sha, topic)
+    if start != topic and not on_topic:
+        mb, rc = git(path, "merge-base", f"refs/heads/{topic}", sha)
+        if rc == 0 and mb and not is_ancestor(path, mb, start):
+            return mb, f"diff starts at merge-base({topic}, sha) {mb[:10]}: only changes since"
+        return start, None
+    if start != topic or not on_topic:
         return start, None
     chain = (git(path, "rev-list", "--first-parent", topic)[0] or "").split()  # newest first
     lo, hi, found = 0, len(chain) - 1, None  # containment is monotonic along the chain: binary search the oldest
@@ -3578,8 +5126,21 @@ class Lineage:
     read once and only when a worktree is not already a child by name. Orca unavailable or failing: empty (the
     naming rule alone), never an error."""
 
-    def __init__(self, own_branches=()):
-        self._map, self._own = None, set(own_branches)
+    def __init__(self, own_branches=(), topic=None):
+        self._map, self._own, self.topic = None, set(own_branches), topic
+
+    def owns(self, branch):
+        """Whether `branch` belongs to this plan: the topic itself, a task branch or `<task branch>-...`, each with an
+        optional Orca prefix (`codex/<branch>`), and an Orca child `<own>--...` of the topic too (the integration
+        QA child `<topic>--qa-<sha7>`). `<topic>-...` alone is not enough: a plan whose topic extends this one
+        (`<topic>-v2`) or a helper of another plan in the same repo is not this plan's."""
+        for own in self._own | ({self.topic} if self.topic else set()):
+            if branch == own or branch.endswith("/" + own):
+                return True
+            sep = own + "--" if own == self.topic else own + "-"  # the topic's own `-` extensions are other plans'
+            if branch.startswith(sep) or ("/" + sep) in branch:
+                return True
+        return False
 
     def parent(self, wt):
         if wt.get("branch") in self._own:  # a task worktree or the integration checkout is no child: no orca call
@@ -3618,13 +5179,14 @@ class Lineage:
 def is_child(wt, parent_branch, parent_path=None, lineage=None):
     """An Orca child of the worktree on `parent_branch`: its branch (Orca may add a prefix) or directory name starts
     with `<parent branch>--` (dispatch names children `<task branch>--...`, child_branch()), or Orca's lineage names
-    the worktree at `parent_path` as its parent (`orca worktree create --parent-worktree` with any name)."""
+    the worktree at `parent_path` as its parent and the branch is the plan's own (Lineage.owns)."""
     mark = parent_branch + "--"
     br = str(wt.get("branch") or "")
     base = os.path.basename(str(wt.get("path") or "").replace("\\", "/").rstrip("/"))
     if br.startswith(mark) or ("/" + mark) in br or base.startswith(mark.replace("/", "-")):
         return True
-    return bool(parent_path and lineage and lineage.parent(wt) == norm_wt(parent_path))
+    return bool(parent_path and lineage and br and lineage.owns(br)
+                and lineage.parent(wt) == norm_wt(parent_path))
 
 
 def children_of(repo, trees, parent_branch, parent_path=None, lineage=None):
@@ -3641,7 +5203,8 @@ def children_of(repo, trees, parent_branch, parent_path=None, lineage=None):
 def child_note_text(c, parent_branch):
     return (f"leftover child worktree {c['path']} ({c['branch'] or 'detached'}): "
             + ("merged" if c["merged"] else f"merge it into {parent_branch}") + ", then remove it at once: "
-            + orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{c['path']}"]))
+            + orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{c['path']}"])
+            + "; its branch is deleted only once the worktree record is gone (`orca-wait --gone`)")
 
 
 def changed_since(path, sha, head, paths):
@@ -3651,10 +5214,12 @@ def changed_since(path, sha, head, paths):
 
 def own_start(plan, reg, info, task, head):
     """Where the task's own commits start on `head`, or None when it has none yet. Dependent tasks may own the same
-    paths, so the repo base is not enough: a branch cut from plan.topic starts at its fork point (none while it is still
+    paths, so the repo base is not enough: a branch cut from plan.topic (a later wave, or a no-deps task whose branch
+    forks from the topic ahead of the base: start_base) starts at its fork point (none while it is still
     on the topic's first-parent chain: cut there, nothing of its own), and a no-worktree task, which shares the topic,
     starts only after its serial predecessor's current QA PASS on an ancestor of head (otherwise it has not started,
-    and the predecessor's commits are not its own)."""
+    and the predecessor's commits are not its own). A stacked task starts at stack_base: the newest dependency SHA in
+    head (None when none is)."""
     base = info["base_sha"] or info["base"]
     if not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
@@ -3662,11 +5227,18 @@ def own_start(plan, reg, info, task, head):
             return base
         rec = verdict_of(plan, reg, prev, "qa")[0]
         return rec["sha"] if rec and rec.get("state") == "PASS" and is_ancestor(info["path"], rec["sha"], head) else None
+    stacked = stack_base(plan, reg, info, task, head)
+    if stacked is not None:
+        return None if stacked[1] else stacked[0]
+    # not stacked: with its branch, start_base(reg) is the unstacked base; without it (removed after integration) its
+    # commits are on the topic, and stackable() would re-enter task_status from uncovered_changes: no reg
     start = start_base(plan, info, task)
     if start != plan["topic"]:
         return base
     fork, note = review_base(info, plan["topic"], start, head)
-    return None if note else fork
+    if note:  # no merge commit marks its start: a no-deps task (topic only by start_base's fork rule) keeps the base
+        return None if task.get("deps") else base
+    return fork
 
 
 def task_status(plan, reg, task, n_in_repo, lineage=None):
@@ -3678,7 +5250,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     base = info["base_sha"] or info["base"]
     row = {"id": task["id"], "repo": task["repo"], "branch": branch, "worktree": None, "sha": None,
            "phase": "pending", "review": None, "qa": None, "children": [], "notes": [],
-           "stale": {}}  # kind -> why: the one currency test below, which lead_report_notes reuses for READY_FOR_PR
+           "stale": {}}  # kind -> why: the one currency test below, which lead_report_state reuses for READY_FOR_PR
     if not path or not os.path.isdir(path):
         row["notes"].append(f"checkout {path} missing")
         return row, info
@@ -3746,7 +5318,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     # Keep the lead's QA visible above, but current integration QA also proves
     # completion in repos where the gate does not require per-task QA.
     if (not per_task_qa and integration_qa and integration_qa.get("state") == "PASS"
-            and integration_qa["sha"] == topic_head):
+            and qa_covers_head(plan, info, integration_qa.get("sha"), topic_head)):
         qa = integration_qa
     if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
         row["phase"] = "qa"
@@ -3779,16 +5351,16 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
     xs_task = next((t for t in tasks if t["repo"] == key and pr.xs_plan(plan, t)), None)
     if xs_task and not (fstate.read_json(verdict_file(plan, f"integration:{key}", "qa")) or {}).get("sha"):
         xq, _ = verdict_of(plan, reg, xs_task["id"], "qa")
-        if xq and xq.get("state") == "PASS" and xq["sha"] == topic_head:
+        if xq and xq.get("state") == "PASS" and qa_covers_head(plan, info, xq.get("sha"), topic_head):
             return first
         row = rows[xs_task["id"]]
         row["phase"] = "integrated"
-        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} is not at the integration HEAD "
+        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} does not cover the integration HEAD "
                             f"{(topic_head or '?')[:10]}: the gate needs it there")
         xs_qa_next(reg, plan, xs_task, info, row, topic_head, me, pf)
         return first
     iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
-    if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
+    if iq and iq.get("state") == "PASS" and qa_covers_head(plan, info, iq.get("sha"), topic_head):
         return first
     if iq and iq.get("state") != "PASS":
         why = f"integration QA {iq.get('state')} at {iq['sha'][:10]}"
@@ -3818,13 +5390,123 @@ def lead_report_file(plan, task):
     return os.path.join(verdict_dir(plan), f"{safe_name(task)}__lead-report.json")
 
 
+def task_progress_since(plan, reg, task, ts):
+    """The first kind of progress the task made after epoch seconds `ts`, or None: `commit` (the task branch tip's
+    committer time), `report` (the lead report file) or `verdict` (a review or QA verdict file of the task or one of its
+    subtasks). Read-only; a missing branch or file is no progress."""
+    info = repo_info(plan, reg, task["repo"])
+    if info["path"]:
+        out, rc = git(info["path"], "log", "-1", "--format=%ct", f"refs/heads/{task_branch(plan, info, task)}")
+        try:
+            if rc == 0 and out and int(out) > ts:
+                return "commit"
+        except ValueError:
+            pass
+    try:
+        if os.path.getmtime(lead_report_file(plan, task["id"])) > ts:
+            return "report"
+    except OSError:
+        pass
+    me = glob.escape(safe_name(task["id"]))
+    # verdict files only: `<task>[@<subtask>]__review.json|__qa.json` and their `__<suffix>` forms. The implementer and
+    # reviewer model records (`*.model.json`) are written by dispatch together with the spec: not progress.
+    patterns = []
+    for stem in (me, f"{me}@*"):
+        for kind in ("review", "qa"):
+            patterns += [f"{stem}__{kind}.json", f"{stem}__{kind}__*.json"]
+    for pattern in patterns:
+        for path in glob.glob(os.path.join(glob.escape(verdict_dir(plan)), pattern)):
+            if path.endswith(".model.json"):
+                continue
+            try:
+                if os.path.getmtime(path) > ts:
+                    return "verdict"
+            except OSError:
+                continue
+    return None
+
+
+def implement_spec_name(task_id):
+    """The basename of an implement spec of task `task_id`, as orca_prompt writes it for --phase implement."""
+    return re.compile(re.escape(fstate.session_key(task_id)) + r"-implement-[0-9a-f]{16}[.]md")
+
+
+def implement_progress_since(plan, reg, task, spec, ts):
+    """The progress of the one subtask whose implement spec is `spec` after epoch seconds `ts`, or None: `subtask <sid>
+    verdict` (a review or QA verdict file of that subtask) or `subtask <sid> commit` (its child branch tip's committer
+    time). The subtask is the one whose `<task>@<sid>__implementer.model.json` record names `spec`; an implement spec
+    that maps to no subtask has no progress of its own (task commits, the lead report and sibling verdicts never count:
+    the lead commits subtask work and sibling implementers report). Read-only; a garbled or missing record maps nothing."""
+    vdir = verdict_dir(plan)
+    want = os.path.normcase(os.path.realpath(spec))
+    pre = f"{safe_name(task['id'])}{SUB_SEP}"
+    sid = None
+    for n in sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []:
+        if not (n.startswith(pre) and n.endswith(IMPL_TAIL) and len(n) > len(pre) + len(IMPL_TAIL)):
+            continue
+        rec = fstate.read_json(os.path.join(vdir, n))
+        got = rec.get("spec") if isinstance(rec, dict) else None
+        if isinstance(got, str) and got and os.path.normcase(os.path.realpath(got)) == want:
+            sid = n[len(pre):-len(IMPL_TAIL)]
+            break
+    if sid is None:
+        return None
+    stem = glob.escape(f"{safe_name(task['id'])}{SUB_SEP}{sid}")
+    for kind in ("review", "qa"):
+        for pattern in (f"{stem}__{kind}.json", f"{stem}__{kind}__*.json"):
+            for path in glob.glob(os.path.join(glob.escape(vdir), pattern)):
+                if path.endswith(".model.json"):
+                    continue
+                try:
+                    if os.path.getmtime(path) > ts:
+                        return f"subtask {sid} verdict"
+                except OSError:
+                    continue
+    info = repo_info(plan, reg, task["repo"])
+    if info["path"]:
+        child = child_branch(task_branch(plan, info, task), sid, "implement")
+        out, rc = git(info["path"], "log", "-1", "--format=%ct", f"refs/heads/{child}")
+        try:
+            if rc == 0 and out and int(out) > ts:
+                return f"subtask {sid} commit"
+        except ValueError:
+            pass
+    return None
+
+
+def nudge_notes(plan, reg, task):
+    """The `stuck?:` note of a task whose latest nudge record entry still shows the unsubmitted start prompt and which
+    made no progress since that check; [] otherwise. A missing or garbled record is no opinion, never an error."""
+    try:
+        rec = fstate.read_json(nudge_file(plan, task["id"]))
+        entries = [e for e in rec.get("nudges", []) if isinstance(e, dict)] if isinstance(rec, dict) else []
+        if not entries:
+            return []
+        last = max(entries, key=lambda e: str(e.get("checked_at") or ""))
+        if last.get("still_stuck") is not True:
+            return []
+        checked = datetime.strptime(str(last.get("checked_at")), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc).timestamp()
+        if task_progress_since(plan, reg, task, checked) is not None:
+            return []
+        return [f"stuck?: session {last.get('handle', '?')} still shows its start prompt after a nudge at "
+                f"{last.get('at', '?')}: relaunch the session"]
+    except Exception:  # a note must never break status
+        return []
+
+
 def lead_report_summary(body):
     first = next((ln.strip() for ln in str(body).splitlines() if ln.strip()), "")
     return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
 
 
-def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):
-    """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only). `orca_done`: task ids whose 'task done: <id>'
+def lead_report_state(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):
+    """The `lead report:` and `READY_FOR_PR:` notes of a task row and the same facts as `status --json` fields, computed
+    once so the note and the field never disagree (read-only): {notes, lead_report, ready_for_pr}. `lead_report`:
+    {at, sha, summary, current} of the durable `report` record (current: it counts for the task HEAD), None without
+    one. `ready_for_pr`: {ready, missing} (missing: the first missing reason the note prints, None when ready), None
+    when no READY_FOR_PR note applies (a tier XS plan, a phase outside READY_PHASES). `orca_done`: task ids whose
+    'task done: <id>'
     message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only).
     `path`: the task's repo checkout. In a no-worktree repo the task HEAD is plan.topic and moves when the next task
     commits, so in the integrated and qa phases a report at an ancestor of the HEAD still counts (as review and QA do).
@@ -3834,10 +5516,13 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, 
     is not ready while any exists. `row["stale"]` (set by task_status, the one review/QA currency test the phase and
     `next` use) also keeps it not ready: a review or QA that is not current is never READY_FOR_PR."""
     rec = fstate.read_json(lead_report_file(plan, task["id"]))
-    rec = rec if isinstance(rec, dict) and rec.get("sha") else None
+    rec = rec if isinstance(rec, dict) and isinstance(rec.get("sha"), str) and rec["sha"] else None
     head, notes = row["sha"], []
     report_current = bool(rec) and (rec["sha"] == head or (
         no_worktree and row["phase"] in ("integrated", "qa") and bool(path) and is_ancestor(path, rec["sha"], head)))
+    out = {"notes": notes, "ready_for_pr": None, "lead_report": None if not rec else {
+        "at": rec["at"] if isinstance(rec.get("at"), str) else None, "sha": rec["sha"],
+        "summary": str(rec.get("summary", "")), "current": report_current}}
     if rec:
         stale = f" (stale: task HEAD is {head[:10]})" if head and not report_current else ""
         notes.append(f"lead report: {rec.get('at', '?')} @{rec['sha'][:10]} {rec.get('summary', '')}{stale}")
@@ -3845,10 +5530,10 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, 
         notes.append(f"lead report: task done: {task['id']} (an Orca message only: no durable record, ask the lead to run "
                      "`report`)")
     if pr.xs_plan(plan, task):
-        return notes
+        return out
     stale = row.get("stale") or {}
     if row["phase"] not in READY_PHASES:
-        return notes
+        return out
     rv, qa, phase = row["review"], row["qa"], row["phase"]
     missing = None
     if not rec:
@@ -3875,7 +5560,8 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, 
     elif blockers:
         missing = blockers[0] + (f" (+{len(blockers) - 1} more)" if len(blockers) > 1 else "")
     notes.append("READY_FOR_PR: yes" if missing is None else f"READY_FOR_PR: no ({missing})")
-    return notes
+    out["ready_for_pr"] = {"ready": missing is None, "missing": missing}
+    return out
 
 
 def orca_done_tasks(runs):
@@ -3913,11 +5599,11 @@ def status(plan, reg, orca_run=None):
     count = {k: serial_count(plan, reg, k) for k in keys}  # a no-worktree checkout counts every plan alias of it
     rows, infos = {}, {}
     own = [task_branch(plan, repo_info(plan, reg, t["repo"]), t) for t in tasks] + [plan["topic"]]
-    lineage = Lineage(own)  # one read-only `orca worktree list` for every task, only when needed
+    lineage = Lineage(own, plan["topic"])  # one read-only `orca worktree list` for every task, only when needed
     for t in tasks:
         rows[t["id"]], infos[t["id"]] = task_status(plan, reg, t, count[t["repo"]], lineage)
     # children of the integration checkout (integration QA or a helper in `<topic>--*`, or any name by Orca's
-    # lineage), once per repo
+    # lineage with a plan-owned branch), once per repo
     int_children = []
     for key in keys:
         info = repo_info(plan, reg, key)
@@ -3939,7 +5625,14 @@ def status(plan, reg, orca_run=None):
             prev = serial_predecessor(plan, reg, t) if not info["worktrees"] else None
             if prev and rows[prev]["phase"] != "qa" and prev not in waiting:
                 waiting.append(prev)
-            if waiting:
+            stk = (stackable(plan, reg, info, t, {u: r["phase"] for u, r in rows.items()})
+                   if waiting and not prev else None)
+            if stk:  # one dependency in flight, the others integrated: start from its tip instead of waiting
+                row["notes"].append(f"stackable on {stk['dep']}@{stk['sha'][:10]}: dispatch --phase lead starts it "
+                                    "from that tip")
+                ready.append(tid)
+                row["next"] = f"{dispatch} --phase lead --runner orca"
+            elif waiting:
                 row["notes"].append("waits for " + ", ".join(waiting))
             else:
                 ready.append(tid)  # a worktree repo starts the task lead, which creates the task worktree
@@ -3963,6 +5656,12 @@ def status(plan, reg, orca_run=None):
                                 f"{row['branch']}, then review the new HEAD")
             # only the task lead commits: it resumes (task worktree, or the main checkout of a no-worktree repo) and
             # starts a fresh fix session, then review and QA on the new HEAD
+            row["next"] = f"{dispatch} --phase lead --runner orca"
+        elif row["phase"] == "reviewed" and (row["qa"] or {}).get("state") == "FAIL" and (row["qa"] or {}).get("sha") in (
+                row["review"]["sha"], row["sha"]):
+            # review PASS but the task QA failed on this candidate: merging it would integrate a failing commit
+            row["notes"].append(f"QA FAIL at {row['qa']['sha'][:10]} on the reviewed candidate: no merge; fix it on "
+                                f"{row['branch']} (fix session), then a fresh verify")
             row["next"] = f"{dispatch} --phase lead --runner orca"
         elif row["phase"] == "reviewed":
             home = worktree_for(info["path"], plan["topic"])[0]
@@ -3988,6 +5687,40 @@ def status(plan, reg, orca_run=None):
                     row["notes"].append("QA runs once all tasks of the repo are integrated: waits for " + ", ".join(others))
                 else:
                     row["next"] = f"{me} dispatch {pf} --task integration:{t['repo']} --phase qa --sha {topic_head} --runner orca"
+        if row["phase"] in ("implementing", "candidate", "reviewed") and row["sha"]:
+            before = row["next"]
+            stack_notes(plan, reg, info, t, row)  # stacked on D@X; D moved past HEAD: merge it as next
+            if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
+                # the durable `sync` record; read-only here: the note goes once HEAD contains the SHA (file kept)
+                # only for the task's current dependency: a leftover record of another dependency shows nothing
+                syn, cur = sync_record(plan, t["id"]), stack_record_live(plan, info, t, row["sha"])
+                if (syn and cur and syn.get("dep") == cur.get("dep") and plan_has_task(plan, syn.get("dep"))
+                        and not is_ancestor(info["path"], syn["sha"], row["sha"])):
+                    row["notes"].append(f"sync: {syn['dep']} moved to {syn['sha'][:10]} ({syn.get('at')}): at the next "
+                                        f"subtask boundary run {syn.get('command')} (never rebase), resolve conflicts "
+                                        "inside the owned paths, then continue")
+            if row["phase"] == "candidate" and not pr.xs_plan(plan, t):
+                g = stack_gate(plan, reg, info, t, row["sha"])
+                if g:  # verify would exit 2: merge the dependency's PASS first, or wait for it
+                    row["notes"].append(f"verify waits: {g['reason']}")
+                    row["next"] = (orca_cmd.quote(["git", "-C", row["worktree"], "merge", g["merge"]] if row["worktree"]
+                                                  else ["git", "merge", g["merge"]]) if g["merge"] else None)
+            elif row["phase"] == "reviewed" and (row["review"] or {}).get("state") == "PASS":
+                stk = (stack_record_live(plan, info, t, row["sha"])
+                       if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t) else None)
+                dep = stk.get("dep") if stk else None
+                if dep in rows and rows[dep]["phase"] not in done:
+                    row["notes"].append(f"integrate {dep} first (dependency first), then merge {row['branch']} with "
+                                        "git merge --no-ff")
+                    if row["next"] == before:  # keep a dependency merge stack_notes named; never the topic merge
+                        row["next"] = None
+    # stacked siblings while one of them is not integrated: sibling worktrees and the merge order (next unchanged)
+    for sg in stack_groups(plan, reg):
+        ids = [sg["dep"], *sg["dependents"]]
+        if any(rows[i]["phase"] not in done for i in ids if i in rows):
+            for i in ids:
+                if i in rows and sg["text"] not in rows[i]["notes"]:
+                    rows[i]["notes"].append(sg["text"])
     # the gate needs the repo's integration QA PASS at the integration HEAD (also after per-task QA of a no-worktree
     # repo): until then the repo's tasks stay integrated and the next command is that QA. A no-worktree checkout is
     # one serial group across every plan alias of it: its integration QA waits until every task of the checkout
@@ -4013,24 +5746,46 @@ def status(plan, reg, orca_run=None):
     open_waves =[n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
     nxt = [f"{me} gate {pf}"] if tasks and not blocked and all(r["phase"] == "qa" for r in rows.values()) else []
     # settled Orca workers of the task leads' Runs that still own a terminal: release them now, not at task end
-    workers = orca_sessions(orca_runs(plan, orca_run))
+    run_rows = {}
+    workers = orca_sessions(orca_runs(plan, orca_run), run_rows)
     nxt = [u["command"] for s in workers for u in s["unreleased"]] + nxt
+    # a test slot still held after the task's verify reported or its session was released: the run outlived the
+    # session; name the stop command for that PID only, first in `next` (status never runs it)
+    slots = slot_holders(plan, reg)
+    left = verify_slot_leftovers(plan, rows, slots, run_rows, orca_run)
+    for e in left:
+        rows[e["task"]]["notes"].append(f"test slot {e['slot']['slot']} (PID {e['slot']['pid']}) in "
+                                        f"{e['slot']['checkout']} left by the verify session ({e['reason']}): stop "
+                                        f"that PID only: {e['stop']}")
+    nxt = list(dict.fromkeys(e["stop"] for e in left)) + nxt
     # what each task lead reported (a durable `report` record), and whether the work is ready for the PR gate: a run lead
     # polling status sees completion without messages; --orca-run adds the 'task done' messages of older leads
     runs = orca_runs(plan, orca_run)
     orca_done = orca_done_tasks(runs) if runs else set()
     for t in tasks:
         rinfo = repo_info(plan, reg, t["repo"])
-        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done, rinfo["path"],
-                                                    no_worktree=not rinfo["worktrees"], blockers=task_fails[t["id"]])
+        lr = lead_report_state(plan, rows[t["id"]], t, orca_done, rinfo["path"], no_worktree=not rinfo["worktrees"],
+                               blockers=task_fails[t["id"]])
+        rows[t["id"]]["notes"] += lr["notes"]
+        rows[t["id"]]["lead_report"], rows[t["id"]]["ready_for_pr"] = lr["lead_report"], lr["ready_for_pr"]
+        rows[t["id"]]["notes"] += nudge_notes(plan, reg, t)
+    for key in keys:  # the run lead file blockers of `gate`, once per repo, on that repo's first task (plan order)
+        info = repo_info(plan, reg, key)
+        if not info["path"] or not os.path.isdir(info["path"]):
+            continue
+        head, rc = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")
+        if rc != 0 or not head:
+            continue
+        first = next(t for t in tasks if t["repo"] == key)
+        rows[first["id"]]["notes"] += [f"gate blocker: {b}" for b in run_lead_file_blockers(plan, info, key, head)]
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]
         out_rows.append({k: r[k] for k in ("id", "repo", "wave", "phase", "branch", "worktree", "sha", "review", "qa",
-                                           "children", "next", "notes")})
+                                           "children", "next", "notes", "lead_report", "ready_for_pr")})
     return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
             "waves": v["waves"], "tasks": out_rows, "integration_children": int_children, "ready_wave": open_waves[0] if open_waves else None,
-            "ready": ready, "next": nxt, "_workers": workers, "_slots": slot_holders(plan, reg)}
+            "ready": ready, "next": nxt, "_workers": workers, "_slots": slots, "_left": left}
 
 
 def cmd_status(a, reg):
@@ -4048,17 +5803,27 @@ def cmd_status(a, reg):
         for tid, roles in models.items():
             for role, model in roles.items():
                 print(f"model: {tid} {role} -> {model['agent']} ({model['why']})")
+    widenings = valid_widenings(plan, reg)
+    for entry in widenings:
+        print("model scope widening: " + model_policy.widening_text(entry), file=sys.stderr if a.json else sys.stdout)
     out = status(plan, reg, a.orca_run)
     if a.json:
         out["models"] = models
+        # the plan entry's fields plus the text the stderr line prints: only valid entries, so the schema holds
+        out["model_scope_widen"] = [{**{k: e[k] for k in model_policy.WIDEN_KEYS},
+                                     "text": model_policy.widening_text(e)} for e in widenings]
     workers = out.pop("_workers", [])
     slots = out.pop("_slots", [])
+    # the schema's slot entries allow no extra field: a slot left by a verify dispatch is a text line only
+    left = out.pop("_left", [])
     if a.json:
+        out["slots"] = slots  # the held test slots with their progress, as cleanup --json has them (read-only)
         print(json.dumps(out, indent=2))
-        # the status schema has no workers or slots field: those lines (NOT_AVAILABLE, UNRELEASED, held slots) go to stderr
+        # the status schema has no workers field: those lines (NOT_AVAILABLE, UNRELEASED) go to stderr, and the held
+        # slots keep their text lines there too
         for line in session_lines(workers):
             print("Workers: " + line, file=sys.stderr)
-        for line in slot_lines(slots):
+        for line in slot_lines(slots) + left_slot_lines(left):
             print("Slots: " + line, file=sys.stderr)
         return 0 if out["valid"] else 1
     print(f"Pipeline {out['plan']} on {out['topic']}" + ("" if out["valid"] else "  INVALID"))
@@ -4079,7 +5844,7 @@ def cmd_status(a, reg):
         print("Every wave is integrated.")
     for line in session_lines(workers):
         print("Workers: " + line)
-    for line in slot_lines(slots):
+    for line in slot_lines(slots) + left_slot_lines(left):
         print("Slots: " + line)
     for c in out["next"]:
         print("Next: " + c)
@@ -4117,6 +5882,362 @@ def cmd_report(a, reg):
     return 0
 
 
+def send_orca(argv):
+    """Run one `orca orchestration send` argv: (ok, one-line why). Never raises."""
+    exe = shutil.which("orca")
+    if not exe:
+        return False, "orca is not on PATH"
+    try:
+        r = subprocess.run([exe] + list(argv[1:]), capture_output=True, text=True, timeout=60, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        why = str(e)
+    else:
+        try:
+            data = json.loads(r.stdout or "")
+        except ValueError:
+            data = None
+        if r.returncode == 0 and data is not None and not (isinstance(data, dict) and data.get("ok") is False):
+            return True, ""
+        if r.returncode != 0:
+            why = f"exit {r.returncode}: " + ((r.stderr or "").strip() or (r.stdout or "").strip() or "no output")
+        elif data is None:
+            why = "stdout is not JSON: " + ((r.stdout or "").strip() or "empty")
+        else:
+            err = data.get("error")
+            why = "ok false: " + (json.dumps(err) if err is not None else (r.stdout or "").strip())
+    return False, " ".join(why.split())[:200]
+
+
+def cmd_sync(a, reg):
+    """Tell each stacked dependent of a task that its dependency moved: print the merge command, record
+    <dependent>__sync.json (status shows it until the dependent's HEAD contains the SHA) and with --send nudge its lead
+    through Orca. Exit 0, 1 when a send failed, 2 usage."""
+    plan = read_plan(a.plan, reg)
+    plan["_path"] = a.plan
+    if a.task.startswith("integration:"):
+        die("sync is per plan task: --task <id>")
+    dep = find_task(plan, a.task)
+    did = dep["id"]
+    info = repo_info(plan, reg, dep["repo"])
+    path = info["path"]
+    dbranch = task_branch(plan, info, dep)
+    sha = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{dbranch}")[0] if path else None
+    ref = dbranch
+    if not sha:
+        rv = verdict_of(plan, reg, did, "review")[0]
+        if rv and rv.get("state") == "PASS":
+            ref = sha = rv["sha"]
+    if not sha:
+        print(f"sync: {did} has no task branch and no review PASS: nothing to sync")
+        return 0
+    print(f"sync: {did} at {sha[:10]} ({ref})")
+    deps = stacked_dependents(plan, reg, did)
+    if not deps:
+        print(f"sync: no stacked dependent of {did}")
+        return 0
+    rc, ids = 0, False  # ids: the Orca worktree ids, read once and only when a dependent has no orca_run
+    for t in deps:
+        tid = t["id"]
+        tinfo = repo_info(plan, reg, t["repo"])
+        tpath = tinfo["path"]
+        tbranch = task_branch(plan, tinfo, t)
+        head = git(tpath, "rev-parse", "--verify", "--quiet", f"refs/heads/{tbranch}")[0] or ""
+        wt = worktree_for(tpath, tbranch)[0]
+        if is_ancestor(tpath, sha, head):
+            print(f"{tid}: up to date (HEAD {head[:10]} contains {did}@{sha[:10]})")
+            if os.path.exists(sync_file(plan, tid)):
+                try:
+                    os.remove(sync_file(plan, tid))
+                except OSError as e:
+                    print(f"factory-pipeline: could not remove {sync_file(plan, tid)}: {e.strerror or e}", file=sys.stderr)
+            continue
+        cmd = orca_cmd.quote(["git", "-C", wt, "merge", ref] if wt else ["git", "merge", ref])
+        run = t.get("orca_run").strip() if isinstance(t.get("orca_run"), str) else ""
+        run = run[len("run:"):].strip() if run.startswith("run:") else run
+        to = f"run:{run}" if run else None
+        if not to and wt:
+            if ids is False:
+                ids = orca_worktree_ids()
+            if ids and ids.get(norm_wt(wt)):
+                to = f"@worktree:{ids[norm_wt(wt)]}"
+        subject = f"sync: {did} moved to {sha[:10]}"
+        print(f"{tid}: {did} moved to {sha[:10]}, not in HEAD {head[:10]}: {cmd}")
+        argv = orca_cmd.send_message(to, subject, cmd) if to else None
+        if argv:
+            print(f"  send: {orca_cmd.quote(argv)}")
+        else:
+            print(f"  no Orca address for {tid} (no task orca_run, no Orca worktree record): pass the command to its lead")
+        sent = False
+        if a.send and argv:
+            if shutil.which("orca") is None:
+                print("  not sent: orca is not on PATH")
+            else:
+                sent, why = send_orca(argv)
+                if sent:
+                    print(f"  sent to {to}")
+                else:
+                    print(f"  send FAILED ({to}): {why}")
+                    rc = 1
+        # the durable signal, with or without --send: a message is only a nudge
+        fstate.write_json(sync_file(plan, tid), {"plan": plan.get("id"), "task": tid, "dep": did, "ref": ref, "sha": sha,
+                                                 "command": cmd, "to": to, "sent": sent, "at": now_utc()}, indent=2)
+    return rc
+
+
+NUDGE_POINTER = re.compile(r"Read your task spec at\s+(\S.*?\.md)")
+NUDGE_POINTER_JOINED = re.compile(r"Read your task spec at\s*(\S.*?\.md)")  # the "".join text has no space after "at"
+# what a composer line may show before the prompt besides whitespace: > and | and the Unicode prompt and box marks
+# U+203A, U+276F, U+00BB, U+2502, U+2503
+NUDGE_COMPOSER_MARKERS = ">›❯»│┃|"
+NUDGE_RULE_CHARS = "─━═"
+NUDGE_ACTIVITY = re.compile(r"^[●✻⎿]|Ran \d+ shell command|Read \d+ file")
+
+
+def nudge_rule_line(line):
+    """Whether a stripped screen line is a horizontal composer rule."""
+    return len(line) >= 20 and all(c in NUDGE_RULE_CHARS for c in line)
+
+
+def nudge_spec(plan, tail):
+    """The spec file of this plan that a terminal screen's start-prompt pointer names, or None. `tail` is the screen's
+    lines; each is stripped (Orca indents a wrapped line). The pointer is searched in the lines joined by newline and by a
+    space (it wraps after `at`) and, for a path that itself wraps, joined with nothing. A match counts only on a composer
+    line: the text before `Read your task spec at` on the screen line where the match starts is empty or only composer
+    markers (whitespace and NUDGE_COMPOSER_MARKERS). When rules are present, the line must also be below the last-but-one
+    rule (or the sole rule). Activity on a line after the pointer's end indicates submission. An echoed command that
+    carries the pointer is no pointer; the search continues until a counting match names an existing file inside
+    <verdict dir>/specs/."""
+    stripped = [str(ln).strip() for ln in tail]
+    rules = [i for i, ln in enumerate(stripped) if nudge_rule_line(ln)]
+    region_start = rules[-2 if len(rules) >= 2 else -1] + 1 if rules else 0
+    specs_dir = os.path.normcase(os.path.realpath(os.path.join(verdict_dir(plan), "specs")))
+    for sep, rx in (("\n", NUDGE_POINTER), (" ", NUDGE_POINTER), ("", NUDGE_POINTER_JOINED)):
+        text = sep.join(stripped)
+        starts, pos = [], 0
+        for ln in stripped:  # the offset of each stripped line in the joined text
+            starts.append(pos)
+            pos += len(ln) + len(sep)
+        m = rx.search(text)
+        while m:
+            i = bisect.bisect_right(starts, m.start()) - 1
+            end = bisect.bisect_right(starts, m.end() - 1) - 1
+            prefix = stripped[i][:m.start() - starts[i]]
+            if (i >= region_start and all(c.isspace() or c in NUDGE_COMPOSER_MARKERS for c in prefix)
+                    and not any(NUDGE_ACTIVITY.search(ln) for ln in stripped[end + 1:])):
+                path = m.group(1).strip()
+                real = os.path.normcase(os.path.realpath(path))
+                if real.startswith(specs_dir + os.sep) and os.path.isfile(path):
+                    return path
+            m = rx.search(text, m.start() + 1)
+    return None
+
+
+def orca_json(argv, timeout=60):
+    """(result dict or None, why): run one read-only orca argv and return the JSON `result` of its stdout. Never raises."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None, "orca is not on PATH"
+    try:
+        r = subprocess.run([exe] + list(argv[1:]), capture_output=True, text=True, timeout=timeout, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            return None, f"exit {r.returncode}: " + " ".join(((r.stderr or "").strip() or (r.stdout or "").strip()
+                                                            or "no output").split())[:200]
+        data = json.loads(r.stdout or "")
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return None, " ".join(str(e).split())[:200]
+    res = data.get("result") if isinstance(data, dict) and data.get("ok") is not False else None
+    return (res, "") if isinstance(res, dict) else (None, "unexpected JSON")
+
+
+def cmd_nudge(a, reg):
+    """Find start prompts that stayed unsubmitted (see the module docstring) and with --send press Enter once per spec.
+    Exit 0, 1 when a send failed, 2 usage."""
+    plan = read_plan(a.plan, reg)
+    plan["_path"] = a.plan
+    if a.task and a.task.startswith("integration:"):
+        die("nudge is per plan task: --task <id>")
+    tasks = [find_task(plan, a.task)] if a.task else list(plan.get("tasks", []))
+    if a.idle < 0:
+        die("--idle must be 0 or more seconds")
+    if a.stall < 0:
+        die("--stall must be 0 or more seconds")
+    why = "orca is not on PATH" if shutil.which("orca") is None else (
+        None if orca_cmd.orca_reachable() else "the Orca runtime is not reachable")
+    if why:
+        print(f"nudge: Orca is not available ({why}): nothing to check")
+        return 0
+    rc = 0
+    for t in tasks:
+        tid = t["id"]
+        info = repo_info(plan, reg, t["repo"])
+        branch = task_branch(plan, info, t)
+        wt = worktree_for(info["path"], branch)[0] if info["path"] else None
+        if not wt:
+            print(f"{tid}: no task worktree (no live session)")
+            continue
+        res, why = orca_json(orca_cmd.terminal_list(wt))
+        rows = [r for r in (res or {}).get("terminals", []) if isinstance(r, dict)
+                and norm_wt(r.get("worktreePath")) == norm_wt(wt)] if isinstance(
+            (res or {}).get("terminals"), list) else []
+        if res is None:
+            print(f"{tid}: terminal list failed ({why}): no opinion")
+            continue
+        if not rows:
+            print(f"{tid}: no Orca terminal in {wt}")
+            continue
+        rec = fstate.read_json(nudge_file(plan, tid))
+        nudges = [e for e in rec.get("nudges", []) if isinstance(e, dict)] if isinstance(rec, dict) and isinstance(
+            rec.get("nudges"), list) else []
+        changed = False
+        for row in rows:
+            handle = str(row.get("handle") or "?")
+            last = row.get("lastOutputAt")
+            try:
+                idle = (int(time.time() - float(last) / 1000) if isinstance(last, (int, float, str))
+                        and not isinstance(last, bool) else None)
+            except ValueError:
+                idle = None
+            head = f"{tid}  {handle}  idle {'?' if idle is None else idle}s"
+            screen, why = orca_json(orca_cmd.terminal_read(handle))
+            term = (screen or {}).get("terminal")
+            tail = term.get("tail") if isinstance(term, dict) else None
+            if not isinstance(tail, list):
+                print(f"{head}  ok  screen unreadable (no opinion)")
+                continue
+            spec = nudge_spec(plan, tail)
+            if not spec:
+                print(f"{head}  ok  no start-prompt pointer on screen")
+                continue
+            if idle is None:
+                print(f"{head}  ok  no lastOutputAt (no opinion)")
+                continue
+            if idle < a.idle:
+                print(f"{head}  ok  recent output ({idle}s < {a.idle}s)")
+                continue
+            try:
+                since = os.path.getmtime(spec)
+            except OSError:
+                print(f"{head}  ok  spec file unreadable (no opinion)")
+                continue
+            # an implement spec counts only its own subtask's progress: the lead commits subtask work and sibling
+            # implementers report, so task-level progress never proves this session started
+            progress = (implement_progress_since(plan, reg, t, spec, since)
+                        if implement_spec_name(tid).fullmatch(os.path.basename(spec))
+                        else task_progress_since(plan, reg, t, since))
+            if progress:
+                print(f"{head}  ok  progress since the spec was written: {progress}")
+                continue
+            real = os.path.normcase(os.path.realpath(spec))
+            prior = next((e for e in nudges if os.path.normcase(os.path.realpath(str(e.get("spec") or ""))) == real), None)
+            if prior:
+                print(f"{head}  STUCK  nudged, still stuck: relaunch the session (nudged at {prior.get('at', '?')})")
+                if a.send:
+                    prior["still_stuck"], prior["checked_at"], changed = True, now_utc(), True
+                continue
+            print(f"{head}  STUCK  start prompt not submitted (spec {spec})")
+            print(f"  send: orca terminal send --terminal {shlex.quote(handle)} --text $'\\r'")
+            if a.send:
+                # cmd.exe drops a bare carriage return argument: through a .cmd/.bat shim the send would lose its text
+                shim = os.path.splitext(shutil.which("orca") or "")[1].lower() in (".cmd", ".bat")
+                sent, why = ((False, "orca resolves to a batch shim, which drops the CR argument: run the send command "
+                              "above by hand") if shim else send_orca(orca_cmd.terminal_send(handle)))
+                if sent:
+                    print(f"  sent CR to {handle}")
+                    stamp = now_utc()
+                    nudges.append({"spec": os.path.abspath(spec), "handle": handle, "at": stamp, "checked_at": stamp,
+                                   "still_stuck": False})
+                    changed = True
+                else:
+                    print(f"  send FAILED ({handle}): {why}")
+                    rc = 1
+        if changed:
+            fstate.write_json(nudge_file(plan, tid), {"plan": plan.get("id"), "task": tid, "nudges": nudges}, indent=2)
+    stalled_workers(orca_runs({"tasks": tasks}, a.orca_run), a.stall)
+    return rc
+
+
+NUDGE_TURN_UNOBSERVED = re.compile(r"turn[ _-]?start[ _-]?(?:was[ _-]?)?(?:not[ _-]?observed|unobserved)|turn_unobserved",
+                                   re.I)
+
+
+def worker_turn_unobserved(worker):
+    """Whether a worker-show `worker` record says its turn never started: the last dispatch_input effect has state
+    `turn_unobserved` (a later dispatch_input state such as `accepted` clears it), or lastError says the turn start was
+    not observed and no dispatch_input effect has another state."""
+    effects = worker.get("effects") if isinstance(worker.get("effects"), list) else []
+    states = [str(e.get("state") or "") for e in effects if isinstance(e, dict) and e.get("kind") == "dispatch_input"]
+    last = states[-1] if states else None
+    if last == "turn_unobserved":
+        return True
+    err = worker.get("lastError")
+    text = json.dumps(err) if isinstance(err, (dict, list)) else str(err or "")
+    return last is None and bool(NUDGE_TURN_UNOBSERVED.search(text))
+
+
+def stalled_workers(runs, stall):
+    """Print one row per running (not settled, not released) worker of each Orca Run: STALLED when its agent terminal
+    has been silent for at least `stall` seconds and no human prompt holds it, with the re-dispatch advice. Read-only:
+    worker-list, worker-show and terminal list only; nothing is sent or written for a STALLED row."""
+    if not runs:
+        print("nudge: no Orca Run named (task orca_run or --orca-run): stalled workers not checked")
+        return
+    terminals = {}  # worktree path -> terminal rows (or None when the list failed), one list call per worktree
+    for run in runs:
+        workers, why, _ = orca_workers(run)
+        if workers is None:
+            print(f"{run}: worker-list failed ({why}): stalled workers not checked (no opinion)")
+            continue
+        for w in workers:
+            if worker_settled(w) or worker_released(w):
+                continue
+            did = str(w.get("dispatchId") or "?")
+            head = f"{run}  {did}"
+            show, why = orca_json(["orca", "orchestration", "worker-show", "--dispatch", did, "--full", "--json"])
+            if show is None:
+                print(f"{head}  idle ?s  ok  worker-show failed ({why}) (no opinion)")
+                continue
+            worker = show.get("worker") if isinstance(show.get("worker"), dict) else {}
+            obs = show.get("observation") if isinstance(show.get("observation"), dict) else {}
+            if obs.get("agentWait") is not None:
+                print(f"{head}  idle ?s  ok  waiting on a human")
+                continue
+            handle = str(w.get("agentTerminalHandle") or worker.get("agentTerminalHandle") or "")
+            wid = str(worker.get("worktreeId") or "")
+            path = wid.partition("::")[2] if "::" in wid else (wid or _worker_checkout(w))
+            if not handle or not path:
+                print(f"{head}  idle ?s  ok  no agent terminal or worktree (no opinion)")
+                continue
+            if norm_wt(path) not in terminals:
+                res, _ = orca_json(orca_cmd.terminal_list(path))
+                rows = (res or {}).get("terminals")
+                terminals[norm_wt(path)] = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+            rows = terminals[norm_wt(path)]
+            if rows is None:
+                print(f"{head}  idle ?s  ok  terminal list failed (no opinion)")
+                continue
+            row = next((r for r in rows if str(r.get("handle") or "") == handle), None)
+            last = (row or {}).get("lastOutputAt")
+            try:
+                idle = (int(time.time() - float(last) / 1000) if isinstance(last, (int, float, str))
+                        and not isinstance(last, bool) else None)
+            except ValueError:
+                idle = None
+            if idle is None:
+                print(f"{head}  idle ?s  ok  no lastOutputAt for {handle} (no opinion)")
+                continue
+            if idle < stall:
+                print(f"{head}  idle {idle}s  ok  active ({idle}s < {stall}s)")
+                continue
+            reason = "no turn start" if worker_turn_unobserved(worker) else "turn ended without worker_done"
+            print(f"{head}  idle {idle}s  STALLED  {reason}")
+            print(f"  re-dispatch: check `{orca_cmd.quote(['orca', 'terminal', 'read', '--terminal', handle])}`, then "
+                  f"`{orca_cmd.quote(['orca', 'orchestration', 'worker-stop', '--dispatch', did])}` and dispatch a fresh "
+                  f"session (factory-pipeline.py dispatch ... --phase <same phase>); release it with "
+                  f"`{orca_cmd.quote(['orca', 'orchestration', 'worker-release', '--dispatch', did])}`")
+
+
 def cmd_agents(a, reg):
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
@@ -4151,6 +6272,11 @@ def main():
     p = sub.add_parser("validate", parents=[common])
     p.add_argument("plan")
     p.add_argument("--json", action="store_true")
+    pe = sub.add_parser("plan-edit", parents=[common])
+    pe.add_argument("plan")
+    pe.add_argument("--from", dest="from_file", required=True, metavar="COPY")
+    pe.add_argument("--commit", action="store_true")
+    pe.add_argument("--message")
     sp = sub.add_parser("subplan", parents=[common])
     sp.add_argument("action", choices=("validate",))
     sp.add_argument("subplan")
@@ -4168,7 +6294,10 @@ def main():
             d.add_argument("--placement", choices=PLACEMENTS)
             d.add_argument("--subplan")
             d.add_argument("--subtask")
+            d.add_argument("--suite-warn", type=suite_warn_arg, default=SUITE_WARN, metavar="N")
             d.add_argument("--note", action="append", default=[], metavar="TEXT")
+            d.add_argument("--note-file", action="append", default=[], metavar="FILE")
+            d.add_argument("--orca-run", metavar="RUN_ID")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
@@ -4211,6 +6340,17 @@ def main():
     body = rp.add_mutually_exclusive_group(required=True)
     body.add_argument("--body")
     body.add_argument("--body-file")
+    sy = sub.add_parser("sync", parents=[common])
+    sy.add_argument("plan")
+    sy.add_argument("--task", required=True)
+    sy.add_argument("--send", action="store_true")
+    nu = sub.add_parser("nudge", parents=[common])
+    nu.add_argument("plan")
+    nu.add_argument("--task")
+    nu.add_argument("--idle", type=int, default=120, metavar="SECONDS")
+    nu.add_argument("--stall", type=int, default=900, metavar="SECONDS")
+    nu.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
+    nu.add_argument("--send", action="store_true")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
@@ -4220,6 +6360,11 @@ def main():
     c.add_argument("--json", action="store_true")
     c.add_argument("--after-merge", action="store_true")
     c.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
+    ow = sub.add_parser("orca-wait", parents=[common])
+    ow.add_argument("--worktree", required=True, metavar="PATH")
+    ow.add_argument("--gone", action="store_true")
+    ow.add_argument("--timeout", type=float, default=60.0, metavar="SECONDS")
+    ow.add_argument("--interval", type=float, default=2.0, metavar="SECONDS")
     g = sub.add_parser("gate", parents=[common])
     g.add_argument("plan")
     g.add_argument("--allow-same-model", action="store_true")
@@ -4235,9 +6380,16 @@ def main():
     reg = load_registry(a.registry)
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
-    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
-            "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
-            "report": cmd_report}[a.cmd](a, reg)
+    global _GIT_MEMO_ON
+    _GIT_MEMO_ON = True  # memoize rev-parse / worktree list for this verb only
+    try:
+        return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "plan-edit": cmd_plan_edit, "planner": cmd_planner,
+                "dispatch": cmd_dispatch, "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup,
+                "status": cmd_status, "report": cmd_report, "sync": cmd_sync, "nudge": cmd_nudge,
+                "orca-wait": cmd_orca_wait}[a.cmd](a, reg)
+    finally:
+        _GIT_MEMO_ON = False
+        _GIT_MEMO.clear()
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@ from .common import CMDS, INTERPRETERS, MAX_DEPTH, POWERSHELLS, RESERVED_LEAD, S
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
-def logical_lines(command):
-    """Split on newlines outside quotes; drop heredoc bodies (they are data, not commands)."""
+def _heredoc_lines(command, substitutions=False):
+    """Split command lines and handle heredoc bodies for tokenization or substitution scanning."""
     lines, buf, quote, escape = [], [], None, False
     for ch in command:
         if escape:
@@ -31,21 +31,35 @@ def logical_lines(command):
             continue
         buf.append(ch)
     lines.append("".join(buf))
-    out, stack = [], []  # stack of [delimiter, reader, body lines]
+    out, stack = [], []  # stack of [delimiter, reader, body lines, quoted]
     for line in lines:
         if stack and line.strip() == stack[-1][0]:
-            _, reader, body = stack.pop()
-            if reader and reader != "shell" and re.search(r"\b(git|gh)\b", "\n".join(body)):
+            _, reader, body, _ = stack.pop()
+            if substitutions:
+                out.append(line)
+            elif reader and reader != "shell" and re.search(r"\b(git|gh)\b", "\n".join(body)):
                 out.append(f"__opaque__ '`{reader}` code from a heredoc invokes git/gh'")
             continue
         if stack and stack[-1][1] != "shell":
             stack[-1][2].append(line)  # data (or interpreter code): not shell commands
+            if substitutions and not stack[-1][3]:
+                out.append(line)  # unquoted heredocs still expand substitutions
             continue
         out.append(line)  # a command line - also the body of a heredoc that a shell executes
         m = HEREDOC.search(line)
         if m:
-            stack.append([m.group(2), heredoc_reader(line), []])
+            stack.append([m.group(2), heredoc_reader(line), [], bool(m.group(1))])
     return out
+
+
+def logical_lines(command):
+    """Split on newlines outside quotes; drop heredoc bodies unless a shell reads them."""
+    return _heredoc_lines(command)
+
+
+def substitution_text(command):
+    """Remove quoted heredoc data, retaining bodies expanded or executed by a shell."""
+    return "\n".join(_heredoc_lines(command, substitutions=True))
 
 
 def _stdin_reader(argv):
@@ -234,7 +248,7 @@ def expand(command, depth=0, shell="bash"):
             continue
         if p in CMDS:
             for k, a in enumerate(argv[1:], 1):
-                if a.lower() in {"/c", "/k"}:
+                if a.lower() in {"/c", "/k", "//c", "//k"}:
                     yield from expand(" ".join(argv[k + 1:]), depth + 1)
                     break
             else:

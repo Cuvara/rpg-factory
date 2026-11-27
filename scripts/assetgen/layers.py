@@ -15,6 +15,13 @@ framing) is a technical constraint; a purpose's constraints.<field> replaces the
 spec.hints.<field> = {text, from: purpose, source, overrides: {text, source}} so the prompt writer uses one value and
 sees the style hint marked overridden. A "style" field (palette) is taste only the style sets. A style field may be
 prose (a string) or a structured object (stylelock.py); its hint is the object's `text`.
+
+Profile routing (UNTESTED on RTX 5060): data/template-profiles.json maps (purpose, hardware profile of
+data/hardware.json) to a template id; a game layer adds or replaces entries per (purpose, profile) in
+<authoring>/assetgen/template-profiles.json. route_template walks from the chosen profile down to api-only and takes
+the first entry whose template exists in the core or game layer (a missing one is a warning, then the next lower
+profile); none: the purpose's default_template. profile_fit_error refuses a template whose requires.profile ranks above
+the chosen profile. Nothing here was generated or measured on the target hardware. resolve itself is unchanged.
 """
 import hashlib
 import json
@@ -31,6 +38,11 @@ KINDS = {
 
 
 PRECEDENCE = os.path.join(HERE, "data", "precedence.json")
+HARDWARE = os.path.join(HERE, "data", "hardware.json")
+ROUTES = os.path.join(HERE, "data", "template-profiles.json")
+ROUTES_SCHEMA = "rpg-factory.assetgen-template-profiles/1"
+CORE_ROUTES_LABEL = "core:scripts/assetgen/data/template-profiles.json"
+GAME_ROUTES_LABEL = "game:assetgen/template-profiles.json"
 
 
 class SpecError(Exception):
@@ -198,6 +210,124 @@ def resolve(purpose, style=None, template=None, authoring=None):
     return {"schema": "rpg-factory.assetgen-spec/1", "authoring": os.path.abspath(authoring) if authoring else None,
             "purpose": ref(p), "style": ref(s), "template": ref(t),
             "params": params, "param_sources": param_sources, "hints": hints, "sources": sources}
+
+
+def hardware_profiles():
+    """[{"id", "rank", "min_vram_gb", "min_ram_gb", "nominal"}] of data/hardware.json, sorted by rank."""
+    try:
+        with open(HARDWARE, encoding="utf-8") as f:
+            obj = json.load(f)
+        out = []
+        for p in obj["profiles"]:
+            req = p["requires"]
+            row = {"id": p["id"], "rank": p["rank"], "min_vram_gb": req["min_vram_gb"], "min_ram_gb": req["min_ram_gb"],
+                   "nominal": p.get("nominal", "")}
+            if not isinstance(row["id"], str) or not row["id"] or isinstance(row["rank"], bool) \
+                    or not isinstance(row["rank"], int) \
+                    or any(isinstance(row[k], bool) or not isinstance(row[k], (int, float)) for k in ("min_vram_gb", "min_ram_gb")):
+                raise ValueError("profile %r: id, rank, requires.min_vram_gb or requires.min_ram_gb malformed" % p.get("id"))
+            out.append(row)
+        if not out:
+            raise ValueError("no profiles")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise SpecError("data/hardware.json is missing or malformed (%s)" % exc)
+    return sorted(out, key=lambda r: r["rank"])
+
+
+def profile_ids_text(profiles=None):
+    """'api-only, local-4gb, local-8gb' (the hardware profile ids in rank order, for messages)."""
+    return ", ".join(p["id"] for p in (profiles or hardware_profiles()))
+
+
+def _routes_file(path, label, profile_ids, ids_text):
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, ValueError) as exc:
+        raise SpecError("%s: unreadable JSON (%s)" % (label, exc))
+    if not isinstance(obj, dict):
+        raise SpecError("%s: top level must be an object" % label)
+    if obj.get("schema") != ROUTES_SCHEMA:
+        raise SpecError("%s: schema must be %r" % (label, ROUTES_SCHEMA))
+    routes = obj.get("routes")
+    if not isinstance(routes, dict):
+        raise SpecError("%s: routes must be an object of purpose id -> {profile id: template id}" % label)
+    for purpose, by_profile in routes.items():
+        if not isinstance(by_profile, dict):
+            raise SpecError("%s: routes.%s must be an object of profile id -> template id" % (label, purpose))
+        for profile, tid in by_profile.items():
+            if profile not in profile_ids:
+                raise SpecError("%s: routes.%s: %r is not a hardware profile (%s; data/hardware.json)"
+                                % (label, purpose, profile, ids_text))
+            if not isinstance(tid, str) or not tid:
+                raise SpecError("%s: routes.%s.%s must be a non-empty template id" % (label, purpose, profile))
+    return routes
+
+
+def template_routes(authoring=None):
+    """{purpose: {profile: (template_id, source_label)}}: data/template-profiles.json, then the game layer's
+    <authoring>/assetgen/template-profiles.json when it exists (the game entry wins per (purpose, profile))."""
+    profiles = hardware_profiles()
+    ids, ids_text = {p["id"] for p in profiles}, profile_ids_text(profiles)
+    files = [(ROUTES, CORE_ROUTES_LABEL)]
+    if authoring:
+        game = os.path.join(game_dir(authoring), "template-profiles.json")
+        if os.path.exists(game):
+            files.append((game, GAME_ROUTES_LABEL))
+    out = {}
+    for path, lab in files:
+        for purpose, by_profile in _routes_file(path, lab, ids, ids_text).items():
+            for profile, tid in by_profile.items():
+                out.setdefault(purpose, {})[profile] = (tid, lab)
+    return out
+
+
+def route_template(purpose, profile_id, authoring=None):
+    """(template_id, template_from, warnings): the routed template of the chosen profile, else of the next lower
+    profile; (None, "purpose default_template", warnings) when no route names a template of the core or game layer."""
+    profiles = hardware_profiles()
+    rank = {p["id"]: p["rank"] for p in profiles}
+    if profile_id not in rank:
+        raise SpecError("profile %r is not a hardware profile (%s; data/hardware.json)" % (profile_id, profile_ids_text(profiles)))
+    routes = template_routes(authoring).get(purpose, {})
+    files = layer_files("template", authoring)
+    known = set(files["core"]) | set(files["game"])
+    warnings = []
+    for q in sorted((p for p in profiles if p["rank"] <= rank[profile_id]), key=lambda p: -p["rank"]):
+        if q["id"] not in routes:
+            continue
+        tid, lab = routes[q["id"]]
+        if tid in known:
+            return tid, "%s routes.%s.%s" % (lab, purpose, q["id"]), warnings
+        warnings.append("template-profiles: template %r (purpose %s, profile %s) is in no core or game layer yet; "
+                        "falling back" % (tid, purpose, q["id"]))
+    return None, "purpose default_template", warnings
+
+
+def template_requires_profile(template_entry):
+    """The hardware profile a template needs: its requires.profile, else api-only."""
+    req = template_entry["data"].get("requires")
+    return req["profile"] if isinstance(req, dict) and "profile" in req else "api-only"
+
+
+def profile_fit_error(template_entry, profile_id):
+    """None when the template runs on the chosen profile, else the refusal (the VRAM reason)."""
+    profiles = hardware_profiles()
+    by_id = {p["id"]: p for p in profiles}
+    need = template_requires_profile(template_entry)
+    if not isinstance(need, str) or need not in by_id:
+        return "template %s: requires.profile %r is not a hardware profile (%s; data/hardware.json)" % (
+            template_entry["id"], need, profile_ids_text(profiles))
+    if profile_id not in by_id:
+        return "profile %r is not a hardware profile (%s; data/hardware.json)" % (profile_id, profile_ids_text(profiles))
+    if by_id[need]["rank"] <= by_id[profile_id]["rank"]:
+        return None
+    peak = template_entry["data"]["requires"].get("peak_vram_gb")
+    peak_text = "; requires.peak_vram_gb %g" % peak if isinstance(peak, (int, float)) and not isinstance(peak, bool) else ""
+    return ("template %s requires profile %s (VRAM >= %g GiB, RAM >= %g GiB%s), above the chosen profile %s "
+            "(VRAM >= %g GiB): a %s machine cannot run it (data/hardware.json); pick a template for %s or lower"
+            % (template_entry["id"], need, by_id[need]["min_vram_gb"], by_id[need]["min_ram_gb"], peak_text, profile_id,
+               by_id[profile_id]["min_vram_gb"], profile_id, profile_id))
 
 
 def resolve_hints(p, s):
