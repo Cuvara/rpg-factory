@@ -436,6 +436,86 @@
         "routing output is unchanged for the golden scenarios",
         "a test covers the large path list"
       ]
+    },
+    {
+      "id": "sync-main",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "heavy",
+      "grade_reason": "a merge of 802 main commits into the topic with 14 conflicting files across skills, tests and scripts; a wrong resolution silently drops one side",
+      "objective": "PR #161 (feat/skills/vfx-graph into main) conflicts with main: main gained 802 commits since the topic's base 3272444 (up to 1ecb2e8, PR #160 session-lows). In the task worktree, merge origin/main into the task branch and resolve the 14 conflicting files (README.md, docs/architecture/overview.md, scripts/README.md, scripts/factory-cmd.py, skills/asset-gen/SKILL.md, skills/factory-core/SKILL.md, skills/factory-core/references/parallel-work.md, skills/factory-core/references/skill-contract.md, tests/affected.py, tests/assetgen.test.sh, tests/commands.test.sh, tests/dogfood.sh, tests/pipeline.test.sh, tests/routing.test.sh) so that both sides survive: every change main made and every change of this plan. Never take one side wholesale; read both diffs against the merge base for each file. Then rebuild registry.json with scripts/build-registry.py, refresh counts and golden fixtures that both sides moved (skill-touchpoints.py vfx-graph must stay OK; README and overview counts must count the skills and verbs of both sides), and run the affected tier with base origin/main. Commit the merge as one merge commit, fixes after it as normal commits. A changelog fragment is needed only if behaviour changes beyond the merge.",
+      "paths": [
+        "README.md",
+        "docs/architecture/overview.md",
+        "scripts/README.md",
+        "scripts/factory-cmd.py",
+        "skills/asset-gen/SKILL.md",
+        "skills/factory-core/SKILL.md",
+        "skills/factory-core/references/parallel-work.md",
+        "skills/factory-core/references/skill-contract.md",
+        "tests/affected.py",
+        "tests/assetgen.test.sh",
+        "tests/commands.test.sh",
+        "tests/dogfood.sh",
+        "tests/pipeline.test.sh",
+        "tests/routing.test.sh",
+        "registry.json",
+        "tests/fixtures/routing-golden.json",
+        "changelog.d/vfx-merge-main.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "context-argv"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "tests/routing.test.sh",
+        "tests/routing-golden.test.sh",
+        "tests/commands.test.sh",
+        "tests/pipeline.test.sh",
+        "tests/assetgen.test.sh",
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "the task branch contains origin/main 1ecb2e8 and merges cleanly into main",
+        "no change of either side is lost in the 14 files",
+        "registry.json is the build; skill-touchpoints.py vfx-graph OK; the affected tier against origin/main has 0 failed"
+      ]
+    },
+    {
+      "id": "ci-gpu",
+      "repo": "unityvfx",
+      "kind": "fix",
+      "implementer": "claude",
+      "reason": "the work needs the Unity Sandbox and the editor tools wired for Claude sessions",
+      "grade": "heavy",
+      "grade_reason": "test-infrastructure change that decides which tests CI can run; a native editor crash is involved",
+      "objective": "UnityVFX CI on PR #1 (run 45974445050, game-ci/unity-test-runner v4.3.2 with 1 GB /dev/shm, Ubuntu runner without a GPU): the EditMode job crashes the editor natively in VFXManager::Update -> VFX::DispatchCompute (no results XML; editmode.log ends with that stack), and the PlayMode job reports 89 total, 88 passed, 1 failed: Cuvara.VFX.Sandbox.ShowcaseTests.ShowcaseSmokeTests.FixtureStation_HasAliveParticles_AfterItsTrigger ('BurstQuads has alive particles after the station's trigger, Expected: greater than 0'). VFX Graph simulates on the GPU, which the runner does not have. Make CI green without weakening local evidence: put every test that needs VFX GPU simulation or a capture into one NUnit category (for example GPU), have the CI jobs exclude it (customParameters -testCategory with a negation, or the equivalent the action supports) and say in CI.md and the job summary how many tests CI ran and that the GPU category runs only in the Sandbox; also guard each such test at runtime (skip with a clear reason when the graphics device cannot run VFX compute) so no future CI or headless run crashes the editor. Find every test that reaches VFX simulation, not only the one that failed. Locally in the Sandbox the full suite must still run and pass with counts reported. CHANGELOG [Unreleased] entry. Push nothing; the run lead pushes.",
+      "paths": [
+        "Tests/",
+        ".github/",
+        "Documentation~/CI.md",
+        "CHANGELOG.md",
+        "Sandbox~/Assets/Tests/",
+        "Samples~/Showcase/Tests/"
+      ],
+      "exclusions": [],
+      "deps": [
+        "pkg-showcase"
+      ],
+      "resources": [
+        "unity-test"
+      ],
+      "checks": [
+        "Unity Test Runner in the Sandbox, EditMode and PlayMode, all categories: counted passes, 0 failed",
+        "the same runs with the GPU category excluded: counted, 0 failed, and the count named",
+        "python .github/scripts/check_metas.py"
+      ],
+      "acceptance": [
+        "CI EditMode and PlayMode jobs can run on a runner without a GPU: no test outside the GPU category reaches VFX simulation",
+        "local Sandbox runs of every category still pass",
+        "CI.md states which tests CI runs and which only the Sandbox runs"
+      ]
     }
   ]
 }
