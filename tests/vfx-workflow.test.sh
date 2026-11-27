@@ -15,7 +15,7 @@ registry=json.loads((root/'registry.json').read_text())
 for path in sorted((root/'templates/vfx').glob('*.md')):
  data=json.loads(re.search(r'^---json\s*\n(.*?)\n---',path.read_text(),re.S).group(1)); assert data['status']=='draft'; assert data['schema_version']==2
  (temp/'authoring/vfx/specs'/(path.stem+'.artifact.json')).write_text(json.dumps(data))
-assert len(list((root/'templates/vfx').glob('*.md')))==3
+assert len(list((root/'templates/vfx').glob('*.md')))==4
 design={'id':'DS-event-001','kind':'feature-spec','domain':'design','spec':{'gameplay_events':['combat.hit']}}
 valid={'id':'VFX-burst-001','kind':'vfx-spec','domain':'vfx','status':'approved','spec':{'purpose':'proposal','triggers':['DS-event-001'],'duration_seconds':1,'phases':[{'name':'active','duration_seconds':1}],'curves':[{'property':'size','keyframes':[{'time':0,'value':0},{'time':1,'value':1}]}],'particle_systems':[{'id':'main','max_particles':8,'lifetime_seconds':1,'spawn_per_second':8}],'materials':[],'platforms':{'desktop':{'budget':{'max_particles':10,'max_overdraw':1,'max_draw_calls':1,'max_ms':1},'constraints':[]}},'platform_constraints':[],'dependencies':[{'id':'UI-cue-001','kind':'ui','status':'tbd'}]}}
 ctx=Context(str(temp/'authoring'),registry,'',{'DS-event-001':('design/features/event.json',design),'VFX-burst-001':('vfx/specs/spec.json',valid)},lambda _:None)

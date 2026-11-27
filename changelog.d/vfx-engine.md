@@ -6,6 +6,9 @@
   dissipation), texture conventions, allowed outputs, blend modes and shaders, per-platform budgets, the capture
   viewing conditions and the asset-gen style the effect textures use. `docs/schemas/vfx-capture.schema.json` mirrors
   the com.cuvara.vfx capture statistics (`cuvara.vfx-capture/1`).
+- **Registered kind `vfx-style`.** `registry/domains/vfx.json` lists `vfx-style` in the VFX domain's artifact kinds,
+  maps it to its kind schema and gives it the VFX direction lifecycle, so `artifact-lint` accepts the template and
+  profiles; `tests/vfx-workflow.test.sh` lints the fourth VFX template.
 - **VFX lint.** `scripts/vfx/vfx_style.py show` prints the resolved profile; `lint --style <profile> --recipe <file>
   [--inspect <file>] [--stats <file>] [--spec <file>]` grades one effect against it and prints
   `rpg-factory.vfx-lint/1` with one row per rule (recipe schema and VFX Graph version, timing sum and ratios, HDR
