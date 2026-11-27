@@ -279,10 +279,23 @@ def repo_state(key, d, rep, args, reg, ws=None):
             "committed_paths": committed, "submodules_scanned": args["submodules"]}
 
 
+_RESOLVE_PROGRAM = None
+
+
+def _resolve_program():
+    # Constant-size program: binds $files/$subst/$tools from stdin and the registry from --slurpfile, then runs
+    # resolve.jq. Nothing that grows with the path count goes through argv (Windows limit: 32767 characters).
+    global _RESOLVE_PROGRAM
+    if _RESOLVE_PROGRAM is None:
+        with open(RESOLVE, encoding="utf-8") as fh:
+            _RESOLVE_PROGRAM = ". as {files: $files, subst: $subst, tools: $tools} | $__reg[0] | " + fh.read()
+    return _RESOLVE_PROGRAM
+
+
 def resolve(reg, key, files, subst, tools):
-    r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files),
-                        "--argjson", "subst", json.dumps(subst), "--argjson", "tools", json.dumps(tools),
-                        "-f", RESOLVE, REGISTRY], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--slurpfile", "__reg", REGISTRY, _resolve_program()],
+                       input=json.dumps({"files": files, "subst": subst, "tools": tools}),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         die(f"routing engine failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
