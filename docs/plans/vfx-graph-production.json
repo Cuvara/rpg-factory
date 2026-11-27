@@ -181,7 +181,9 @@
         "tests/factory-status.test.sh",
         "tests/check-registry.test.sh",
         "tests/fixtures/routing-golden.json",
-        "changelog.d/unityvfx-repo.md"
+        "changelog.d/unityvfx-repo.md",
+        "skills/delivery/pipeline-defaults.json",
+        "tests/devtools.test.sh"
       ],
       "exclusions": [],
       "deps": [
