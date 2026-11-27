@@ -86,6 +86,24 @@ def artifact_body(obj, kind, path, what):
     return obj, None
 
 
+def is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def band_problems(name, band, upper):
+    """The shape problems of a {min, max} band: an object, numbers >= 0 (and <= upper when given), min <= max."""
+    if not isinstance(band, dict):
+        return ["%s (not an object with min and max)" % name]
+    bad = [f for f in ("min", "max") if not is_number(band.get(f)) or band[f] < 0
+           or (upper is not None and band[f] > upper)]
+    if bad:
+        limits = "a number >= 0" if upper is None else "a number in 0..%s" % upper
+        return ["%s.%s (%s)" % (name, f, limits) for f in bad]
+    if band["min"] > band["max"]:
+        return ["%s (min %s > max %s)" % (name, band["min"], band["max"])]
+    return []
+
+
 def resolve_profile(path):
     obj = parse_doc(path, read_bytes(path, "style"), "style")
     body, info = artifact_body(obj, "vfx-style", path, "style")
@@ -96,6 +114,10 @@ def resolve_profile(path):
                 missing.append("%s (not an object)" % key)
             else:
                 missing += ["%s.%s" % (key, f) for f in fields if f not in body[key]]
+    for key, names, upper in (("hdr_intensity", rules.TIERS, None), ("timing", rules.PHASES, 1)):
+        if isinstance(body.get(key), dict):
+            missing += [problem for name in names if name in body[key]
+                        for problem in band_problems("%s.%s" % (key, name), body[key][name], upper)]
     if "vfx_graph" in body and rules.major_minor(body["vfx_graph"]) is None:
         missing.append("vfx_graph (%r is not a major.minor version)" % (body["vfx_graph"],))
     if isinstance(body.get("palette"), dict) and isinstance(body["palette"].get("elements"), dict):

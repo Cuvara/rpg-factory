@@ -271,6 +271,9 @@ exit3 "style whose palette ramp names a colour not in its element's colors" \
   'missing or malformed: palette.elements.fire.ramp \(names not in its colors: ember_glow\)' \
   -- lint --style "$L/bad-profile-ramp.style.json" --recipe "$G_R"
 exit3 "show: style whose palette ramp names an unknown colour" 'palette.elements.fire.ramp' -- show --style "$L/bad-profile-ramp.style.json"
+exit3 "style with a malformed band (hdr_intensity.primary min above max)" \
+  'missing or malformed: hdr_intensity.primary \(min 4.0 > max 1.0\)' \
+  -- lint --style "$L/bad-profile-band.style.json" --recipe "$G_R"
 
 # -- exit 2: usage
 exit2() {  # exit2 <label> -- <vfx_style args...>

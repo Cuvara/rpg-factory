@@ -5,10 +5,11 @@ Fixtures of `scripts/vfx/vfx_style.py lint`. The style profile is `tests/fixture
 `primary` (recipe `meta.tags`). All recipe, inspect and stats `.json` files validate against the com.cuvara.vfx
 schemas (`Schemas~/vfx-recipe`, `vfx-inspect`, `vfx-capture`) and the `.vfx-spec.md` specs against
 `docs/schemas/kinds/vfx-spec.schema.json`, except `bad-recipe-schema.vfxrecipe.json` (its `schema` is wrong) and
-`bad-vfx-graph-version-unparsable.vfxrecipe.json` (its `vfx_graph` is not a version), both on purpose. The two
+`bad-vfx-graph-version-unparsable.vfxrecipe.json` (its `vfx_graph` is not a version), both on purpose. The three
 `bad-profile-*.style.json` files are `profile.json` with one field broken (exit 3 cases):
-`bad-profile-vfx-graph.style.json` also breaks the vfx-style schema pattern, `bad-profile-ramp.style.json` passes it
-(the schema cannot check that ramp names exist in `colors`; `vfx_style.py` does).
+`bad-profile-vfx-graph.style.json` also breaks the vfx-style schema pattern, `bad-profile-ramp.style.json` and
+`bad-profile-band.style.json` pass it (the schema cannot check that ramp names exist in `colors` or that a band's
+`min` is not above its `max`; `vfx_style.py` does).
 
 `good.inspect.json` and `good.stats.json` carry the SHA-256 of the bytes of `good.vfxrecipe.json`
 (`90e40473da6c49fe17e07e05c61757033988975b8ac3d845e78e75d26a57fb02`). `.gitattributes` keeps every file here
@@ -69,4 +70,5 @@ good.vfxrecipe.json`; a bad stats file also with `--inspect good.inspect.json`. 
 | `lint ... --stats good.inspect.json` (wrong schema id) or `--spec <a vfx-style artifact>` (wrong kind) | 3 |
 | `lint --style bad-profile-vfx-graph.style.json --recipe good.vfxrecipe.json` (profile `vfx_graph` `latest`, not a major.minor version) | 3 |
 | `lint` or `show` with `--style bad-profile-ramp.style.json` (`palette.elements.fire.ramp` names `ember_glow`, not in fire's `colors`) | 3 |
+| `lint --style bad-profile-band.style.json --recipe good.vfxrecipe.json` (`hdr_intensity.primary` min 4.0 above max 1.0; every `hdr_intensity` and `timing` band must be an object with numeric `min` <= `max`, timing shares in 0..1) | 3 |
 | no command, an unknown command, an unknown option, an option without a value, `lint` without `--recipe`, `show` without `--style` | 2 |
