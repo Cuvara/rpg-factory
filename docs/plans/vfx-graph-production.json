@@ -361,7 +361,7 @@
       "kind": "docs",
       "grade": "standard",
       "grade_reason": "shared docs, counts, routing scenario, dogfood and eval entries listed by skill-touchpoints.py",
-      "objective": "Finish every touchpoint scripts/skill-touchpoints.py vfx-graph still lists and the shared docs: the factory-core Skills section and skill table, the skill-contract diagram, README diagram, tables and counts, docs/architecture/overview.md counts, a new docs/architecture/vfx-production.md (the chain style profile, textures, recipe, capture, lint, human review, record; which repo owns what; what stays HUMAN_REQUIRED), a routing scenario for vfx-graph in tests/routing.test.sh, the golden fixture, a dogfood EXPECT entry for an effect task, evals/vfx-graph-effect with its grader, and docs/plans/backlog.md lines the run lead names in the spec notes. One fragment changelog.d/vfx-touchpoints.md.",
+      "objective": "Finish every touchpoint scripts/skill-touchpoints.py vfx-graph still lists and the shared docs: the factory-core Skills section and skill table, the skill-contract diagram, README diagram, tables and counts, docs/architecture/overview.md counts, a new docs/architecture/vfx-production.md (the chain style profile, textures, recipe, capture, lint, human review, record; which repo owns what; what stays HUMAN_REQUIRED), a routing scenario for vfx-graph in tests/routing.test.sh, the golden fixture, a dogfood EXPECT entry for an effect task, evals/vfx-graph-effect with its grader, and docs/plans/backlog.md lines the run lead names in the spec notes. One fragment changelog.d/vfx-touchpoints.md. Follow-ups added by the run lead on 2026-11-27 from skill-vfx-graph: the nine MISSING items of scripts/skill-touchpoints.py vfx-graph; registry/core.json dev_tools unity-mcp-cli and unity-mcp used_by gain vfx-graph (rebuild registry.json); docs/architecture/domains/vfx.md says gameplay-event-to-vfx; commands/vfx-lint.md examples use vfx/style/; skills/vfx-graph/references/vfxgraph-review.md names recipe_sha256 of stats.json correctly; scripts/vfx/data/plan.json: a NOT_VFX case for gameplay wording such as 'shadow strike cooldown' in tests/vfx-production.test.sh, and the recipe and capture steps name the unity-package leg if vfx_plan.py can resolve it without a code change (else a backlog line); tests/pipeline.test.sh:2944 NOKILL matches only the word kill (word boundaries), so a checkout path with 'skills' passes. Backlog lines for docs/plans/backlog.md come from the run lead's notes. Also add one operating lesson to skills/factory-core/references/parallel-work.md (delivery-flow lessons live there), within its line budget: an `orca terminal read` answer terminal_handle_stale is not proof that a task lead ended; check `orca orchestration worker-list --run <its run>` liveness and the lead's own Run messages before dispatching a replacement lead (2026-11-27: Orca had resumed the first pkg-core lead one minute before a replacement was dispatched, and both started a verify of the same SHA; the first one's verify noticed the foreign Sandbox editor and stopped).",
       "paths": [
         "README.md",
         "docs/architecture/overview.md",
@@ -377,7 +377,17 @@
         "docs/plans/backlog.md",
         ".claude-plugin/",
         ".codex-plugin/",
-        "changelog.d/vfx-touchpoints.md"
+        "changelog.d/vfx-touchpoints.md",
+        "registry/core.json",
+        "registry.json",
+        "docs/architecture/domains/vfx.md",
+        "commands/vfx-lint.md",
+        "skills/vfx-graph/references/vfxgraph-review.md",
+        "scripts/vfx/data/",
+        "tests/vfx-production.test.sh",
+        "tests/pipeline.test.sh",
+        "tests/new-skill.test.sh",
+        "skills/factory-core/references/parallel-work.md"
       ],
       "exclusions": [],
       "deps": [
