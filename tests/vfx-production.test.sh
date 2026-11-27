@@ -337,6 +337,12 @@ plan --json "add a fire effect to the fireball spell" --root "$P/empty/authoring
 plan --json --effect fire-bolt --root "$P/empty/authoring"; rc=$?
 [ $rc -eq 3 ] && [ "$(q .status)" = NEEDS_CONTEXT ] && [ "$(q '[.missing[].item] | join(",")')" = project ] \
   && ok "plan NEEDS_CONTEXT: no --project is never guessed (missing project)" || no "plan no project: rc=$rc missing=$(q '[.missing[].item]')"
+# Without --project the recipe and capture steps have no input to grade: NOT_AVAILABLE, the authoring steps graded.
+plan --json --effect fire-bolt --root "$P/done/authoring"; rc=$?
+[ $rc -eq 3 ] && [ "$(steps)" = "style=DONE,textures=DONE,recipe=NOT_AVAILABLE,capture=NOT_AVAILABLE,record=DONE" ] \
+  && [ "$(q .current_step)" = recipe ] && [ "$(q '.steps[2].evidence[0]')" = "no project" ] \
+  && ok "plan: without --project the recipe and capture steps are NOT_AVAILABLE, the authoring steps still graded" \
+  || no "plan NOT_AVAILABLE: rc=$rc $(steps) $(q '.steps[2].evidence')"
 plan --json --effect fire-bolt --root "$TMP/no-such-root" --project "$TMP/no-such-project"; rc=$?
 [ $rc -eq 3 ] && [ "$(q '[.missing[].item] | join(",")')" = "authoring-root,project" ] \
   && ok "plan NEEDS_CONTEXT: a --root and --project that are not directories" || no "plan bad dirs: rc=$rc missing=$(q '[.missing[].item]')"
@@ -415,6 +421,20 @@ printf '\n' >> "$STY"; wplan; rc=$?
 [ $rc -eq 0 ] && [ "$(q '.steps[0].state')" = STALE ] \
   && ok "plan: a binding profile changed after its approval is STALE" || no "plan stale approval: rc=$rc $(steps)"
 cp "$P/done/authoring/vfx/style/vfx-style.md" "$STY"
+# A rejected gen-run blocks the textures step (status before any approval record is read).
+GEN="$W/done/authoring/assetgen/runs/fire-bolt-glow-001/run.md"; cp "$GEN" "$TMP/run.md.bak"
+python3 -B - "$GEN" <<'PY'
+import sys
+p = sys.argv[1]; t = open(p, encoding="utf-8").read()
+open(p, "w", encoding="utf-8", newline="").write(t.replace('"status": "approved"', '"status": "rejected"', 1))
+PY
+wplan; rc=$?
+[ $rc -eq 0 ] && [ "$(steps)" = "style=DONE,textures=BLOCKED,recipe=DONE,capture=DONE,record=DONE" ] \
+  && [ "$(q .current_step)" = textures ] && [ "$(q '.context.gen_runs[0].state')" = BLOCKED ] \
+  && q '.steps[1].evidence | join(" ")' | grep -q 'AGEN-fire-bolt-glow-001 is rejected' \
+  && ok "plan: a rejected gen-run makes the textures step BLOCKED and the current step" \
+  || no "plan blocked gen-run: rc=$rc $(steps) $(q '.steps[1].evidence')"
+cp "$TMP/run.md.bak" "$GEN"
 rm -rf "$W/done/authoring/approvals/VFX-style-001" "$W/done/authoring/approvals/AGEN-fire-bolt-glow-001"; wplan; rc=$?
 [ $rc -eq 0 ] && [ "$(steps)" = "style=NEEDS_APPROVAL,textures=NEEDS_APPROVAL,recipe=DONE,capture=DONE,record=DONE" ] \
   && [ "$(q .current_step)" = style ] && q '.steps[0].evidence[0]' | grep -q 'no approval record' \
