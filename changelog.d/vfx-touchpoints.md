@@ -18,7 +18,8 @@
 ### Changed
 
 - **unity-mcp used_by.** Registry dev tools `unity-mcp-cli` and `unity-mcp` list `vfx-graph` in `used_by`
-  (`registry/core.json`, rebuilt `registry.json`).
+  (`registry/core.json`, rebuilt `registry.json`);
+  the `vfx-graph` Tools section names `unity-mcp`.
 - **vfx-plan steps.** The recipe and capture steps name the `rpg-factory:unity-package` leg for a change to the
   `com.cuvara.vfx` package itself and `rpg-factory:vfx-graph` for authoring (`scripts/vfx/data/plan.json`).
 - **Docs wording.** `docs/architecture/domains/vfx.md` names the input handoff `gameplay-event-to-vfx`;
