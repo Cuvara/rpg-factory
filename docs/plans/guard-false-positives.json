@@ -1,0 +1,47 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "guard-false-positives",
+  "title": "guard: path-only git reset, heredoc data and own-PID rebinding",
+  "topic": "feat/delivery/guard-false-positives",
+  "goal": "Close issues #155 and #158. The advisory guard flags a path-only `git reset` (unstage) as moving the protected branch, flags kill commands named in a quoted heredoc that is only written to a file, and its own-PID exemption from #60 is not voided by export/declare/local/typeset rebinding; a few rare kill forms are still missed.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "guard-fp",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Read issues #155 and #158 (`gh issue view 155`, `gh issue view 158`). The guard is advisory only; never add a permissionDecision. (1) #155, scripts/lib/rpgf_guard/git.py, the `if sub == \"reset\":` branch (around line 139): today any non-flag word on a protected branch counts as `<commit>`. Words after `--` are paths, never a revision. A word before `--` is a revision only when it looks like one: a ref or rev expression (HEAD, HEAD~1, @{u}, origin/main, a branch or tag name, a 7-40 hex SHA, anything with ~ ^ @ or :) and not an existing path relative to the command's working directory (the guard may stat paths; it must not run git). `git reset -q docs/plans/x.json`, `git reset -- a b`, `git reset HEAD -- file` and `git reset -p file` stay quiet on main (HEAD as the rev of a path reset does not move the branch); `git reset HEAD~1`, `git reset origin/main`, `git reset --soft HEAD~2`, `git reset --mixed abc1234` stay flagged; --hard/--merge/--keep keep their own advisory. (2) #158 item 1: a quoted heredoc whose body mentions kill commands inside backticks, fed to a reader that does not execute it (`cat > f <<'EOF'`, `cat <<'EOF' > f`, `tee f <<'EOF'`, `gh ... --body-file - <<'EOF'`), gets the process advisory. Likely cause: `_substitutions()` in scripts/lib/rpgf_guard/process.py scans the raw command text for backticks and $(...), including heredoc bodies; a quoted-delimiter heredoc body (<<'EOF' or <<\"EOF\") is never expanded by the shell, so skip it there (an unquoted <<EOF body does expand $(...) and backticks: keep scanning it; a heredoc fed to a shell, `bash <<EOF` / `cat <<EOF | sh`, stays a command). Reuse the heredoc parsing of scripts/lib/rpgf_guard/shell.py rather than a second parser. (3) #158 item 2: the own-PID exemption is voided by `export NAME=`, `declare [-x] NAME=`, `local NAME=`, `typeset NAME=`, `readonly NAME=` rebinding to a non-own value; `foreach Kill` (ForEach-Object alias) is flagged like `ForEach-Object Kill`; `kill -- $pid` and `$p.Kill()` on a -PassThru result count as own-PID kills (quiet). Rebinding inside a nested `bash -c` stays a documented limitation. Tests in tests/git-guard.test.sh for every item, positive and negative, at least the reset cases in the `$SERVER` working directory on its protected branch. A new bypass class also gets a case in tests/installed-safety.sh when that suite covers its class. Changelog fragment changelog.d/guard-false-positives.md (### Fixed).",
+      "paths": [
+        "scripts/lib/rpgf_guard/git.py",
+        "scripts/lib/rpgf_guard/process.py",
+        "scripts/lib/rpgf_guard/shell.py",
+        "scripts/lib/gitguard.py",
+        "tests/git-guard.test.sh",
+        "tests/installed-safety.sh",
+        "changelog.d/guard-false-positives.md"
+      ],
+      "exclusions": [
+        "scripts/factory-pipeline.py",
+        "skills/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/git-guard.test.sh",
+        "tests/installed-safety.sh"
+      ],
+      "acceptance": [
+        "path-only git reset forms (`git reset -q <file>`, `git reset -- <paths>`, `git reset HEAD -- <file>`) get no branch-move advisory on a protected branch; revision forms still do",
+        "kill commands named inside a quoted heredoc written to a file or a --body-file get no process advisory; a heredoc fed to a shell and an unquoted heredoc with a real $(pgrep ...) substitution still do",
+        "export/declare/local/typeset/readonly rebinding voids the own-PID exemption; `foreach Kill` is flagged; `kill -- $pid` and `$p.Kill()` on a -PassThru result are quiet",
+        "every existing git-guard and installed-safety case passes"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "pipeline-lows",
+  "title": "Structured status fields, pipeline CLI docs, dispatch and gate lows",
+  "topic": "pipeline-lows",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "status-fields",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "the status schema every run lead and tool reads",
+      "objective": "Backlog topics plugin-flow-5-followups, policy-followups-leftovers and workflow-slim-followups (docs/plans/backlog.md). (1) `factory-pipeline.py status --json`: the task-lead report and READY_FOR_PR live only in the text notes of each task row, and the `model_scope_widen` lines go to stderr only, because docs/schemas/pipeline-status.schema.json forbids extra fields. Add structured, schema-typed fields: per task the lead report (time, sha, first line or null) and ready_for_pr (yes or the first missing reason); at the top level the model scope widenings (or []). Keep the text output unchanged. (2) docs/pipeline-cli.md lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes of status, and orca-wait exit 6; add them, citing by section. (3) The `factory-pipeline.py` usage text of `verdict` lists no `verify` phase and still says a subtask needs its own review: make it describe the code. Cases in tests/pipeline.test.sh (status --json carries the new fields and validates against the schema; the verdict usage names verify). Changelog fragment changelog.d/pipeline-lows-status.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "docs/schemas/pipeline-status.schema.json",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/pipeline-lows-status.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "status --json has schema-valid lead report, ready_for_pr and model scope widening fields",
+        "docs/pipeline-cli.md documents report, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6",
+        "the verdict usage text describes the verify phase",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "dispatch-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "dispatch specs and the gate scope check of every plan",
+      "objective": "Backlog topics qa-reach-followups-2, plugin-flow-5-followups and workflow-slim-followups (docs/plans/backlog.md), all in scripts/factory-pipeline.py. (1) `dispatch` prints an `orca orchestration worker-start` command without `--run`, so a task lead with its own Orca Run adds it by hand: add the Run when one is known (the task's recorded Orca Run or --orca-run). (2) `dispatch --phase review` (and the verify spec) diffs `main...<sha>`; a task that merged another integrated task then shows the foreign files as scope findings (a false FAIL): diff against the task's recorded base or the integration base it merged. (3) The QA spec template's cleanup uses a possibly-empty variable (`rm -f $S/*.log`), which stalls an unattended worker on a permission prompt: use `${S:?}` or a literal path. (4) Base-health lows: `known_failing_text(plan)` is computed twice per prompt; an entry with an unknown key gets both the error and the warning. (5) `gate` reports files that came in with a merge of the default branch and the run lead's docs/plans/backlog.md edit as changes outside every task's owned paths: credit both, like the plan file and the run report. Cases in tests/pipeline.test.sh for each. Changelog fragment changelog.d/pipeline-lows-dispatch.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/pipeline-lows-dispatch.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "status-fields"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "the printed worker-start command carries --run when a Run is known",
+        "review and verify specs diff against the task's base, so a merged integrated task shows no foreign scope findings",
+        "the QA spec cleanup cannot expand to an unscoped path",
+        "known_failing_text runs once per prompt and an unknown key gets one message",
+        "gate credits default-branch merge files and the backlog edit",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "doc-lows",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "light",
+      "grade_reason": "two stale sentences in the script index and the factory-core skill",
+      "objective": "Backlog topics plugin-flow-5-followups and workflow-slim-followups (docs/plans/backlog.md). (1) scripts/README.md (the `orca-wait.sh` entry) still says the waiter wakes on three message types and leaves messages unacked: make it describe scripts/orca-wait.sh as it is. (2) skills/factory-core/SKILL.md step 11 is still titled 'Review + QA', while the flow has one verify session (review, then QA): retitle it and keep the skill contract (tests/skills-lint.sh, skills/factory-core/references/skill-contract.md). Checks: tests/skills-lint.sh. No changelog fragment unless the wording changes behaviour.",
+      "paths": [
+        "scripts/README.md",
+        "skills/factory-core/SKILL.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "the orca-wait.sh entry describes the script",
+        "factory-core step 11 names the verify step",
+        "the named suite passes"
+      ]
+    }
+  ]
+}

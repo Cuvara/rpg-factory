@@ -200,17 +200,31 @@ check high "$SERVER" 'taskkill /IM powershell.exe /F'
 check high "$SERVER" 'Stop-Process -Name dotnet -Force' "" PowerShell
 check high "$SERVER" 'Stop-Process -ProcessName powershell' "" PowerShell
 check high "$SERVER" 'Get-Process dotnet | Stop-Process -Force' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | % Kill' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | ForEach-Object Kill' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | ForEach-Object -MemberName Kill' "" PowerShell
+check high "$SERVER" '(Get-Process dotnet).Kill()' "" PowerShell
 check high "$SERVER" 'Get-CimInstance Win32_Process | Where-Object {$_.Name -eq "dotnet.exe"} | ForEach-Object {$_.Terminate()}' "" PowerShell
 check high "$SERVER" 'Get-WmiObject Win32_Process -Filter "Name=dotnet.exe" | Invoke-CimMethod -MethodName Terminate' "" PowerShell
 check high "$SERVER" 'Get-CimInstance Win32_Process -Filter "Name=dotnet.exe" | Where-Object {$_.CommandLine -like "*--filter*"} | % { Stop-Process -Id $_.ProcessId -Force }' "" PowerShell
 check high "$SERVER" 'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { $_.CommandLine -like '*--filter*' } | % { Stop-Process -Id $_.ProcessId -Force }"'
 check high "$SERVER" 'pkill -f dotnet'
+check high "$SERVER" 'pkill.exe dotnet'
 check high "$SERVER" 'killall powershell'
+check high "$SERVER" 'busybox killall dotnet'
+check high "$SERVER" 'busybox pkill -f run.sh'
+check high "$SERVER" 'killall5 -9'
+check high "$SERVER" 'fuser -k 8080/tcp'
+check high "$SERVER" 'kill $(lsof -t -i:8080)'
+check high "$SERVER" 'kill -9 $(lsof -ti:8080)'
+check high "$SERVER" 'kill $(pgrep run.sh)'
 check high "$SERVER" 'kill $(pgrep -f dotnet)'
 check high "$SERVER" 'pgrep -f dotnet | xargs kill'
 check high "$SERVER" 'wmic process where "name like dotnet" delete'
 check high "$SERVER" 'wmic process where "name like dotnet" call terminate'
 check high "$SERVER" 'bash -c "taskkill //F //IM dotnet.exe"'
+check high "$SERVER" 'cmd //c "taskkill /F /IM dotnet.exe"'
+check high "$SERVER" 'cmd.exe //k "taskkill /F /IM dotnet.exe"'
 check high "$SERVER" 'powershell -NoProfile -Command "Stop-Process -Name dotnet -Force"' "" PowerShell
 check high "$SERVER" "bash <<'KILL_EOF'
 taskkill /F /IM dotnet.exe
@@ -221,6 +235,35 @@ check allow "$SERVER" 'Stop-Process -Id 1234' "" PowerShell
 check allow "$SERVER" 'kill 1234'
 check allow "$SERVER" 'kill $!'
 check allow "$SERVER" 'kill %1'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -9 $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -TERM $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -s TERM $pid'
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -n 9 $pid'
+check allow "$SERVER" './run.sh & PID=$!; pgrep -f run.sh; kill ${PID}'
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id -Force -PassThru -Confirm:$false -WhatIf' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; $p | Stop-Process' "" PowerShell
+check high "$SERVER" './run.sh & pid=$!; kill $(pgrep -f run.sh)'
+check high "$SERVER" './run.sh & pid=$!; for pid in $(pgrep x); do kill $pid; done'
+check high "$SERVER" './run.sh & pid=$!; pgrep x | while read pid; do kill $pid; done'
+check high "$SERVER" './run.sh & pid=$!; select pid in $(pgrep x); do kill $pid; done'
+check high "$SERVER" './run.sh & PID=$!; pgrep x; kill $pid'
+check high "$SERVER" '$p = Start-Process x -PassThru; foreach ($p in Get-Process dotnet) { Stop-Process -Id $p.Id }' "" PowerShell
+check high "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet | Stop-Process' "" PowerShell
+# #158: a declaration builtin rebinding the PID variable to a non-own value voids the own-PID exemption
+check high "$SERVER" './run.sh & pid=$!; export pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; declare pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; declare -x pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; local pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; typeset pid=$(pgrep -f dotnet); kill $pid'
+check high "$SERVER" './run.sh & pid=$!; readonly pid=$(pgrep -f dotnet); kill $pid'
+# Documented limitation: a rebinding inside a nested `bash -c` (pid=$!; bash -c "pid=...; kill \$pid") is not seen.
+check allow "$SERVER" './run.sh & pid=$!; pgrep -f run.sh; kill -- $pid'
+check allow "$SERVER" './run.sh & export pid=$!; pgrep -f run.sh; kill $pid'
+check high "$SERVER" 'Get-Process dotnet | foreach Kill' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | foreach -MemberName Kill' "" PowerShell
+check allow "$SERVER" '$p = Start-Process dotnet -PassThru; Get-Process dotnet; $p.Kill()' "" PowerShell
 
 # a query that selects processes by name/pattern + any terminator, whatever the separators (RV-B9 MAJOR-1)
 check high "$SERVER" 'taskkill //F //PID $(powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='"'"'bash.exe'"'"'\" | Where-Object { $_.CommandLine -like '"'"'*run.sh*'"'"' } | % { $_.ProcessId }") //T'
@@ -278,11 +321,44 @@ check allow "$TMP" 'ps aux'
 check allow "$TMP" 'Get-Process -Id 1234 | Stop-Process' "" PowerShell
 check allow "$TMP" '$p | Stop-Process' "" PowerShell
 check allow "$TMP" 'wmic process where processid=1234 delete'
-check allow "$TMP" "grep -E 'foo|pkill' file"
-check allow "$TMP" 'rg "taskkill|pkill|killall" scripts/'
-check allow "$TMP" "grep -rnE 'Stop-Process|taskkill /IM' ."
-check allow "$TMP" 'echo "step 1; pkill is forbidden"'
-check allow "$TMP" 'echo "do not run taskkill /F /IM dotnet.exe"'
+check allow "$SERVER" "grep -E 'foo|pkill' file"
+check allow "$SERVER" 'rg "taskkill|pkill|killall" scripts/'
+check allow "$SERVER" "grep -rnE 'Stop-Process|taskkill /IM' ."
+check allow "$SERVER" 'echo "step 1; pkill is forbidden"'
+check allow "$SERVER" 'echo "do not run taskkill /F /IM dotnet.exe"'
+check allow "$SERVER" 'echo "busybox killall and fuser -k"'
+check allow "$SERVER" "grep -n 'ForEach-Object -MemberName Kill' f"
+# #158: a quoted heredoc (<<'EOF', <<"EOF") is never expanded, so kill commands named in its body are data
+hd_body='Never run `busybox killall|pkill` or `fuser -k` on the host.'
+check allow "$SERVER" "cat > body.md <<'EOF'
+$hd_body
+EOF"
+check allow "$SERVER" "cat <<'EOF' > body.md
+$hd_body
+EOF"
+check allow "$SERVER" "cat > body.md <<\"EOF\"
+$hd_body
+EOF"
+check allow "$SERVER" "tee body.md <<'EOF'
+$hd_body
+EOF"
+check allow "$TMP" "gh pr create --title t --body-file - <<'EOF'
+$hd_body
+EOF"   # in \$TMP: gh pr create has its own human-gate advisory inside the workspace
+# a heredoc fed to a shell is commands; an unquoted heredoc body expands \$(...) and backticks
+check high "$SERVER" "cat <<'EOF' | sh
+pkill -f dotnet
+EOF"
+check high "$SERVER" "bash <<'EOF'
+pkill x
+EOF"
+check high "$SERVER" "cat > f <<EOF
+\$(pgrep -f dotnet | xargs kill)
+EOF"
+check high "$SERVER" "cat > f <<EOF
+pids: \`pgrep -f dotnet | xargs kill\`
+EOF"
+check allow "$FEATURE" 'git commit -m "fix: flag pkill.exe and killall5"'
 check allow "$TMP" 'git commit -m "fix(guard): flag a; killall"'
 check allow "$TMP" "jq -r '.a | killall' f"
 check allow "$TMP" "python scripts/x.py --pattern 'a|killall'"
@@ -460,6 +536,7 @@ check allow "$SERVER" "xargs git tag -l < /dev/null"
 check allow "$SERVER" "echo f | xargs git log --oneline"
 check warn "$SERVER" 'find . -name x -exec git checkout -- {} \;'
 check warn "$SERVER" "cmd.exe /c git reset --hard"
+check warn "$SERVER" 'cmd //c "git push --force origin main"'
 check warn "$SERVER" 'powershell.exe -c "git reset --hard"'
 check warn "$SERVER" "powershell.exe -EncodedCommand ZwBpAHQA"
 check warn "$SERVER" 'G=git; $G reset --hard'
@@ -481,6 +558,21 @@ check warn "$SERVER" "git revert HEAD"
 check warn "$SERVER" "git am patch.mbox"
 check warn "$SERVER" "git pull --rebase"
 check warn "$SERVER" "git reset HEAD~3"
+# #155: a path-only reset updates the index and never moves the protected branch; a revision reset does
+mkdir -p "$SERVER/docs/plans" && touch "$SERVER/docs/plans/x.json"
+check allow "$SERVER" "git reset -q docs/plans/x.json"
+check allow "$SERVER" "git reset docs/plans/x.json"
+check allow "$SERVER" "git reset -- docs/plans/x.json other.txt"
+check allow "$SERVER" "git reset HEAD -- docs/plans/x.json"      # HEAD as the rev of a path reset moves nothing
+check allow "$SERVER" "git reset -p docs/plans/x.json"
+check allow "$SERVER" "git reset -q"
+check allow "$SERVER" "git reset -q docs/plans/x.json" "" PowerShell
+check warn "$SERVER" "git reset HEAD~1"
+check warn "$SERVER" "git reset origin/main"
+check warn "$SERVER" "git reset --soft HEAD~2"
+check warn "$SERVER" "git reset --mixed abc1234"
+check warn "$SERVER" "git reset @{u}"
+check warn "$SERVER" "git reset --hard origin/main"
 check warn "$SERVER" "git checkout -B develop origin/develop"
 check warn "$SERVER" "git switch -C develop origin/develop"
 check warn "$SERVER" "git branch -f develop HEAD~2"
@@ -1034,12 +1126,66 @@ if has_case language; then
 vi_msg='sửa lỗi đăng nhập của người dùng'
 lang() { # yes|no cwd command [tool-name] [field]  (field: command, or prompt for the Agent tool)
   local expect="$1" cwd="$2" cmd="$3" tool="${4:-Bash}" field="${5:-command}" payload out rc got=no
-  payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" --arg f "$field" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{($f):$c}, cwd:$d, session_id:"guardtest"}')
+  payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" --arg f "$field" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:({($f):$c} + (if $f == "prompt" then {description:"delegate work"} else {} end)), cwd:$d, session_id:"guardtest"}')
   out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
   [[ "$out" == *'english-only'* ]] && got=yes
   if [ "$rc" -eq 0 ] && [ "$got" = "$expect" ] && [[ "$out" != *permissionDecision* ]] && { [ "$got" = no ] || [[ "$out" == *'advisory (warn)'* ]]; }; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL english-only expected=%s got=%s rc=%s tool=%s cmd=%q\n  out=%s\n' "$expect" "$got" "$rc" "$tool" "$cmd" "$out"; fi
 }
+# Clone-like and linked-worktree fixtures outside the workspace, with no host git setup.
+LANG_CLONE="$TMP/language-clone"; LANG_WT="$TMP/language-worktree"; LANG_OTHER="$TMP/language-other"
+mkdir -p "$LANG_CLONE/.git/worktrees/wt" "$LANG_CLONE/.claude-plugin" "$LANG_WT" "$LANG_OTHER/.git" "$LANG_OTHER/.claude-plugin"
+printf '%s\n' '{"name":"rpg-factory"}' > "$LANG_CLONE/.claude-plugin/plugin.json"
+printf 'gitdir: %s/.git/worktrees/wt\n' "$LANG_CLONE" > "$LANG_WT/.git"
+printf '%s\n' '{"name":"other-plugin"}' > "$LANG_OTHER/.claude-plugin/plugin.json"
+for checkout in "$LANG_CLONE" "$LANG_WT"; do
+  lang yes "$checkout" "git commit -m \"$vi_msg\""
+  lang yes "$checkout" "$vi_msg" Agent prompt
+  lang yes "$checkout" "gh pr create --title \"$vi_msg\""
+  lang yes "$checkout" "orca orchestration send --body \"$vi_msg\""
+done
+lang yes "$OUT" "git -C $LANG_CLONE commit -m \"$vi_msg\""
+# A relative -C is resolved against the hook's cwd: from an unrelated directory it still reaches a plugin checkout, a
+# linked worktree or a workspace repo; into an unrelated directory, or with English text, there is no opinion.
+lang yes "$OUT" "git -C ../language-clone commit -m \"$vi_msg\""
+lang yes "$OUT" "git -C ../language-worktree commit -m \"$vi_msg\""
+lang yes "$OUT" "git -C ../ws/rpg-mmo-server commit -m \"$vi_msg\""
+lang yes "$OUT" "git -C .. -C language-clone commit -m \"$vi_msg\""            # chained -C: each is relative to the previous
+lang yes "$OUT" "echo ok && git -C ../language-clone commit -m \"$vi_msg\""    # inside a command list
+lang yes "$OUT" "git -C ../language-clone commit -m \"$vi_msg\"" PowerShell
+lang no  "$OUT" "git -C ../language-other commit -m \"$vi_msg\""               # a plugin-named repo that is not rpg-factory
+lang no  "$OUT" "git -C ../no-such-dir commit -m \"$vi_msg\""
+lang no  "$OUT" "git -C ../language-clone commit -m 'fix login'"               # English text with a relative -C
+lang no  "$LANG_OTHER" "git -C ../outside commit -m \"$vi_msg\""
+# In `cd x && git -C ../y ...` the -C path is relative to x: a preceding cd to a literal directory moves the base
+# (pure path arithmetic, the fixture directory `sub` need not exist); a cd whose target is not a literal (a variable,
+# `-`, a glob, a substitution) gives no opinion for a later relative -C and never crashes; an absolute -C still counts.
+lang yes "$OUT" "cd sub && git -C ../../language-clone commit -m \"$vi_msg\""           # relative to $OUT/sub, not to $OUT
+lang yes "$OUT" "cd .. && git -C language-clone commit -m \"$vi_msg\""                  # only resolves after the cd
+lang yes "$OUT" "cd $LANG_OTHER && git -C ../language-clone commit -m \"$vi_msg\""      # an absolute cd
+lang yes "$OUT" "cd ../language-clone && git -C . commit -m \"$vi_msg\""
+lang yes "$OUT" "cd ../language-other; cd ../language-clone; git -C . commit -m \"$vi_msg\""   # the last cd wins
+lang yes "$OUT" "cd -- ../language-clone && git -C . commit -m \"$vi_msg\""             # an option-looking end marker is skipped
+lang yes "$OUT" "pushd ../language-clone && git -C . commit -m \"$vi_msg\""
+lang no  "$OUT" "cd ../language-other && git -C . commit -m \"$vi_msg\""                # the cd leaves the plugin-named non-rpg-factory dir
+lang no  "$OUT" "cd sub && git -C ../language-clone commit -m \"$vi_msg\""              # $OUT/sub/../language-clone is $OUT/language-clone
+lang no  "$OUT" "cd ../language-clone && git -C ../language-other commit -m \"$vi_msg\""
+lang no  "$OUT" "cd \"\$NOT_SET\" && git -C ../language-clone commit -m \"$vi_msg\""    # a variable: unknown directory, no opinion
+lang no  "$OUT" "cd \$NOT_SET && git -C ../language-clone commit -m \"$vi_msg\""
+lang no  "$OUT" "cd \"\$(pwd)\" && git -C ../language-clone commit -m \"$vi_msg\""      # a substitution
+lang no  "$OUT" "cd - && git -C ../language-clone commit -m \"$vi_msg\""                # the previous directory is unknown
+lang no  "$OUT" "cd ../language-* && git -C ../language-clone commit -m \"$vi_msg\""    # a glob
+lang no  "$OUT" "cd && git -C ../language-clone commit -m \"$vi_msg\""                  # bare cd goes to the machine's home
+lang no  "$OUT" "cd \$NOT_SET && git -C . commit -m \"$vi_msg\""
+lang yes "$OUT" "cd \$NOT_SET && git -C $LANG_CLONE commit -m \"$vi_msg\""              # an absolute -C needs no base
+lang no  "$OUT" "cd \$NOT_SET; cd ../language-clone; git -C . commit -m \"$vi_msg\""    # a relative cd after an unknown one stays unknown
+lang yes "$OUT" "cd \$NOT_SET; cd $LANG_CLONE; git -C . commit -m \"$vi_msg\""         # an absolute cd makes the base known again
+lang yes "$OUT" "Set-Location ../language-clone; git -C . commit -m \"$vi_msg\"" PowerShell
+lang yes "$OUT" "cd ../language-other; git -C ../language-clone commit -m \"$vi_msg\"" PowerShell
+lang no  "$OUT" "Set-Location \$env:NOT_SET; git -C ../language-clone commit -m \"$vi_msg\"" PowerShell
+lang no  "$OUT" "cd ../language-other; git -C . commit -m \"$vi_msg\"" PowerShell
+lang no "$LANG_OTHER" "git commit -m \"$vi_msg\""
+lang no "$LANG_OTHER" "$vi_msg" Agent prompt
 lang yes "$FEATURE" "git commit -m \"$vi_msg\""
 lang yes "$FEATURE" "git commit --message \"$vi_msg\""
 lang yes "$FEATURE" "git commit --message=\"$vi_msg\""
@@ -1061,6 +1207,14 @@ lang yes "$FEATURE" "gh --repo o/r pr create -t \"$vi_msg\" -b x"
 lang yes "$FEATURE" "orca orchestration send --from t --type worker_done --subject done --body \"$vi_msg\""
 lang yes "$FEATURE" "orca orchestration send --from t --subject \"$vi_msg\" --body done"
 lang yes "$FEATURE" "orca agent launch --agent claude --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment prod orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --pairing-code CODE orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment=prod orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --json orchestration send --body \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment prod agent launch --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --pairing-code CODE agent launch --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --environment=prod agent launch --prompt \"$vi_msg\""
+lang yes "$FEATURE" "orca --json agent launch --prompt \"$vi_msg\""
 lang yes "$FEATURE" "echo ok && git commit -m \"$vi_msg\""           # inside a command list
 lang yes "$FEATURE" "bash -c 'git commit -m \"$vi_msg\"'"             # inside a nested shell
 lang yes "$FEATURE" "git commit -m \"$vi_msg\"" PowerShell
@@ -1080,6 +1234,15 @@ lang no  "$FEATURE" '' Agent prompt
 # A command outside every workspace (and not a worktree of one) gets no opinion.
 lang no  "$OUT" "git commit -m \"$vi_msg\""
 lang no  "$OUT" "$vi_msg" Agent prompt
+# Names alone do not imply an Agent tool: both required string fields must be present.
+for tool in Task Agent; do
+  payload=$(jq -cn --arg t "$tool" --arg p "$vi_msg" --arg d "$FEATURE" '{tool_name:$t, tool_input:{prompt:$p}, cwd:$d}')
+  out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL non-Agent %s input: rc=%s out=%s\n' "$tool" "$rc" "$out"; fi
+done
+payload=$(jq -cn --arg p "$vi_msg" --arg d "$FEATURE" '{tool_name:"Task", tool_input:{subject:$p, description:$p}, cwd:$d}')
+out=$(guard_command <<<"$payload" 2>/dev/null); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL task-list input: rc=%s out=%s\n' "$rc" "$out"; fi
 # Malformed payloads and an unrelated tool are no opinion (rc 0, no output).
 for bad in '{"tool_name":"Agent","tool_input":{"prompt":42},"cwd":"/"}' '{"tool_name":"Agent","tool_input":null}' '{"tool_name":"Agent"}'; do
   out=$(guard_command <<<"$bad" 2>/dev/null); rc=$?

@@ -1,0 +1,2 @@
+# Split entries from reasons at the last " #" so regexes may contain it.
+tests/portable-paths.test.sh:/home/(?:workspaceowner|anotherowner) # Fixture verifies that changing the registry default changes the allowed path.

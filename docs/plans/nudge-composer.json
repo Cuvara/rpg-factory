@@ -1,0 +1,42 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "nudge-composer",
+  "title": "Nudge: a spec pointer counts only on the composer line",
+  "topic": "feat/delivery/nudge-composer",
+  "goal": "Close issue #144. `factory-pipeline.py nudge` classified a working task lead as STUCK because its screen echoed the `orca worker-start --spec 'Read your task spec at <verify spec> ...'` command it had just run: nudge_spec() accepts the pointer anywhere on the screen. A start prompt that stayed unsubmitted sits on its own composer line, so a pointer with other text before it on its line (a command, a quote) is not a start prompt.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "composer-pointer",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "In scripts/factory-pipeline.py nudge_spec(), a pointer match counts only when the text before 'Read your task spec at' on the screen line where the match starts, after stripping, is empty or only composer markers (whitespace and any of > › ❯ » │ ┃ |). This holds for all three join forms (newline, space, empty): map the match start in the joined text back to its line and column. A match with any other prefix (for example `orca worker-start --spec '` or a quote) is skipped and the search goes on, so a later composer-line pointer still counts. Everything else in cmd_nudge stays as it is. In tests/pipeline.test.sh case nudge: a lead terminal whose screen echoes a worker-start command carrying a pointer to another spec of this plan (and no composer-line pointer) is `ok  no start-prompt pointer on screen` and gets no send; a screen with such an echo above a real `> Read your task spec at ...` composer line is still STUCK naming the composer line's spec; the existing bare, `> ` and wrapped screens still match. Update the nudge text in the module docstring help if it says the pointer may be anywhere on the screen.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/nudge-composer.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "docs/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "a lead screen that shows only an echoed `orca worker-start --spec 'Read your task spec at <spec of this plan> and follow it.'` command is ok with 'no start-prompt pointer on screen', and nudge --send sends nothing to it",
+        "a screen with that echo above a `> Read your task spec at <other spec>` composer line is STUCK naming the composer line's spec",
+        "the existing bare, '> ', wrapped-after-at and path-wrapped pointer cases still classify as before",
+        "every existing pipeline case passes"
+      ]
+    }
+  ]
+}

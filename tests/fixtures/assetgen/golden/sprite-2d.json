@@ -1,7 +1,16 @@
 {
  "1": {
   "_meta": {
-   "title": "Generate image"
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for sprite-2d: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate sprite"
   },
   "class_type": "NineRouterImage",
   "inputs": {
@@ -10,19 +19,6 @@
    "quality": "high",
    "size": "1024x1024",
    "user_prompt": [
-    "3",
-    0
-   ]
-  }
- },
- "2": {
-  "_meta": {
-   "title": "Save image"
-  },
-  "class_type": "SaveImage",
-  "inputs": {
-   "filename_prefix": "assetgen/golden-sprite-2d-001",
-   "images": [
     "1",
     0
    ]
@@ -30,11 +26,15 @@
  },
  "3": {
   "_meta": {
-   "title": "Prompt (Claude, Codex review NOT_RUN)"
+   "title": "Save sprite"
   },
-  "class_type": "PrimitiveStringMultiline",
+  "class_type": "SaveImage",
   "inputs": {
-   "value": "Test prompt for sprite-2d: one subject, centered."
+   "filename_prefix": "assetgen/golden-sprite-2d-001-sprite",
+   "images": [
+    "2",
+    0
+   ]
   }
  }
 }

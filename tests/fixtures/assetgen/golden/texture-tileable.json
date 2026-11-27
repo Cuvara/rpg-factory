@@ -1,7 +1,16 @@
 {
  "1": {
   "_meta": {
-   "title": "Generate image"
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for texture-tileable: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Generate texture"
   },
   "class_type": "NineRouterImage",
   "inputs": {
@@ -10,19 +19,6 @@
    "quality": "high",
    "size": "1024x1024",
    "user_prompt": [
-    "3",
-    0
-   ]
-  }
- },
- "2": {
-  "_meta": {
-   "title": "Save image"
-  },
-  "class_type": "SaveImage",
-  "inputs": {
-   "filename_prefix": "assetgen/golden-texture-tileable-001",
-   "images": [
     "1",
     0
    ]
@@ -30,11 +26,43 @@
  },
  "3": {
   "_meta": {
-   "title": "Prompt (Claude, Codex review NOT_RUN)"
+   "title": "Resize to the square tile size"
   },
-  "class_type": "PrimitiveStringMultiline",
+  "class_type": "ImageScale",
   "inputs": {
-   "value": "Test prompt for texture-tileable: one subject, centered."
+   "crop": "disabled",
+   "height": 1024,
+   "image": [
+    "2",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 1024
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Preview raw generation"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ]
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Save tileable texture"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-texture-tileable-001-albedo",
+   "images": [
+    "3",
+    0
+   ]
   }
  }
 }

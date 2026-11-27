@@ -8,6 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"
 REG="$TMP/registry.json"; WS="$TMP/ws"
 jq '.repos.uitoolkit.optional = true
+  | .workspace.report_language = "Vietnamese"
   | .domains.engineering.artifact_kinds = ["shared"]
   | .domains.design = {summary:"Design artifacts",status:"active",lead:"design-lead",repos:["uitoolkit"],artifact_kinds:["spec","shared"],quality_gates:["lint"],human_gates:["rules"],handoffs:["spec-to-code"]}
   | .skills["design-lead"] = {kind:"repo",domain:"design",order:999}
@@ -33,6 +34,10 @@ jq '(.domains |= with_entries(select(.key == "engineering" or .key == "design"))
 export RPG_FACTORY_REGISTRY="$graph_reg"
 out=$(ctx --domain design --graph 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'Dependency graph: design -> engineering' <<<"$out" && ok "handoff graph topological order" || no "handoff graph (rc=$rc): $out"
+language='write everything in English (files, plans, briefs, messages, commits, PR text); report to the owner in Vietnamese.'
+grep -Fxq "Language: $language" <<<"$out" && ok "graph text language" || no "graph text language: $out"
+out=$(ctx --domain design --graph --json 2>&1); rc=$?
+[ "$rc" -eq 0 ] && jq -e --arg language "$language" '.graph == ["design", "engineering"] and .language == $language' <<<"$out" >/dev/null && ok "graph JSON language" || no "graph JSON language (rc=$rc): $out"
 export RPG_FACTORY_REGISTRY="$REG"
 out=$(ctx --repo authoring --json --paths design/features/crafting.md 2>&1); rc=$?
 [ "$rc" -eq 0 ] && jq -e '.repos[0].routing.follow_ups | length > 0' <<<"$out" >/dev/null && ok "authoring source routes downstream follow-ups" || no "authoring follow-ups (rc=$rc)"
@@ -48,8 +53,10 @@ out=$(ctx --domain design --graph 2>&1); rc=$?
 export RPG_FACTORY_REGISTRY="$graph_reg"
 out=$(ctx --domain engineering 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'Domain' <<<"$out" && grep -q 'routes by --repo/--paths (module ownership)' <<<"$out" && ok "--domain engineering text" || no "--domain engineering text (rc=$rc)"
+grep -Fxq "Language: $language" <<<"$out" && ok "domain text language" || no "domain text language: $out"
 out=$(ctx --json --domain engineering 2>&1); rc=$?
 [ "$rc" -eq 0 ] && jq -e '.domain.id == "engineering" and .domain.lead == null and (.domain.repos | length > 0)' <<<"$out" >/dev/null && ok "--domain engineering JSON" || no "--domain engineering JSON (rc=$rc)"
+[ "$rc" -eq 0 ] && jq -e --arg language "$language" '.language == $language' <<<"$out" >/dev/null && ok "domain JSON language" || no "domain JSON language (rc=$rc): $out"
 out=$(ctx --domain missing 2>&1); rc=$?
 [ "$rc" -eq 2 ] && grep -q 'unknown domain missing; known:' <<<"$out" && ok "unknown domain exits 2" || no "unknown domain (rc=$rc)"
 out=$(ctx --kind absent 2>&1); rc=$?

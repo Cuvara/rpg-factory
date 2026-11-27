@@ -1,0 +1,232 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for prop-2d: one subject, centered."
+  }
+ },
+ "10": {
+  "_meta": {
+   "title": "Vary the base (fixed seed, low denoise)"
+  },
+  "class_type": "KSampler",
+  "inputs": {
+   "cfg": 5.5,
+   "denoise": 0.35,
+   "latent_image": [
+    "9",
+    0
+   ],
+   "model": [
+    "6",
+    0
+   ],
+   "negative": [
+    "8",
+    0
+   ],
+   "positive": [
+    "7",
+    0
+   ],
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "karras",
+   "seed": 1,
+   "steps": 24
+  }
+ },
+ "11": {
+  "_meta": {
+   "title": "Decode in tiles"
+  },
+  "class_type": "VAEDecodeTiled",
+  "inputs": {
+   "overlap": 64,
+   "samples": [
+    "10",
+    0
+   ],
+   "temporal_overlap": 8,
+   "temporal_size": 64,
+   "tile_size": 512,
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ },
+ "12": {
+  "_meta": {
+   "title": "Join the base alpha"
+  },
+  "class_type": "JoinImageWithAlpha",
+  "inputs": {
+   "alpha": [
+    "2",
+    1
+   ],
+   "image": [
+    "11",
+    0
+   ]
+  }
+ },
+ "13": {
+  "_meta": {
+   "title": "Preview fitted base"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "5",
+    0
+   ]
+  }
+ },
+ "14": {
+  "_meta": {
+   "title": "Preview variation before alpha"
+  },
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "11",
+    0
+   ]
+  }
+ },
+ "15": {
+  "_meta": {
+   "title": "Save variation"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-prop-2d--local-variation-001-variation",
+   "images": [
+    "12",
+    0
+   ]
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Approved base (1024x1024, transparent background, high quality)"
+  },
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "ref.png"
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Load SDXL checkpoint"
+  },
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "sd_xl_base_1.0.safetensors"
+  }
+ },
+ "4": {
+  "_meta": {
+   "title": "Load IPAdapter"
+  },
+  "class_type": "IPAdapterUnifiedLoader",
+  "inputs": {
+   "model": [
+    "3",
+    0
+   ],
+   "preset": "PLUS (high strength)"
+  }
+ },
+ "5": {
+  "_meta": {
+   "title": "Fit base to the local size"
+  },
+  "class_type": "ImageScale",
+  "inputs": {
+   "crop": "disabled",
+   "height": 1024,
+   "image": [
+    "2",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 1024
+  }
+ },
+ "6": {
+  "_meta": {
+   "title": "Apply base and anchor look"
+  },
+  "class_type": "IPAdapterAdvanced",
+  "inputs": {
+   "combine_embeds": "concat",
+   "embeds_scaling": "V only",
+   "end_at": 1.0,
+   "image": [
+    "2",
+    0
+   ],
+   "ipadapter": [
+    "4",
+    1
+   ],
+   "model": [
+    "4",
+    0
+   ],
+   "start_at": 0.0,
+   "weight": 0.6,
+   "weight_type": "linear"
+  }
+ },
+ "7": {
+  "_meta": {
+   "title": "Encode reviewed prompt"
+  },
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    1
+   ],
+   "text": [
+    "1",
+    0
+   ]
+  }
+ },
+ "8": {
+  "_meta": {
+   "title": "Encode negative"
+  },
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    1
+   ],
+   "text": "blurry, low quality, watermark, text, extra objects, cropped"
+  }
+ },
+ "9": {
+  "_meta": {
+   "title": "Encode fitted base"
+  },
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "5",
+    0
+   ],
+   "vae": [
+    "3",
+    2
+   ]
+  }
+ }
+}

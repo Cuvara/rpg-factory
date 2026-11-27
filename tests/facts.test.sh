@@ -4,9 +4,10 @@
 # hard-code volatile values that belong in facts[] or in the live scripts.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/workspace.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 R="${RPG_FACTORY_FACTS_REGISTRY:-$ROOT/registry.json}"   # override: the stale-detection self-test below
-WS="${RPG_FACTORY_WORKSPACE:-$(jq -r .workspace.root_default "$R")}"
+WS="${RPG_FACTORY_WORKSPACE:-$(rpgf_platform_path "$(jq -r .workspace.root_default "$R")")}"
 pass=0; fail=0; skip=0
 T="$(mktemp_win)"; trap 'rm -rf "$T"' EXIT
 # Only the stale-value self-tests inherit this cache; fixture repos get their own exports.
@@ -34,8 +35,10 @@ while read -r enc; do
       fail=$((fail + 1)); echo "FAIL  $id: cannot read the HEAD tree into the disposable index for repo $repo"; continue
     fi
     exports[$repo]="$export_dir"; gitdirs[$repo]="$gitdir"
-    # git archive leaves submodules as empty directories and LFS files as pointers; probes grade that export.
-    # Report it (read-only git on HEAD, once per repo) instead of materializing them: the suite stays offline.
+    # git archive leaves submodules as empty directories. LFS-tracked files are pointers without git-lfs; with
+    # git-lfs configured, git archive runs the smudge filter, so the export holds the real content and needs the
+    # LFS store or network. Probes grade that export. Report it (read-only git on HEAD, once per repo); the suite
+    # never installs or requires git-lfs and materializes no submodule.
     submodules=$(GIT_DIR="$gitdir" GIT_OPTIONAL_LOCKS=0 git ls-tree -r HEAD 2>/dev/null | grep -c '^160000 ' || true)
     lfs=0
     if GIT_DIR="$gitdir" GIT_OPTIONAL_LOCKS=0 git grep -q 'filter=lfs' HEAD -- ':(glob)**/.gitattributes' 2>/dev/null; then
@@ -46,7 +49,7 @@ while read -r enc; do
     if [ "${submodules:-0}" -gt 0 ] || [ "${lfs:-0}" -gt 0 ]; then
       parts=()
       [ "${submodules:-0}" -gt 0 ] && parts+=("omits $submodules submodule(s) (gitlinks)")
-      [ "${lfs:-0}" -gt 0 ] && parts+=("leaves $lfs LFS-tracked file(s) as pointers")
+      [ "${lfs:-0}" -gt 0 ] && parts+=("has $lfs LFS-tracked file(s) (pointers without git-lfs; smudged, possibly fetched, with git-lfs)")
       echo "NOTE  repo $repo: HEAD export ${parts[0]}${parts[1]:+ and ${parts[1]}}; probes grade the committed HEAD without them"
     fi
     dirty[$repo]=0
@@ -131,6 +134,7 @@ if [ -z "${RPG_FACTORY_FACTS_REGISTRY:-}" ]; then
   }
   fixture_commit() { git -C "$1" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture; }
   # A gitlink plus two LFS-tracked files: one NOTE for the repo, naming both counts, and the fact still passes.
+  # The fixture files are plain text, not real LFS objects, so the assertion holds with and without git-lfs on the host.
   fixture_repo "$T/ws-caveat/client"
   git -C "$T/ws-caveat/client" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,vendor/sub
   printf '*.bin filter=lfs diff=lfs merge=lfs -text\n' > "$T/ws-caveat/client/.gitattributes"
@@ -141,7 +145,7 @@ if [ -z "${RPG_FACTORY_FACTS_REGISTRY:-}" ]; then
   o=$(RPG_FACTORY_WORKSPACE="$T/ws-caveat" RPG_FACTORY_FACTS_REGISTRY="$T/fixture.json" bash "$0" 2>&1); rc=$?
   if [ "$rc" -eq 0 ] && grep -q '^PASS  enter-playmode-options = enabled=1 options=0$' <<<"$o" &&
      [ "$(grep -c '^NOTE ' <<<"$o")" = 1 ] &&
-     grep -q '^NOTE  repo client: HEAD export omits 1 submodule(s) (gitlinks) and leaves 2 LFS-tracked file(s) as pointers; ' <<<"$o"; then
+     grep -q '^NOTE  repo client: HEAD export omits 1 submodule(s) (gitlinks) and has 2 LFS-tracked file(s) (pointers without git-lfs; smudged, possibly fetched, with git-lfs); ' <<<"$o"; then
     pass=$((pass + 1)); echo "PASS  submodule and LFS caveats of the HEAD export are noted once per repo"
   else fail=$((fail + 1)); echo "FAIL  submodule/LFS NOTE (rc=$rc): $o"; fi
   # A submodule only: no LFS part in the NOTE. (The clean fixture above proves a repo with neither prints no NOTE.)

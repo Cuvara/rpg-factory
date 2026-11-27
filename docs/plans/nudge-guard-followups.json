@@ -1,0 +1,97 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "nudge-guard-followups",
+  "title": "nudge: subtask progress and transcript echoes do not mislead it; guard follow-ups from #60",
+  "topic": "feat/delivery/nudge-guard-followups",
+  "goal": "Close issues #152 and #60. (1) `factory-pipeline.py nudge` reported a stuck implementer start prompt as ok because a sibling subtask's commit on the same task branch counted as task progress (plan none-affected-notrun, about 58 minutes lost). (2) The process and git guard misses `cmd //c` (the Git Bash form), several kill forms, flags the recommended own-PID pattern, and some quoted-text negative tests run where the old guard never checked processes, so they prove nothing. (3) Issue #156: nudge read a submitted start prompt that Claude Code echoes, indented, in the transcript as an unsubmitted composer pointer and reported a running verify session as STUCK.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "nudge-subtask-progress",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Issue #152. In scripts/factory-pipeline.py `cmd_nudge` (around line 5655) the per-terminal check calls `task_progress_since(plan, reg, t, since)` (around line 5065), which counts any new commit on the task branch, the lead report, or any review/QA verdict of the task or its subtasks. For a spec of the implement phase (spec file name `<task>-implement-<digest>.md`, or however `orca_prompt` names implement specs: read it), task-level progress must not clear a terminal: the lead commits subtask work and sibling implementers report, so neither proves this session started. For such a spec count only progress that belongs to this spec's own dispatch: a verdict or worker record of the subtask whose implement spec this is, when the spec can be mapped to a subtask (check what dispatch records next to the spec, e.g. the model record or the subplan); when it cannot be mapped, no progress counts and the screen pointer plus idle time decide. Lead, verify and other phase specs keep today's task-level rule. Keep `nudge` read-only apart from the one keystroke and its record, keep the never-twice rule, keep the composer-line pointer rule of PR #148. Add tests in tests/pipeline.test.sh with the existing fake `orca`: two implementer terminals in one task worktree with two implement specs, a commit on the task branch after both specs, one terminal still showing its composer pointer and idle -> STUCK (and sent once with --send), the other terminal whose pointer is gone -> ok; a lead-phase terminal with a commit after its spec stays ok (unchanged rule). Changelog fragment changelog.d/nudge-subtask-progress.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/nudge-subtask-progress.md"
+      ],
+      "exclusions": [
+        "scripts/lib/rpgf_guard/",
+        "tests/git-guard.test.sh"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "an idle implementer terminal that still shows its spec pointer on a composer line is STUCK although a sibling subtask committed to the task branch after its spec was written",
+        "lead and verify terminals keep the task-level progress rule",
+        "every existing pipeline nudge case passes"
+      ]
+    },
+    {
+      "id": "guard-followups",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Issue #60 (read it: `gh issue view 60`). The guard is advisory only. (1) scripts/lib/rpgf_guard/shell.py `expand()` (the `if p in CMDS:` branch around line 236) accepts `/c` and `/k` but not the Git Bash forms `//c` and `//k`: accept them, so `cmd //c \"taskkill /F /IM dotnet.exe\"` gets the process advisory and `cmd //c \"git push --force origin main\"` gets the force-push advisory. Update the wrapper list in the scripts/lib/gitguard.py docstring. (2) scripts/lib/rpgf_guard/process.py: flag `Get-Process <name> | % Kill`, `| ForEach-Object Kill`, `| ForEach-Object -MemberName Kill` (and `.Kill()` on a name-selected Get-Process), `pkill.exe`, `busybox killall`/`busybox pkill`, `killall5`, and kills by port (`fuser -k`, `kill $(lsof -t ...)`, `kill $(lsof -ti:PORT)`). Keep quoted text as data (no new false positive on grep/echo/commit message text). EncodedCommand stays a documented limitation. (3) False positive: a command that starts a process, queries processes by name, and kills only the PID it started must not be flagged: `./run.sh & pid=$!; pgrep -f run.sh; kill $pid` and `$p = Start-Process dotnet -PassThru; Get-Process dotnet; Stop-Process -Id $p.Id`. Exempt a terminator whose only targets are variables assigned from `$!` or from a `-PassThru` Start-Process result in the same command; a terminator fed by a name query (`kill $(pgrep x)`, `taskkill //PID $(... Win32_Process ...)`) stays flagged. (4) tests/git-guard.test.sh: add cases for every item above (positive and negative), and move several of the quoted-text negative process cases (around line 281-299, currently run with `$TMP`) to the `$SERVER` working directory so they would fail on a guard that flagged quoted text inside the workspace. Every new bypass class also gets a case in tests/installed-safety.sh if that suite covers process or wrapper classes (check it). Changelog fragment changelog.d/guard-followups.md (### Fixed).",
+      "paths": [
+        "scripts/lib/rpgf_guard/shell.py",
+        "scripts/lib/rpgf_guard/process.py",
+        "scripts/lib/gitguard.py",
+        "tests/git-guard.test.sh",
+        "tests/installed-safety.sh",
+        "changelog.d/guard-followups.md"
+      ],
+      "exclusions": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/git-guard.test.sh",
+        "tests/installed-safety.sh"
+      ],
+      "acceptance": [
+        "`cmd //c` and `cmd //k` are expanded like `/c` and `/k` for both the git rules and the process rule",
+        "the kill forms listed in #60 item 2 get the process advisory; quoted mentions of them stay quiet",
+        "the two own-PID examples of #60 item 3 get no advisory; a kill fed by a name query still does",
+        "several quoted-text negative process cases run in the $SERVER working directory",
+        "every existing git-guard and installed-safety case passes"
+      ]
+    },
+    {
+      "id": "nudge-composer-region",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Issue #156 (read it: `gh issue view 156`). In scripts/factory-pipeline.py `nudge_spec()` (PR #148 composer rule: a pointer counts when its screen-line prefix is whitespace or one of NUDGE_COMPOSER_MARKERS) a submitted prompt that Claude Code echoes in the transcript, indented by two spaces, also matches, so a session waiting on its own background shell was reported STUCK. Change the rule so only a pointer in the composer counts: when the screen has a horizontal rule line (a line made of box-drawing `─` / `━` / `═`, at least 20 wide), only text below the last-but-one such rule (the composer box between the last two rules, or below the last rule if there is only one) counts; when the screen has no rule line, keep today's rule. In addition, any of these lines after the pointer means the prompt was submitted and the terminal is not stuck: a line starting (after whitespace) with `●`, `✻`, `⎿`, or matching `Ran \\d+ shell command`, `Read \\d+ file`. Keep the wrapped-pointer handling (the pointer split across lines, PR #148 bisect over newline, space and empty joins). Tests in tests/pipeline.test.sh with the existing fake orca: the issue's screen shape (indented `=== TASK ===` echo with the pointer, activity lines, an empty `❯` composer between two rules) is not STUCK; a pointer inside the composer box between the two rules with no activity after it is STUCK; an unruled screen keeps the PR #148 cases. Changelog fragment changelog.d/nudge-composer-region.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/nudge-composer-region.md"
+      ],
+      "exclusions": [
+        "scripts/lib/rpgf_guard/",
+        "tests/git-guard.test.sh"
+      ],
+      "deps": [
+        "nudge-subtask-progress"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "the #156 screen (submitted prompt echoed in the transcript, empty composer) is not STUCK",
+        "an unsubmitted pointer in the composer box with no activity after it is STUCK",
+        "every existing pipeline nudge case passes, including section 8 of nudge-subtask-progress"
+      ]
+    }
+  ]
+}

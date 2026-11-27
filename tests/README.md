@@ -4,15 +4,15 @@ Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standal
 `RPG_FACTORY_STATE_DIR`; `tests/run-all.sh` runs them all and prints the usage header with `-h`. Fixtures live in
 `tests/fixtures/`. Full command list and flags: `scripts/README.md` "Commands".
 
+- `tests/portable-paths.test.sh` checks detection, exceptions and enforcement of portable paths.
+- `tests/workspace-default.test.sh` checks the shell and Python workspace defaults across stubbed platforms.
+- `tests/plugin-registry.test.sh` checks `scripts/lib/plugin_registry.py`: plugin root lookup and registry loading shared by the pin checks.
+
 ## QA tiers and run-all flags
 
-The QA tiers table of `skills/delivery/references/delivery.md` (section 10, "QA tiers"; registry `pipeline.qa_tiers`)
-names the command of each tier. In short: a task runs `tests/run-all.sh --affected --base <base> -j 2` or its own
-suites with `--only-suites`; integration QA before a PR runs `tests/run-all.sh --workspace-only`; CI
-runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite, `--no-workspace --no-claude`)
-and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single required check
-(`.github/workflows/tests.yml`, section "CI" below); `tests/run-all.sh --release` and `tests/dogfood.sh --installed`
-run only for a release. The rules behind those commands follow.
+Which tier runs which command, and when: `skills/delivery/references/delivery.md` section 10 ("QA tiers"; registry
+`pipeline.qa_tiers`). CI is described in section "CI" below. The run-all flags and rules that belong to the runner
+follow.
 
 ## CI
 
@@ -67,6 +67,18 @@ runs the suite.
 script loads or runs by name): a library module or a helper selects only the suites of the scripts that reach it, and
 anything unsure runs. A miss there is caught by integration QA, whose suite reuse uses the conservative rule above.
 
+`--within L` (comma-separated suite or check names; requires `--affected --base <b>`) is task QA: only the suites of L
+run, each limited to the cases the change reaches (all cases when unsure; a named suite the change does not reach
+still runs). Suites the change reaches outside L print `left to CI: N suites (...)` and are not run: CI is the breadth
+gate (every affected suite on Linux and Windows per PR, `ci-ok` green before merging). `tests/run-all.sh --affected
+--base <review base> --within <check suites> -j 1` is the task QA command. `--only-suites` still unions with
+`--affected` and remains for hand runs.
+
+`--workspace-only --base <b>` runs only the workspace checks whose declared inputs in `tests/affected.py` the change
+since `<b>` reaches (unsure or a global input runs the check); without `--base` it runs all of them, and `--release`
+always runs everything. The result record (`rpg-factory.run-all-result/1`) holds each check's duration and the summary
+prints the five slowest checks.
+
 `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the checks that run a script
 outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan, package ready, Netcode headless)
 are selected like suites by that script path, else they count as not affected; `--only-suites` may name such a script
@@ -85,6 +97,10 @@ a non-integer exits 2) caps the targeted runs, the slots are `locks/run-all-slot
 the wait line is `run-all: waiting for a test slot (<n> in use: <holders>)`, `--no-wait` exits 3 and a dead holder is
 taken over (`run-all: taking over stale test slot <n> (<pid>)`).
 
+An admitted run, also an interrupted one, ends its output with `run-all: result record <path> (FAIL blocks:
+tests/run-all.sh --last-result)` once the record under the state dir `run-all/results/` is written, so a caller that
+keeps only the tail of the output finds the FAIL blocks there.
+
 ## Case selection
 
 `pipeline.test.sh`, `parallel-policy.test.sh` and `git-guard.test.sh` take `--case NAMES` and `--list-cases`;
@@ -93,3 +109,21 @@ suite), and an explicit `--only-suites` name runs all its cases unless `--only-c
 `--only-suites` suite that has a case map; misuse exits 2; `ALL` or an empty list runs every case).
 `routing.test.sh` also takes `--case` and `--list-cases` when run by hand, but it has no case map: `--affected` always
 runs all its cases and `--only-cases` rejects it.
+
+A case-map line is `# case-map: <group> <pattern>...`. A plain pattern (a glob, or a directory ending in `/`) reaches
+the whole file. `PATH::NAME` names a top-level function, class or module-level name of the Python file `PATH` (an exact
+path) that the group runs as an entry point (a CLI verb's `cmd_*` function, a function the test calls on a module it
+loads), and `PATH::*` reaches the whole file. A group's `PATH::` patterns override its own plain globs for that file.
+run-all passes its `--base` to `affected.py cases`, which maps the changed lines (`git diff -U0` against the
+merge-base) to top-level functions and classes and selects the groups whose named entries reach them through the
+file's own static references (scope-aware). It falls back to the whole file (every group with any pattern for it)
+when unsure: a change outside one function or class (imports, constants, decorators, top-level code), an added,
+deleted or renamed function, a parse failure, a helper the import-time code or `main()` reaches, a changed helper no
+named entry reaches, or an unnamed changed helper in a module that looks names up dynamically (`globals()`,
+`sys.modules`, ...). A group whose plain glob matches the file without a `PATH::` override reaches the whole file, so
+every change to the file selects it, narrowed or not. A file that imports or runs the changed one (a caller the import
+closure reaches) gets no symbol reasoning: on a narrowed change it adds only the groups that list it and have no pattern
+for the changed file (a caller that no group matches at all gives ALL; one whose every group names the changed file
+adds nothing); on a whole-file fallback every reached file is matched file-level. Map rules: every group that
+runs the file names it (`::*` or every entry it runs, those it reaches through callers included, prerequisites
+excepted); when unsure, keep the plain pattern or `PATH::*`. The full rules are in the `tests/affected.py` docstring.

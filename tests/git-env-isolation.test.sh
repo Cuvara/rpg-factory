@@ -39,8 +39,15 @@ msg=$(gitcfg_verify); rc=$?
 [ $rc -ne 0 ] && grep -q "changed during the run" <<<"$msg" && ok "guard: a rewritten shared config (core.worktree) fails with a message" || no "guard missed a changed shared config (rc=$rc)" "$msg"
 gitcfg_snapshot "$W"; git config -f "$CFG" --unset core.worktree; gitcfg_verify >/dev/null; rc=$?
 [ $rc -ne 0 ] && ok "guard: a second change is caught against the new snapshot" || no "guard: second change not caught"
+first_copy="$GITCFG_COPY"; git config -f "$CFG" core.worktree "/mnt/c/changed/again"   # a changed config keeps its copy
+gitcfg_verify >/dev/null; gitcfg_snapshot "$W"; second_copy="$GITCFG_COPY"
+[ -n "$first_copy" ] && [ -n "$second_copy" ] && [ "$first_copy" != "$second_copy" ] && [ ! -e "$first_copy" ] && [ -f "$second_copy" ] \
+  && ok "guard: a second snapshot replaces the first copy (one copy left)" || no "guard: re-snapshot leaked the earlier copy" "first=$first_copy second=$second_copy"
+git config -f "$CFG" --unset core.worktree
 gitcfg_snapshot "$TMP"       # not a repository: nothing recorded, nothing to fail
+[ ! -e "$second_copy" ] && [ -z "$GITCFG_COPY" ] && ok "guard: a snapshot outside a repository removes the earlier copy" || no "guard: earlier copy kept after a snapshot outside a repository" "$second_copy"
 gitcfg_verify >/dev/null && ok "guard: outside a repository it records nothing and passes" || no "guard: outside a repository it failed"
+rm -f "$first_copy" "$second_copy" "${GITCFG_COPY:-}"
 
 echo "git-env-isolation: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

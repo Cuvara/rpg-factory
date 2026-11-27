@@ -5,9 +5,11 @@
 # overlap each other, a block's lines are counted, a run1 suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
 # Killed workers cannot hang the queue; shared config classification permits only whole added branch/worktree sections.
 # A shared-config WARN is counted in the summary (copy removed; kept on FAIL); a passing suite's RETRY lines show under its PASS line.
+# The suite registration inline check (suite_registration) fails an unregistered suite file under tests/ and a stale exemption.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+PLUGIN_SRC="$ROOT"   # ROOT is re-pointed at fixtures below
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 good() { pass=$((pass + 1)); echo "PASS  $1"; }
@@ -169,7 +171,7 @@ config_case 'core key inserted before new section' FAIL
 # Persistence is tested in a disposable git repo with tiny suites; never run the real full suite.
 mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/scripts/checks" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
 cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
-printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
+printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ] || { echo "a broke here"; exit 1; }\n' > "$TMP/repo/tests/a.sh"
 cat > "$TMP/repo/tests/b.sh" <<'SUITE'
 #!/usr/bin/env bash
 # case-map: alpha scripts/alpha.py
@@ -180,7 +182,23 @@ printf 'b\n' >> "$RUN_LOG"
 SUITE
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
+# hold: a suite that blocks while it runs (HOLD_SUITE_MARK appears, then it waits for HOLD_SUITE_MARK.release), so a test
+# can observe the slot while a check is running
+cat > "$TMP/repo/tests/hold.sh" <<'SUITE'
+#!/usr/bin/env bash
+printf 'hold\n' >> "$RUN_LOG"
+touch "$HOLD_SUITE_MARK"; hold_until=$((SECONDS + 240))
+while [ ! -f "$HOLD_SUITE_MARK.release" ]; do
+  [ "$SECONDS" -lt "$hold_until" ] || { echo 'fixture suite hold timed out'; exit 1; }
+  sleep 0.1
+done
+SUITE
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
+# stand-ins for the three repo-wide enforcement scripts a --within run also runs (WITHIN_GUARDS); PP_BREACH=1 plants a
+# portable-paths breach, RG_BREACH=1 a raw jq reader breach in the workspace readers guard
+printf '#!/usr/bin/env bash\nprintf "english\\n" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/english-only.py"
+printf '#!/usr/bin/env bash\nprintf "portable\\n" >> "$RUN_LOG"\n[ "${PP_BREACH:-0}" = 0 ] || { echo "planted portable-paths breach"; exit 1; }\n' > "$TMP/repo/scripts/checks/portable-paths.py"
+printf '#!/usr/bin/env bash\nprintf "readers\\n" >> "$RUN_LOG"\n[ "${RG_BREACH:-0}" = 0 ] || { echo "planted raw jq reader breach"; exit 1; }\n' > "$TMP/repo/scripts/checks/workspace-readers.sh"
 # partial: passes with a SKIP line (a tool missing), like orca-commands without orca
 printf '#!/usr/bin/env bash
 printf "partial\n" >> "$RUN_LOG"
@@ -202,7 +220,10 @@ elif sys.argv[1] == 'select-many':
     print('\n'.join(s for s in sys.argv[3:] if s in os.environ.get('SELECT', 'tests/b.sh').split(',')))
 elif sys.argv[1] == 'cases':
     if os.environ.get('CASES_FAIL'): sys.exit(1)
-    for suite in sys.argv[3:]:   # like affected.py: one line per selected suite only
+    args = sys.argv[2:]   # cases [--NAME VALUE | --NAME=VALUE]... FILE SUITE...: options in any order, never a suite
+    while args and args[0].startswith('--'):
+        args = args[1:] if '=' in args[0] else args[2:]
+    for suite in args[1:]:   # like affected.py: one line per selected suite only
         if suite in os.environ.get('SELECT', 'tests/b.sh').split(','):
             print(suite, os.environ.get('CASE_SELECT', 'ALL') if suite == 'tests/b.sh' else 'ALL')
 PY
@@ -223,8 +244,21 @@ runall_prepare; rc=$?
 if ! $workspace_only; then
 run a bash tests/a.sh
 run b bash tests/b.sh
+[ "${WITH_HOLD:-0}" = 0 ] || run hold bash tests/hold.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
+[ "${WITH_SKIP:-0}" = 0 ] || skp "tool check" "tool not on PATH"   # a skip for another reason than not affected
+if [ "${WITH_GUARDS:-0}" != 0 ]; then   # the three enforcement lines, like run-all.sh's
+  run "English-only enforcement (report available)" bash scripts/checks/english-only.py --enforce
+  run "Portable-paths enforcement" bash scripts/checks/portable-paths.py --enforce
+  run "Workspace readers guard (jq readers map paths, Python readers use the helper)" bash scripts/checks/workspace-readers.sh .
+fi
+# per-check durations: checks of known length, a failure and a runp skip (no tests/ path, so --list-suites never names them)
+dskip_post() { _skp "dskip" "why"; }
+if [ "${WITH_DUR:-0}" != 0 ]; then
+  run d0 bash -c 'true'; run d3 bash -c 'sleep 3'; run d2 bash -c 'sleep 2'
+  run dfail bash -c 'echo broke; exit 1'; runp dskip dskip_post bash -c 'true'
+fi
 $release && run1 safety bash tests/installed-safety.sh   # release-only, like run-all.sh's installed-safety line
 fi
 # workspace-list-begin
@@ -241,6 +275,8 @@ if [ "${WITH_WS:-0}" != 0 ]; then
   block blk_run
   run ws env RPG_FACTORY_WORKSPACE=/ws bash tests/ws.sh
 fi
+# the `claude plugin validate` lines: gated by the pseudo key only for --workspace-only --base (no tests/ path: not listed)
+if [ "${WITH_CLAUDE:-0}" != 0 ]; then ws_gate claude-plugin-validate && run1 cv bash -c 'printf "cv\n" >> "$RUN_LOG"'; fi
 # workspace-list-end
 [ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
 [ -z "${CFG_CHANGE:-}" ] || git config rpgtest.during "$CFG_CHANGE"
@@ -249,8 +285,13 @@ runall_finish
 if [ -n "${CHECK_CFG:-}" ]; then
   if gitcfg_verify >/dev/null; then echo 'cfg unchanged'; else echo 'cfg changed'; rm -f "$GITCFG_COPY"; fi
 fi
+[ "${SLOWEST:-0}" = 0 ] || runall_slowest
+runall_summary
 echo "counts $pass $fail $skip"
-[ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
+# run-all.sh's own exit rule: every line after its last top-level summary call (the nothing-reached line, the status)
+exit_rule=$(awk '{ sub(/\r$/, "") } /^runall_summary$/ { n = NR } { l[NR] = $0 } END { for (i = n + 1; n && i <= NR; i++) print l[i] }' "$ROOT_UNDER_TEST/tests/run-all.sh")
+[ -n "$exit_rule" ] || { echo 'fixture: no exit rule after runall_summary in run-all.sh'; exit 99; }
+eval "$exit_rule"
 PLAN
 git -C "$TMP/repo" init -q
 git -C "$TMP/repo" add .
@@ -264,9 +305,11 @@ reset_cache
 out=$(cache_plan); rc=$?
 tree=$(git -C "$TMP/repo" rev-parse 'HEAD^{tree}')
 [ "$rc" = 0 ] && [ -f "$TMP/state/run-all/$tree.json" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && [ "$(find "$TMP/state/run-all/results" -type f -name '*.json' | wc -l)" -eq 1 ] \
   && good 'clean full PASS writes tree record and releases lock' || no 'full PASS record/lock' "$out"
 out=$(cache_plan --reuse); rc=$?
 [ "$rc" = 0 ] && grep -q '^reused full run at ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && [ "$(find "$TMP/state/run-all/results" -type f -name '*.json' | wc -l)" -eq 1 ] \
   && good '--reuse hits clean PASS tree without running suites' || no '--reuse clean hit' "$out"
 # Restricted coverage cannot satisfy an unrestricted request.
 python3 - "$TMP/state/run-all/$tree.json" <<'PY'
@@ -329,28 +372,58 @@ done
 # --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
 : > "$RUN_LOG"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
-[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/hold.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
   && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites --release); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '
-' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
+' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/hold.sh tests/never.sh tests/partial.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
 out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
 miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
-    scripts/checks/netcode-headless.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
+    scripts/checks/netcode-headless.sh scripts/checks/english-only.py scripts/checks/portable-paths.py scripts/checks/workspace-readers.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py \
+    tests/workflow.test.sh tests/handoff-e2e.test.sh tests/artifact-quality.test.sh tests/asset-manifest.test.sh tests/domains-foundation.test.sh; do
   grep -qx "$s" <<<"$real" || miss+=" $s"; done
-for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
+for s in tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
 rel=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites --release)
 [ "$(grep -vx 'tests/installed-safety.sh' <<<"$rel")" = "$real" ] && grep -qx tests/installed-safety.sh <<<"$rel" || miss+=" release:installed-safety"
 [ "$rc" = 0 ] && [ -z "$miss" ] && [ "$(sort <<<"$real" | uniq -d)" = "" ] \
   && good "--list-suites on run-all.sh: suites and gated scripts, no orphan or syntax-check path ($(wc -l <<<"$real") names)" \
   || no "--list-suites (run-all.sh) wrong:$miss" "$real"
-out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/handoff-e2e.test.sh,tests/git-guard.test.sh,tests/orca-wait.test.sh 2>&1); rc=$?
-[ "$rc" = 2 ] && grep -q "unknown suite 'tests/handoff-e2e.test.sh'" <<<"$out" && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
+out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/git-guard.test.sh,tests/orca-wait.test.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
   && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
   && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
+# suite registration (inline check): every suite file under tests/ has a run line or a SUITE_EXEMPT entry; an exemption for a
+# missing or registered file fails. suite_registration runs against a temp tree with a stand-in run-all file.
+mkdir -p "$TMP/reg/tests"
+printf '%s\n' 'run "a" env -u TMPDIR tests/a.test.sh' 'if [ -f tests/b.test.sh ]; then run "b" tests/b.test.sh; fi' > "$TMP/reg/plan.sh"
+for s in a b exempt zz-unregistered; do printf '#!/usr/bin/env bash\n' > "$TMP/reg/tests/$s.test.sh"; done
+cat > "$TMP/reg-check.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+cd "$REG" || exit 1
+echo '== unregistered'; SUITE_EXEMPT="tests/exempt.test.sh"; suite_registration "$REG/plan.sh"
+rm -f tests/zz-unregistered.test.sh
+echo '== clean'; suite_registration "$REG/plan.sh"
+echo '== bad exemptions'; SUITE_EXEMPT="tests/exempt.test.sh tests/a.test.sh tests/gone.test.sh"; suite_registration "$REG/plan.sh"
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" REG="$TMP/reg" env -u RUNALL_SUITES_FROM bash "$TMP/reg-check.sh" 2>&1); rc=$?
+sect() { sed -n "/^== $1\$/,/^== /{/^== /d;p;}" <<<"$out"; }
+s1=$(sect unregistered); s2=$(sect clean); s3=$(sect 'bad exemptions')
+[ "$rc" = 0 ] && [ "$(grep -c '^FAIL' <<<"$s1")" = 1 ] \
+  && grep -qx 'FAIL  suite registration: tests/zz-unregistered.test.sh has no run line in tests/run-all.sh and no SUITE_EXEMPT entry' <<<"$s1" \
+  && ! grep -q '^PASS' <<<"$s1" && ! grep -q 'exempt.test.sh\|tests/a.test.sh\|tests/b.test.sh' <<<"$s1" \
+  && good 'suite registration fails an unregistered suite file under tests/ by name and passes run lines and exemptions' \
+  || no "suite registration: unregistered file (rc=$rc)" "$out"
+[ "$rc" = 0 ] && grep -qx 'PASS  suite registration: 3 tests/\*.test.sh files each have a run line or a SUITE_EXEMPT entry' <<<"$s2" \
+  && ! grep -q '^FAIL' <<<"$s2" && good 'suite registration passes when every suite has a run line or an exemption' \
+  || no "suite registration: clean tree (rc=$rc)" "$out"
+[ "$rc" = 0 ] && [ "$(grep -c '^FAIL' <<<"$s3")" = 2 ] && ! grep -q '^PASS' <<<"$s3" \
+  && grep -qx 'FAIL  suite registration: SUITE_EXEMPT entry tests/a.test.sh also has a run line in tests/run-all.sh (drop the exemption)' <<<"$s3" \
+  && grep -qx 'FAIL  suite registration: SUITE_EXEMPT entry tests/gone.test.sh does not exist' <<<"$s3" \
+  && good 'suite registration fails an exemption that is registered or names no file' \
+  || no "suite registration: bad exemptions (rc=$rc)" "$out"
 # a listed suite that is absent from the tree (a run line behind `if [ -f ... ]`) is not listed for run-all's own
 # run lines and is rejected by --only-suites; a stand-in list (RUNALL_SUITES_FROM) keeps every name it lists
 printf '%s\n' 'run "present" tests/git-guard.test.sh' 'if [ -f tests/zz-absent.test.sh ]; then run "absent" tests/zz-absent.test.sh; fi' \
@@ -505,6 +578,10 @@ HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
 for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
 # the holder records its Windows PID where the runtime has one (MSYS/Cygwin /proc/<pid>/winpid), and no file elsewhere
 HL="$TMP/state/locks/run-all-full"; hpid=$(cat "$HL/pid" 2>/dev/null)
+inspection=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/repo"); irc=$?
+[ "$irc" = 1 ] && grep -q "^running: full run pid $hpid .* args --no-reuse$" <<<"$inspection" \
+  && [ "$(cat "$HL/args" 2>/dev/null)" = '--no-reuse' ] && [ -n "$(cat "$HL/record" 2>/dev/null)" ] \
+  && good 'printer shows the live full-run lock and its arguments before a result exists' || no 'running full-run inspection' "$inspection"
 if [ -r "/proc/$hpid/winpid" ]; then
   [ -n "$hpid" ] && [ "$(cat "$HL/winpid" 2>/dev/null)" = "$(cat "/proc/$hpid/winpid")" ]     && good 'full-run lock records the holder Windows PID' || no 'winpid recorded' "pid=$hpid winpid=$(cat "$HL/winpid" 2>&1)"
 else
@@ -536,6 +613,8 @@ git -C "$TMP/repo" config --remove-section rpgtest
 mkdir -p "$TMP/state/locks/run-all-full"
 printf '99999999\n' > "$TMP/state/locks/run-all-full/pid"
 printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
+printf 'old arguments\n' > "$TMP/state/locks/run-all-full/args"
+printf '/old/result.json\n' > "$TMP/state/locks/run-all-full/record"
 out=$(cache_plan --no-reuse); rc=$?
 [ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
@@ -622,14 +701,28 @@ if [ -r "/proc/$spid/winpid" ]; then
 else
   [ -n "$spid" ] && [ ! -e "$SL/1/winpid" ] && good 'targeted slot records shell PID without a Windows runtime' || no 'slot pid metadata'
 fi
-out=$(cache_plan --only-suites tests/a.sh --no-reuse --no-wait); rc=$?
+out=$(cache_plan --only-suites tests/a.sh --no-reuse -j 1 --no-wait); rc=$?
 [ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (2 in use:' <<<"$out" && [ ! -s "$RUN_LOG" ] \
   && good '--no-wait exits 3 when all targeted test slots are busy, before checks' || no 'targeted no-wait' "$out"
-cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/slot-waiter.out" 2>&1 & sw=$!
+cache_plan --only-suites tests/a.sh --no-reuse -j 1 > "$TMP/slot-waiter.out" 2>&1 & sw=$!
 slot_wait_for "$TMP/slot-waiter.out" 'waiting for a test slot'
 kill -0 "$sw" 2>/dev/null && [ ! -s "$RUN_LOG" ] && grep -q "$spid in " "$TMP/slot-waiter.out" \
   && good 'third targeted run queues and names its holders and checkouts' || no 'targeted wait message' "$(cat "$TMP/slot-waiter.out")"
+sleep 1; queued_until=$(date -u +%FT%TZ)   # one second into the wait: a start taken before the wait is earlier
 touch "$TMP/slot-held-1.release"; wait "$sh1"; sr1=$?; wait "$sw"; srw=$?
+waiter_start=$(python3 -B - "$TMP/state/run-all/results" <<'PY'
+import glob, json, os, sys
+for path in glob.glob(os.path.join(sys.argv[1], '*', '*.json')):
+    with open(path, encoding='utf-8') as f:
+        r = json.load(f)
+    if '-j' in r['args']:
+        print(r['started'] + ' ' + os.path.basename(path).split('-')[0])
+PY
+)
+read -r waiter_started waiter_stamp <<<"${waiter_start%$'\r'}"
+[ -n "$waiter_started" ] && [[ ! "$waiter_started" < "$queued_until" ]] && [ "$waiter_stamp" = "${waiter_started//[-:]/}" ] \
+  && good 'a queued run records its start at slot admission, not before its wait' \
+  || no 'queued run start time' "started '$waiter_started' file '$waiter_stamp' queued until $queued_until"
 touch "$TMP/slot-held-2.release"; wait "$sh2"; sr2=$?
 [ "$sr1 $sr2 $srw" = '0 0 0' ] && [ "$(grep -c 'waiting for a test slot' "$TMP/slot-waiter.out")" -eq 1 ] \
   && [ "$(sort "$RUN_LOG" | tr '\n' ' ')" = 'a a b ' ] && [ -z "$(ls -A "$SL")" ] \
@@ -647,18 +740,30 @@ out=$(RPG_FACTORY_TEST_SLOTS=bad cache_plan --affected --no-reuse 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q 'RPG_FACTORY_TEST_SLOTS needs a non-negative integer' <<<"$out" \
   && good 'invalid slot cap exits 2 before checks' || no 'invalid slot cap' "$out"
 mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"
-out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
-[ "$rc" = 0 ] && grep -q 'taking over stale test slot 1 (99999999)' <<<"$out" && [ ! -d "$SL/1" ] \
-  && good 'dead targeted slot is reclaimed under guard and released' || no 'stale test slot' "$out"
+printf 'old arguments\n' > "$SL/1/args"; printf '/old/result.json\n' > "$SL/1/record"
+printf 'check=old\n' > "$SL/1/progress"; printf 'check=old\n' > "$SL/1/progress.tmp.99999999"   # a dead holder's progress goes with its slot
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait 2>"$TMP/slot-takeover.err"); rc=$?
+[ "$rc" = 0 ] && ! grep -q 'taking over stale test slot' <<<"$out" && grep -q 'taking over stale test slot 1 (99999999)' "$TMP/slot-takeover.err" && [ ! -d "$SL/1" ] \
+  && good 'dead targeted slot is reclaimed under guard and released; the takeover message is on stderr, not stdout' || no 'stale test slot' "$out $(cat "$TMP/slot-takeover.err")"
 mkdir -p "$SL/1/reclaim"; printf '99999999\n' > "$SL/1/pid"; printf '99999998\n' > "$SL/1/reclaim/pid"
 out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
 [ "$rc" = 0 ] && grep -q 'removing stale reclaim guard of test slot 1' <<<"$out" && [ ! -d "$SL/1" ] \
   && good 'dead reclaim guard cannot wedge targeted slots' || no 'stale slot reclaim guard' "$out"
 mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"; printf '4242\n' > "$SL/1/winpid"
-out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait 2>&1); rc=$?
 [ "$rc" = 3 ] && ! grep -q 'taking over stale test slot' <<<"$out" && [ -d "$SL/1" ] \
   && good 'live Windows PID prevents targeted slot takeover across runtimes' || no 'live slot winpid' "$out"
 rm -rf "$SL/1"
+# netcode-headless.sh prune_evidence orders same-second evidence directories by numeric pid: pid 10 is newer than pid 9.
+# Only the function is run (extracted from the check), against a temp evidence root.
+EV="$TMP/evidence-prune"; mkdir -p "$EV"
+for n in 20260101T000000-9 20260101T000000-10 20260101T000000-100 20260101T000001-1 20251231T235959-99999; do mkdir -p "$EV/$n"; done
+sed -n '/^prune_evidence() {/,/^}/p' "$PLUGIN_SRC/scripts/checks/netcode-headless.sh" > "$TMP/prune-evidence.sh"
+out=$(RPG_FACTORY_NETCODE_EVIDENCE_KEEP=3 bash -c '. "$1"; prune_evidence "$2" 20260101T000001-1' _ "$TMP/prune-evidence.sh" "$EV" 2>&1); rc=$?
+left=$(ls "$EV" | LC_ALL=C sort | tr '\n' ' ')
+[ "$rc" = 0 ] && [ "$left" = '20260101T000000-10 20260101T000000-100 20260101T000001-1 ' ] \
+  && grep -q 'pruned 2 old' <<<"$out" \
+  && good 'netcode evidence prune keeps the newest by full timestamp, then numeric pid (pid 100 and 10 over 9)' || no "evidence prune order (rc=$rc left='$left')" "$out"
 out=$(BREAK_SUITE=1 cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
 [ "$rc" = 1 ] && [ -z "$(ls -A "$SL")" ] && good 'targeted slot released after a failing suite' || no 'slot release on failure' "$out"
 # Signals must release the acquired slot too. Start bash directly to capture the sourced-runner process PID.
@@ -667,6 +772,251 @@ slot_wait_for "$TMP/slot-signal"
 kill -TERM "$ss"; wait "$ss"; rc=$?
 [ "$rc" = 143 ] && [ -z "$(ls -A "$SL")" ] \
   && good 'targeted slot released on TERM' || no "slot release on TERM ($rc)" "$(cat "$TMP/slot-signal.out")"
+# Results survive lost terminals, preserve original arguments and describe failures independently of PASS reuse.
+last_result() { bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/repo"; }
+for broken in 0 1; do
+  reset_cache
+  out=$(BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh,tests/b.sh --no-reuse); rc=$?
+  printed=$(last_result); prc=$?
+  record=$(sed -n 's/^result: //p' <<<"$printed")
+  checked=$(python3 -B - "$record" "$TMP/repo" "$broken" "$out" <<'PY'
+import datetime, hashlib, json, os, re, subprocess, sys
+path, checkout, broken, output = sys.argv[1:]
+broken = int(broken)
+with open(path, encoding='utf-8') as f:
+    r = json.load(f)
+assert r['schema'] == 'rpg-factory.run-all-result/1'
+assert r['checkout'] == checkout
+assert r['args'] == ['--only-suites', 'tests/a.sh,tests/b.sh', '--no-reuse']
+assert r['exit'] == broken and type(r['exit']) is int
+assert r['counts'] == {'pass': 2-broken, 'fail': broken, 'skip': 0, 'warn': 0, 'not_affected': 0}
+# a timed suite keeps its wall time in the name, as run-all prints it ('a [1s]')
+assert len(r['failed']) == broken and all(re.fullmatch(r'a \[[0-9]+s\]', name) for name in r['failed'])
+if broken:   # the failure's output survives the run: its last lines, next to the unchanged failed list
+    [out] = r['failed_output']
+    assert sorted(out) == ['name', 'tail'] and out['name'] == r['failed'][0]
+    assert 'a broke here' in out['tail'].split('\n')
+else:
+    assert r['failed_output'] == []
+assert r['summary'] in output.splitlines()
+start, end = (datetime.datetime.fromisoformat(r[k].replace('Z', '+00:00')) for k in ('started', 'ended'))
+assert start <= end and r['started'].endswith('Z') and r['ended'].endswith('Z')
+assert r['head'] == subprocess.check_output(['git', '-C', checkout, 'rev-parse', 'HEAD'], text=True).strip()
+assert type(r['pid']) is int and r['pid'] > 0
+assert r['winpid'] is None or type(r['winpid']) is int and r['winpid'] > 0
+key = hashlib.sha256(checkout.encode()).hexdigest()[:16]
+assert os.path.dirname(path).replace('\\', '/').endswith('/run-all/results/' + key)
+assert re.fullmatch(r'\d{8}T\d{6}Z-\d+\.json', os.path.basename(path))
+assert os.path.basename(path) == start.strftime('%Y%m%dT%H%M%SZ') + f"-{r['pid']}.json"
+sys.stdout.buffer.write(b'record valid\n')
+PY
+  ); crc=$?
+  [ "$rc" = "$broken" ] && [ "$prc" = 0 ] && [ "$crc" = 0 ] && [ "$checked" = 'record valid' ] \
+    && grep -qx "exit: $broken" <<<"$printed" && grep -q '^started: .*Z$' <<<"$printed" \
+    && grep -q '^ended: .*Z$' <<<"$printed" && grep -qx 'args: --only-suites tests/a.sh,tests/b.sh --no-reuse' <<<"$printed" \
+    && { [ "$broken" = 0 ] || [ "$(grep -A1 -E '^FAILED a \[[0-9]+s\]$' <<<"$printed")" = "$(grep -E '^FAILED a \[[0-9]+s\]$' <<<"$printed")"$'\n''      a broke here' ]; } \
+    && good "persistent result has every field, exact counts and failures; printer reads it (exit $broken)" \
+    || no "result record (run $rc, printer $prc, validation $crc)" "$out"$'\n'"$printed"
+done
+# The default checkout works when the runner is sourced by the stand-in too.
+out=$(cache_plan --last-result); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$printed" ] \
+  && good '--last-result defaults to the current checkout and runs no check' || no 'default checkout printer' "$out"
+# The record path is the very last output line (after the summary), for a passing and a failing run alike, so a caller
+# that keeps only the tail of the output can find the FAIL blocks: the file exists under the state dir and holds them.
+for broken in 1 0; do
+  reset_cache
+  out=$(BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+  last=$(tail -n 1 <<<"${out//$'\r'/}")
+  rec=${last#run-all: result record }; rec=${rec%% (FAIL blocks: tests/run-all.sh --last-result)}
+  sum_n=$(grep -n '^run-all: [0-9]* checks, ' <<<"${out//$'\r'/}" | tail -n 1 | cut -d: -f1)
+  total_n=$(wc -l <<<"${out//$'\r'/}" | tr -d ' ')
+  held=$(python3 -B - "$rec" "$broken" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    r = json.load(f)
+broken = int(sys.argv[2])
+if broken:
+    [o] = r['failed_output']
+    assert o['name'].startswith('a [') and 'a broke here' in o['tail'].split('\n')
+else:
+    assert r['failed'] == [] and r['failed_output'] == []
+sys.stdout.buffer.write(b'held\n')
+PY
+  ); hrc=$?
+  [ "$rc" = "$broken" ] && [ "$last" != "$rec" ] && [ "$(grep -c '^run-all: result record ' <<<"${out//$'\r'/}")" = 1 ] \
+    && [ -n "$sum_n" ] && [ "$sum_n" -lt "$total_n" ] && [[ "$rec" == "$TMP/state/run-all/results/"* ]] && [ -f "$rec" ] \
+    && [ "$hrc" = 0 ] && [ "$held" = held ] && grep -qx "result: $rec" <<<"$(last_result)" \
+    && good "the last output line names the result record, after the summary, holding the FAIL blocks (exit $broken)" \
+    || no "record path line (run $rc, record check $hrc, summary line $sum_n of $total_n)" "$out"
+done
+# An interrupted run prints it too, once the record is written.
+reset_cache
+HOLD_MARK="$TMP/record-line-term" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/record-line-term.out" 2>&1 & rt=$!
+slot_wait_for "$TMP/record-line-term"
+kill -TERM "$rt"; wait "$rt"; rc=$?
+last=$(tail -n 1 "$TMP/record-line-term.out" | tr -d '\r'); rec=${last#run-all: result record }; rec=${rec%% (FAIL blocks: tests/run-all.sh --last-result)}
+[ "$rc" = 143 ] && [ "$last" != "$rec" ] && [ -f "$rec" ] && grep -qx 'exit: 143' <<<"$(last_result)" \
+  && good 'an interrupted run (TERM) prints its result record path as the last line' || no "record path line after TERM (rc $rc)" "$(cat "$TMP/record-line-term.out")"
+for ((i=0; i<300; i++)); do [ -z "$(ls -A "$SL")" ] && break; sleep 0.1; done
+# Inspection is read-only, including when no record exists or a caller supplies parallel-job flags.
+before=$(find "$TMP/state" -type f -exec sha256sum {} \; | sort)
+out=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/unknown-checkout" -j 2); rc=$?
+after=$(find "$TMP/state" -type f -exec sha256sum {} \; | sort)
+[ "$rc" = 1 ] && grep -q 'no result record for checkout ' <<<"$out" && [ "$before" = "$after" ] \
+  && good '--last-result for an unknown checkout exits 1 without changing persistent state' || no 'unknown checkout result' "$out"
+out=$(bash "$ROOT/tests/run-all.sh" --checkout "$TMP/repo" 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q -- '--checkout requires --last-result' <<<"$out" \
+  && good '--checkout requires the read-only printer' || no '--checkout without printer' "$out"
+for broken in 0 1; do
+  reset_cache
+  mark="$TMP/duplicate-$broken"
+  HOLD_MARK="$mark" BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/duplicate-holder.out" 2>&1 & dh=$!
+  slot_wait_for "$mark"
+  dp=$(cat "$SL/1/pid" 2>/dev/null); ds=$(cat "$SL/1/started" 2>/dev/null); dr=$(cat "$SL/1/record" 2>/dev/null)
+  [ "$(cat "$SL/1/args" 2>/dev/null)" = '--only-suites tests/a.sh --no-reuse' ] && [[ "$dr" == "$TMP/state/run-all/results/"* ]] \
+    && good 'slot publishes normalized arguments and its absolute result path' || no 'slot arguments and record metadata'
+  out=$(cache_plan --no-wait --only-suites tests/a.sh --no-reuse); rc=$?
+  [ "$rc" = 4 ] && grep -q "same run already holds test slot 1 (pid $dp, winpid .*started $ds, args " <<<"$out" \
+    && grep -q -- '--last-result' <<<"$out" && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] && [ ! -f "$dr" ] \
+    && good 'same checkout and arguments exit 4 naming the holder, without a suite or another slot' || no "duplicate run (rc $rc)" "$out"
+  running=$(last_result); rrc=$?
+  [ "$rrc" = 1 ] && grep -q "^running: slot 1 pid $dp .*started $ds args --only-suites tests/a.sh --no-reuse$" <<<"$running" \
+    && good 'read-only inspection shows a live matching slot before its first result exists' || no 'running slot inspection' "$running"
+  cache_plan --attach --only-suites tests/a.sh --no-reuse --no-wait > "$TMP/attached.out" 2>&1 & da=$!
+  slot_wait_for "$TMP/attached.out" 'run-all: attaching to test slot 1'
+  kill -0 "$da" 2>/dev/null && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] \
+    && good '--attach waits on the original owner without taking another slot or starting a suite' || no 'attach wait' "$(cat "$TMP/attached.out")"
+  touch "$mark.release"; wait "$dh"; hrc=$?; wait "$da"; arc=$?
+  nr=$(find "$TMP/state/run-all/results" -name '*.json' -type f | wc -l | tr -d ' ')
+  [ "$hrc" = "$broken" ] && [ "$arc" = "$broken" ] && [ "$nr" = 1 ] && [ "$(cat "$RUN_LOG")" = a ] \
+    && grep -q '^result: ' "$TMP/attached.out" && grep -qx "exit: $broken" "$TMP/attached.out" && [ -z "$(ls -A "$SL")" ] \
+    && good "--attach prints the holder's only result and returns its exit status ($broken)" \
+    || no "attached result (holder $hrc, attached $arc, records $nr)" "$(cat "$TMP/attached.out")"
+done
+# While a run holds a slot it keeps a progress file in the slot directory (UTC time, the check running or last finished,
+# its result, the counts so far); the file goes with the slot. tests/a.sh passes (or fails) first, then tests/hold.sh runs.
+for broken in 0 1; do
+  reset_cache
+  mark="$TMP/progress-held-$broken"
+  HOLD_SUITE_MARK="$mark" WITH_HOLD=1 BREAK_SUITE=$broken cache_plan --only-suites tests/a.sh,tests/hold.sh --no-reuse -j 1 > "$TMP/progress.out" 2>&1 & pg=$!
+  slot_wait_for "$mark"
+  prog=$(tr -d '\r' < "$SL/1/progress" 2>/dev/null)
+  keys=$(cut -d= -f1 <<<"$prog" | tr '\n' ' ')
+  [ "$keys" = 'updated check result passed failed ' ] && grep -qx 'check=hold' <<<"$prog" && grep -qx 'result=running' <<<"$prog" \
+    && grep -qx "passed=$((1 - broken))" <<<"$prog" && grep -qx "failed=$broken" <<<"$prog" \
+    && grep -Eqx 'updated=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' <<<"$prog" && [ -z "$(ls "$SL/1" | grep 'progress\.tmp')" ] \
+    && good "a held slot has a progress file: the running check, its result and the counts so far (failing first suite: $broken)" \
+    || no "slot progress file (broken $broken)" "$prog"
+  touch "$mark.release"; wait "$pg"; prc=$?
+  for ((i=0; i<300; i++)); do [ -d "$SL/1" ] || break; sleep 0.1; done
+  [ "$prc" = "$broken" ] && [ -z "$(ls -A "$SL")" ] \
+    && good 'the progress file is gone once the slot is released' || no "slot progress cleanup (rc $prc)" "$(ls -A "$SL/1" 2>/dev/null)"
+done
+# A newer result wins over an older failure. Neither the printer nor a run writes into the checkout.
+out=$(cache_plan --only-suites tests/a.sh,tests/b.sh --no-reuse); rc=$?
+printed=$(last_result); prc=$?
+[ "$rc $prc" = '0 0' ] && grep -qx 'exit: 0' <<<"$printed" && ! grep -q '^FAILED ' <<<"$printed" \
+  && [ -z "$(git -C "$TMP/repo" status --porcelain)" ] \
+  && good 'printer selects the newest result for the checkout; fixture checkout stays clean' || no 'newest result and checkout pollution' "$printed"
+# Background a held run in a subshell, let that launching shell return, then release the orphaned run.
+reset_cache
+(
+  HOLD_MARK="$TMP/detached" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse \
+    > "$TMP/detached.out" 2>&1 < /dev/null &
+  printf '%s\n' "$!" > "$TMP/detached.pid"
+)
+launcher_rc=$?
+slot_wait_for "$TMP/detached"
+dr=$(cat "$SL/1/record" 2>/dev/null)
+touch "$TMP/detached.release"
+slot_wait_for "$dr"
+printed=$(last_result); prc=$?
+[ "$launcher_rc $prc" = '0 0' ] && [ -f "$dr" ] && grep -qx "result: $dr" <<<"$printed" \
+  && grep -qx 'exit: 0' <<<"$printed" && [ "$(cat "$RUN_LOG")" = a ] \
+  && good 'a run whose launching subshell already exited still writes its result' || no 'detached run result' "$printed"
+# A record is published before its slot is removed; wait for cleanup before resetting shared fixture state.
+for ((i=0; i<300; i++)); do [ -d "$SL/1" ] || break; sleep 0.1; done
+# Identical arguments in another checkout retain the ordinary second-slot behaviour.
+reset_cache
+cp -R "$TMP/repo" "$TMP/other-repo"
+HOLD_MARK="$TMP/checkout-one" cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/checkout-one.out" 2>&1 & co1=$!
+slot_wait_for "$TMP/checkout-one"
+HOLD_MARK="$TMP/checkout-two" bash "$TMP/cache-plan.sh" "$TMP/other-repo" --only-suites tests/a.sh --no-reuse > "$TMP/checkout-two.out" 2>&1 & co2=$!
+slot_wait_for "$TMP/checkout-two"
+[ "$(cat "$SL/1/checkout" 2>/dev/null)" = "$TMP/repo" ] && [ "$(cat "$SL/2/checkout" 2>/dev/null)" = "$TMP/other-repo" ] \
+  && good 'same arguments in another checkout take the second slot' || no 'other checkout slot' "$(cat "$TMP/checkout-two.out")"
+touch "$TMP/checkout-one.release" "$TMP/checkout-two.release"
+wait "$co1"; c1=$?; wait "$co2"; c2=$?
+out=$(bash "$ROOT/tests/run-all.sh" --last-result --checkout "$TMP/other-repo"); rc=$?
+[ "$c1 $c2 $rc" = '0 0 0' ] && grep -qx 'exit: 0' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && [ -z "$(git -C "$TMP/other-repo" status --porcelain)" ] \
+  && good 'each checkout publishes its own result and runs its own suite' || no 'checkout-isolated results' "$out"
+# HUP exits 129, publishes partial counts and releases its slot just like TERM.
+reset_cache
+HOLD_MARK="$TMP/slot-hup" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/slot-hup.out" 2>&1 & hs=$!
+slot_wait_for "$TMP/slot-hup"
+kill -HUP "$hs"; wait "$hs"; hrc=$?
+printed=$(last_result); prc=$?
+[ "$hrc $prc" = '129 0' ] && grep -qx 'exit: 129' <<<"$printed" && [ -z "$(ls -A "$SL")" ] \
+  && good 'HUP publishes an interrupted result and releases its targeted slot' || no 'HUP result and cleanup' "$printed"
+# Zero slots still records the run, retaining the original flags omitted only from duplicate matching.
+reset_cache
+out=$(RPG_FACTORY_TEST_SLOTS=0 cache_plan --only-suites tests/a.sh --no-reuse --no-wait --attach); rc=$?
+printed=$(last_result); prc=$?
+[ "$rc $prc" = '0 0' ] && grep -qx 'args: --only-suites tests/a.sh --no-reuse --no-wait --attach' <<<"$printed" \
+  && [ -z "$(ls -A "$SL")" ] && grep -q '^run-all: 2 checks, 1 passed, 0 failed, 1 skipped (1 not affected by the change)$' <<<"$printed" \
+  && good 'disabled slot cap still publishes counts and all original arguments' || no 'result without slot admission' "$printed"
+# Seed old records without running suites repeatedly: writing the next real result keeps exactly the newest 20.
+record=$(sed -n 's/^result: //p' <<<"$printed")
+python3 -B - "$record" <<'PY'
+import json, os, sys
+directory = os.path.dirname(sys.argv[1])
+with open(sys.argv[1], encoding='utf-8') as f:
+    r = json.load(f)
+for i in range(25):
+    path = os.path.join(directory, f'20000101T000000Z-{i}.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(r, f)
+    os.utime(path, (i+1, i+1))
+PY
+out=$(cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+printed=$(last_result); prc=$?
+nr=$(find "${record%/*}" -type f -name '*.json' | wc -l | tr -d ' ')
+[ "$rc $prc" = '0 0' ] && [ "$nr" = 20 ] && [ ! -e "${record%/*}/20000101T000000Z-0.json" ] \
+  && grep -qx 'args: --only-suites tests/a.sh --no-reuse' <<<"$printed" \
+  && good 'result writes prune old records to the newest 20 per checkout' || no "result retention ($nr files)" "$printed"
+# A failed record write is silent and leaves the holder's result untouched; attachment reports the missing record.
+reset_cache; mkdir -p "$TMP/state/run-all"; : > "$TMP/state/run-all/results"
+HOLD_MARK="$TMP/result-unwritable" cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/result-unwritable.out" 2>&1 & uh=$!
+slot_wait_for "$TMP/result-unwritable"
+cache_plan --only-suites tests/a.sh --no-reuse --attach > "$TMP/result-missing.out" 2>&1 & ua=$!
+slot_wait_for "$TMP/result-missing.out" 'run-all: attaching to'
+touch "$TMP/result-unwritable.release"; wait "$uh"; urc=$?; wait "$ua"; arc=$?
+[ "$urc $arc" = '0 5' ] && grep -q 'no result record available' "$TMP/result-missing.out" \
+  && ! grep -Eqi 'traceback|error|result' "$TMP/result-unwritable.out" && [ -z "$(ls -A "$SL")" ] \
+  && good 'record errors do not change output or exit; attachment with no record exits 5' \
+  || no "record write failure (holder $urc, attached $arc)" "$(cat "$TMP/result-unwritable.out" "$TMP/result-missing.out")"
+# A holder killed without its EXIT trap (SIGKILL) keeps its owner file and writes no record: an attached run notices
+# the dead holder, ends with exit 5 and says there is no record, without starting a suite.
+reset_cache
+HOLD_MARK="$TMP/killed-holder" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/killed-holder.out" 2>&1 & kh=$!
+slot_wait_for "$TMP/killed-holder"
+cache_plan --only-suites tests/a.sh --no-reuse --attach > "$TMP/killed-attach.out" 2>&1 & ka=$!
+slot_wait_for "$TMP/killed-attach.out" 'run-all: attaching to test slot 1'
+kill -KILL "$kh"; wait "$kh" 2>/dev/null
+for ((i=0; i<300; i++)); do kill -0 "$ka" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$ka" 2>/dev/null; then
+  kill "$ka" 2>/dev/null; wait "$ka" 2>/dev/null
+  no '--attach to a killed holder ends' "$(cat "$TMP/killed-attach.out")"
+else
+  wait "$ka"; arc=$?
+  [ "$arc" = 5 ] && grep -q 'no result record available' "$TMP/killed-attach.out" && [ -f "$SL/1/owner" ] \
+    && [ ! -s "$RUN_LOG" ] && [ ! -d "$SL/2" ] \
+    && good '--attach to a holder killed without its EXIT trap ends with exit 5 and no record' \
+    || no "attach to killed holder (rc $arc)" "$(cat "$TMP/killed-attach.out")"
+fi
+rm -rf "$SL/1"
 # With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
 # listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
 live_case() { # name want-log want-counts args...
@@ -724,6 +1074,213 @@ out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --inline-only --no-reuse --no-wait); r
 [ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (1 in use:' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--inline-only takes a test slot (busy slot: exit 3 with --no-wait) and no full-run lock' || no '--inline-only test slot' "$out"
 rm -rf "$SL/1"
+# Exit rule of an affected run with a base: a change that reaches no check (0 passed, 0 failed, every skip not affected)
+# exits 6 (NOT_RUN: no evidence, never a pass) and says so in two lines after the summary; the result record's exit is 6
+# and it writes no suite PASS record. A skip for another reason, a run without a base and --only-suites alone keep the
+# old rule (0 passes exit 1); a run that reaches a suite exits on it.
+NONE_LINE='run-all: nothing the change reaches: no check ran (not affected: 2)'
+NOTRUN_LINE='run-all: exit 6 = NOT_RUN: no evidence; run without --base (or with --only-suites) for a verdict'
+none_after_summary() { # out: the nothing-reached line appears once, after the summary line, the NOT_RUN line right after it
+  local s n r
+  s=$(grep -n '^run-all: [0-9]* checks, ' <<<"$1" | tail -1 | cut -d: -f1)
+  n=$(grep -nxF "$NONE_LINE" <<<"$1" | cut -d: -f1)
+  r=$(grep -nxF "$NOTRUN_LINE" <<<"$1" | cut -d: -f1)
+  [ -n "$s" ] && [ -n "$n" ] && [ -n "$r" ] && [ "$(grep -cxF "$NONE_LINE" <<<"$1")" = 1 ] \
+    && [ "$(grep -cxF "$NOTRUN_LINE" <<<"$1")" = 1 ] && [ "$n" -gt "$s" ] && [ "$r" = $((n + 1)) ]
+}
+no_suite_record() { [ "$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')" = 0 ]; }
+for j in 1 3; do
+  reset_cache
+  out=$(SELECT=none cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  printed=$(last_result)
+  [ "$rc" = 6 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && none_after_summary "$out" \
+    && grep -qx 'run-all: 2 checks, 0 passed, 0 failed, 2 skipped (2 not affected by the change)' <<<"$out" && no_suite_record \
+    && grep -qx 'exit: 6' <<<"$printed" \
+    && good "--affected --base reaching no check exits 6 (NOT_RUN, record exit 6), nothing-reached and NOT_RUN lines after the summary (-j $j)" \
+    || no "--affected reaching nothing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"$'\n'"$printed"
+  reset_cache
+  out=$(WITH_SKIP=1 SELECT=none cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 1 ] && grep -qx 'counts 0 0 3' <<<"$out" && grep -q '^SKIP  tool check (tool not on PATH)' <<<"$out" \
+    && ! grep -q 'nothing the change reaches' <<<"$out" && no_suite_record \
+    && good "--affected reaching no check with a skip for another reason still exits 1, no nothing-reached line (-j $j)" \
+    || no "--affected reaching nothing plus a tool skip (-j $j): rc $rc" "$out"
+  reset_cache
+  out=$(cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$RUN_LOG")" = b ] && grep -qx 'counts 1 0 1' <<<"$out" && ! grep -q 'nothing the change reaches' <<<"$out" \
+    && good "--affected --base reaching a passing suite exits 0 without the nothing-reached line (-j $j)" \
+    || no "--affected reaching a passing suite (-j $j): rc $rc" "$out"
+  reset_cache
+  out=$(BREAK_CASE=1 cache_plan --no-reuse -j "$j" --affected --base main); rc=$?
+  [ "$rc" = 1 ] && grep -qx 'counts 0 1 1' <<<"$out" && ! grep -q 'nothing the change reaches' <<<"$out" && no_suite_record \
+    && good "--affected --base reaching a failing suite exits 1 without the nothing-reached line (-j $j)" \
+    || no "--affected reaching a failing suite (-j $j): rc $rc" "$out"
+  # tests/never.sh is a listed suite whose run line is off (no WITH_NEVER): nothing runs, a and b are not affected
+  reset_cache
+  out=$(NO_BASE=1 cache_plan --no-reuse -j "$j" --affected --only-suites tests/never.sh); rc=$?
+  [ "$rc" = 1 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && grep -q 'no base, running only --only-suites tests/never.sh' <<<"$out" \
+    && ! grep -q 'nothing the change reaches' <<<"$out" \
+    && good "--affected without a base and nothing passing keeps exit 1, no nothing-reached line (-j $j)" \
+    || no "--affected no base, nothing passing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"
+  reset_cache
+  out=$(cache_plan --no-reuse -j "$j" --only-suites tests/never.sh); rc=$?
+  [ "$rc" = 1 ] && [ -z "$(cat "$RUN_LOG")" ] && grep -qx 'counts 0 0 2' <<<"$out" && ! grep -q 'nothing the change reaches' <<<"$out" \
+    && good "--only-suites alone with nothing passing keeps exit 1, no nothing-reached line (-j $j)" \
+    || no "--only-suites nothing passing (-j $j): rc $rc log '$(cat "$RUN_LOG")'" "$out"
+done
+# --within (task QA's scoped selection, with --affected --base): only the named suites and gated scripts run. A named suite
+# the change reaches gets only its affected cases (as --affected passes them), one the change does not reach still runs
+# with every case, what the change selects outside the list is left to CI (counted as not affected, named in one line
+# before the checks). Same lines and counts at -j 1 and -j 3; affected.py is asked once.
+for j in 1 3; do
+  reset_cache; : > "$TMP/case-args"; : > "$TMP/aff-calls"
+  out=$(AFF_CALLS="$TMP/aff-calls" CASE_LOG="$TMP/case-args" SELECT=tests/b.sh CASE_SELECT=alpha cache_plan --no-reuse -j "$j" --affected --base main --within tests/b.sh,tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' '); calls=$(tr '\n' ' ' < "$TMP/aff-calls")
+  first=$(grep -nE '^(PASS|SKIP|FAIL)' <<<"$out" | head -1 | cut -d: -f1); left=$(grep -nx 'left to CI: 0 suites' <<<"$out" | cut -d: -f1)
+  [ "$rc" = 0 ] && [ "$log" = 'a b ' ] && [ "$(cat "$TMP/case-args")" = '--case alpha' ] && grep -q '^PASS  b (cases alpha)' <<<"$out" \
+    && [ "$calls" = 'cases ' ] && grep -qx 'counts 2 0 0' <<<"$out" && [ -n "$left" ] && [ "$left" -lt "$first" ] \
+    && good "--within: the reached named suite gets only its affected cases, the unreached named suite runs, one cases call, left-to-CI line first (-j $j)" \
+    || no "--within cases (-j $j): rc $rc log '$log' calls '$calls' cases '$(cat "$TMP/case-args")'" "$out"
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" SELECT=tests/a.sh CASE_SELECT=alpha cache_plan --no-reuse -j "$j" --affected --base main --within tests/b.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'b ' ] && [ "$(wc -l < "$TMP/case-args" | tr -d ' ')" = 1 ] && [ -z "$(cat "$TMP/case-args")" ] && ! grep -q '(cases ' <<<"$out" \
+    && grep -qx 'left to CI: 1 suites (tests/a.sh)' <<<"$out" && grep -qx 'counts 1 0 1' <<<"$out" \
+    && good "--within: a named suite the change does not reach still runs, with every case; the selected one outside the list is left to CI (-j $j)" \
+    || no "--within unreached (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(WITH_NEVER=1 SELECT=tests/b.sh,tests/a.sh,tests/never.sh cache_plan --no-reuse -j "$j" --affected --base main --within tests/b.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'b ' ] && grep -qx 'left to CI: 2 suites (tests/a.sh, tests/never.sh)' <<<"$out" && grep -qx 'counts 1 0 2' <<<"$out" \
+    && grep -q '(2 not affected by the change)' <<<"$out" \
+    && good "--within: every selected suite outside the list is named and counted as not affected, none runs (-j $j)" \
+    || no "--within left to CI (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(NO_BASE=1 cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'affected mode: no base, running only --within tests/a.sh' <<<"$out" \
+    && grep -q '^left to CI: no base' <<<"$out" && grep -qx 'counts 1 0 1' <<<"$out" \
+    && good "--within without a base runs only the named suites and says so (-j $j)" || no "--within no base (-j $j): rc $rc log '$log'" "$out"
+  # a gated script named in the list runs (block and inline), a live-lane suite the list does not name does not
+  reset_cache
+  out=$(WITH_LIVE=1 SELECT=tests/live.sh cache_plan --no-reuse -j "$j" --affected --base main --within=scripts/checks/x.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'block inline ' ] && grep -qx 'left to CI: 1 suites (tests/live.sh)' <<<"$out" && grep -qx 'counts 3 0 3' <<<"$out" \
+    && good "--within=L runs a named gated script, leaves a selected live-lane suite to CI (-j $j)" || no "--within gated (-j $j): rc $rc log '$log'" "$out"
+  # the repo-wide enforcement lines (WITHIN_GUARDS) also run under --within when the change reaches them, they are not
+  # reported as left to CI, and a breach fails the run; unreached, or without a base, they do not run
+  guards=scripts/checks/english-only.py,scripts/checks/portable-paths.py,scripts/checks/workspace-readers.sh
+  reset_cache
+  out=$(WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a english portable readers ' ] && grep -qx 'left to CI: 0 suites' <<<"$out" && grep -qx 'counts 4 0 1' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -q '^PASS  Portable-paths enforcement' <<<"$out" \
+    && grep -q '^PASS  Workspace readers guard' <<<"$out" \
+    && good "--within of an unrelated suite also runs all three enforcement lines the change reaches, not listed as left to CI (-j $j)" \
+    || no "--within guards run (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(PP_BREACH=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" != 0 ] && [ "$log" = 'a english portable readers ' ] && grep -q '^FAIL  Portable-paths enforcement' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -qx 'counts 3 1 1' <<<"$out" \
+    && good "--within fails (FAIL line, rc != 0) on a planted portable-paths breach (-j $j)" \
+    || no "--within guards breach (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(RG_BREACH=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" != 0 ] && [ "$log" = 'a english portable readers ' ] && grep -q '^FAIL  Workspace readers guard' <<<"$out" \
+    && grep -q '^PASS  English-only enforcement' <<<"$out" && grep -q '^PASS  Portable-paths enforcement' <<<"$out" \
+    && grep -qx 'counts 3 1 1' <<<"$out" \
+    && good "--within fails (FAIL line, rc != 0) on a planted raw jq reader breach in the workspace readers guard (-j $j)" \
+    || no "--within readers breach (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(WITH_GUARDS=1 SELECT=tests/b.sh cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 4' <<<"$out" \
+    && good "--within: an enforcement line the change does not reach does not run (-j $j)" || no "--within guards unreached (-j $j): rc $rc log '$log'" "$out"
+  reset_cache
+  out=$(NO_BASE=1 WITH_GUARDS=1 SELECT=$guards cache_plan --no-reuse -j "$j" --affected --base main --within tests/a.sh); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$log" = 'a ' ] && grep -qx 'counts 1 0 4' <<<"$out" \
+    && good "--within without a base runs no enforcement line, only the named suites (-j $j)" || no "--within guards no base (-j $j): rc $rc log '$log'" "$out"
+done
+within_misuse() { # message args...
+  local want=$1; shift
+  reset_cache
+  out=$(cache_plan "$@" 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q "^run-all: .*$want" <<<"$out" && [ ! -s "$RUN_LOG" ] && ! grep -q '^PASS ' <<<"$out" \
+    && [ ! -d "$TMP/state/locks/run-all-full" ] && [ -z "$(ls -A "$SL" 2>/dev/null)" ] \
+    && good "--within misuse exits 2: $*" || no "--within misuse (rc=$rc): $*" "$out"
+}
+for a in '--only-suites tests/a.sh' '--only-suites=tests/a.sh' '--only-cases alpha' '--inline-only' '--release' '--workspace-only' '--list-suites'; do
+  # shellcheck disable=SC2086   # the option and its value are two words, or one with =
+  within_misuse '--within conflicts with ' --within tests/a.sh --affected $a
+  # shellcheck disable=SC2086
+  within_misuse '--within conflicts with ' $a --affected --within tests/a.sh
+done
+within_misuse '--within requires --affected' --within tests/a.sh
+within_misuse '--within requires --affected' --base main --within tests/a.sh
+within_misuse '--within needs a list' --affected --within=
+within_misuse '--within needs a list' --affected --within
+within_misuse "unknown suite 'tests/unknown.sh'" --affected --base main --within tests/a.sh,tests/unknown.sh
+within_misuse "unknown suite 'tests/orphan.sh'" --affected --base main --within tests/orphan.sh
+within_misuse "release-only suite 'tests/installed-safety.sh' runs only with --release" --affected --base main --within tests/installed-safety.sh
+out=$(cache_plan --help); rc=$?
+[ "$rc" = 0 ] && grep -q -- '--within L' <<<"$out" && grep -q -- '--workspace-only \[--base REF\]' <<<"$out" && grep -q 'slowest' <<<"$out" \
+  && good 'the usage text documents --within, --workspace-only --base and the slowest-checks lines' || no 'usage text for the new flags' "$out"
+# --workspace-only --base: only the workspace checks the change reaches run (each gated like a suite; the `claude plugin
+# validate` lines by the key claude-plugin-validate), the rest counts as not affected; no test slot. Without --base, or when
+# no base is found, every workspace check runs.
+ws_case() { # name want-log want-counts args... (the stand-in selection comes from the caller's SELECT / NO_BASE)
+  local name=$1 wlog=$2 wcounts=$3 j; shift 3
+  for j in 1 3; do
+    reset_cache
+    out=$(WITH_LIVE=1 WITH_WS=1 WITH_CLAUDE=1 cache_plan --no-reuse -j "$j" "$@"); rc=$?
+    log=$(sort "$RUN_LOG" | tr '\n' ' ')
+    [ "$rc" = 0 ] && [ "$log" = "$wlog" ] && grep -qx "counts $wcounts" <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
+      && [ -z "$(ls -A "$SL" 2>/dev/null)" ] && good "workspace-only --base: $name (-j $j)" || no "workspace-only --base: $name (-j $j): rc $rc log '$log'" "$out"
+  done
+}
+SELECT=none ws_case 'a change reaching no workspace input (docs only) runs none of the checks' '' '1 0 6' --workspace-only --base main
+SELECT=tests/live.sh,tests/ws.sh ws_case 'only the reached checks run (routing-like inputs)' 'live ws ' '3 0 4' --workspace-only --base main
+SELECT=claude-plugin-validate ws_case 'the claude validator runs on its own key' 'cv ' '2 0 5' --workspace-only --base main
+SELECT=tests/live.sh,tests/blockrun.sh,tests/ws.sh,scripts/checks/x.sh,claude-plugin-validate ws_case 'a change reaching everything runs everything' 'block blockrun cv inline live ws ' '7 0 0' --workspace-only --base main
+SELECT=none ws_case 'without --base every workspace check runs' 'block blockrun cv inline live ws ' '7 0 0' --workspace-only
+SELECT=none NO_BASE=1 ws_case 'no base found: every workspace check runs' 'block blockrun cv inline live ws ' '7 0 0' --workspace-only --base main
+reset_cache
+out=$(WITH_LIVE=1 WITH_WS=1 WITH_CLAUDE=1 SELECT=none cache_plan --no-reuse --workspace-only --release --base main 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q 'conflicts with --no-workspace and --release' <<<"$out" && [ ! -s "$RUN_LOG" ] \
+  && good '--workspace-only --base still conflicts with --release' || no '--workspace-only --base --release' "$out"
+# a scoped workspace run takes no test slot: it runs with the only slot held by another run
+reset_cache; mkdir -p "$SL/1"; printf '%s\n' "$$" > "$SL/1/pid"; printf 'another checkout\n' > "$SL/1/checkout"
+out=$(RPG_FACTORY_TEST_SLOTS=1 WITH_LIVE=1 SELECT=tests/live.sh cache_plan --no-reuse --no-wait --workspace-only --base main); rc=$?
+[ "$rc" = 0 ] && [ "$(sort "$RUN_LOG" | tr '\n' ' ')" = 'live ' ] && ! grep -q 'waiting for a test slot' <<<"$out" \
+  && good '--workspace-only --base takes no test slot (the only slot is held by another run)' || no '--workspace-only --base admission' "$out"
+rm -rf "$SL/1"
+# per-check durations: the result record lists one {name, seconds, status} per check in run order (-j 1 and -j 3 alike;
+# a block is one entry, the lines inside it are not), and the summary tail names the slowest checks, longest first
+for j in 1 3; do
+  reset_cache
+  out=$(WITH_DUR=1 WITH_LIVE=1 SLOWEST=1 cache_plan --no-reuse -j "$j"); rc=$?
+  rec=$(ls -t "$TMP/state/run-all/results"/*/*.json 2>/dev/null | head -1)
+  checked=$(python3 -B - "$rec" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1], encoding='utf-8'))
+d = r['durations']
+assert all(sorted(x) == ['name', 'seconds', 'status'] and type(x['seconds']) is int and x['seconds'] >= 0 for x in d), d
+names = [x['name'] for x in d]
+assert names == ['a', 'b', 'd0', 'd3', 'd2', 'dfail', 'dskip', 'live', 'block gated_block'], names
+by = {x['name']: x for x in d}
+assert [x['status'] for x in d] == ['pass'] * 5 + ['fail', 'skip', 'pass', 'pass'], d
+assert by['d3']['seconds'] >= 3 and by['d2']['seconds'] >= 2, by   # sleeps are lower bounds; a loaded host only adds
+print('durations valid')
+PY
+  ); crc=$?
+  tail_lines=$(grep -A5 '^slowest checks:$' <<<"$out" | tail -n +2 | sed -E -n 's/^  ([0-9]+)s  .*/\1/p')   # the five seconds, as printed
+  [ "$rc" = 1 ] && [ "$crc" = 0 ] && [ "$checked" = 'durations valid' ] \
+    && [ "$(wc -l <<<"$tail_lines" | tr -d ' ')" = 5 ] && [ "$tail_lines" = "$(sort -nr <<<"$tail_lines")" ] \
+    && good "result record holds per-check durations in run order, the summary names the slowest first (-j $j)" \
+    || no "durations (-j $j): rc $rc record check $crc '$checked'" "$out"
+done
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh
@@ -751,11 +1308,14 @@ for a in '--only-suites' '--only-suites=' '-j 0' '--jobs x' '--only-suites tests
   # shellcheck disable=SC2086
   TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" $a >/dev/null 2>&1; args+="$? "
 done
+early_records=$(find "$TMP/state/run-all/results" -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
 cache_plan >/dev/null; TMPDIR="$CT" cache_plan --reuse >/dev/null; r3=$?
 mkdir -p "$TMP/state/locks/run-all-full"; printf '%s
 ' "$$" > "$TMP/state/locks/run-all-full/pid"
 TMPDIR="$CT" cache_plan --no-reuse --no-wait >/dev/null; r4=$?; rm -rf "$TMP/state/locks/run-all-full"
 left=$(ls -A "$CT")
+[ "$early_records" = 0 ] && [ "$(find "$TMP/state/run-all/results" -type f -name '*.json' | wc -l)" -eq 1 ] \
+  && good 'usage errors, list, reuse hits and no-wait exits publish no result record' || no 'early-exit result records'
 [ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ "$args" = '2 2 2 2 2 ' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, bad arguments, release-only suite, --reuse hit, --no-wait) leave no git-config copy'   || no "early-exit temp files (rc $r1 $r2 $r3 $r4, arguments $args)" "$left"
 # A shared-config WARN is counted, the copy is removed on WARN and kept on FAIL, and a passing suite's RETRY lines are
 # shown under its PASS line. End to end: the stand-in plan sources the real scheduler and ends with the real tail of
@@ -797,7 +1357,7 @@ wrun() { # jobs [VAR=value...]: sets out, rc and leaves the temp dir listing in 
     bash "$TMP/warn-plan.sh" "$WF" -j "$j" --only-suites tests/w.sh,tests/r.sh 2>&1); rc=$?
   left=$(ls -A "$CT2")
 }
-if [ -n "$tail_src" ] && grep -q 'gitcfg_verify' <<<"$tail_src" && grep -q '^echo "run-all: \$total checks' <<<"$tail_src"; then
+if [ -n "$tail_src" ] && grep -q 'gitcfg_verify' <<<"$tail_src" && grep -qx 'runall_summary' <<<"$tail_src"; then
   for j in 1 2; do
     wrun "$j" CFG_MODE=warn
     [ "$rc" = 0 ] && grep -q "^WARN  shared git config: only other sessions' branch/worktree sections were added" <<<"$out" \

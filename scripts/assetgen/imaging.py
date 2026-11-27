@@ -3,6 +3,8 @@
 Pixels are straight (not premultiplied) RGBA, as PNG stores them. "Opaque" means alpha >= OPAQUE (224): the image
 service writes its bodies with alpha 251-254, not 255 (e2e barrel-prop-001), so a strict 255 would miss the body.
 
+fit_box(width, height, expect_w, expect_h) -> (W, H): smallest enclosing canvas at the expected aspect.
+pad(img, W, H) -> (RGBA bytes, left, top): center the original pixels on a transparent canvas.
 edge_fringe(img) -> (state, details): the png-edge-fringe QA row (qa.py adds it for purposes with qa.alpha required).
   A soft edge pixel has alpha 1-31 (FRINGE_MAX_ALPHA) and an opaque pixel within RADIUS (2) px (Chebyshev ring 1,
   else ring 2). Its reference colour is the mean RGB of the opaque pixels on the nearest ring that has any. It is
@@ -49,6 +51,24 @@ CHECKER = ((0x99, 0x99, 0x99), (0x66, 0x66, 0x66))
 CHECKER_SIZE = 16
 
 _SOFT = bytes(1 if 1 <= a <= FRINGE_MAX_ALPHA else 0 for a in range(256))
+
+
+def fit_box(width, height, expect_w, expect_h):
+    if width * expect_h >= height * expect_w:
+        return width, (width * expect_h + expect_w - 1) // expect_w
+    return (height * expect_w + expect_h - 1) // expect_h, height
+
+
+def pad(img, W, H):
+    if W < img.width or H < img.height:
+        raise ValueError("canvas must contain the image")
+    left, top = (W - img.width) // 2, (H - img.height) // 2
+    out = bytearray(W * H * 4)
+    stride = img.width * 4
+    for y in range(img.height):
+        start = ((top + y) * W + left) * 4
+        out[start:start + stride] = img.rgba[y * stride:(y + 1) * stride]
+    return bytes(out), left, top
 
 
 def _alpha(img):

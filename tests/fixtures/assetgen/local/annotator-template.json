@@ -1,0 +1,288 @@
+{
+  "schema": "rpg-factory.comfy-template/1",
+  "title": "Annotator provenance fixture",
+  "description": "UNTESTED on RTX 5060: pose and depth preprocessor model fixture; nothing generated or measured.",
+  "params": {
+    "prompt": {
+      "type": "string",
+      "required": true,
+      "description": "Final reviewed prompt (filled from --prompt-file)."
+    },
+    "model": {
+      "type": "string",
+      "default": "cx/gpt-5.6-sol-image",
+      "description": "Image model id served through the NineRouterImage node."
+    },
+    "size": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+      ],
+      "default": "1024x1024",
+      "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+    },
+    "quality": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "auto",
+      "description": "Image quality."
+    },
+    "background": {
+      "type": "enum",
+      "options": [
+        "auto",
+        "opaque",
+        "transparent"
+      ],
+      "default": "auto",
+      "description": "Background mode."
+    },
+    "filename_prefix": {
+      "type": "string",
+      "default": "assetgen/run",
+      "description": "SaveImage filename prefix in the ComfyUI output folder."
+    },
+    "seed": {
+      "type": "int",
+      "default": 123
+    }
+  },
+  "output_node": "2",
+  "workflow": {
+    "1": {
+      "class_type": "NineRouterImage",
+      "inputs": {
+        "user_prompt": [
+          "3",
+          0
+        ],
+        "model": "{{model}}",
+        "size": "{{size}}",
+        "quality": "{{quality}}",
+        "background": "{{background}}"
+      },
+      "_meta": {
+        "title": "Generate image"
+      }
+    },
+    "2": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "{{filename_prefix}}",
+        "images": [
+          "10",
+          0
+        ]
+      },
+      "_meta": {
+        "title": "Save image"
+      }
+    },
+    "3": {
+      "class_type": "PrimitiveStringMultiline",
+      "inputs": {
+        "value": "{{prompt}}"
+      },
+      "_meta": {
+        "title": "Prompt (Claude, Codex review <state>)"
+      }
+    },
+    "4": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "sdxl.safetensors"
+      }
+    },
+    "5": {
+      "class_type": "LoraLoader",
+      "inputs": {
+        "model": [
+          "4",
+          0
+        ],
+        "clip": [
+          "4",
+          1
+        ],
+        "lora_name": "style.safetensors",
+        "strength_model": 0.8,
+        "strength_clip": 0.7
+      }
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": [
+          "3",
+          0
+        ],
+        "clip": [
+          "5",
+          1
+        ]
+      }
+    },
+    "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry",
+        "clip": [
+          "5",
+          1
+        ]
+      }
+    },
+    "8": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": [
+          "1",
+          0
+        ],
+        "vae": [
+          "4",
+          2
+        ]
+      }
+    },
+    "9": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "5",
+          0
+        ],
+        "seed": "{{seed}}",
+        "steps": 20,
+        "cfg": 5.5,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "positive": [
+          "6",
+          0
+        ],
+        "negative": [
+          "7",
+          0
+        ],
+        "latent_image": [
+          "8",
+          0
+        ],
+        "denoise": 0.45
+      }
+    },
+    "10": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "9",
+          0
+        ],
+        "vae": [
+          "4",
+          2
+        ]
+      }
+    },
+    "11": {
+      "class_type": "DepthAnythingPreprocessor",
+      "inputs": {
+        "image": [
+          "1",
+          0
+        ],
+        "ckpt_name": "depth_anything_vitl14.pth",
+        "resolution": 512
+      },
+      "_meta": {
+        "title": "Depth map"
+      }
+    },
+    "12": {
+      "class_type": "DWPosePreprocessor",
+      "inputs": {
+        "image": [
+          "1",
+          0
+        ],
+        "detect_hand": "enable",
+        "detect_body": "enable",
+        "detect_face": "enable",
+        "resolution": 512,
+        "bbox_detector": "yolox_l.onnx",
+        "pose_estimator": "dw-ll_ucoco_384.onnx"
+      },
+      "_meta": {
+        "title": "Pose map"
+      }
+    },
+    "13": {
+      "class_type": "PreviewImage",
+      "inputs": {
+        "images": [
+          "11",
+          0
+        ]
+      },
+      "_meta": {
+        "title": "Preview depth"
+      }
+    },
+    "14": {
+      "class_type": "PreviewImage",
+      "inputs": {
+        "images": [
+          "12",
+          0
+        ]
+      },
+      "_meta": {
+        "title": "Preview pose"
+      }
+    }
+  },
+  "requires": {
+    "profile": "local-8gb",
+    "peak_vram_gb": 7.0,
+    "ram_gb": 16,
+    "packs": [
+      "comfyui_controlnet_aux"
+    ],
+    "models": [
+      {
+        "kind": "checkpoints",
+        "name": "sdxl.safetensors",
+        "size_gb": 6.5
+      },
+      {
+        "kind": "loras",
+        "name": "style.safetensors",
+        "size_gb": 0.2
+      },
+      {
+        "kind": "annotators",
+        "name": "depth_anything_vitl14.pth",
+        "size_gb": 0.7
+      },
+      {
+        "kind": "annotators",
+        "name": "yolox_l.onnx",
+        "size_gb": 0.2
+      },
+      {
+        "kind": "annotators",
+        "name": "dw-ll_ucoco_384.onnx",
+        "size_gb": 0.13
+      }
+    ]
+  }
+}

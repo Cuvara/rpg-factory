@@ -3,13 +3,13 @@ messages and launch prompts, and the prompt of the Agent tool. Advisory only (le
 detection is lib/english.py, shared with scripts/checks/english-only.py and scripts/file-guard.py.
 
 Fast path: pure ASCII text returns before any parsing. A command that cannot be parsed, or that lies outside the
-workspace, gets no opinion.
+workspace, its repos' worktrees, and every rpg-factory checkout or linked worktree gets no opinion.
 """
 import os
 import re
 
-from .common import PLUGIN_ROOT, find_workspace, native_path, outside_workspace, within
-from .git import gh_normalise, parse_git
+from .common import PLUGIN_ROOT, find_workspace, native_path, outside_workspace, plugin_checkout, within
+from .git import gh_normalise, git_c_dirs, parse_git
 from .shell import expand, prog
 
 import english  # noqa: E402  (scripts/lib is on sys.path: common.py appends it)
@@ -68,7 +68,14 @@ def targets(argv):
             label = f"gh {words[1]} {words[2]} text"
             return [(label, t) for t in option_values(words[3:], {"--title", "--body"}, {"t", "b"})]
     elif name == "orca":
-        positional = [a for a in argv[1:] if not a.startswith("-")][:2]
+        positional, i = [], 1
+        while i < len(argv) and len(positional) < 2:
+            arg = argv[i]
+            i += 1
+            if arg in {"--environment", "--pairing-code"}:
+                i += 1  # global option value is not a subcommand
+            elif not arg.startswith("-"):
+                positional.append(arg)
         if positional == ["orchestration", "send"]:
             return [("orca orchestration send text", t) for t in option_values(argv[1:], {"--subject", "--body"}, set())]
         if positional == ["agent", "launch"]:
@@ -90,24 +97,45 @@ def finding(label, text):
 
 
 def in_scope(cwd, registry, command=""):
-    """The command runs in the workspace, in a worktree whose main checkout is in it, or in the plugin checkout."""
+    """Scope: the workspace, its repos' worktrees, and every rpg-factory checkout and linked worktree.
+
+    This includes the installed plugin root and any clone, wherever they lie; unrelated directories get no opinion."""
     cwd = cwd or os.getcwd()
-    if find_workspace(cwd, registry) or within(cwd, PLUGIN_ROOT):
+    if find_workspace(cwd, registry) or within(cwd, PLUGIN_ROOT) or plugin_checkout(cwd):
         return True
     if outside_workspace(os.path.abspath(cwd), registry, {}):
         return True
-    return bool(command) and any(find_workspace(native_path(os.path.expanduser(t)), registry)
-                                 for t in re.findall(r"((?:\b[A-Za-z]:[/\\]|/)[^\s'\"]+)", command))
+    return bool(command) and any(find_workspace(path, registry) or plugin_checkout(path)
+                                 for path in (native_path(os.path.expanduser(t)) for t in re.findall(r"((?:\b[A-Za-z]:[/\\]|/)[^\s'\"]+)", command)))
+
+
+def git_dir_in_scope(argvs, cwd, registry):
+    """True when a `git -C <dir>` of the expanded commands lies in scope. The directories come from git_c_dirs: a
+    relative `-C` is resolved against the directory a preceding literal `cd` in the same command line moved to,
+    else against the hook's cwd, so `git -C ../clone commit ...` from an unrelated directory is still seen; after
+    a `cd` whose target is not a literal the relative `-C` is skipped. Pure path arithmetic plus the marker reads
+    in_scope already does: no subprocess, no repository scan; any error is "not in scope" (no opinion)."""
+    for path in git_c_dirs(argvs, cwd):
+        try:
+            if (find_workspace(path, registry) or within(path, PLUGIN_ROOT) or plugin_checkout(path)
+                    or outside_workspace(path, registry, {})):
+                return True
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return False
 
 
 def language_hits(payload, registry):
     """Bash and PowerShell commands: git commit, gh pr/issue, orca send/launch text that is not English."""
     command = (payload.get("tool_input") or {}).get("command") or ""
-    if command.isascii() or not in_scope(payload.get("cwd"), registry, command):
+    if command.isascii():
         return []
     shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    argvs = list(expand(command, shell=shell))
+    if not in_scope(payload.get("cwd"), registry, command) and not git_dir_in_scope(argvs, payload.get("cwd"), registry):
+        return []
     hits, flagged = [], set()
-    for argv in expand(command, shell=shell):
+    for argv in argvs:
         for label, text in targets(argv):
             hit = finding(label, text) if label not in flagged else None  # one finding per kind of text
             if hit:
@@ -118,10 +146,19 @@ def language_hits(payload, registry):
     return hits[:MAX_HITS]
 
 
+def is_agent_input(tool_input):
+    """Agent and legacy Task inputs both require string prompt and description fields."""
+    return (isinstance(tool_input, dict) and isinstance(tool_input.get("prompt"), str)
+            and isinstance(tool_input.get("description"), str))
+
+
 def agent_prompt_hits(payload, registry):
-    """The Agent tool: a prompt for a subagent is a brief, so it is English."""
-    prompt = (payload.get("tool_input") or {}).get("prompt")
-    if not isinstance(prompt, str) or prompt.isascii() or not in_scope(payload.get("cwd"), registry):
+    """An Agent-shaped input has a subagent brief as its prompt, so it is English."""
+    tool_input = payload.get("tool_input")
+    if not is_agent_input(tool_input):
+        return []
+    prompt = tool_input["prompt"]
+    if prompt.isascii() or not in_scope(payload.get("cwd"), registry):
         return []
     hit = finding("Agent tool prompt", prompt)
     return [hit] if hit else []

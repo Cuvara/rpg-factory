@@ -24,6 +24,7 @@ import plan_paths
 import workspace
 from plan_paths import resolve_repo_path
 
+REAL_EXISTS = os.path.exists                 # captured before any patch: every non-marker path answers from the disk
 tmp = Path(sys.argv[2]).resolve()
 drive = tmp / 'drive-c'                      # stands for C:/ when the converter runs as on Windows
 plan = tmp / 'plans' / 'nested' / 'plan.json'
@@ -50,10 +51,27 @@ def windows_native(p):
     return str(drive) + r[2:] if r.startswith('C:/') else r
 
 
+INSTALL_ROOTS = ('C:/Program Files/Git', 'C:/Program Files (x86)/git', 'D:/tools/Git')
+
+
 @contextlib.contextmanager
-def windows():
-    """Run plan_paths and workspace as on Windows."""
-    with patch.object(plan_paths, '_is_nt', lambda: True), patch.object(workspace, 'os', NtOs()):
+def windows(roots=INSTALL_ROOTS):
+    """Run plan_paths and workspace as on Windows. `roots` are the Git for Windows install roots that exist: each
+    holds usr/bin/bash.exe, except a root ending in /git (lower case) that holds git-bash.exe instead."""
+    markers = set()
+    for root in roots:
+        markers.add(root + ('/git-bash.exe' if root.endswith('/git') else '/usr/bin/bash.exe'))
+
+    def exists(p):
+        # a Git install marker is answered only from this call's markers: never from an outer patch (a nested
+        # windows(roots=()) must not inherit the outer roots) and never from the real filesystem
+        s = str(p).replace('\\', '/')
+        if s.endswith('/usr/bin/bash.exe') or s.endswith('/git-bash.exe'):
+            return s in markers
+        return REAL_EXISTS(p)
+
+    with patch.object(plan_paths, '_is_nt', lambda: True), patch.object(workspace, 'os', NtOs()), \
+            patch.object(os.path, 'exists', exists):
         yield
 
 
@@ -79,6 +97,40 @@ with windows():
                              (MSYS_WSL + '/repo', 'C:/ws/repo'), ('C:/ws/repo', 'C:/ws/repo'),
                              ('C:\\ws\\repo', 'C:\\ws\\repo'), ('repo/x', 'repo/x'), ('', '')):
         expect('_native nt ' + repr(spelling), real_native(spelling), wanted)
+    # only a leading /mnt/<letter>/ is a WSL mount (its MSYS rewrite sits under the Git install root); a native
+    # path that merely contains a /mnt/<letter>/ segment is kept. A directory named Git is not an install root
+    # unless it holds usr/bin/bash.exe or git-bash.exe.
+    for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', 'C:/Program Files/Gitx/mnt/c/ws', 'D:/mnt/c',
+                     'C:/Users/x/Git/mnt/c/y'):
+        expect('_native nt keeps ' + spelling, real_native(spelling), spelling)
+    for spelling, wanted in (('/mnt/d/x', 'D:/x'), ('C:/Program Files/Git/mnt/d/x', 'D:/x'),
+                             ('C:/Program Files (x86)/git/mnt/c/ws', 'C:/ws'), ('D:/tools/Git/mnt/e', 'E:/')):
+        expect('_native nt converts ' + spelling, real_native(spelling), wanted)
+    # native_abs itself (every caller: context.py, run-checks.py) applies the same guard, not only plan_paths
+    for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/Git/mnt/c/y', 'C:/Users/x/mnt/c/y'):
+        expect('native_abs nt keeps ' + spelling, workspace.native_abs(spelling), spelling)
+    for spelling, wanted in ((MSYS_WSL, 'C:/ws'), ('C:/Program Files/Git/mnt/d/x', 'D:/x'),
+                             ('C:/Program Files (x86)/git/mnt/c/ws/repo', 'C:/ws/repo'), ('/mnt/c/ws', 'C:/ws'),
+                             ('C:/ws', 'C:/ws')):
+        expect('native_abs nt converts ' + spelling, workspace.native_abs(spelling), wanted)
+    # the markers decide: git-bash.exe or usr/bin/bash.exe under a directory with any name qualifies, a directory
+    # named Git without either does not
+    with windows(roots=('C:/Users/x/Git',)):
+        expect('native_abs nt converts under a user directory named Git that holds bash.exe',
+               workspace.native_abs('C:/Users/x/Git/mnt/c/y'), 'C:/y')
+    with windows(roots=('C:/Users/x/git',)):
+        expect('native_abs nt converts under a root that holds git-bash.exe',
+               workspace.native_abs('C:/Users/x/git/mnt/c/y'), 'C:/y')
+    with windows(roots=()):
+        expect('native_abs nt keeps a Git directory without markers',
+               workspace.native_abs(MSYS_WSL), MSYS_WSL)
+        expect('_native nt keeps a Git directory without markers', real_native(MSYS_WSL), MSYS_WSL)
+    # an existing path is never rewritten, whatever its prefix
+    with windows(), patch.object(os.path, 'exists', lambda p: True):
+        expect('native_abs nt keeps an existing path', workspace.native_abs(MSYS_WSL), MSYS_WSL)
+for spelling in ('C:/proj/mnt/d/new', 'C:/Users/x/mnt/c/y', '/mnt/d/x', 'C:/Program Files/Git/mnt/d/x'):
+    with posix():
+        expect('_native posix identity ' + spelling, real_native(spelling), spelling)
 for spelling in ('C:/ws/repo', MSYS_WSL, '/mnt/c/ws', '/c/ws'):
     with posix():
         expect('_native posix ' + spelling, real_native(spelling), spelling)
@@ -144,6 +196,41 @@ PY
 if [ "$rc" -eq 0 ]; then
   while IFS= read -r label; do ok "plan_paths: $label"; done <<<"$out"
 else no "plan_paths windows spellings (rc=$rc)" "$out"; fi
+
+# MACHINE_PATH (plan_paths.machine_path_hit): a file: URL with a home or Users path is flagged like the drive form; an
+# inner path segment named home or Users, a plain http(s) URL with /home/ and a word ending in "file:" stay allowed.
+out=$(python3 -B - "$ROOT" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))
+from plan_paths import machine_path_hit
+
+flagged = [
+    'file:///C:/Users/user/repo/x.md', 'file:///c:/Users/user', 'file:///home/user/repo', 'file:///Users/user/repo',
+    'file://localhost/home/user', 'file:/home/user/repo', 'see (file:///home/user/x) here', 'FILE:///HOME/user/x',
+    'file:///C:/work/repo', '/home/user/repo', '/Users/user/repo',
+    'file://host/C:/Users/user/repo/x.md', 'file://host/home/user/repo', 'file://host/Users/user/repo',
+    'file://server.example.com/home/user/x', 'file://localhost/C:/Users/user', 'see (file://host/home/user/x) here',
+]
+allowed = [
+    'docs/home/readme.md', 'src/Users/list.md', 'https://example.com/home/x', 'http://example.com/Users/x',
+    'docs/home/', 'file:///docs/readme.md', 'profile:/home/x', 'file:relative/home/x',
+    'file://host/docs/readme.md', 'file://host/work/x', 'file://host/docs/home/x', 'file:///docs/home/x',
+    'file://server.example.com/shared/Users/x',
+]
+for text in flagged:
+    assert machine_path_hit(text), 'not flagged: ' + text
+    print('MACHINE_PATH flags ' + text)
+for text in allowed:
+    hit = machine_path_hit(text)
+    assert hit is None, 'flagged %r: %r' % (text, hit)
+    print('MACHINE_PATH allows ' + text)
+PY
+); rc=$?
+if [ "$rc" -eq 0 ]; then
+  while IFS= read -r label; do ok "plan_paths: $label"; done <<<"$out"
+else no "plan_paths MACHINE_PATH cases (rc=$rc)" "$out"; fi
 
 echo "plan-paths: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

@@ -3,7 +3,7 @@
  "title": "UI element part",
  "description": "Button, frame, panel or ornament part for UI Toolkit skins; transparent background.",
  "handoff_domain": "ui",
- "default_template": "image-generate",
+ "default_template": "staged-ui-element",
  "default_family": "ui",
  "dimensions": [
   "palette",

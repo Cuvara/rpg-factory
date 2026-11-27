@@ -1,0 +1,121 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "flow-lows-2",
+  "title": "Orca lineage retry, cleanup order, plan-edit and validate lows, reader guard selection",
+  "topic": "flow-lows-2",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "orca-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "worktree visibility and cleanup of every plan run through Orca",
+      "objective": "Backlog topics plugin-flow-5-followups, workflow-slim-followups and policy-followups-leftovers (docs/plans/backlog.md), in scripts/factory-pipeline.py. (1) The `orca worktree set` call that `dispatch --phase lead` prints right after `git worktree add` runs before Orca knows the worktree and sets nothing; make the printed commands wait for (bounded retry) or check that `orca worktree list` shows the worktree before `orca worktree set`, and say what happens when it never appears. (2) Cleanup order: `orca terminal close --terminal <handle>` of a finished task lead returned runtime_error, and `orca worktree rm` deleted the branch asynchronously a few seconds later, so a `git branch -d` right after it failed with 'used by worktree'. The cleanup guidance and commands that `cleanup` prints must wait for the worktree record to go before deleting the branch. (3) With concise `worker-list` rows (Orca without --full), a worker released through `terminalState` but without `state` is still counted in the 'settledness not checked' note: count it as released. Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh with fake orca stubs only. Changelog fragment changelog.d/flow-lows-2-orca.md (### Fixed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/flow-lows-2-orca.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "the printed lead commands do not run orca worktree set before Orca lists the worktree",
+        "cleanup does not delete a branch before its worktree record is gone",
+        "a concise worker row released through terminalState counts as released",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "plan-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "plan editing and validation used by every run lead, and the case reach of the pipeline suite",
+      "objective": "Backlog topics plan-edit-followups and plugin-flow-5-followups (docs/plans/backlog.md). (1) `plan-edit` re-reads the copy after validation and repeats the no-worktree marker step instead of using `read_plan`: simplify with no behaviour change. (2) `validate` prints no staleness note for changed paths or acceptance; only `plan-edit` does: make validate print the same note when a task's paths or acceptance changed after its verdicts (read-only, a note, not an error). (3) tests/pipeline.test.sh runs ALL cases for scripts/lib/pipeline_route.py (and any other pipeline library file its case map does not name): map the case groups that reach it, with evidence from `tests/affected.py cases`, and report the group counts before and after. Read the current code first: some of this may already be fixed; report what was. Cases in tests/pipeline.test.sh. Changelog fragment changelog.d/flow-lows-2-plan.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. (4) Scope widened by the run lead (strictly necessary follow-up of task orca-lows, which added the read-only `factory-pipeline.py orca-wait --worktree PATH [--gone]` verb and prints it before `orca worktree set` and before `git branch -d` after `orca worktree rm`): skills/delivery/references/delivery.md ('Orca visibility', session lifecycle and cleanup) and docs/pipeline-cli.md still describe `orca worktree set` right after the add and `git branch -d` right after `orca worktree rm` with no wait, and pipeline-cli.md does not document the verb; make both describe the code, and keep tests/parallel-policy.test.sh and tests/skills-lint.sh green. The verb name can be confused with scripts/orca-wait.sh (the run lead's message waiter): say in the docs which is which.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/flow-lows-2-plan.md",
+        "skills/delivery/references/delivery.md",
+        "docs/pipeline-cli.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "orca-lows"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "validate prints a staleness note for changed paths or acceptance",
+        "plan-edit uses read_plan with no behaviour change",
+        "a pipeline_route.py change no longer selects every pipeline case group, or the report says with evidence why not",
+        "the named suite passes",
+        "delivery.md and docs/pipeline-cli.md describe the worktree wait and the orca-wait verb"
+      ]
+    },
+    {
+      "id": "guard-reach",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "selection of one fast guard and one policy lesson",
+      "objective": "Backlog topics qa-reach-followups-2 and plugin-flow-5-followups (docs/plans/backlog.md). (1) tests/affected.py selects the workspace reader guard (scripts/checks/workspace-readers.sh) only for changes under scripts/ and tests/; find with evidence which other files it reads (skills, hooks, registry readers, any jq or Python reader it scans) and extend the selection to exactly those, with cases in tests/affected.test.sh. (2) Record the lesson in skills/factory-core/references/parallel-work.md: a `status` message sent to an Orca dispatch that has already finished creates an Orca follow-up worker (two appeared in plan plugin-flow-5); send lead messages only to the run of a live task lead and put context in the start prompt (keep tests/parallel-policy.test.sh and tests/skills-lint.sh green). Changelog fragment changelog.d/flow-lows-2-guard.md. CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        "changelog.d/flow-lows-2-guard.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/affected.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "the reader guard is selected for every file it reads",
+        "parallel-work.md carries the follow-up worker lesson with its reason",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "ci-fix",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "two CI failures of PR 153 caused by tasks plan-lows and orca-lows",
+      "objective": "Added by the run lead after CI failed on PR 153 (strictly necessary: the PR cannot merge). (1) tests/delivery-generic.test.sh 'delivery.md size cap' fails: skills/delivery/references/delivery.md is 33282 bytes, over the 32768-byte cap (task plan-lows added the orca-wait worktree wait text). Bring it under the cap by tightening wording in the sections this plan touched or nearby redundant prose, without losing any rule; never raise the cap. Keep tests/parallel-policy.test.sh and tests/skills-lint.sh green. (2) tests/affected.test.sh case 'a pipeline script runs every case of the pipeline suite without a base' expects `affected_cases(['scripts/lib/pipeline_route.py'], 'tests/pipeline.test.sh') == 'ALL'`; since task plan-lows mapped every pipeline case group to pipeline_route.py symbols, a no-base change returns the explicit full group list. Accept 'ALL' or the full list, as the factory-pipeline.py half of the same check does, and keep the meaning (every case runs). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "tests/affected.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [
+        "plan-lows",
+        "guard-reach"
+      ],
+      "checks": [
+        "tests/delivery-generic.test.sh",
+        "tests/affected.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "delivery.md is at most 32768 bytes and keeps every rule",
+        "the affected.test.sh pipeline case accepts the full list",
+        "the named suites pass"
+      ]
+    }
+  ]
+}

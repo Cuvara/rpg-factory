@@ -22,7 +22,8 @@ requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sort
   hashes and the relevant rejections (id and content hash), so a review made before the family or the rejection set
   changed is stale too; a spec or run.md written before the style lock hashes exactly as it did.
 generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
-  workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
+  workflow.json graph when a NineRouterImage or KSampler is present, prompts included (a workflow re-rendered with
+  another prompt is stale; the plugin also checks
   that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
   path of the run's copy references/<name> (None or a missing file -> null); style-lock anchors are LoadImage inputs
   anchor-<id>.png, so their copies are bound by content. With spec.style_lock it also holds {"anchors": [{anchor_id,
@@ -34,9 +35,13 @@ typed_param(name, decl, value) -> value coerced to its template param type (Valu
 style_lock_binding(spec) -> {"style", "family", "references": [anchor sha256...], "rejections": [{id, sha256}]} of
   spec.style_lock (sha256 of a rejection: canonical JSON of its spec.style_lock entry), or None for a spec without it.
 style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] without it).
-workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
-  (PrimitiveStringMultiline) it links to.
+workflow_prompts(workflow) -> 9router prompts followed by linked primitive CLIP texts, excluding negative-only nodes.
+local_generation(workflow, spec, hashes=None) -> local model, LoRA and sampler provenance and requires hash, or None
+  without local nodes. Local generation is UNTESTED on RTX 5060.
 run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
+save_image_prefixes(workflow) -> SaveImage node IDs and filename prefixes from the rendered workflow.
+comfy_jobs_dir() -> the configured or platform-default comfy-cli jobs directory.
+output_origins(run_dir, workflow, jobs_dir=None) -> output PNG origins from names, fetch.json or job-state evidence.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
   exactly these; the plugin requires a PASS row for each), in the order png-valid, png-size, png-alpha, [png-corners],
@@ -44,9 +49,12 @@ required_checks(purpose_qa) -> the QA check names every output must carry for th
   [png-not-blank], [png-edge-fringe] (last, only for qa.alpha required). Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
-requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
-  the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
-  (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
+requested_size(workflow, spec) -> the size the run asked for: the size input of the template's primary_node
+  (NineRouterImage; a KSampler gives <w>x<h> of its EmptyLatentImage). A declared primary that gives no size falls
+  back to the resolved spec's size param. Without a usable declared node, use the NineRouterImage with the lowest node
+  id (never dict order), else the resolved spec's size param, else "auto". qa.json records it next to the purpose
+  content hash it graded with (purpose_sha256), so a QA report made before the size or the purpose qa block changed
+  is stale.
 qa_style_binding(spec, locate) -> what the style consistency rows of qa.py evaluate besides the purpose and the output
   bytes, or None for a spec without style_lock (no style rows): {"style": spec.style_lock.style (the style ref: id,
   version, sha256), "style_sha256": sha256 of the canonical JSON of the effective style data spec.style.data (what
@@ -60,6 +68,12 @@ import hashlib
 import json
 import os
 import re
+import sys
+from urllib.parse import parse_qs, unquote, urlsplit
+
+PREVIEW_DIR = "previews"
+FETCH_FILE = "fetch.json"
+JOBS_DIR_ENV = "RPG_FACTORY_COMFY_JOBS_DIR"
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
@@ -189,7 +203,238 @@ def qa_errors(qa):
 
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
 TEXT_NODES = ("PrimitiveStringMultiline", "PrimitiveString")  # a prompt node: its "value" is the text it outputs
+SAMPLERS = ("KSampler", "KSamplerAdvanced")
+GENERATION_NODES = ("NineRouterImage",) + SAMPLERS
+CLIP_TEXT_INPUTS = {"CLIPTextEncode": ("text",), "CLIPTextEncodeSDXL": ("text_g", "text_l")}
+MODEL_LOADERS = {"CheckpointLoaderSimple": ("ckpt_name", "checkpoints"),
+                 "LoraLoader": ("lora_name", "loras"), "ControlNetLoader": ("control_net_name", "controlnet"),
+                 "UpscaleModelLoader": ("model_name", "upscale_models"),
+                 "DepthAnythingPreprocessor": ("ckpt_name", "annotators"),
+                 "DWPosePreprocessor": (("bbox_detector", "pose_estimator"), "annotators")}
+PRESET_LOADERS = {"IPAdapterUnifiedLoader": ("preset", "ipadapter")}
+LOCAL_NODES = SAMPLERS + tuple(MODEL_LOADERS) + tuple(PRESET_LOADERS)
 RUN_PREFIX = "assetgen/"
+
+
+def save_image_prefixes(workflow):
+    if not isinstance(workflow, dict):
+        return {}
+    return {str(nid): node["inputs"]["filename_prefix"] for nid, node in workflow.items()
+            if isinstance(node, dict) and node.get("class_type") == "SaveImage"
+            and isinstance(node.get("inputs"), dict)
+            and isinstance(node["inputs"].get("filename_prefix"), str)}
+
+
+def comfy_jobs_dir():
+    configured = os.environ.get(JOBS_DIR_ENV)
+    if configured:
+        return configured
+    if sys.platform == "win32":
+        root = os.path.expanduser("~/AppData/Local/comfy-cli")
+    elif sys.platform == "darwin":
+        root = os.path.expanduser("~/Library/Application Support/comfy-cli")
+    else:
+        root = os.path.expanduser("~/.config/comfy-cli")
+    return os.path.join(root, "jobs")
+
+
+def _parts(path):
+    return path.replace("\\", "/").split("/")
+
+
+def _save_match(filename, prefixes, subfolder=None):
+    for node_id, prefix in prefixes.items():
+        parts = _parts(prefix)
+        if (re.fullmatch(re.escape(parts[-1]) + r"_[0-9]+_\.png", filename)
+                and (subfolder is None or "/".join(parts[:-1]) == subfolder)):
+            return node_id
+    return None
+
+
+def _job_state(jobs_dir, short_id):
+    matches = []
+    try:
+        entries = os.scandir(jobs_dir)
+        with entries:
+            for entry in entries:
+                if not (entry.name.lower().startswith(short_id.lower()) and entry.name.endswith(".json")):
+                    continue
+                try:
+                    with open(entry.path, encoding="utf-8") as f:
+                        state = json.load(f)
+                    prompt = state.get("prompt_id") if isinstance(state, dict) else None
+                    if isinstance(prompt, str) and prompt.lower().startswith(short_id.lower()):
+                        matches.append(state)
+                except (OSError, ValueError, UnicodeError):
+                    continue
+    except (OSError, TypeError, ValueError):
+        pass
+    return matches
+
+
+def _source_details(source):
+    if not isinstance(source, str) or not source:
+        return None
+    parsed = urlsplit(source)
+    if parsed.scheme in ("http", "https") or (not parsed.scheme and "filename" in parse_qs(parsed.query)):
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        filename = query.get("filename", [None])[0]
+        if not filename:
+            return None
+        return filename, query.get("subfolder", [None])[0], query.get("type", ["output"])[0]
+    path = unquote(parsed.path) if parsed.scheme == "file" else source
+    parts = _parts(path.rstrip("/\\"))
+    if not parts[-1]:
+        return None
+    # ComfyUI writes PreviewImage files straight into its temp dir: only the parent counts, so an install that sits
+    # under some other directory named temp does not turn its SaveImage files into previews.
+    parent = parts[-2] if len(parts) > 1 else None
+    return parts[-1], parent, "temp" if parent == "temp" else "output"
+
+
+def _record_node(record, details):
+    outputs = record.get("outputs") if isinstance(record, dict) else None
+    if not isinstance(outputs, dict):
+        return None
+    for node_id, node in outputs.items():
+        if not isinstance(node, dict):
+            continue
+        for rows in node.values():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if (isinstance(row, dict) and
+                        (row.get("filename"), row.get("subfolder", ""), row.get("type", "output")) == details):
+                    return str(node_id)
+    return None
+
+
+def _fetch_entries(run_dir):
+    """Read valid fetch evidence as a whole; a malformed file supplies no evidence."""
+    try:
+        with open(os.path.join(run_dir, FETCH_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return []
+    entries = data if isinstance(data, list) else [data]
+    if not all(isinstance(entry, dict) and isinstance(entry.get("prompt_id"), str)
+               and isinstance(entry.get("urls"), list) and all(isinstance(url, str) for url in entry["urls"])
+               for entry in entries):
+        return []
+    return entries
+
+
+def host_free_source(source):
+    """Remove URL authority while retaining the path and query used to classify fetch evidence."""
+    if not isinstance(source, str):
+        return source
+    try:
+        parsed = urlsplit(source)
+        if parsed.scheme in ("http", "https") or parsed.netloc:
+            return parsed.path + ("?" + parsed.query if parsed.query else "") + ("#" + parsed.fragment if parsed.fragment else "")
+    except ValueError:
+        return source  # malformed authority: keep the evidence as recorded; classification reports it invalid
+    return source
+
+
+def rewrite_fetch(run_dir):
+    """Remove hosts from fetch URL entries, preserving the JSON shape and entry order."""
+    path = os.path.join(run_dir, FETCH_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return
+    entries = data if isinstance(data, list) else [data]
+    changed = False
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("urls"), list):
+            urls = [host_free_source(url) for url in entry["urls"]]
+            changed |= urls != entry["urls"]
+            entry["urls"] = urls
+    if changed:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False)
+            f.write("\n")
+
+
+def _classify_source(result, source, prefixes, save_nodes, label, evidence, record=None):
+    result["source"] = host_free_source(source) if isinstance(source, str) else None
+    if evidence == FETCH_FILE:
+        result["evidence"] = evidence
+    try:
+        details = _source_details(source)
+    except (ValueError, TypeError):
+        details = None
+    if details is None:
+        result["reason"] = "invalid source in %s" % label
+        return
+    filename, subfolder, kind = details
+    node = _record_node(record, (filename, subfolder or "", kind))
+    result["node_id"] = node
+    if kind == "temp" or filename.startswith("ComfyUI_temp_") or (node is not None and node not in save_nodes):
+        result.update(kind="preview", reason="preview source %s (%s)" % (filename, label), evidence=evidence)
+    else:
+        save_node = node if node in save_nodes else _save_match(filename, prefixes, subfolder)
+        if save_node is not None:
+            result.update(kind="save", node_id=save_node, evidence=evidence,
+                          reason="SaveImage node %s (%s)" % (save_node, prefixes.get(save_node, filename)))
+        else:
+            result["reason"] = "unrecognized source %s (%s)" % (filename, label)
+
+
+def _job_origin(result, jobs_dir, short_id, index, prefixes, save_nodes):
+    states = _job_state(jobs_dir, short_id)
+    if len(states) != 1:
+        result["reason"] = ("no job state for " if not states else "multiple job states for ") + short_id
+    else:
+        state = states[0]
+        outputs = state.get("outputs")
+        if isinstance(outputs, list) and index < len(outputs):
+            _classify_source(result, outputs[index], prefixes, save_nodes, "comfy-cli job %s" % short_id,
+                             "job-state", state.get("record"))
+            return
+        result["reason"] = "no output %d in comfy-cli job %s" % (index, short_id)
+    result["reason"] += "; save the fetch_outputs url_only=true result as <run>/fetch.json"
+
+
+def output_origins(run_dir, workflow, jobs_dir=None):
+    """Classify output PNGs from names, fetch.json or fallback comfy-cli job evidence."""
+    prefixes = save_image_prefixes(workflow)
+    fetch_entries = _fetch_entries(run_dir)
+    save_nodes = {str(nid) for nid, node in workflow.items()
+                  if isinstance(node, dict) and node.get("class_type") == "SaveImage"} if isinstance(workflow, dict) else set()
+    results = {}
+    try:
+        entries = os.scandir(os.path.join(run_dir, "outputs"))
+        with entries:
+            names = sorted(e.name for e in entries if e.name.endswith(".png") and e.is_file())
+    except (OSError, TypeError, ValueError):
+        return results
+    for name in names:
+        result = {"kind": "unknown", "node_id": None, "source": None, "reason": "unrecognized output name", "evidence": None}
+        node = _save_match(name, prefixes)
+        if node is not None:
+            result.update(kind="save", node_id=node, reason="SaveImage node %s (%s)" % (node, prefixes[node]), evidence="name")
+        elif name.startswith("ComfyUI_temp_"):
+            result.update(kind="preview", reason="ComfyUI temp file %s" % name, evidence="name")
+        else:
+            match = re.fullmatch(r"([0-9a-fA-F]{8})_([0-9]{3,})(\.[0-9]+)?\.png", name)
+            if match:
+                short_id = match.group(1)
+                index = int(match.group(2))
+                matches = [entry for entry in fetch_entries if entry["prompt_id"].lower().startswith(short_id.lower())]
+                if len(matches) > 1:
+                    result["reason"] = "multiple fetch.json entries for " + short_id
+                elif matches:
+                    if index < len(matches[0]["urls"]):
+                        _classify_source(result, matches[0]["urls"][index], prefixes, save_nodes, FETCH_FILE, FETCH_FILE)
+                    else:
+                        result["reason"] = "no output %d in fetch.json for %s" % (index, short_id)
+                else:
+                    _job_origin(result, comfy_jobs_dir() if jobs_dir is None else jobs_dir, short_id, index, prefixes, save_nodes)
+        results["outputs/" + name] = result
+    return results
 
 
 def run_filename_prefix(run_id):
@@ -200,7 +445,7 @@ def run_filename_prefix(run_id):
 
 def workflow_prompts(workflow):
     """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent); a link to a prompt node
-    (TEXT_NODES) gives that node's value, any other link stays as the link."""
+    gives its value. Also include linked primitive CLIP texts except negative-only encoders."""
     if not isinstance(workflow, dict):
         return []
     out = []
@@ -212,6 +457,45 @@ def workflow_prompts(workflow):
         if isinstance(src, dict) and src.get("class_type") in TEXT_NODES and isinstance(src.get("inputs"), dict):
             v = src["inputs"].get("value")
         out.append(v)
+    polarities, visited, pending = {}, set(), []
+    for n in workflow.values():
+        if isinstance(n, dict) and n.get("class_type") in SAMPLERS and isinstance(n.get("inputs"), dict):
+            pending.extend((n["inputs"].get(p), p) for p in ("positive", "negative"))
+    while pending:
+        link, polarity = pending.pop()
+        if not (isinstance(link, list) and len(link) == 2 and isinstance(link[0], str)):
+            continue
+        nid, index = link
+        if (nid, polarity) in visited:
+            continue
+        visited.add((nid, polarity))
+        node = workflow.get(nid)
+        if not isinstance(node, dict):
+            continue
+        cls = node.get("class_type")
+        if isinstance(cls, str) and cls in CLIP_TEXT_INPUTS:
+            polarities.setdefault(nid, set()).add(polarity)
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if "positive" in inputs and "negative" in inputs and type(index) is int and index in (0, 1):
+            pending.append((inputs["positive" if index == 0 else "negative"], polarity))
+        else:
+            pending.extend((v, polarity) for v in inputs.values())
+    for nid, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        cls, inputs = node.get("class_type"), node.get("inputs")
+        if not isinstance(cls, str) or cls not in CLIP_TEXT_INPUTS or not isinstance(inputs, dict):
+            continue
+        if polarities.get(nid) == {"negative"}:
+            continue
+        for key in CLIP_TEXT_INPUTS[cls]:
+            link = inputs.get(key)
+            src = workflow.get(link[0]) if isinstance(link, list) and len(link) == 2 and isinstance(link[0], str) else None
+            if isinstance(src, dict) and src.get("class_type") in TEXT_NODES and isinstance(src.get("inputs"), dict):
+                out.append(src["inputs"].get("value"))
     return out
 
 
@@ -234,7 +518,7 @@ def _file_sha256(path):
 
 
 def generation_inputs(workflow, spec, locate=None):
-    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") == "NineRouterImage"
+    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") in GENERATION_NODES
                                           for n in workflow.values()):
         graph = {}
         for nid, node in workflow.items():
@@ -266,6 +550,87 @@ def style_lock_references(spec):
 def _canonical_sha256(obj):
     text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def local_record_key(row):
+    """Return the cache key for a model or LoRA row, if its name and kind are strings."""
+    if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+        return None
+    kind = row.get("kind", "loras")
+    return kind + "/" + row["name"] if isinstance(kind, str) else None
+
+
+def local_generation(workflow, spec, hashes=None):
+    """Record local loaders and sampling settings, resolving linked seed values; no local nodes means no record."""
+    if not isinstance(workflow, dict):
+        return None
+    nodes = [(str(nid), node) for nid, node in workflow.items()
+             if isinstance(node, dict) and node.get("class_type") in LOCAL_NODES]
+    if not nodes:
+        return None
+    def node_order(item):
+        nid = item[0]
+        if nid.isascii() and nid.isdigit():
+            number = nid.lstrip("0") or "0"
+            return (0, len(number), number, nid)
+        return (1, 0, nid, nid)
+    nodes.sort(key=node_order)
+    hashes = hashes if isinstance(hashes, dict) else {}
+    spec = spec if isinstance(spec, dict) else {}
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = template.get("data") if isinstance(template.get("data"), dict) else {}
+    template_graph = data.get("workflow") if isinstance(data.get("workflow"), dict) else {}
+    try:
+        requires = _canonical_sha256(data["requires"]) if "requires" in data else None
+    except (TypeError, ValueError, RecursionError):
+        requires = None
+    result = {"models": [], "loras": [], "samplers": [], "requires_sha256": requires}
+
+    def digest(kind, name, preset=False):
+        value = hashes.get(kind + "/" + name.replace("\\", "/")) if isinstance(name, str) and not preset else None  # Windows ComfyUI names subfolder models with a backslash
+        return value if isinstance(value, str) and SHA256.fullmatch(value) else None
+
+    def seed_param(nid):
+        node = template_graph.get(nid)
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        value = inputs.get("noise_seed" if node.get("class_type") == "KSamplerAdvanced" else "seed") if isinstance(inputs, dict) else None
+        if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str):
+            source = template_graph.get(value[0])
+            source_inputs = source.get("inputs") if isinstance(source, dict) else None
+            value = source_inputs.get("value") if isinstance(source_inputs, dict) else None
+        match = PLACEHOLDER.fullmatch(value.strip()) if isinstance(value, str) else None
+        return match.group(1) if match else None
+
+    for nid, node in nodes:
+        cls = node["class_type"]
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        if cls in SAMPLERS:
+            seed = inputs.get("noise_seed" if cls == "KSamplerAdvanced" else "seed")
+            if isinstance(seed, list) and len(seed) == 2 and isinstance(seed[0], str):
+                source = workflow.get(seed[0])
+                source_inputs = source.get("inputs") if isinstance(source, dict) else None
+                if isinstance(source_inputs, dict) and "value" in source_inputs:
+                    seed = source_inputs["value"]
+            row = {"node": nid, "class_type": cls, "seed": seed, "seed_param": seed_param(nid)}
+            row.update({key: inputs.get(key) for key in ("sampler_name", "scheduler", "steps", "cfg", "denoise")})
+            result["samplers"].append(row)
+        elif cls == "LoraLoader":
+            name = inputs.get("lora_name")
+            sha = digest("loras", name)
+            result["loras"].append({"node": nid, "name": name, "strength_model": inputs.get("strength_model"),
+                                    "strength_clip": inputs.get("strength_clip"), "sha256": sha,
+                                    "verified": sha is not None})
+        else:
+            preset = cls in PRESET_LOADERS
+            key, kind = (PRESET_LOADERS if preset else MODEL_LOADERS)[cls]
+            for model_key in key if isinstance(key, tuple) else (key,):
+                name = inputs.get(model_key)
+                if isinstance(key, tuple) and name in (None, "None", "none"):
+                    continue
+                sha = digest(kind, name, preset)
+                result["models"].append({"node": nid, "class_type": cls, "kind": kind, "name": name,
+                                         "sha256": sha, "verified": sha is not None})
+    return result
 
 
 def style_lock_binding(spec):
@@ -374,12 +739,41 @@ def requirements_sha256(spec, generation=None):
 
 
 def requested_size(workflow, spec):
+    spec = spec if isinstance(spec, dict) else {}
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = template.get("data") if isinstance(template.get("data"), dict) else {}
+    primary = data.get("primary_node")
+    node = None
     if isinstance(workflow, dict):
-        for node in workflow.values():
-            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
-                inputs = node.get("inputs")
-                return inputs.get("size", "auto") if isinstance(inputs, dict) else "auto"
-    params = spec.get("params") if isinstance(spec, dict) else None
+        if isinstance(primary, str) and isinstance(workflow.get(primary), dict):
+            node = workflow[primary]
+        else:
+            candidates = [(nid, n) for nid, n in workflow.items()
+                          if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
+            if candidates:
+                def order(item):
+                    nid = str(item[0])
+                    if nid.isdigit():
+                        try:
+                            return (0, int(nid))
+                        except ValueError:
+                            pass
+                    return (1, nid)
+                node = min(candidates, key=order)[1]
+        if isinstance(node, dict):
+            inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+            if node.get("class_type") == "NineRouterImage":
+                return inputs.get("size", "auto")
+            if node.get("class_type") in SAMPLERS:
+                link = inputs.get("latent_image")
+                source = workflow.get(link[0]) if (isinstance(link, list) and len(link) == 2
+                                                   and isinstance(link[0], str)) else None
+                latent = source.get("inputs") if isinstance(source, dict) else None
+                if (isinstance(source, dict) and source.get("class_type") == "EmptyLatentImage"
+                        and isinstance(latent, dict) and type(latent.get("width")) is int
+                        and type(latent.get("height")) is int and latent["width"] > 0 and latent["height"] > 0):
+                    return "%dx%d" % (latent["width"], latent["height"])
+    params = spec.get("params")
     return params.get("size", "auto") if isinstance(params, dict) else "auto"
 
 

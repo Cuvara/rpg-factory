@@ -164,6 +164,30 @@ for available,expected in [('claude,codex','codex'),('claude','claude')]:
 print('PASS workflow dispatch honors agent routing default and availability fallback for both runners')
 PY
 [ "$?" -eq 0 ] || exit 1
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json,os,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); tmp=pathlib.Path(sys.argv[2])
+# The default Agent-tool runners are pinned on purpose. Upstream evidence for codex: openai/codex-plugin-cc (marketplace
+# openai-codex) ships the plugin `codex` from plugins/codex, whose agent file plugins/codex/agents/codex-rescue.md
+# declares `name: codex-rescue` (checked at commit db52e28). Claude Code names a plugin agent `<plugin>:<agent>`, so the
+# subagent_type is `codex:codex-rescue`; `general-purpose` is Claude Code's built-in agent. scripts/lib/orca_cmd.py
+# agent_task passes the value as subagent_type for factory-workflow.py dispatch --runner agent.
+expected={'claude':'general-purpose','codex':'codex:codex-rescue'}
+for rel in ('registry.json','registry/core.json','skills/delivery/pipeline-defaults.json'):
+    agents=json.loads((root/rel).read_text(encoding='utf-8'))['pipeline']['agents']
+    actual={name:agents[name]['agent_runner'] for name in expected}
+    assert actual==expected,(rel,actual)
+# Dispatch a codex-routed node with the shipped runner names: only routing and availability change in the fixture copy.
+reg=json.loads((root/'registry.json').read_text(encoding='utf-8')); pipe=reg['pipeline']
+pipe['agent_routing']={'default':'codex'}; pipe['available_agents']=['claude','codex']
+fixture=tmp/'runner-pin-registry.json'; fixture.write_text(json.dumps(reg))
+p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'dispatch',str(tmp/'design.json'),'--registry',str(fixture),'--authoring',str(tmp/'authoring'),'--node','design','--runner','agent'],capture_output=True,text=True,env=dict(os.environ,RPG_FACTORY_AGENTS='claude,codex'))
+assert p.returncode==0,p.stderr
+call=json.loads(p.stdout.split('\n',1)[1])
+assert call['subagent_type']=='codex:codex-rescue',call
+print('PASS default Agent-tool runners are pinned (codex:codex-rescue, general-purpose) and a codex node dispatches as codex:codex-rescue')
+PY
+[ "$?" -eq 0 ] || exit 1
 python3 - "$ROOT" "$TMP" <<'PY'
 import hashlib,importlib.util,json,pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); author=t/'authoring-stale'; (author/'design/features').mkdir(parents=True); (author/'ui/specs').mkdir(parents=True)
@@ -233,4 +257,4 @@ assert any(x['contract']=='ui-vfx-sync' and ui['id'] in x['changed'] and vfx['id
 print('PASS sync contract reports the opposite side for revalidation without an ordering edge')
 PY
 [ "$?" -eq 0 ] || exit 1
-echo 'workflow tests: 15 run, 15 passed, 0 failed'
+echo 'workflow tests: 18 run, 18 passed, 0 failed'

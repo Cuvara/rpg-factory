@@ -30,11 +30,11 @@
  },
  "3": {
   "_meta": {
-   "title": "Save image"
+   "title": "Save edited image"
   },
   "class_type": "SaveImage",
   "inputs": {
-   "filename_prefix": "assetgen/golden-image-edit-001",
+   "filename_prefix": "assetgen/golden-image-edit-001-edit",
    "images": [
     "2",
     0

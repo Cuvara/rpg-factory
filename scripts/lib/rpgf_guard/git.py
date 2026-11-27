@@ -29,6 +29,57 @@ def parse_git(argv):
     return cdir, argv[i], argv[i + 1:], cfg
 
 
+LITERAL_DIR_BAD = re.compile(r"[$`*?\[\]{}!;|&<>()\"']")
+
+
+def literal_cd_target(argv):
+    """The directory of a `cd <dir>` argv when it is a literal path, else None. None for a bare `cd`, `cd -`, a
+    target with a variable, substitution or glob, and a `~user` that os.path.expanduser cannot resolve. A leading
+    `~` (`cd ~`, `cd ~/x`) is expanded by os.path.expanduser and returns that path."""
+    target = next((x for x in argv[1:] if not x.startswith("-") or x == "-"), None)
+    if not target or target == "-" or LITERAL_DIR_BAD.search(target):
+        return None
+    target = os.path.expanduser(target.replace("\\", "/"))
+    if target.startswith("~"):
+        return None  # `~user` that expanduser could not resolve
+    return native_path(target)
+
+
+def git_c_dirs(argvs, cwd):
+    """Absolute normalised directory of every `git -C <dir>` in the expanded argvs, in order. A relative `-C` is
+    relative to the directory a preceding `cd <literal dir>` in the same command line moved to, else to `cwd`;
+    after a `cd` whose target is not a literal (a variable, `-`, a glob, a substitution) a relative `-C` is skipped
+    (no opinion). Pure path arithmetic: no subprocess, no repository scan, never raises."""
+    base = None
+    try:
+        base = os.path.abspath(cwd or os.getcwd())
+    except (OSError, ValueError, TypeError):
+        pass
+    out = []
+    for argv in argvs:
+        try:
+            if argv and prog(argv[0]) in CD_WORDS:
+                target = literal_cd_target(argv)
+                if target is not None and os.path.isabs(target):
+                    base = os.path.normpath(target)  # an absolute cd makes the directory known again
+                elif target is None or base is None:
+                    base = None
+                else:
+                    base = os.path.normpath(os.path.join(base, target))
+                continue
+            parsed = parse_git(argv)
+            if not parsed or not parsed[0]:
+                continue
+            cdir = os.path.expanduser(parsed[0])
+            if os.path.isabs(cdir):
+                out.append(os.path.normpath(cdir))
+            elif base is not None:
+                out.append(os.path.normpath(os.path.join(base, cdir)))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
 def has_short_flag(args, letter):
     return any(re.match(r"^-[A-Za-z]*" + letter + r"[A-Za-z]*$", a) for a in args)
 
@@ -71,7 +122,32 @@ def tag_listing(args):
     return True
 
 
-def classify(sub, args, branch, patterns, cfg):
+def reset_moves_branch(args, cwd):
+    """Recognise a revision reset; pathspec and patch resets only update the index."""
+    words = []
+    i = 0
+    while i < len(args):
+        x = args[i]
+        if x == "--":
+            if i + 1 < len(args):
+                return False
+            break
+        if x == "--pathspec-from-file" or x.startswith("--pathspec-from-file="):
+            return False
+        if x == "--patch" or has_short_flag([x], "p"):
+            return False
+        if not x.startswith("-"):
+            words.append(x)
+        i += 1
+    if len(words) != 1:
+        return False
+    word = words[0]
+    if cwd is not None and os.path.exists(os.path.join(cwd, native_path(word))):
+        return False
+    return bool(re.search(r"[~^@:]", word) or re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]*", word))
+
+
+def classify(sub, args, branch, patterns, cfg, *, cwd=None):
     """List of (decision, reason) for one git invocation."""
     R = []
 
@@ -88,7 +164,7 @@ def classify(sub, args, branch, patterns, cfg):
     if sub == "reset":
         if a & {"--hard", "--merge", "--keep"}:
             ask("`git reset --hard/--merge/--keep` discards working-tree changes")
-        elif protected and any(not x.startswith("-") for x in args):
+        elif protected and reset_moves_branch(args, cwd):
             ask(f"`git reset <commit>` moves protected branch `{branch}`")
     elif sub == "clean" and (has_short_flag(args, "f") or "--force" in a):
         ask("`git clean -f` permanently deletes untracked files (user work, imported Unity samples)")
@@ -418,7 +494,7 @@ def evaluate(payload, registry):
                 parts = shlex.split(alias)
                 sub, args = parts[0], parts[1:] + args
         created = new_branch_from(sub, args)
-        for d, t in classify(sub, args, branch, patterns, cfg):
+        for d, t in classify(sub, args, branch, patterns, cfg, cwd=eff):
             reasons.append((d, f"[{where}] {t}"))
         if created and top:
             predicted_branch[top] = created

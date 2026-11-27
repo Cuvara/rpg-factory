@@ -1,0 +1,172 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "assetgen-followups",
+  "title": "Follow-ups of the asset-gen run: engine and batch notes, topic start base, run-all result record",
+  "topic": "feat/assetgen/followups",
+  "goal": "Close the backlog topics the runs of assetgen-hybrid, assetgen-style and assetgen-batch left open: the non-blocking review notes on the asset-gen engine, templates, batch and style report (backlog assetgen-run-followups), the start base and stack record of a task whose dependencies are all integrated (backlog review-base-topic), and a run-all that stays visible and safe after its wrapping command was stopped (backlog run-all-orphan-after-reap). Nothing here generates an image, installs a pack or downloads a model.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "engine-notes",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Close the engine and hybrid-template notes of backlog assetgen-run-followups. (1) fetch.json entries written or read by the engine carry no host: strip scheme, host and port from every recorded URL, keep what the output filter needs to classify files, and accept an older fetch.json that still has hosts. (2) A model kind for preprocessor and annotator models (pose, depth) in the local node registry and provenance, so such a model is recorded and checked like the other local model kinds instead of being unknown. (3) Provenance covers KSamplerAdvanced like KSampler, and the literal CLIP text check covers it too. (4) The run.md '- Fit:' line and the fit/raw docstrings in assetgen.py describe what the code does. (5) lint reads the known-nodes data once per invocation, not once per template. (6) The anchor_target lint cases assert every entry of results, not only results[0]. (7) The staged layout test (no wire through an unrelated node) covers every core workflow template, not only staged-*.json; re-lay out the hybrid and local templates it then fails, changing positions only, never nodes, links, params or widget values. (8) The fixture local/hybrid-anchor-template.json uses the tiled VAE decode the local-8gb profile wants.",
+      "paths": [
+        "scripts/assetgen/",
+        "scripts/checks/domains/assetgen.py",
+        "templates/assetgen/",
+        "docs/schemas/kinds/gen-run.schema.json",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-engine-notes.md"
+      ],
+      "exclusions": [
+        "skills/",
+        "scripts/factory-pipeline.py"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "no fetch.json written by the engine or shown in a skill example contains a host, and a run with an older fetch.json that has hosts still filters and finalizes as before",
+        "a template with a pose or depth preprocessor model passes provenance and the profile lint with the model recorded under the new kind; an unknown preprocessor model still fails",
+        "a template that samples with KSamplerAdvanced gets the same provenance rows and the same literal CLIP text result as the KSampler form of it",
+        "lint over several templates loads the known-nodes data once (a test proves it) and its results are unchanged",
+        "the layout test runs over every core workflow template and passes; the re-laid templates differ from before only in node positions (a test or a diff check proves it), and the template goldens are updated",
+        "the anchor_target lint cases fail when any result, not only the first, is wrong",
+        "every existing assetgen case passes; no image is generated and no endpoint or credential appears in templates/assetgen or scripts/assetgen"
+      ]
+    },
+    {
+      "id": "batch-report-notes",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Close the batch and style-report notes of backlog assetgen-run-followups. (1) In finalize.py the local name rows of the --discard-qa-fail branch no longer shadows the sheet rows parameter. (2) The manifest line 'Sheet: ... -> N outputs' counts the cells that are outputs now and names the discarded ones separately. (3) One budget rule, with and without a sheet: the budget counts generations made, so a discarded output still counts (a discard never refunds a generation), and a sliced sheet counts as one generation whether or not its cells were discarded; budget text and --json say how many counted outputs are discarded. (4) style report: the text label and the JSON count for anchors agree on what they count; report distinct anchors and, separately, selected anchor copies, so one anchor selected by two runs is one anchor and two copies. (5) The setup heredoc of the selected-anchor regression case in tests/assetgen.test.sh is checked for its exit status.",
+      "paths": [
+        "scripts/assetgen/finalize.py",
+        "scripts/assetgen/budget.py",
+        "scripts/assetgen/discard.py",
+        "scripts/assetgen/slicer.py",
+        "scripts/assetgen/assetgen.py",
+        "scripts/assetgen/style_report.py",
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-batch-report-notes.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/",
+        "skills/"
+      ],
+      "deps": [
+        "engine-notes"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "finalize --discard-qa-fail on a run with a sheet (--rows and --cols given) slices with the given rows and cols and discards the QA-FAIL cells; a test covers the two flags together",
+        "the manifest sheet line of a run with discarded cells names the remaining and the discarded count, and matches discards.json",
+        "budget gives the same used count before and after a discard, with and without a sheet; a fully discarded sheet counts as one generation; tests cover the four combinations",
+        "style report text and --json give the distinct anchor count and the selected copy count for a style where one anchor is selected by two runs (1 and 2)",
+        "the regression case fails loudly when its setup heredoc fails",
+        "every existing assetgen case passes or is updated for the documented budget rule only"
+      ]
+    },
+    {
+      "id": "topic-start-base",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Backlog review-base-topic. A task whose dependencies are all integrated (or that has none) and that is cut from the topic branch must start from the topic and get no stack record: dispatch --phase lead prints a worktree cut from the topic HEAD, never from a dependency's old branch tip, and writes no <task>__stack.json. review_base and own_start for such a task use the topic (the newest topic commit contained in the task HEAD) instead of the plan base, so the tier command selects only the task's own delta instead of every suite. A stack record that names a dependency already integrated into the topic before the task branch was cut is ignored by status, verify dispatch and the gate (no 'integrated before its dependency' blocker from it). True stacking on one in-flight dependency behaves as before.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "tests/pipeline.test.sh",
+        "tests/fixtures/pipeline/",
+        "docs/pipeline-cli.md",
+        "changelog.d/topic-start-base.md"
+      ],
+      "exclusions": [
+        "scripts/assetgen/",
+        "tests/run-all.sh"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh"
+      ],
+      "acceptance": [
+        "a task added to a plan after its dependencies were integrated: dispatch --phase lead prints git worktree add from the topic HEAD and no stack note, and no stack record file exists afterwards",
+        "for a no-deps task cut from a topic that is ahead of main, the review base is the topic commit the task started from and affected selection sees only the task's own files (a test with a throwaway repo proves both)",
+        "a leftover stack record naming an integrated dependency does not block verify dispatch or the gate, and status shows no 'stacked on' note for it",
+        "the existing stacked-dispatch cases (one in-flight dependency, sync, gate order) pass unchanged",
+        "docs/pipeline-cli.md states the rule in the section that describes the start base"
+      ]
+    },
+    {
+      "id": "run-all-result-record",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Backlog run-all-orphan-after-reap. When the command that wrapped tests/run-all.sh is stopped, the run keeps going and keeps its test slot while the session believes it is dead. Make that visible and safe. (1) run-all.sh writes its arguments into the slot (or lock) directory at start and, at exit, a result record under the persistent run-all state directory (resolved the way the existing run-all state is, never TMPDIR): checkout, arguments, start and end time, exit status and the summary line with the pass, fail and skip counts, plus the failed suite names. (2) A read-only way to print the newest result record of a checkout, so a later session reads the result of a run whose terminal is gone. (3) A second targeted run of the same checkout with the same arguments while the first is still alive does not start a copy: it says which run holds the slot (pid, started) and exits with a distinct documented status, or waits for that run's record and returns its result when asked to with a flag; pick one default and document it. (4) parallel-work.md gets the operating lesson with its reason: before a rerun, check the slot's checkout and winpid and read the result record. No process is stopped by this change, and nothing is matched by pattern.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        "scripts/README.md",
+        "changelog.d/run-all-result-record.md"
+      ],
+      "exclusions": [
+        "scripts/factory-pipeline.py",
+        "scripts/assetgen/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "after a targeted run ends, the result record exists and holds checkout, arguments, times, exit status, counts and failed suites; the read-only printer shows it for that checkout",
+        "a run whose parent shell went away still writes its record at exit (a test starts a run detached and reads the record afterwards)",
+        "a second run of the same checkout and arguments while the first is alive starts no second copy of any suite and reports the holder; a run with different arguments or another checkout behaves as before",
+        "pass, fail and reuse behaviour, the full-run lock and the slot count are unchanged for a single run",
+        "the record lives under the persistent run-all state directory and tests set RPG_FACTORY_STATE_DIR to a temp dir; no file is written into the checkout",
+        "tests/parallel-policy.test.sh passes with the new lesson in parallel-work.md"
+      ]
+    },
+    {
+      "id": "followup-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Docs notes of backlog assetgen-run-followups and the backlog bookkeeping of this plan. (1) skills/comfy-desktop-setup: the skill's own steps end with the model-hash cache and hardware-profile.json written, using commands that exist in this repo; if a needed command does not exist, say so in the lead report instead of describing one. (2) docs/architecture/multi-discipline-factory.md states the current number of tech skills (count them from the registry, do not guess). (3) docs/plans/backlog.md: remove review-base-topic and run-all-orphan-after-reap from Open and add them under Covered as shipped in plan assetgen-followups; reduce assetgen-run-followups to what this plan does not cover (the 'registry paths exist in workspace' check that fails inside Orca agent terminals, and the owner's run of docs/plans/assetgen-hybrid/e2e-local.md on the target hardware) and list the rest under Covered.",
+      "paths": [
+        "skills/comfy-desktop-setup/",
+        "docs/architecture/multi-discipline-factory.md",
+        "docs/plans/backlog.md",
+        "tests/comfy-desktop-setup.test.sh",
+        "changelog.d/assetgen-followup-docs.md"
+      ],
+      "exclusions": [
+        "scripts/",
+        "skills/asset-gen/",
+        "skills/comfyui/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/comfy-desktop-setup.test.sh",
+        "tests/skills-lint.sh"
+      ],
+      "acceptance": [
+        "following the comfy-desktop-setup steps as written produces the model-hash cache and hardware-profile.json with existing commands, and tests/comfy-desktop-setup.test.sh covers the new step",
+        "the architecture doc's tech skill count equals the registry's",
+        "backlog.md Open no longer lists the covered topics, Covered names plan assetgen-followups for them, and the two uncovered notes remain under assetgen-run-followups",
+        "skills-lint passes; English only"
+      ]
+    }
+  ]
+}

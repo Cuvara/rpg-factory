@@ -1,0 +1,129 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "test-speed",
+  "title": "Fast and precise QA: scoped task QA, affected workspace checks, per-check timing, faster slow suites",
+  "topic": "test-speed",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "runall-scope",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "run-all is the QA entry point of every plan; a selection bug either wastes hours or silently skips a suite",
+      "objective": "Owner request (2026-11-18): tests must be fast and precise; most task time went into broad runs and checks the change does not need. Measured on this Windows host: task QA `tests/run-all.sh --affected --base <base> --only-suites <checks> -j 2` UNIONS the import-closure selection with every case of the named suites (a scripts/lib/workspace.py change selected 62 of 77 suites); integration QA `--workspace-only` took 869 s, of which `routing + history replay` 391 s, `routing properties over real history` 158 s and `registry facts re-probed in the repos` 153 s ran although the change touched no routing, skill or registry input. Implement in tests/run-all.sh and tests/affected.py: (1) a scoped selection `--affected --base <b> --within <suites>`: only the named suites run, each limited to its affected cases when it has a case map (the cases `tests/affected.py cases` gives; ALL when unsure, never fewer), a named suite the change does not reach still runs (its explicit check), and the suites the closure selects outside the list are printed as `left to CI: N suites (...)` and not run; inline checks keep their current rule. Conflicts and usage text like the existing flags. (2) `--workspace-only --base <b>`: run only the workspace checks whose inputs the change reaches (declare the inputs per workspace check in tests/affected.py next to EXTRA: routing replay and routing properties read skills/, registry, scripts/factory_session.py, scripts/lib/routing*, evals/; facts reads registry facts and scripts/check-registry.sh probes; and so on for each of the 24 checks, reading run-all.sh to find what each runs); unsure or a GLOBAL input means run it; without --base keep today's behaviour (all 24); `--release` always runs everything. (3) Per-check timing: the run-all result record (rpg-factory.run-all-result/1, written by tests/run-all.sh) gets each check's duration, and the summary prints the five slowest checks. Cases in tests/run-all-parallel.test.sh and tests/affected.test.sh: within-list case selection, a named but unreached suite still runs, left-to-CI line, workspace selection for a docs-only change (none of routing/facts), a skill change (routing checks run), a registry change (all), no --base (all), timing in the record. Changelog fragment changelog.d/test-speed-runall.md (### Added). Do not edit scripts/factory-pipeline.py (task pipeline-qa uses the new flag). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/affected.py",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.test.sh",
+        "changelog.d/test-speed-runall.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "--affected --base B --within L runs only the suites in L, each limited to its affected cases (ALL when unsure), and prints the suites left to CI",
+        "--workspace-only --base B skips routing replay, routing properties and facts for a docs-only change and runs them when their inputs change; without --base all 24 run",
+        "the result record holds per-check durations and the summary names the five slowest checks",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "qa-policy",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "standard",
+      "grade_reason": "the single copy of the QA policy every plan follows; a wrong rule either skips needed checks or keeps the slow runs",
+      "objective": "Owner request (2026-11-18): tests must be fast and precise; task time must not go into broad runs or checks the change does not need. Rewrite the QA policy to the new shape (implemented by tasks runall-scope and pipeline-qa of this plan): task QA runs only the task's named check suites, each limited to the cases the change reaches (`tests/run-all.sh --affected --base <base> --within <check suites> -j 1`), the suites outside the task's checks are left to CI, which runs every affected suite on Linux and Windows per PR and whose `ci-ok` must be green before merging (the breadth gate); integration QA runs `tests/run-all.sh --workspace-only --base <plan base>` (only the workspace checks the change reaches; all of them without a base and in `--release`). A plan's task `checks` must name the suites that test the changed behaviour (the precise set); the plan author picks them, the verify session may add one it finds missing and says so. Add the low-memory lesson with its reason (plans policy-followups, path-audit, flow-lows, run-lows: verify sessions lost their tier run many times when Claude Code stopped background shells under low memory): on a loaded machine run `-j 1`, one task QA at a time; a task lead reports NOT_RUN after one retry instead of looping. Files: skills/delivery/references/delivery.md section 10 'QA tiers' (byte cap 32768 with LF, now about 31500: replace text, do not grow it past the cap; `tests/delivery-generic.test.sh` and `tests/line-budget.test.sh` check it), skills/factory-core/references/parallel-work.md (RPG specifics and the lesson), .claude/CLAUDE.md QA paragraph and its Commands block (keep it short; it points to delivery.md section 10), tests/README.md 'QA tiers and run-all flags' (document --within and --workspace-only --base). Grep tests/ for phrases these files must keep (tests/parallel-policy.test.sh, tests/skills-lint.sh, tests/delivery-generic.test.sh) and keep or update them consistently; never drop a rule other than the one replaced. Changelog fragment changelog.d/test-speed-policy.md (### Changed). The machine is short on memory: run one test command at a time; stop your own test run before you report.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/references/parallel-work.md",
+        ".claude/CLAUDE.md",
+        "tests/README.md",
+        "changelog.d/test-speed-policy.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/delivery-generic.test.sh",
+        "tests/line-budget.test.sh",
+        "tests/skills-lint.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "delivery.md section 10, parallel-work.md, CLAUDE.md and tests/README.md state the scoped task QA, CI as the breadth gate and the affected workspace checks, consistently",
+        "the low-memory lesson is written with its reason",
+        "delivery.md stays under its byte cap",
+        "the named suites pass"
+      ]
+    },
+    {
+      "id": "assetgen-speed",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "test-only refactor of the slowest suite; it must keep every assertion",
+      "objective": "Owner request (2026-11-18): tests must be fast and precise. tests/assetgen.test.sh is the slowest suite: about 4 min on Linux CI and 41 min (2488 s) on this Windows host, and it has no case map, so any assetgen change runs every case. (1) Measure: time each case group of the suite on this host (one run, -j 1) and report the ten slowest with their cost drivers (git init per case, python process starts, fixture copies, ComfyUI fakes, sleeps). (2) Make it faster without dropping or weakening any assertion: build shared fixtures once per run and copy them (a template git repo instead of `git init` + commits per case), batch Python calls where a case starts many interpreters, remove fixed sleeps in favour of polling with a bound. (3) Give the suite `--case` selection and `# case-map:` header lines (the format tests/affected.py case_map reads; see tests/pipeline.test.sh and tests/parallel-policy.test.sh for the pattern) mapping its inputs (scripts/assetgen/*, templates/assetgen/*, scripts/checks/domains/assetgen.py, the gen-run schema, fixtures) to case groups, so a change to one module runs its cases only. Report case count and wall time before and after on this host. Changelog fragment changelog.d/test-speed-assetgen.md (### Changed). Do not edit tests/affected.py or tests/run-all.sh (task runall-scope owns them). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report.",
+      "paths": [
+        "tests/assetgen.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/test-speed-assetgen.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "every existing assertion is kept",
+        "the suite has --case selection and a case map covering its inputs",
+        "wall time on this host before and after is reported, with the ten slowest cases",
+        "the named suite passes"
+      ]
+    },
+    {
+      "id": "pipeline-qa",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "the verify spec every task follows; plus the second slowest suite",
+      "objective": "Owner request (2026-11-18): tests must be fast and precise. Builds on task runall-scope (merge its branch; never rebase). (1) scripts/factory-pipeline.py `tier_command` and the verify and QA spec text: task QA becomes `tests/run-all.sh --affected --base <review base> --within <the checks' suites> -j 1` (no longer a union with the whole closure); without check suites keep a safe form and say so; the stderr line `selected N of M suites` reports the scoped count and the count left to CI; integration QA prints `tests/run-all.sh --workspace-only --base <plan base>`; the module docstring and usage text follow; the `validate` warning 'checks contain test suites' is replaced by the rule that checks name the suites that test the changed behaviour (backlog workflow-slim-followups). docs/pipeline-cli.md documents the new command forms. (2) tests/pipeline.test.sh is the second slowest suite (about 2 min on Linux CI, about 35 min on this Windows host): measure its case groups on this host (one run, -j 1), report the ten slowest and their cost drivers, and make it faster without dropping or weakening any assertion (shared fixtures copied instead of rebuilt, fewer process starts, no fixed sleeps); tighten its case map so a change to scripts/factory-pipeline.py does not always select ALL when a narrower group is safe (only when it is). Report wall time before and after on this host. Cases in tests/pipeline.test.sh for the new tier command. Changelog fragment changelog.d/test-speed-pipeline.md (### Changed). The machine is short on memory: run one test command at a time with -j 1; stop your own test run before you report. (3) Found by task qa-policy: scripts/README.md (around line 99) still says `--only-suites` is the task QA (unioned with --affected), and the registry `pipeline.qa_tiers` description (registry/core.json, built into registry.json with `python3 -B scripts/build-registry.py`) predates --within and --workspace-only --base; bring both in line with the new commands. skills/delivery/pipeline-defaults.json pipeline.qa_tiers must stay equal to the registry (tests/delivery-generic.test.sh 'defaults drift').",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "tests/pipeline.test.sh",
+        "docs/pipeline-cli.md",
+        "changelog.d/test-speed-pipeline.md",
+        "scripts/README.md",
+        "registry/core.json",
+        "registry.json",
+        "skills/delivery/pipeline-defaults.json"
+      ],
+      "exclusions": [],
+      "deps": [
+        "runall-scope"
+      ],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/delivery-generic.test.sh"
+      ],
+      "acceptance": [
+        "task QA specs name `--affected --base <base> --within <check suites> -j 1`; integration QA names `--workspace-only --base <plan base>`",
+        "the stderr selection line reports the scoped count and the suites left to CI",
+        "pipeline.test.sh keeps every assertion; wall time before and after on this host is reported",
+        "the named suites pass",
+        "scripts/README.md and the registry qa_tiers description name the new commands; registry.json is the build"
+      ]
+    }
+  ]
+}

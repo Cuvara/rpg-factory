@@ -1,8 +1,9 @@
 """Offline lint of asset-gen data and rendered workflows.
 
-Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types, input
-names, required inputs, link targets and types, combo values against data/known-nodes.json (a snapshot; the live
-check is comfy-mcp validate_workflow), extends targets, and that no file carries a URL, host address or credential.
+Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types (a ui_only
+node such as Note is never part of workflow), input names, required inputs, link targets and types, combo values
+against data/known-nodes.json (a snapshot; the live check is comfy-mcp validate_workflow), extends targets, and that
+no file carries a URL, host address or credential.
 Purpose constraints are checked against data/precedence.json. A core file is linted as core data only (no game
 layer merged in), so a bad game value is reported on the game file that holds it.
 Style lock (stylelock.py): style version, status and structured fields, purpose default_family/dimensions/
@@ -12,12 +13,38 @@ authoring repo and no project.json, lint adds a WARN row for assetgen/project.js
 style without a usable structured style field (palette.colors, tone, canvas, outline.edge_darkness; absent, empty or
 malformed per consistency.field_states, the parsing the style checks use) is a WARN: no style-* QA row can grade.
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
+lint_rows adds one {path, check: "assetgen-graph-style", ...} row per template (a core or game layer template, merged
+as lint_data merges it, or a standalone file with the template schema): the workflow style guide (graphstyle.py:
+titles, one stage group per node, the group vocabulary Prompt, References, Generate, Models, Refine (local),
+Post-process, Preview, Output and its order, a Note per group, the reviewed prompt as one PrimitiveStringMultiline
+feeding every positive text input, SaveImage only in Output with a filename suffix, no static LoadImage file) plus the
+profile rules (graphstyle.py: profile, vram, checkpoints, controlnet, batch, tiled-vae, flux) for the template's own
+requires.profile: lint_rows passes profile=None and hardware=hardware_or_none() (None when data/hardware.json is
+malformed: the requires check already FAILs, and no profile rule runs). A legacy template without a ui block is a
+WARN, never a FAIL. An unreadable file or a layer load error gets no extra row (its assetgen-lint row already FAILs).
+Render targets: template_target_errors (assetgen.template_target_errors is the same function; render runs it on the
+filled workflow) checks a template's anchor_target (an existing node, one of its inputs, an input that takes anchors:
+ANCHOR_TARGETS) and primary_node (an existing generation node; required when the graph has more than one
+NineRouterImage). template_errors runs it on the template's own workflow, so a bad declaration FAILs lint, not only
+render.
+Local models (UNTESTED on RTX 5060: the block is a declaration compared with planning thresholds, never a measured
+number; nothing is generated or measured): a template's optional requires block {profile, peak_vram_gb, ram_gb,
+packs, models[{kind, name, size_gb}], offload} is checked against data/hardware.json (profile id, the profile's VRAM
+and RAM ceilings and pack ids, model kinds, a model name that is a file name; no link, path or credential; offload a
+bool: true declares that one checkpoint is unloaded before the next loads, which the graph-style checkpoints rule
+reads). A node of a known-nodes pack needs its pack id in requires.packs, and a local_model_nodes or pack node needs
+the block and a profile with a GPU (hardware.json requires.gpu true; api-only has none and stays valid for an
+API-only graph). No requires and no such node: nothing changes.
 """
+import copy
+import functools
 import json
+import math
 import os
 import re
 
 import consistency
+import graphstyle
 import layers
 import runfiles
 import stylelock
@@ -34,11 +61,66 @@ FORBIDDEN = [
     (re.compile(r"\bBearer\s+\S", re.I), "bearer credential"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{12,}"), "API key value"),
 ]
+HARDWARE = os.path.join(layers.HERE, "data", "hardware.json")
+REQUIRES_KEYS = ("profile", "peak_vram_gb", "ram_gb", "packs", "models", "offload")
+MODEL_KEYS = ("kind", "name", "size_gb")
+EXTRA_MODEL_KINDS = ("loras", "vae", "annotators")  # model folders a template may name that no hardware profile lists
+
+
+@functools.lru_cache(maxsize=1)
+def _load_known_registry():
+    """Read the registry once per process; cache_info().misses exposes the load count."""
+    with open(KNOWN, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def known_registry():
+    """The whole data/known-nodes.json: nodes, packs {pack id: {nodes, ...}} and local_model_nodes."""
+    return copy.deepcopy(_load_known_registry())
 
 
 def known_nodes():
-    with open(KNOWN, encoding="utf-8") as f:
-        return json.load(f)["nodes"]
+    return known_registry()["nodes"]
+
+
+def is_number(v):
+    """An int or a finite float (bool is not a number)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and (isinstance(v, int) or math.isfinite(v))
+
+
+def hardware():
+    """(profiles, kinds) of data/hardware.json: {profile id: {"vram": requires.min_vram_gb, "ram":
+    requires.min_ram_gb, "gpu": requires.gpu (a bool), "packs": [pack id]}} and the model kinds any profile names
+    (file order). ValueError with one message when the file is missing or malformed."""
+    try:
+        with open(HARDWARE, encoding="utf-8") as f:
+            raw = json.load(f)
+        profiles, kinds = {}, []
+        for p in raw["profiles"]:
+            entry = {"vram": p["requires"]["min_vram_gb"], "ram": p["requires"]["min_ram_gb"],
+                     "gpu": p["requires"]["gpu"], "packs": [pack["id"] for pack in p["packs"]]}
+            found = [m["kind"] for m in p["models"]]
+            if (not isinstance(p["id"], str) or not is_number(entry["vram"]) or not is_number(entry["ram"])
+                    or not isinstance(entry["gpu"], bool)
+                    or not all(isinstance(x, str) for x in entry["packs"] + found)):
+                raise ValueError("profile %r: id, pack ids and model kinds must be strings, min_vram_gb and min_ram_gb numbers, gpu a bool" % (p["id"],))
+            profiles[p["id"]] = entry
+            kinds += [k for k in found if k not in kinds]
+        if not profiles:
+            raise ValueError("no profiles")
+        return profiles, kinds
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("data/hardware.json is missing or malformed (%s: %s): the requires block cannot be checked"
+                         % (type(exc).__name__, str(exc).replace("\n", " ")))
+
+
+def hardware_or_none():
+    """The profiles of hardware() for the graph-style profile rules, or None when data/hardware.json is missing or
+    malformed (the requires check reports that; the graph style then runs no profile rule)."""
+    try:
+        return hardware()[0]
+    except ValueError:
+        return None
 
 
 def domains():
@@ -74,6 +156,9 @@ def check_graph(graph, params=None):
         ctype, spec = node["class_type"], nodes.get(node["class_type"])
         if spec is None:
             errs.append("node %s: unknown node type %s (not in data/known-nodes.json; live check: comfy-mcp validate_workflow)" % (nid, ctype))
+            continue
+        if spec.get("ui_only"):
+            errs.append("node %s: %s is a UI-only node (frontend canvas only, no API form); it cannot be part of workflow" % (nid, ctype))
             continue
         for name, decl in spec["inputs"].items():
             if decl.get("required") and name not in node["inputs"]:
@@ -125,6 +210,129 @@ def check_graph(graph, params=None):
     return errs, warns
 
 
+def requires_errors(data, graph):
+    """(errors, warnings) of a template's optional requires block and of the graph rules tied to it. The block names
+    what a local template needs: a data/hardware.json profile, the peak VRAM and the RAM it declares (never above the
+    profile's min_vram_gb / min_ram_gb), the node packs its workflow uses and its model files (kind, file name, size).
+    A node of a known-nodes pack needs that pack id in requires.packs; a local_model_nodes or pack node needs the
+    block and a declared profile with a GPU (hardware.json requires.gpu true): one error per such node otherwise.
+    A template without the block and without such a node gets no error and no warning."""
+    registry = known_registry()
+    pack_of = {name: pid for pid, spec in registry.get("packs", {}).items() for name in spec.get("nodes", [])}
+    local = set(registry.get("local_model_nodes", []))
+    typed = [(nid, node["class_type"]) for nid, node in (graph.items() if isinstance(graph, dict) else [])
+             if isinstance(node, dict) and isinstance(node.get("class_type"), str)]
+    if "requires" not in data:
+        return ["node %s (%s) runs a local model: the template needs a requires block (%s)"
+                % (nid, ctype, ", ".join(REQUIRES_KEYS)) for nid, ctype in typed if ctype in local or ctype in pack_of], []
+    req = data["requires"]
+    if not isinstance(req, dict):
+        return ["requires must be an object (%s)" % ", ".join(REQUIRES_KEYS)], []
+    try:
+        profiles, kinds = hardware()
+    except ValueError as exc:
+        return [str(exc)], []
+    errs = ["requires.%s: unknown key (a requires block holds only %s)" % (k, ", ".join(REQUIRES_KEYS))
+            for k in req if k not in REQUIRES_KEYS]
+    text = json.dumps(req)
+    errs += ["requires contains a %s (%s); it names a profile, packs and model files, never a link, an endpoint or a credential"
+             % (what, m.group(0)[:40]) for rx, what in FORBIDDEN for m in [rx.search(text)] if m]
+    profile = req.get("profile")
+    limits = profiles.get(profile) if isinstance(profile, str) else None
+    if "profile" not in req:
+        errs.append("requires.profile missing (one of %s; data/hardware.json)" % ", ".join(profiles))
+    elif limits is None:
+        errs.append("requires.profile %r is not a hardware profile (%s; data/hardware.json)" % (profile, ", ".join(profiles)))
+    elif not limits["gpu"]:
+        with_gpu = ", ".join(pid for pid, p in profiles.items() if p["gpu"]) or "hardware.json has none"
+        errs += ["node %s (%s) runs a local model, but profile %s has no GPU (hardware.json requires.gpu false); declare a local profile (%s)"
+                 % (nid, ctype, profile, with_gpu) for nid, ctype in typed if ctype in local or ctype in pack_of]
+    for key, limit, field in (("peak_vram_gb", "vram", "min_vram_gb"), ("ram_gb", "ram", "min_ram_gb")):
+        value = req.get(key)
+        if not is_number(value) or value < 0:
+            errs.append("requires.%s must be a number >= 0" % key if key in req else "requires.%s missing (a number >= 0)" % key)
+        elif limits is not None and value > limits[limit]:
+            errs.append("requires.%s %s is above %s %s of profile %s (data/hardware.json): the template would not fit the machine the profile describes"
+                        % (key, value, field, limits[limit], profile))
+    if "offload" in req and not isinstance(req["offload"], bool):
+        errs.append("requires.offload must be true or false")
+    declared = req.get("packs", [])
+    if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
+        errs.append("requires.packs must be a list of pack ids (strings)")
+        declared = [p for p in declared if isinstance(p, str)] if isinstance(declared, list) else []
+    declared_ids = list(dict.fromkeys(declared))
+    errs += ["requires.packs lists %r more than once" % p for p in declared_ids if declared.count(p) > 1]
+    if limits is not None:
+        errs += ["requires.packs: %r is not a pack of profile %s (%s)" % (p, profile, ", ".join(limits["packs"]) or "it has no packs")
+                 for p in declared_ids if p not in limits["packs"]]
+    models = req.get("models", [])
+    if not isinstance(models, list):
+        errs.append("requires.models must be a list of {%s} objects" % ", ".join(MODEL_KEYS))
+        models = []
+    allowed = kinds + [k for k in EXTRA_MODEL_KINDS if k not in kinds]
+    for i, model in enumerate(models):
+        if not isinstance(model, dict) or sorted(model) != sorted(MODEL_KEYS):
+            errs.append("requires.models[%d] must be an object with exactly %s" % (i, ", ".join(MODEL_KEYS)))
+            continue
+        if not isinstance(model["kind"], str) or model["kind"] not in allowed:
+            errs.append("requires.models[%d].kind %r is not a model kind (%s)" % (i, model["kind"], ", ".join(allowed)))
+        name = model["name"]
+        if not isinstance(name, str) or not name.strip() or any(c in name for c in "/\\:"):
+            errs.append("requires.models[%d].name must be a model file name; source links live in docs/hardware.md, never in templates" % i)
+        if not is_number(model["size_gb"]) or model["size_gb"] <= 0:
+            errs.append("requires.models[%d].size_gb must be a number > 0" % i)
+    used = set()
+    for nid, ctype in typed:
+        pid = pack_of.get(ctype)
+        if pid is None:
+            continue
+        used.add(pid)
+        if pid not in declared_ids:
+            errs.append("node %s uses %s from pack %s, not declared in requires.packs" % (nid, ctype, pid))
+    warns = ["requires.packs declares %s, but no workflow node comes from that pack" % p for p in declared_ids if p not in used]
+    return errs, warns
+
+
+ANCHOR_TARGETS = (("NineRouterImage", "reference_images"), ("IPAdapterAdvanced", "image"))
+
+
+def template_target_errors(tmpl, workflow):
+    """Errors of a template's optional anchor_target and primary_node declarations against workflow (render: the
+    filled workflow, on every render; lint: the template's own workflow). assetgen.template_target_errors is this."""
+    errors = []
+    if "anchor_target" in tmpl:
+        target = tmpl["anchor_target"]
+        if not (isinstance(target, dict) and set(target) == {"node", "input"}
+                and all(isinstance(target[k], str) for k in ("node", "input"))):
+            errors.append('anchor_target must be {"node": <node id>, "input": <input name>}')
+        elif target["node"] not in workflow:
+            errors.append("anchor_target.node %r is not a node of the workflow" % target["node"])
+        else:
+            node = workflow[target["node"]]
+            cls = node.get("class_type") if isinstance(node, dict) else None
+            known = known_nodes().get(cls, {}) if isinstance(cls, str) else {}
+            if target["input"] not in known.get("inputs", {}):
+                errors.append("anchor_target.input %r is not an input of node %s (%s)" %
+                              (target["input"], target["node"], cls))
+            elif (cls, target["input"]) not in ANCHOR_TARGETS:
+                errors.append("anchor_target %s.%s cannot take anchors (allowed: NineRouterImage.reference_images, IPAdapterAdvanced.image)" %
+                              (cls, target["input"]))
+    if "primary_node" in tmpl:
+        primary = tmpl["primary_node"]
+        if not isinstance(primary, str) or primary not in workflow:
+            errors.append("primary_node %r is not a node of the workflow" % (primary,))
+        else:
+            node = workflow[primary]
+            cls = node.get("class_type") if isinstance(node, dict) else None
+            if cls not in runfiles.GENERATION_NODES:
+                errors.append("primary_node %s (%s) is not a generation node (NineRouterImage, KSampler)" % (primary, cls))
+    else:
+        count = sum(1 for node in workflow.values() if isinstance(node, dict) and node.get("class_type") == "NineRouterImage")
+        if count > 1:
+            errors.append("the template has %d NineRouterImage nodes: declare primary_node (the node whose size the run requests)" % count)
+    return errors
+
+
 def template_errors(data, ident):
     errs, warns = [], []
     params = data.get("params")
@@ -145,6 +353,11 @@ def template_errors(data, ident):
     warns += w
     used = set(PLACEHOLDER.findall(json.dumps(graph)))
     warns += ["param %s is declared but never used in the workflow" % n for n in params if n not in used]
+    e, w = requires_errors(data, graph)
+    errs += e
+    warns += w
+    if isinstance(graph, dict):  # a workflow that is not an object already FAILs check_graph
+        errs += template_target_errors(data, graph)
     errs += [e for e in stylelock.purpose_errors(data) if e.startswith("max_references")]
     out = data.get("output_node")
     if not isinstance(graph, dict) or not isinstance(out, str) or out not in graph:
@@ -152,6 +365,27 @@ def template_errors(data, ident):
     elif not isinstance(graph[out], dict) or not known_nodes().get(graph[out].get("class_type"), {}).get("output_node"):
         errs.append("output_node %s is not an output node (SaveImage)" % out)
     return errs, warns
+
+
+def fit_errors(qa):
+    if not isinstance(qa, dict) or not isinstance(qa.get("size"), dict):
+        return []
+    size = qa["size"]
+    fit = size.get("fit", "none")
+    if fit not in ("none", "pad"):
+        return ["qa.size.fit must be one of ['none', 'pad']"]
+    if fit != "pad":
+        return []
+    errs = []
+    if qa.get("alpha") != "required":
+        errs.append("qa.size.fit pad needs qa.alpha required (pad adds transparent pixels)")
+    if size.get("mode") != "orientation":
+        errs.append("qa.size.fit pad needs qa.size.mode orientation")
+    if "orientation" in size and size["orientation"] != "auto":
+        errs.append("qa.size.fit pad needs qa.size.orientation auto (the expected aspect comes from qa.size.expect)")
+    if size.get("allow_swap") is True:
+        errs.append("qa.size.fit pad needs qa.size.allow_swap false (pad would square a swapped output qa accepts)")
+    return [err + "; or set qa.size.fit none" for err in errs]
 
 
 def purpose_errors(data, ident, authoring):
@@ -207,7 +441,7 @@ def purpose_errors(data, ident, authoring):
                             % (field, ", ".join(sorted(k for k, v in rules.items() if v == "purpose"))))
             elif not isinstance(text, str) or not text:
                 errs.append("constraints.%s must be a non-empty string" % field)
-    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa"))
+    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa")) + fit_errors(data.get("qa"))
 
 
 def style_errors(data):
@@ -334,6 +568,43 @@ def lint_file(path, authoring=None):
         errs.append("malformed data (%s: %s)" % (type(exc).__name__, exc))
     state = "FAIL" if errs else ("WARN" if warns else "PASS")
     return {"path": shown, "check": "assetgen-lint", "state": state, "reasons": errs + warns}
+
+
+def template_data(path, authoring=None):
+    """(data, error) of a template file for the graph style rows: a core or game layer template merged as lint_data
+    merges it (a core file as core only), or a standalone file whose schema is the template schema. (None, None) for
+    any other file or an unreadable one; (None, message) when a layer template does not load."""
+    if stylelock.classify(path, authoring)[0]:
+        return None, None
+    kind, ident, layer = classify(path, authoring)
+    if kind:
+        if kind != "template":
+            return None, None
+        try:
+            if layer == "core":
+                return layers.load(kind, ident, None, _layer="core")["data"], None
+            return layers.load(kind, ident, authoring)["data"], None
+        except layers.SpecError as exc:
+            return None, str(exc)
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return None, None
+    if isinstance(raw, dict) and raw.get("schema") == layers.KINDS["template"]["schema"]:
+        return raw, None
+    return None, None
+
+
+def lint_rows(path, authoring=None):
+    """[lint_file(path)] plus one assetgen-graph-style row (graphstyle.template_row) when path is a template; its
+    profile rules use the template's own requires.profile (profile=None) against hardware_or_none()."""
+    rows = [lint_file(path, authoring)]
+    data, _ = template_data(path, authoring)
+    if isinstance(data, dict):
+        rows.append(graphstyle.template_row(data, known_nodes(), display(path, authoring),
+                                            profile=None, hardware=hardware_or_none()))
+    return rows
 
 
 def default_paths(authoring=None):

@@ -1,0 +1,81 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "owner-policy",
+  "title": "Owner decisions of 2026-11-17: a plan may widen the model scope with a recorded approval, english-only applies in every rpg-factory checkout",
+  "topic": "owner-policy",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "scope-widen",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a new plan field that changes which models validate and dispatch accept; too loose defeats the model scope",
+      "objective": "Owner decision (2026-11-17, backlog topic policy-followups-leftovers): a plan may widen `pipeline.models.scope` for itself, but only (a) after asking the owner, with the owner's word recorded in the plan, or (b) when the model is strictly necessary for that plan, with the reason recorded in the plan. Today scripts/lib/model_policy.py lets the personal override file only narrow the scope, and nothing in a plan can name a model outside it. Add an optional plan field (suggested name `model_scope_widen`: a list of entries with `agent`, `model`, `efforts` (non-empty list), `basis` (`owner-approved` or `necessary`), `reason` (non-empty text: the owner's word and its date for owner-approved, why no in-scope model can do the work for necessary)) to docs/schemas/pipeline-plan.schema.json and to `validate`: a malformed entry, an unknown agent, an empty reason or an unknown basis is a validation error; an entry that names a model and effort already in scope is a note, not an error. Add a function to scripts/lib/model_policy.py that applies a plan's widening on top of the loaded policy (registry, then the personal narrowing override, then the plan's widening; the personal override file itself still may only narrow). Use it wherever a command has the plan: the models table of `validate` and `status`, `dispatch` (`--model` / `--effort`; a widened model is used only when passed explicitly, the registry profiles do not change), `subplan` validation, and `verdict --model` only if it checks the scope today (read the code; do not add a new check there). Every command that accepts a widened model prints one line naming the widening and its basis, `validate` and `status` list every widening of the plan, and the `gate` output or report template (whichever lists models today) carries the list so the final report shows it. Without the field nothing changes. Tests in tests/pipeline.test.sh (run them with `--case`; add the new case names to the case map if tests/affected.py needs it): an out-of-scope model without the field still exits 2; with a valid entry it dispatches and prints the widening line; each malformed entry form fails validate; a widening of one plan does not leak into another plan; the personal override still cannot widen. Document it in docs/pipeline-cli.md (model section) and add at most two sentences to skills/delivery/references/delivery.md section 10 'Model choice' (the file has a byte cap checked by tests/line-budget.test.sh: trim elsewhere in the same section if needed, never raise the cap). Changelog fragment changelog.d/owner-policy-scope-widen.md (### Added). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "scripts/lib/model_policy.py",
+        "scripts/factory-pipeline.py",
+        "docs/schemas/pipeline-plan.schema.json",
+        "docs/pipeline-cli.md",
+        "skills/delivery/references/delivery.md",
+        "tests/pipeline.test.sh",
+        "tests/affected.py",
+        "changelog.d/owner-policy-scope-widen.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/line-budget.test.sh",
+        "tests/skills-lint.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "a plan without the field behaves exactly as before",
+        "an out-of-scope model dispatches only with a valid widening entry of that plan, and the output names the widening and its basis",
+        "validate rejects an entry without a reason or with an unknown basis",
+        "the personal override file still cannot widen the scope",
+        "validate and status list every widening of the plan"
+      ]
+    },
+    {
+      "id": "english-everywhere",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "a hook scope change in two guards; too wide warns in unrelated projects, and hooks must stay fast",
+      "objective": "Owner decision (2026-11-17, backlog topic policy-followups-leftovers): the english-only check applies everywhere in rpg-factory work; only the chat report to the owner uses `workspace.report_language`. Run lead's reading, told to the owner: every rpg-factory checkout and worktree is covered (the installed plugin root, any other clone or checkout of this plugin, and every linked worktree of one, including Orca task worktrees outside the workspace), on top of what is covered today (the workspace, registered repos, worktrees of workspace repos, docs/plans and the harness plan and memory directories); unrelated projects outside the workspace stay without opinion. First establish what is not covered today, with a failing test per gap: (1) the git guard, `in_scope()` in scripts/lib/rpgf_guard/language.py: a command whose cwd is a plugin checkout that is neither the guard's own PLUGIN_ROOT nor inside the workspace (a clone elsewhere), and a linked worktree of such a checkout; the Agent tool prompt path uses the same function. (2) scripts/file-guard.py `language_advisory`: a write into such a checkout or worktree (`plugin_checkout()` decides today; read what it accepts). (3) a `git -C <dir>` command aimed at a plugin checkout from a cwd outside every scope. Recognise a plugin checkout without a repository scan and without running git: walk up from the directory to a `.git` entry and test for the plugin manifest (`.claude-plugin/plugin.json` whose name is this plugin's), and for a linked worktree read the main checkout from the `.git` file the way `linked_worktree` already does; share one helper between the two guards if they do not share it today. Hooks stay fast (one guard process per command, pure-ASCII text returns before any path work) and never crash: any error means no opinion. Keep the allowlists (registry `workspace.language_allow`, tests/fixtures/english-allow.txt) and the advisory wording. Tests: a case per closed gap in tests/git-guard.test.sh and tests/file-guard.test.sh, a case that an unrelated directory outside the workspace still gets no advisory, and tests/hook-perf.test.sh must still pass. Update the scope sentence in the docstrings of both guards, in .claude/CLAUDE.md only if its wording is now wrong, and in skills/factory-core/references/git-safety.md if it states the scope. If a gap listed above turns out to be covered already, keep its test as a regression case and say so in the report. Changelog fragment changelog.d/owner-policy-english-scope.md (### Changed). CI runs on Linux: no test may depend on host tools of this Windows machine. The machine is short on memory: run one test command at a time; if the tier command is stopped, run the task's checks directly and report that.",
+      "paths": [
+        "scripts/lib/rpgf_guard/language.py",
+        "scripts/lib/rpgf_guard/common.py",
+        "scripts/lib/workspace.py",
+        "scripts/file-guard.py",
+        "tests/git-guard.test.sh",
+        "tests/file-guard.test.sh",
+        "skills/factory-core/references/git-safety.md",
+        ".claude/CLAUDE.md",
+        "changelog.d/owner-policy-english-scope.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/git-guard.test.sh",
+        "tests/file-guard.test.sh",
+        "tests/hook-perf.test.sh",
+        "tests/workspace-default.test.sh"
+      ],
+      "acceptance": [
+        "non-English commit, PR, session-message and Agent-prompt text gets the english-only advisory in every plugin checkout and each of its linked worktrees, wherever they are on disk",
+        "a non-English write into such a checkout or worktree gets the advisory, and the allowlists still apply",
+        "an unrelated directory outside the workspace gets no advisory",
+        "tests/hook-perf.test.sh passes"
+      ]
+    }
+  ]
+}

@@ -1,22 +1,49 @@
 #!/usr/bin/env bash
 # asset-gen engine (scripts/assetgen/): list/show/resolve with core + game layers (override, extends, per-field
-# source, param precedence, purpose constraints over style hints), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
+# source, param precedence, purpose constraints over style hints), strict render of every core purpose
+# (templates/assetgen/purposes/*.json) against golden workflows (tests/fixtures/assetgen/golden/<purpose>.json
+# for the default template, <purpose>--<template>.json for a variant; extra render params from the optional
+# tests/fixtures/assetgen/cases/<purpose>.json and a variant's cases/<purpose>--<template>.json; every variant's
+# workflow.ui.json converts back too; every core template declaring anchor_target gets its style-lock anchors there,
+# graph-lint --run PASS and a byte-identical repeat render; a core template with a local requires.profile FAILS
+# graph-lint --profile api-only naming the profile),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
-# workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
-# lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
-# the 2x2 tile preview of tileable purposes and --no-write), the four vfx purposes (list, show handoff domain vfx, resolve with realistic-pbr,
-# golden renders, png-flipbook-grid, png-black-background and tileable axis x QA on small fixtures, malformed data), embed (workflow tEXt chunk in the outputs), publish
+# workflow.json by a stdlib UI->API converter), a run filename_prefix (with optional inline output suffix),
+# lint errors and warnings (blamed on the game file holding a bad value), offline node registry sync and UI layout,
+# the local node registry (UNTESTED on RTX 5060: the 13 core SDXL nodes from the saved object_info, the 4 pack nodes
+# from object_info-packs.json, known-nodes packs and local_model_nodes against data/hardware.json) and the template
+# requires block (profile, peak_vram_gb, ram_gb, packs, models, offload: accepted complete, refused without a profile,
+# with an undeclared or foreign pack, above the profile's VRAM or RAM, with a link, path or credential, a non-bool
+# offload, missing next to local nodes, or naming a profile without a GPU (api-only) next to a local or pack node;
+# hardware.json missing or malformed, a non-bool requires.gpu included, is one FAIL reason, no traceback),
+# the graph style lint (tests/fixtures/assetgen/graphstyle_selftest.py: every rule passing and failing on the template
+# and the frontend form, anchor nodes without exemption; graph-lint exits 0/1/2, --profile (an unknown id exits 2, a
+# hybrid template under local-8gb PASSES and under api-only FAILS naming the profile, core templates keep their
+# result; UNTESTED on RTX 5060: static checks only), assetgen-graph-style lint rows, legacy
+# templates WARN; a style-locked render of a grouped template lays its anchors into References; the gen-run
+# quality check gen-run-workflow-style: WARN, never FAIL, no row without workflow.ui.json),
+# review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
+# the 2x2 tile preview of tileable purposes and --no-write), the four vfx purposes (listed as core, show handoff domain vfx,
+# resolve with realistic-pbr, golden renders, png-flipbook-grid, png-black-background and tileable axis x QA on small
+# fixtures, malformed data), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes incl. aspect + min area, orientation, area + min pixels, real 9router sizes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
-# prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
+# prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly), review
+# tiers (scripts/assetgen/data/review-tiers.json: a light purpose needs no Claude visual review but a present file is still
+# graded, style-lock anchors force full, no tier recorded in run.md or spec.json; review_tier unit cases and the data file),
+# local and hybrid provenance (UNTESTED on RTX 5060: graph binding, prompts, model hashes and sampler records),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
-# manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
-# the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
+# manifest, promote-anchor, reject, drift), anchor_target (anchors into NineRouterImage or IPAdapterAdvanced; render
+# errors for a missing node or input; lint FAILs a template whose anchor_target or primary_node is bad, render keeps
+# its messages; primary_node and requested_size; UNTESTED on RTX 5060),
+# profile routing (resolve --profile: route, fallback, refusal above the profile, auto; UNTESTED on RTX 5060), style lock QA rows
+# through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs the run's anchor copies, edges, canvas; older specs
+# without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
 # by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
 # the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
@@ -26,30 +53,539 @@
 # proposed -> approved lifecycle, an uncommitted approval HUMAN_REQUIRED in gen-run-style, cross-family anchor
 # warnings and anchor_family_fallback false, drift style-id-mismatch, 1322x1190 square tolerance and allow_swap, the
 # embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
-# style_selftest.py), and no endpoints or credentials in templates/assetgen or scripts/assetgen.
-# Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
+# style_selftest.py, pixelgrid_selftest.py, slicer_selftest.py), sheet slicing at gateway sizes, failed cell counts,
+# repeat and discard behavior, opt-in finalize, slice and sheet-hint CLI; pixel-grid finalize (grid detection, palette limits, determinism,
+# unsupported depths and opt-in QA), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
+# the read-only budget verb: outputs + failed attempts against the limit, ok/at-limit/exceeded/unlimited/invalid and
+# their exits; finalize's budget line and --json key with its exit unchanged), the output filter (finalize's first step
+# moves the PreviewImage files fetch_outputs downloads into outputs/ to previews/, classified by fetch.json or job state
+# under RPG_FACTORY_COMFY_JOBS_DIR, the SaveImage prefix and ComfyUI temp names; unknown files stay; every output a
+# preview FAILs at filter; a name collision never overwrites; budget counts deliverables only; gen-run-outputs FAILs a
+# recorded previews/ path), finalize size fitting (transparent bands, original preservation, skips and refusals),
+# batch discard (QA failures, all-fail and opt-in behavior, manual selection, collisions, refusals, stale reviews,
+# reversible moves, manifest trace and quality checks for unrecorded or changed files; single-output compatibility),
+# style init (style_cmd.py: a draft game style, a family stub and project.json written into a fresh authoring dir; lint
+# 0 FAIL and no WARN for them, the expected WARN once the style is active, resolve locks it; an existing style or
+# project.json is never overwritten, exit 1; a non-core --extends or a malformed --family exits 2; templates/assetgen
+# unchanged), style derive (style_derive.py: palette colours, tone tolerance and a canvas aspect per family proposed from
+# the valid active anchors, byte-identical output for the same anchors, --family restricts, an anchor whose PNG no longer
+# matches image_sha256 is skipped; --apply merges only into a draft style (an active style or one without anchors exits 1
+# and stays byte-identical), after it lint has 0 FAIL and the style-palette, style-tone and style-canvas rows are ok in
+# field_states and available in qa; a canvas entry with only min_side passes lint),
+# style bump (style_cmd.py: an active game style gets a draft version N+1 under styles/<id>/versions/ and carried anchors
+# written only as proposed copies; nothing active is edited, no anchor is written active; the report names every anchor,
+# run and rejection that needs re-approval; no new artifact-quality FAIL on the bumped fixture; a quality rejection or a
+# check that cannot run removes the carried anchors and limits the verb to listing; --list-only writes nothing; a draft
+# style, a core-only id and a second bump exit 1, a malformed --id exits 2),
+# style report (style_report.py: read-only, byte-identical output and an untouched authoring dir; per style and family the
+# runs by status, the tone spread and palette share over the approved outputs, the WARN and FAIL rate of each style-* QA
+# row, rejections by reason and suggested palette.max_distance and tone.tolerance printed with their data and never
+# applied; a group without approved outputs gives null suggestions with a reason; an unreadable output is skipped;
+# --style restricts, a malformed --style exits 2, an unknown style exits 1),
+# the engine notes (an older fetch.json with hosts is finalized and rewritten host-free; the annotators model kind, pose and
+# depth preprocessor models and an unknown one; KSamplerAdvanced provenance and the literal CLIP text check like KSampler;
+# lint reading known-nodes.json once; the layout check over every core workflow template, the re-laid templates differing
+# only in ui.positions and ui.positions validation; every result row of the anchor_target lint cases; the tiled VAE decode
+# of the hybrid anchor fixture),
+# and no endpoints or credentials in templates/assetgen or scripts/assetgen.
+# Usage: tests/assetgen.test.sh [--case NAMES | --only NAMES] [--list-cases] [--update-golden] [-h|--help]
+#   (standalone; temp authoring git repo; no network). The suite is a list of case groups, each one coherent feature
+#   of the engine; no selector runs every group in the order of the text above. NAMES is a comma-separated list of
+#   group names (--list-cases prints them); selectors may be repeated; an empty name, an unknown name or an unknown
+#   option exits 2. A group that reads the state of another one (its run directories, authoring repos or helper files)
+#   names that prerequisite in case_deps below and the prerequisite runs first, once; the authoring repo shared by most
+#   groups is built only when a selected group needs it. ASSETGEN_TEST_TIMES=1 prints the wall time of each group
+#   ("-- group NAME 1.234s"); ASSETGEN_TEST_PLAN=1 prints the groups that would run and exits.
+#   --update-golden rewrites the golden workflows (render-golden group).
+# Speed (a process start costs 0.5-1.5 s on a Windows host, so the suite counts processes, not work): every AG call is
+# served by one interpreter for the whole run (tests/fixtures/assetgen/agserver.py; AG_DIRECT is the plain process and
+# the fallback), the render-golden and ui-workflow loops run in one interpreter each (tests/fixtures/assetgen/loops.py
+# with the stdlib converter ui2api.py; the suite reports every result line with ok/no), jq runs with -b on Windows (no tr
+# process behind it), and the lint rows are read without a pipeline (lint_res). Every assertion text and count is kept.
+# The case-map lines below name, per group, the inputs it reads (affected.py case_map: every file the suite selects
+# that a changed file reaches must match a pattern, else every group runs). Measured with tests/affected.py cases: only
+# tests/fixtures/assetgen/loops.py, tests/fixtures/assetgen/ui2api.py (render-golden, style-cli, ui-layout, ui-workflow),
+# templates/assetgen/gen-run.md and docs/schemas/kinds/gen-run.schema.json narrow today.
+# Every scripts/assetgen/*.py module reaches assetgen.py (the CLI each group runs), approval.py, the quality plugin, the
+# command wrapper and the graph-style and style self-tests; the data JSON, scripts/checks/domains/assetgen.py, the quality
+# plugin and the golden, cases, local and graph-style fixture trees reach the engine or agserver.py, so they select all
+# or nearly all groups. ALL is the fallback for any file not listed; a file is listed under every group that might read
+# it, never fewer.
+# Symbol reach of scripts/assetgen/assetgen.py (the `scripts/assetgen/assetgen.py::NAME` lines at the end of this header;
+# tests/affected.py cases). Module-level reach cannot narrow the CLI groups: assetgen.py imports every assetgen module at
+# the top, so every group reaches every module. Symbol reach does: main() dispatches inline, so a group's entries are the
+# functions main() calls in the branch of each verb the group runs (the group's AG/AGS/loops.py/factory-cmd calls and the
+# mkrun, finrun, qarun, slrun, sh_setup and bound helpers) plus the functions its own Python calls on the module
+# (rendered_params, colour_chunks, workflow_model, model_hashes, wire_references, ui_with_references, slice_step).
+# assetgen.py reads sys.modules[__name__] (it hands the module to finalize.py, discard.py and modelhash.py, which call
+# back through `ag.NAME`), so the engine treats it as a dynamic module: a changed symbol narrows only when a group names
+# that symbol itself, and an unnamed helper stays file-level. Therefore each group names its entries, the names the
+# other modules take from the module object (finalize, slice, discard and manifest groups), and every helper a group
+# runs that no earlier group names (a helper is named once, by the first group that runs it; the engine's in-module
+# reference closure reaches the other groups that call it). main(), fail(), emit(), resolve_run() and module-level
+# code are shared by every verb and stay unnamed, so a change there selects every group that matches the file.
+# A group without a `::` line (list-show, style-report, gen-run-style, fixture-pngs, style-lock, selftests) runs only
+# main() or no assetgen.py code, but it keeps the plain glob scripts/assetgen/*.py, which matches assetgen.py: the
+# engine treats a plain match without a `::` override as the whole file, so these groups are selected by EVERY
+# assetgen.py change, symbol-narrowed ones included, not only by a file-level change. hygiene reads the files and
+# names `assetgen.py::*`. A file that imports or runs assetgen.py (agserver.py, loops.py, approval.py,
+# scripts/factory-cmd.py) adds, on a symbol-narrowed change, only the groups that list it and have no pattern for
+# assetgen.py; every group here lists assetgen.py, so callers add nothing and each group names the assetgen.py entries
+# it reaches through them. A new verb or a new helper reached by a group needs its names here.
+# case-map: list-show scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: resolve scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: render-golden scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/loops.py tests/fixtures/assetgen/ui2api.py
+# case-map: ui-workflow scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/loops.py tests/fixtures/assetgen/ui2api.py
+# case-map: ui-layout scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/ui-layout.json tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/ui2api.py
+# case-map: filename-prefix scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: lint scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/object_info.json tests/fixtures/assetgen/object_info-packs.json tests/fixtures/assetgen/agserver.py
+# case-map: graph-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/graph-style/* tests/fixtures/assetgen/graphstyle_selftest.py tests/fixtures/assetgen/agserver.py
+# case-map: fixture-pngs scripts/assetgen/*.py
+# case-map: png-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: review-cmd scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/factory-cmd.py tests/fixtures/assetgen/agserver.py
+# case-map: embed scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: e2e3 scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-sizes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-failures scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-repeat scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: sheet-discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: pixel-grid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: output-filter scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/comfy-job-state.json tests/fixtures/assetgen/agserver.py
+# case-map: fit scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: finalize-core scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: discard scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: budget scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: publish scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: manifest scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: gen-run-plugin scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: local-hybrid scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: engine-notes scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: style-lock scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/agserver.py
+# case-map: style-cli scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/golden/* tests/fixtures/assetgen/graph-style/* tests/fixtures/assetgen/agserver.py tests/fixtures/assetgen/ui2api.py
+# case-map: anchor-target scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/cases/* tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: profile-routing scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json tests/fixtures/assetgen/local/* tests/fixtures/assetgen/agserver.py
+# case-map: style-qa scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: gen-run-style scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: style-init scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* tests/fixtures/assetgen/agserver.py
+# case-map: style-derive scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* tests/fixtures/assetgen/agserver.py
+# case-map: style-bump scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/agserver.py
+# case-map: style-report scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/* tests/fixtures/assetgen/agserver.py
+# case-map: selftests scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json scripts/checks/domains/assetgen.py scripts/checks/domains/_api.py scripts/checks/artifact-*.py docs/schemas/kinds/gen-run.schema.json docs/artifact.schema.json tests/fixtures/assetgen/consistency_selftest.py tests/fixtures/assetgen/imaging_selftest.py tests/fixtures/assetgen/style_selftest.py tests/fixtures/assetgen/pixelgrid_selftest.py tests/fixtures/assetgen/slicer_selftest.py
+# case-map: hygiene scripts/assetgen/*.py templates/assetgen/purposes/* templates/assetgen/styles/* templates/assetgen/workflows/* scripts/assetgen/data/precedence.json scripts/assetgen/data/hardware.json scripts/assetgen/data/known-nodes.json scripts/assetgen/data/template-profiles.json scripts/assetgen/data/review-tiers.json templates/assetgen/gen-run.md templates/assetgen/comfy-node/*
+# case-map: resolve scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::profile_line scripts/assetgen/assetgen.py::recorded_profile_path scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::style_lock_lines scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_json
+# case-map: render-golden scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::composite_name scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::derived_preview scripts/assetgen/assetgen.py::effective_hints scripts/assetgen/assetgen.py::fill scripts/assetgen/assetgen.py::generation_inputs scripts/assetgen/assetgen.py::graph_lint_hardware scripts/assetgen/assetgen.py::graph_lint_rows scripts/assetgen/assetgen.py::icc_fits scripts/assetgen/assetgen.py::is_codex scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::pixel_size scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::read_graph_json scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::rejection_item scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_anchors scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::review_composites scripts/assetgen/assetgen.py::review_prompt_text scripts/assetgen/assetgen.py::review_requirements_sha256 scripts/assetgen/assetgen.py::review_rubric scripts/assetgen/assetgen.py::review_tiles scripts/assetgen/assetgen.py::review_title scripts/assetgen/assetgen.py::source_preview scripts/assetgen/assetgen.py::style_lock_rejections scripts/assetgen/assetgen.py::tagged_preview scripts/assetgen/assetgen.py::tile_names scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_json
+# case-map: ui-workflow scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: ui-layout scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: filename-prefix scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe_line scripts/assetgen/assetgen.py::failed_attempts scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::unbound_changes scripts/assetgen/assetgen.py::write_json
+# case-map: lint scripts/assetgen/assetgen.py::validation_report
+# case-map: graph-style scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::graph_lint_rows scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::wire_references scripts/assetgen/assetgen.py::write_json
+# case-map: png-qa scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_json
+# case-map: review-cmd scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::rendered_params scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: embed scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: e2e3 scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::colour_chunks scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: sheet-sizes scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: sheet-failures scripts/assetgen/assetgen.py::after_ihdr scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::bound_records scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::colour_chunks scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::depth_refusal scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::existing_front scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::pixels_sha256 scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_json scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::read_ui scripts/assetgen/assetgen.py::rebuild scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::requested_size scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::text_chunks scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_atomic scripts/assetgen/assetgen.py::write_json
+# case-map: sheet-repeat scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::existing_front scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_json scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::run_budget scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: sheet-cli scripts/assetgen/assetgen.py::after_ihdr scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::bound_records scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::colour_chunks scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::depth_refusal scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::existing_front scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::pixels_sha256 scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_json scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::read_ui scripts/assetgen/assetgen.py::rebuild scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::requested_size scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::text_chunks scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_atomic scripts/assetgen/assetgen.py::write_json
+# case-map: sheet-discard scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::run_budget scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: pixel-grid scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: output-filter scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::run_budget scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: fit scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: finalize-core scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: discard scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::existing_front scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_json scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_budget scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: budget scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::defringe scripts/assetgen/assetgen.py::embed scripts/assetgen/assetgen.py::finalize_with_budget scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::run_budget scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: publish scripts/assetgen/assetgen.py::publish
+# case-map: manifest scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: gen-run-plugin scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: local-hybrid scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::model_hashes scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::workflow_model scripts/assetgen/assetgen.py::write_json
+# case-map: engine-notes scripts/assetgen/assetgen.py::validation_report
+# case-map: style-cli scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::graph_lint_rows scripts/assetgen/assetgen.py::inside scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::next_rejection_id scripts/assetgen/assetgen.py::promote_anchor scripts/assetgen/assetgen.py::promote_external_anchor scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::reject scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_authoring scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::run_output scripts/assetgen/assetgen.py::run_style_ref scripts/assetgen/assetgen.py::split_list scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_anchor scripts/assetgen/assetgen.py::write_json
+# case-map: anchor-target scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::graph_lint_rows scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_json
+# case-map: profile-routing scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::write_json
+# case-map: style-qa scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::drift_text scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::manifest scripts/assetgen/assetgen.py::manifest_text scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::review_cmd scripts/assetgen/assetgen.py::run_md_newline scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::write_json
+# case-map: style-init scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_json
+# case-map: style-derive scripts/assetgen/assetgen.py::bind_run scripts/assetgen/assetgen.py::choose_profile scripts/assetgen/assetgen.py::copy_anchors scripts/assetgen/assetgen.py::load_spec scripts/assetgen/assetgen.py::prompt_review_state scripts/assetgen/assetgen.py::qa_run scripts/assetgen/assetgen.py::read_prompt scripts/assetgen/assetgen.py::render scripts/assetgen/assetgen.py::resolve_spec scripts/assetgen/assetgen.py::resolve_text scripts/assetgen/assetgen.py::ui_path scripts/assetgen/assetgen.py::ui_with_references scripts/assetgen/assetgen.py::validation_report scripts/assetgen/assetgen.py::write_json
+# case-map: style-bump scripts/assetgen/assetgen.py::validation_report
+# case-map: hygiene scripts/assetgen/assetgen.py::*
 set -uo pipefail
+ALL_GROUPS='list-show resolve render-golden ui-workflow ui-layout filename-prefix lint graph-style fixture-pngs png-qa review-cmd embed e2e3 sheet-sizes sheet-failures sheet-repeat sheet-cli sheet-discard pixel-grid output-filter fit finalize-core discard budget publish manifest gen-run-plugin local-hybrid engine-notes style-lock style-cli anchor-target profile-routing style-qa gen-run-style style-init style-derive style-bump style-report selftests hygiene'
+usage() {
+  printf '%s\n' 'Usage: assetgen.test.sh [--case NAMES | --only NAMES] [--list-cases] [--update-golden] [-h|--help]' \
+    'NAMES is a comma-separated list of case groups; selectors may be repeated. No selector runs every group.' \
+    'Prerequisite groups run automatically; dependencies are documented beside case_deps below.' \
+    'ASSETGEN_TEST_TIMES=1 prints the wall time of each group; ASSETGEN_TEST_PLAN=1 prints the groups that would run and exits.' \
+    '--update-golden rewrites the golden workflows.'
+}
+SELECTED=; list_cases=0; update_golden=false
+# one selector value (the argument of --case/--only) is validated as it is parsed, before the commas become spaces: an
+# empty or whitespace-only value and an empty name inside the list (leading, trailing or doubled comma) are usage errors,
+# never silently dropped and never "run everything"
+add_selector() {
+  local compact="${1//[[:space:]]/}"
+  case "$compact" in
+    ''|,*|*,|*,,*) printf 'Empty case name in selector: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  SELECTED+=" ${1//,/ }"
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --list-cases) list_cases=1; shift ;;
+    --update-golden) update_golden=true; shift ;;
+    --case|--only)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_selector "$2"; shift 2 ;;
+    --case=*|--only=*) add_selector "${1#*=}"; shift ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before creating any fixture (also with --list-cases).
+unique_selected=
+for selected in $SELECTED; do
+  [[ " $ALL_GROUPS " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+  [[ " $unique_selected " == *" $selected "* ]] || unique_selected+=" $selected"
+done
+SELECTED="$unique_selected"
+if [ "$list_cases" = 1 ]; then printf '%s\n' $ALL_GROUPS; exit 0; fi
+[ -n "$SELECTED" ] || SELECTED="$ALL_GROUPS"
+# case_deps GROUP: the groups whose state GROUP reads (run directories, authoring repos, helper files). The helpers every
+# group may call (mkrun, case_params, finrun, st, ...) are defined for every selection further down and need no entry.
+case_deps() {
+  case "$1" in
+    ui-workflow) echo render-golden ;;
+    filename-prefix) echo resolve ;;
+    lint) echo render-golden ;;
+    graph-style) echo render-golden ;;
+    png-qa) echo lint fixture-pngs ;;
+    review-cmd) echo png-qa fixture-pngs ;;
+    embed) echo fixture-pngs ;;
+    e2e3) echo fixture-pngs ;;
+    pixel-grid) echo fixture-pngs ;;
+    output-filter) echo fixture-pngs ;;
+    fit) echo fixture-pngs ;;
+    finalize-core) echo fixture-pngs ;;
+    discard) echo finalize-core fixture-pngs ;;
+    budget) echo fixture-pngs ;;
+    publish) echo embed ;;
+    manifest) echo fixture-pngs ;;
+    gen-run-plugin) echo manifest discard graph-style png-qa fixture-pngs ;;
+    local-hybrid) echo gen-run-plugin ;;
+    style-cli) echo gen-run-plugin render-golden fixture-pngs ;;
+    anchor-target) echo style-cli ;;
+    style-qa) echo style-cli fixture-pngs ;;
+    gen-run-style) echo fixture-pngs ;;
+    style-derive) echo style-init fixture-pngs ;;
+    style-bump) echo style-init style-cli ;;
+    style-report) echo style-init ;;
+  esac
+}
+has_group() { [[ " $SELECTED " == *" $1 "* ]]; }
+# Expand to a fixed point so even the last requested group brings all of its setup.
+pending="$SELECTED"
+while [ -n "$pending" ]; do
+  next_pending=
+  for selected in $pending; do
+    for dependency in $(case_deps "$selected"); do
+      if [[ " $SELECTED " != *" $dependency "* ]]; then SELECTED+=" $dependency"; next_pending+=" $dependency"; fi
+    done
+  done
+  pending="$next_pending"
+done
+# ASSETGEN_TEST_PLAN=1 prints the groups that would run (selection plus prerequisites, in suite order) and exits
+if [ "${ASSETGEN_TEST_PLAN:-0}" = 1 ]; then
+  plan=; for selected in $ALL_GROUPS; do has_group "$selected" && plan+=" $selected"; done
+  printf 'plan:%s\n' "$plan"; exit 0
+fi
+# group_begin NAME succeeds when the group is selected; group_end prints its wall time with ASSETGEN_TEST_TIMES=1
+group_begin() {
+  has_group "$1" || return 1
+  GROUP_NAME="$1"; GROUP_START="$EPOCHREALTIME"
+}
+group_end() {
+  if [ "${ASSETGEN_TEST_TIMES:-0}" = 1 ]; then
+    local now="$EPOCHREALTIME" elapsed
+    elapsed=$(( ${now/./} - ${GROUP_START/./} ))
+    printf -- '-- group %s %d.%03ds\n' "$GROUP_NAME" "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
+  fi
+}
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+# every jq call of the suite: on Windows the compat wrapper pipes jq through `tr -d '\r'`, a second process per call; `jq -b`
+# writes the LF output directly
+[ -z "${RPGF_WINDOWS:-}" ] || jq() { command jq -b "$@"; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state" CLAUDE_PLUGIN_ROOT="$ROOT"
+# no case reads the machine's comfy-cli job state: the output filter cases write their own job files here
+export RPG_FACTORY_COMFY_JOBS_DIR="$TMP/comfy-jobs"; mkdir -p "$RPG_FACTORY_COMFY_JOBS_DIR"
 unset ASSETGEN_NO_PIL
-update_golden=false; [ "${1:-}" = "--update-golden" ] && update_golden=true
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      /'; return 0; }
-AG() { python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+# AG ARGS...: assetgen.py. Every call is served by ONE interpreter for the whole run (tests/fixtures/assetgen/agserver.py:
+# argv, working directory, the environment variables listed in AG_ENV, stdout, stderr and the exit code carry over), because a
+# process start costs 0.5-1.5 s on a Windows host and the suite makes hundreds of calls. AG_DIRECT is the plain process; AG
+# falls back to it when the server did not start, or died before it took a call (a call it had already taken fails
+# visibly instead of running twice).
+AG_DIRECT() { python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+AG_SRV=; AG_PWD=; AG_CWD=; AG_DIR=; AG_PID=
+AG_ENV=(ASSETGEN_NO_PIL ASSETGEN_MODEL_HASHES RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT RPG_FACTORY_COMFY_JOBS_DIR RPG_FACTORY_STATE_DIR TMPDIR CLAUDE_PLUGIN_ROOT)
+ag_wait() { # ag_wait FILE SECONDS: wait for FILE; 1 = timeout, 2 = the server is gone. A read timeout on a fifo nobody writes is the sleep (no process is started)
+  local t=$SECONDS
+  until [ -e "$1" ]; do
+    if [ -n "$AG_PID" ] && ! kill -0 "$AG_PID" 2>/dev/null; then [ -e "$1" ] && return 0; return 2; fi
+    if [ -n "${AG_SLEEP:-}" ]; then read -r -t 0.005 -u "$AG_SLEEP" ag_unused; fi
+    [ $((SECONDS - t)) -lt "$2" ] || return 1
+  done
+}
+ag_start() {
+  AG_DIR="$(mktemp_win)" || { AG_DIR=; return 0; }
+  mkdir -p "$AG_DIR/c" "$AG_DIR/go" || return 0
+  if mkfifo "$AG_DIR/sleep" 2>/dev/null; then exec {AG_SLEEP}<>"$AG_DIR/sleep"; fi
+  # the server stops when the suite shell is gone (a killed suite never runs its trap); on Git Bash $$ is an MSYS pid,
+  # /proc/$$/winpid is the Windows pid the server can look up
+  local owner=$$; [ ! -r "/proc/$$/winpid" ] || read -r owner < "/proc/$$/winpid"
+  python3 -B "$ROOT/tests/fixtures/assetgen/agserver.py" "$ROOT/scripts/assetgen" "$AG_DIR" "$owner" </dev/null >/dev/null &
+  AG_PID=$!
+  if ag_wait "$AG_DIR/ready" 120; then AG_SRV=1; else AG_SRV=; kill "$AG_PID" 2>/dev/null; fi
+}
+ag_stop() { # ask the server to stop and remove its directory: called by the exit trap
+  local dir=$AG_DIR
+  AG_SRV=; AG_DIR=
+  [ -z "$dir" ] || { : > "$dir/quit" 2>/dev/null; rm -rf "$dir"; }
+}
+AG() {
+  [ -n "$AG_SRV" ] || { AG_DIRECT "$@"; return; }
+  local rc o e name f="$AG_DIR/c/$BASHPID.${EPOCHREALTIME/./}"
+  if [ "$PWD" != "$AG_PWD" ]; then # the server needs the directory in the form Python resolves (C:/x on Windows)
+    AG_PWD=$PWD; AG_CWD=$PWD
+    if [ -n "${RPGF_WINDOWS:-}" ]; then
+      if [[ $PWD =~ ^/([a-zA-Z])(/.*)?$ ]]; then AG_CWD="${BASH_REMATCH[1]^}:${BASH_REMATCH[2]:-/}"; else AG_CWD=$(pwd -W); fi
+    fi
+  fi
+  { printf '%s\0' "$AG_CWD" "${#AG_ENV[@]}"
+    for name in "${AG_ENV[@]}"; do
+      if [ -n "${!name+x}" ]; then printf 'S%s=%s\0' "$name" "${!name}"; else printf 'U%s\0' "$name"; fi
+    done
+    printf '%s\0' "$@"; } > "$f.req"
+  : > "$AG_DIR/go/${f##*/}"
+  ag_wait "$f.rc" 3600 || {
+    # the server died or the call outlived the wait. Its go marker still present: the server never took the call, so
+    # withdraw it and run the call directly. Consumed: the call may have run (and written), so fail it, never run it twice.
+    if rm "$AG_DIR/go/${f##*/}" 2>/dev/null; then AG_SRV=; AG_DIRECT "$@"; return; fi
+    echo "AG: the asset-gen server stopped or timed out while serving this call: $*" >&2
+    return 1
+  }
+  read -r rc < "$f.rc"
+  if [ -s "$f.out" ]; then IFS= read -r -d '' o < "$f.out"; printf '%s' "$o"; fi
+  if [ -s "$f.err" ]; then IFS= read -r -d '' e < "$f.err"; printf '%s' "$e" >&2; fi
+  return "$rc"
+}
+for selected in $SELECTED; do
+  [[ " selftests hygiene " == *" $selected "* ]] || { ag_start; break; }
+done
+trap 'ag_stop; rm -rf "$TMP"' EXIT
 # bound RUN PHASE STATE BY [FINDINGS-JSON]: a verdict carrying the binding review-cmd hands the reviewer (stdout)
 bound() { AG review-cmd --phase "$2" --run "$1" --json | jq -c --arg s "$3" --arg b "$4" --argjson f "${5:-[]}" '.binding + {state: $s, by: $b, findings: $f}'; }
 GOLD="$ROOT/tests/fixtures/assetgen/golden"
 G=(-c user.email=t@t -c user.name=t -c commit.gpgsign=false)
 has_pil() { python3 -c "import PIL" 2>/dev/null; }
 
-# -- temp authoring repo with a game layer
+# Sheet cases have their own fixtures so each can also run independently via --case.
+sh_setup() {
+  sh_run="$TMP/$1-001"; mkdir -p "$sh_run/outputs"
+  AG resolve --purpose icon --style stylized-painterly --template image-generate --out "$sh_run/spec.json" >/dev/null || return 1
+  printf 'A sheet of separate icons.\n' > "$sh_run/prompt.md"
+  AG render --run "$sh_run" >/dev/null || return 1
+  jq '.purpose.data.qa.size = {"mode":"any", "fit":"none"}' "$sh_run/spec.json" > "$TMP/sh-spec.json" && cp "$TMP/sh-spec.json" "$sh_run/spec.json"
+}
+sh_fixture() {
+  python3 -B - "$ROOT" "$sh_run/outputs/prop.png" "$1" "$2" "$3" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import png
+path, w, h, variant = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+data = bytearray(w * h * 4)
+for r, (ya, yb) in enumerate(((.05, .29), (.38, .61), (.70, .94))):
+    for c, (xa, xb) in enumerate(((.04, .38), (.43, .65), (.72, .96))):
+        if variant == 'missing' and (r, c) == (1, 1):
+            continue
+        x0, x1 = int(w * xa) + r * 3, int(w * xb) - r * 2
+        y0, y1 = int(h * ya) + c * 3, int(h * yb) - c * 2
+        row = (bytes((50 + r * 40, 60 + c * 40, 120, 255)) * ((x1 - x0) // 2)
+               + bytes((200, 190, 160, 255)) * ((x1 - x0 + 1) // 2))
+        for y in range(y0, y1):
+            data[(y * w + x0) * 4:(y * w + x1) * 4] = row
+if variant == 'merged':
+    for y in range(int(h * .17), int(h * .17) + 5):
+        x0, x1 = int(w * .37), int(w * .45)
+        data[(y * w + x0) * 4:(y * w + x1) * 4] = bytes((50, 60, 120, 255)) * (x1 - x0)
+open(path, 'wb').write(png.encode(w, h, data))
+EOF
+}
+sh_signature() { (cd "$1" && sha256sum ./*.png | LC_ALL=C sort); }
+sh_case() {
+  case "$1" in
+    sheet-sizes)
+      for sh_size in 1322x1190 1672x941 2172x724; do
+        sh_setup "sh-size-$sh_size" && sh_fixture "${sh_size%x*}" "${sh_size#*x}" good || { no "sheet setup $sh_size"; continue; }
+        cp "$sh_run/outputs/prop.png" "$TMP/sh-input.png"
+        AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+        AG manifest --run "$sh_run" > "$TMP/sh-manifest" 2>> "$TMP/sh-err"; sh_manifest_rc=$?
+        [ "$sh_rc" -eq 0 ] && [ "$sh_manifest_rc" -eq 0 ] \
+          && jq -e '[.steps[].step] == ["filter","slice","fit","defringe","embed","qa"] and any(.steps[]; .step == "slice" and .state == "sliced")' "$TMP/sh-result.json" >/dev/null \
+          && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 9 ] \
+          && jq -e '.rows == 3 and .cols == 3 and (.sheets | length) == 1 and (.sheets[0].cells | length) == 9' "$sh_run/sheet.json" >/dev/null \
+          && cmp -s "$TMP/sh-input.png" "$sh_run/sheets/prop.png" \
+          && grep -q '^- Sheet:' "$sh_run/run.md" \
+          && [ "$(sed -n '/^---json$/,/^---$/p' "$sh_run/run.md" | sed '1d;$d' | jq '[.spec.outputs[] | select(.path | test("^outputs/prop-r[1-3]c[1-3]\\.png$"))] | length')" -eq 9 ] \
+          && ok "sheet: $sh_size yields nine recorded cells and preserves the sheet" || no "sheet $sh_size rc=$sh_rc manifest=$sh_manifest_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      done ;;
+    sheet-failures)
+      for sh_variant in merged missing; do
+        sh_setup "sh-$sh_variant" && sh_fixture 600 450 "$sh_variant" || { no "sheet $sh_variant setup"; continue; }
+        sh_before=$(sh_signature "$sh_run/outputs")
+        AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+        [ "$sh_rc" -eq 1 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] && [ ! -e "$sh_run/sheets" ] && [ ! -e "$sh_run/sheet.json" ] \
+          && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL" and any(.results[]; .state == "FAIL" and (.reason | contains("2 cells found, 3 expected"))))' "$TMP/sh-result.json" >/dev/null \
+          && ok "sheet: $sh_variant cells fail atomically with counts" || no "sheet $sh_variant rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      done
+      sh_setup sh-write-failure && sh_fixture 600 450 good || { no "sheet write failure setup"; return; }
+      python3 -B - "$ROOT" "$sh_run" > "$TMP/sh-fault" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import assetgen, finalize
+original = assetgen.write_atomic
+calls = 0
+def fail_write(path, data, suffix):
+    global calls
+    calls += 1
+    if calls == 3:
+        raise OSError('injected write failure')
+    original(path, data, suffix)
+assetgen.write_atomic = fail_write
+result = finalize.slice_step(assetgen, sys.argv[2], 3, 3, False)
+assert result['state'] == 'FAIL', result
+assert os.listdir(os.path.join(sys.argv[2], 'outputs')) == ['prop.png']
+assert not os.path.exists(os.path.join(sys.argv[2], 'sheet.json'))
+EOF
+      sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && ok "sheet: write failure removes cells and preserves source" || no "sheet write failure rc=$sh_rc" "$(cat "$TMP/sh-fault")" ;;
+    sheet-repeat)
+      sh_setup sh-repeat && sh_fixture 600 450 good || { no "sheet repeat setup"; return; }
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-first.json" 2> "$TMP/sh-err"; sh_first_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget" 2>> "$TMP/sh-err"; sh_budget_rc=$?
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget.json" 2>> "$TMP/sh-err"; sh_budget_json_rc=$?
+      [ "$sh_budget_rc" -eq 0 ] && [ "$sh_budget_json_rc" -eq 0 ] \
+        && grep -q '^budget ok: 1 used ' "$TMP/sh-budget" \
+        && jq -e '.used == 1 and .outputs == 1 and .state == "ok" and .sheet_cells == 9' "$TMP/sh-budget.json" >/dev/null \
+        && ok "sheet: budget counts nine cells as one generation" || no "sheet budget rc=$sh_budget_rc json=$sh_budget_json_rc" "$(cat "$TMP/sh-budget" "$TMP/sh-budget.json" "$TMP/sh-err")"
+      sh_before=$(sh_signature "$sh_run/outputs")
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_first_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ "$sh_before" = "$(sh_signature "$sh_run/outputs")" ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped" and (.reason | contains("already sliced")))' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: repeat finalize skips slicing and preserves cell bytes" || no "sheet repeat rc=$sh_rc first=$sh_first_rc" "$(jq -c '[.results[] | select(.state == "FAIL")]' "$sh_run/qa.json")"
+      AG finalize --run "$sh_run" --rows 2 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 1 ] && jq -e '.failed_at == "slice" and any(.steps[]; .step == "slice" and .state == "FAIL")' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: changed dimensions fail" || no "sheet changed dimensions rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      AG discard --run "$sh_run" --output prop-r1c1.png --reason 'discard one cell' > "$TMP/sh-discard" 2>> "$TMP/sh-err"; sh_discard_rc=$?
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_discard_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ ! -e "$sh_run/outputs/prop-r1c1.png" ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped" and (.reason | contains("already sliced")))' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: repeat after discarding a cell skips slicing" || no "sheet discard repeat rc=$sh_rc discard=$sh_discard_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")" ;;
+    sheet-cli)
+      sh_setup sh-plain && sh_fixture 600 450 good || { no "sheet plain setup"; return; }
+      AG finalize --run "$sh_run" --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ ! -e "$sh_run/sheet.json" ] && jq -e '[.steps[].step] | index("slice") | not' "$TMP/sh-result.json" >/dev/null \
+        && ok "sheet: finalize without dimensions has no slice step" || no "sheet opt-in rc=$sh_rc" "$(cat "$TMP/sh-err")"
+      sh_setup sh-slice && sh_fixture 600 450 good || { no "sheet slice setup"; return; }
+      AG slice --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && jq -e '.state == "sliced"' "$TMP/sh-result.json" >/dev/null && [ -f "$sh_run/sheet.json" ] \
+        && ok "sheet: slice verb succeeds" || no "sheet slice rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_setup sh-slice-bad && sh_fixture 600 450 merged || { no "sheet slice bad setup"; return; }
+      AG slice --run "$sh_run" --rows 3 --cols 3 --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 1 ] && jq -e '.state == "FAIL"' "$TMP/sh-result.json" >/dev/null && [ ! -e "$sh_run/sheet.json" ] \
+        && ok "sheet: slice verb rejects merged cells" || no "sheet slice failure rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_before=$(find "$TMP" -type f | LC_ALL=C sort)
+      sh_hint=$(AG sheet-hint --rows 3 --cols 3 2>&1); sh_rc=$?
+      [ "$sh_rc" -eq 0 ] && [[ "$sh_hint" = *'3 rows and 3 columns'* ]] && [ "$sh_before" = "$(find "$TMP" -type f | LC_ALL=C sort)" ] \
+        && ok "sheet: hint prints the grid without writing files" || no "sheet hint rc=$sh_rc" "$sh_hint"
+      AG sheet-hint --rows 0 --cols 3 > /dev/null 2>&1; sh_zero=$?
+      AG sheet-hint --rows 9 --cols 3 > /dev/null 2>&1; sh_nine=$?
+      AG finalize --run "$sh_run" --rows 3 > /dev/null 2>&1; sh_partial=$?
+      [ "$sh_zero" -eq 2 ] && [ "$sh_nine" -eq 2 ] && [ "$sh_partial" -eq 2 ] \
+        && ok "sheet: invalid dimensions exit 2" || no "sheet invalid arguments: $sh_zero $sh_nine $sh_partial" ;;
+    sheet-discard)
+      sh_setup sh-discard && sh_fixture 600 450 good || { no "sheet discard setup"; return; }
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --discard-qa-fail --json > "$TMP/sh-result.json" 2> "$TMP/sh-err"; sh_rc=$?
+      [ "$sh_rc" -eq 0 ] \
+        && jq -e '[.steps[].step] == ["filter","slice","fit","defringe","embed","qa","discard"] and any(.steps[]; .step == "slice" and .state == "sliced") and any(.steps[]; .step == "discard" and .state == "skipped") and (.discarded | length) == 0' "$TMP/sh-result.json" >/dev/null \
+        && jq -e '.rows == 3 and .cols == 3 and (.sheets[0].cells | length) == 9' "$sh_run/sheet.json" >/dev/null \
+        && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 9 ] \
+        && [ ! -e "$sh_run/outputs-rejected" ] \
+        && ok "sheet: finalize --discard-qa-fail with --rows and --cols slices the given grid and discards nothing when QA passes" \
+        || no "sheet discard flags rc=$sh_rc" "$(cat "$TMP/sh-err" "$TMP/sh-result.json")"
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget-before.json" 2>> "$TMP/sh-err"
+      # one cell now fails QA (opaque corners): the same flags slice nothing again and discard exactly that cell
+      python3 -B - "$ROOT" "$sh_run/outputs/prop-r2c2.png" > "$TMP/sh-fault" 2>&1 <<'EOF2'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import png
+img = png.decode(sys.argv[2])
+open(sys.argv[2], 'wb').write(png.encode(img.width, img.height, bytes((90, 90, 90, 255)) * (img.width * img.height)))
+EOF2
+      sh_opaque_rc=$?
+      AG finalize --run "$sh_run" --rows 3 --cols 3 --discard-qa-fail --json > "$TMP/sh-result.json" 2>> "$TMP/sh-err"; sh_rc=$?
+      AG manifest --run "$sh_run" > "$TMP/sh-manifest" 2>> "$TMP/sh-err"; sh_manifest_rc=$?
+      [ "$sh_opaque_rc" -eq 0 ] && [ "$sh_rc" -eq 0 ] && [ "$sh_manifest_rc" -eq 0 ] \
+        && jq -e 'any(.steps[]; .step == "slice" and .state == "skipped") and any(.steps[]; .step == "discard" and .state == "discarded") and [.discarded[].output] == ["outputs/prop-r2c2.png"]' "$TMP/sh-result.json" >/dev/null \
+        && [ ! -e "$sh_run/outputs/prop-r2c2.png" ] && [ -f "$sh_run/outputs-rejected/prop-r2c2.png" ] && [ "$(find "$sh_run/outputs" -name 'prop-r?c?.png' | wc -l)" -eq 8 ] \
+        && jq -e '.rows == 3 and .cols == 3' "$sh_run/sheet.json" >/dev/null \
+        && jq -e '(.discards | length) == 1 and .discards[0].output == "outputs/prop-r2c2.png"' "$sh_run/discards.json" >/dev/null \
+        && ok "sheet: --discard-qa-fail with --rows and --cols discards the QA-FAIL cell and keeps the recorded grid" \
+        || no "sheet discard cell rc=$sh_rc opaque=$sh_opaque_rc manifest=$sh_manifest_rc" "$(cat "$TMP/sh-fault" "$TMP/sh-err" "$TMP/sh-result.json")"
+      sh_discards=$(jq '.discards | length' "$sh_run/discards.json")
+      grep -q "^- Sheet: 3x3, sheets/prop.png (sha256 [0-9a-f]\{12\}) -> 8 outputs, ${sh_discards} discarded (sheet.json, discards.json)\$" "$sh_run/run.md" \
+        && ! grep -q 'STALE' <(grep '^- Sheet:' "$sh_run/run.md") \
+        && ok "sheet: the manifest Sheet line names the remaining cells and the discarded count of discards.json" \
+        || no "sheet manifest line" "$(grep '^- Sheet:' "$sh_run/run.md")"
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget-after.json" 2>> "$TMP/sh-err"; sh_json_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget" 2>> "$TMP/sh-err"; sh_text_rc=$?
+      [ "$sh_json_rc" -eq 0 ] && [ "$sh_text_rc" -eq 0 ] \
+        && jq -e '[.used, .outputs, .discarded, .sheet_cells, .sheet_cells_discarded] == [1,1,0,9,0]' "$TMP/sh-budget-before.json" >/dev/null \
+        && jq -e '[.used, .outputs, .discarded, .sheet_cells, .sheet_cells_discarded, .state] == [1,1,0,8,1,"ok"]' "$TMP/sh-budget-after.json" >/dev/null \
+        && grep -q '^budget ok: 1 used (1 output + 0 failed attempts) ' "$TMP/sh-budget" \
+        && ok "sheet: budget with a sheet counts one generation before and after a cell is discarded (sheet_cells_discarded 1, discarded 0)" \
+        || no "sheet budget after discard rc=$sh_json_rc/$sh_text_rc" "$(cat "$TMP/sh-budget-before.json" "$TMP/sh-budget-after.json" "$TMP/sh-budget" "$TMP/sh-err")"
+      # every cell discarded: the sheet still counts as one generation, and the text and --json name it
+      mkdir -p "$sh_run/outputs-rejected"
+      for sh_cell in "$sh_run"/outputs/prop-r?c?.png; do
+        sh_name=$(basename "$sh_cell"); sh_sha=$(sha256sum "$sh_cell" | cut -d' ' -f1)
+        mv "$sh_cell" "$sh_run/outputs-rejected/$sh_name"
+        jq --arg o "outputs/$sh_name" --arg p "outputs-rejected/$sh_name" --arg s "$sh_sha" \
+          '.discards += [{output: $o, path: $p, sha256: $s, reason: "test: discard every cell", by: "discard"}]' "$sh_run/discards.json" > "$TMP/sh-discards.json" \
+          && cp "$TMP/sh-discards.json" "$sh_run/discards.json" || no "sheet record discard $sh_name"
+      done
+      AG budget --run "$sh_run" --json > "$TMP/sh-budget-all.json" 2>> "$TMP/sh-err"; sh_json_rc=$?
+      AG budget --run "$sh_run" > "$TMP/sh-budget-all" 2>> "$TMP/sh-err"; sh_text_rc=$?
+      [ "$sh_json_rc" -eq 0 ] && [ "$sh_text_rc" -eq 0 ] \
+        && jq -e '[.used, .outputs, .discarded, .sheet_cells, .sheet_cells_discarded, .state] == [1,1,1,0,9,"ok"]' "$TMP/sh-budget-all.json" >/dev/null \
+        && grep -q '^budget ok: 1 used (1 output, 1 discarded + 0 failed attempts) ' "$TMP/sh-budget-all" \
+        && ok "sheet: a fully discarded sheet still counts as one generation (text and --json name the discard)" \
+        || no "sheet fully discarded budget rc=$sh_json_rc/$sh_text_rc" "$(cat "$TMP/sh-budget-all.json" "$TMP/sh-budget-all" "$TMP/sh-err")" ;;
+    *) echo "Unknown case: $1" >&2; return 2 ;;
+  esac
+}
+
+# The temp authoring repo with a game layer is built by setup_base (below) only when a selected group needs it.
+NOBASE_GROUPS='sheet-sizes sheet-failures sheet-repeat sheet-cli sheet-discard fixture-pngs engine-notes style-lock profile-routing gen-run-style style-init style-derive style-bump style-report selftests hygiene'
 AUTH="$TMP/game-authoring"; GL="$AUTH/assetgen"
+CORE="$ROOT/templates/assetgen"
+core_ids() { local f; for f in "$CORE/$1"/*.json; do [ -f "$f" ] && basename "$f" .json; done | LC_ALL=C sort; }
+setup_base() {
 mkdir -p "$GL/purposes" "$GL/styles" "$GL/templates" "$GL/runs"
 cat > "$GL/purposes/icon.json" <<'EOF'
-{"extends": "icon", "title": "RPG item icon", "params": {"quality": "medium"}, "qa": {"size": {"mode": "exact"}}}
+{"extends": "icon", "title": "RPG item icon", "params": {"quality": "medium"}, "qa": {"size": {"mode": "exact", "fit": "none"}}}
 EOF
 cat > "$GL/styles/pixel-art.json" <<'EOF'
 {"schema": "rpg-factory.assetgen-style/1", "title": "RPG pixel art", "prefix": "16-bit RPG pixel art,", "params": {"quality": "low"}}
@@ -62,12 +598,87 @@ cat > "$GL/templates/image-generate.json" <<'EOF'
 EOF
 git init -q -b main "$AUTH" && git -C "$AUTH" add -A && git -C "$AUTH" "${G[@]}" commit -qm "game layer"
 
+# core ids come from the core data files, so a new purpose, style or template needs no edit here
+CORE_PURPOSES=$(core_ids purposes); CORE_STYLES=$(core_ids styles); CORE_TEMPLATES=$(core_ids workflows)
+n_p=$(wc -w <<<"$CORE_PURPOSES"); n_s=$(wc -w <<<"$CORE_STYLES"); n_t=$(wc -w <<<"$CORE_TEMPLATES"); n_core=$((n_p + n_s + n_t))
+}
+need_base=0
+for selected in $SELECTED; do [[ " $NOBASE_GROUPS " == *" $selected "* ]] || need_base=1; done
+[ "$need_base" = 0 ] || setup_base
+
+# Shared helpers and constants of several groups: definitions only (no process runs), so they are cheap to define for every selection.
+RUNS="$GL/runs"
+mkrun() { # mkrun NAME PURPOSE [resolve args...]
+  local d="$RUNS/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
+  AG resolve --purpose "$p" "$@" --out "$d/spec.json" > /dev/null || return 1
+  printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
+}
+CASES="$ROOT/tests/fixtures/assetgen/cases"
+# case_params PURPOSE [TEMPLATE]: two lines, --param and NAME=VALUE, per render param of the purpose (or of its variant
+# TEMPLATE: the top-level render_params of cases/<purpose>--<template>.json, else variants.<template> of cases/<purpose>.json)
+case_params() {
+  local f="$CASES/$1.json" v="$CASES/$1--${2:-}.json"
+  if [ -n "${2:-}" ] && [ -f "$v" ]; then
+    jq -r '(.render_params // {}) | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$v"; return 0
+  fi
+  [ -f "$f" ] || return 0
+  jq -r --arg t "${2:-}" '(if $t == "" then .render_params else .variants[$t].render_params end) // {}
+    | to_entries[] | "--param", (.key + "=" + (.value | tostring))' "$f"
+}
+# case_variants PURPOSE: the variant template ids of the purpose, from variants in cases/<purpose>.json and from the
+# cases/<purpose>--<template>.json files, sorted, each once
+case_variants() {
+  local f="$CASES/$1.json" v
+  { [ -f "$f" ] && jq -r '(.variants // {}) | keys[]' "$f"
+    for v in "$CASES/$1--"*.json; do [ -f "$v" ] && { v=$(basename "$v" .json); echo "${v#"$1--"}"; }; done
+  } | LC_ALL=C sort -u; return 0
+}
+# stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
+# input order, then each linked socket; the result must equal workflow.json (tests/fixtures/assetgen/ui2api.py)
+UI2API="$ROOT/tests/fixtures/assetgen/ui2api.py"
+KN="$ROOT/scripts/assetgen/data/known-nodes.json"
+FX="$TMP/png"; LOCALFX="$ROOT/tests/fixtures/assetgen/local"
+st() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/q.json"; }
+# finrun NAME PURPOSE PNG [render args...]: a rendered run with the fixture PNG as its only output
+finrun() {
+  local name="$1" p="$2" f="$3"; shift 3
+  mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
+}
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+steps() { grep -E '^(filter|fit|defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+# tpl_ui_init: TPL_UI[<core template id>] is PASS when the template has ui groups, WARN when it is a legacy one (no groups),
+# read with one jq call over every core template (the graph-style lint rows follow it)
+declare -A TPL_UI
+tpl_ui_init() {
+  [ -z "${TPL_UI_READY:-}" ] || return 0
+  local files=() states=() t i=0
+  for t in $CORE_TEMPLATES; do files+=("$CORE/workflows/$t.json"); done
+  mapfile -t states < <(jq -r '(.ui.groups // []) | if length > 0 then "PASS" else "WARN" end' "${files[@]:-/dev/null}")
+  for t in $CORE_TEMPLATES; do TPL_UI[$t]=${states[$i]:-WARN}; i=$((i + 1)); done
+  TPL_UI_READY=1
+}
+# report_loop RESULTS-FILE: ok/no for each line of a tests/fixtures/assetgen/loops.py result file (OK<TAB>label, or
+# NO<TAB>label<TAB>file holding the failure detail)
+report_loop() {
+  local kind label detail
+  while IFS=$'\t' read -r kind label detail; do
+    if [ "$kind" = OK ]; then ok "$label"; else no "$label" "$(<"$detail")"; fi
+  done < "$1"
+}
+
+if group_begin list-show; then
 echo "-- list / show"
 AG list --json > "$TMP/l.json" 2>"$TMP/err"; rc=$?
 n=$(jq '[.entries[] | select(.layer == "core")] | length' "$TMP/l.json")
-[ $rc -eq 0 ] && [ "$n" = 19 ] && ok "core list: 11 purposes + 6 styles + 2 templates" || no "core list rc=$rc n=$n" "$(cat "$TMP/err")"
-ids=$(jq -r '[.entries[] | select(.kind != "template") | .kind + ":" + .id] | sort | join(" ")' "$TMP/l.json")
-[ "$ids" = "purpose:concept-2d purpose:icon purpose:image-edit purpose:ref-3d-turnaround purpose:sprite-2d purpose:texture-tileable purpose:ui-element purpose:vfx-flipbook purpose:vfx-noise-tileable purpose:vfx-sprite purpose:vfx-trail style:anime-cel style:flat-ui style:low-poly style:pixel-art style:realistic-pbr style:stylized-painterly" ]   && ok "every core purpose and style id is listed" || no "ids: $ids"
+[ $rc -eq 0 ] && [ "$n" = "$n_core" ] && ok "core list: $n_p purposes + $n_s styles + $n_t templates" || no "core list rc=$rc n=$n (want $n_core)" "$(cat "$TMP/err")"
+listed=$(jq -r '.entries[] | select(.layer == "core") | .kind + ":" + .id' "$TMP/l.json")
+missing=$(for k in purpose style template; do
+  case $k in purpose) ids_=$CORE_PURPOSES ;; style) ids_=$CORE_STYLES ;; template) ids_=$CORE_TEMPLATES ;; esac
+  for i in $ids_; do grep -qxF "$k:$i" <<<"$listed" || printf '%s ' "$k:$i"; done
+done)
+[ $rc -eq 0 ] && [ -n "$CORE_PURPOSES" ] && [ -n "$CORE_STYLES" ] && [ -z "$missing" ] && ok "every core purpose, style and template id is listed" || no "not listed as core: $missing"
+vfx_missing=$(for vp in vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do grep -qxF "purpose:$vp" <<<"$listed" || printf '%s ' "$vp"; done)
+[ -z "$vfx_missing" ] && ok "the four vfx purposes are listed as core" || no "vfx purposes not listed as core: $vfx_missing"
 for vp in vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do
   AG show "$vp" --json > "$TMP/s.json" 2>"$TMP/err"; rc=$?
   [ $rc -eq 0 ] && [ "$(jq -r '.data.handoff_domain + "|" + .data.default_family + "|" + .data.default_template + "|" + .data.params.background' "$TMP/s.json")" = "vfx|vfx|image-generate|opaque" ]     && ok "show $vp: handoff domain vfx, family vfx, template image-generate, opaque background" || no "show $vp rc=$rc: $(head -c 300 "$TMP/s.json")" "$(cat "$TMP/err")"
@@ -85,8 +696,10 @@ AG show image-edit > /dev/null 2>"$TMP/err"; rc=$?
 AG show image-edit --kind template --json | jq -e '.data.workflow["1"].class_type == "LoadImage"' >/dev/null \
   && ok "show --kind template image-edit" || no "show --kind template"
 
+group_end; fi
+if group_begin resolve; then
 echo "-- resolve: precedence and per-field sources"
-AG resolve --purpose icon --style pixel-art --authoring "$AUTH" --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --template image-generate --authoring "$AUTH" --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
 r() { jq -r "$1" "$TMP/r.json"; }
 [ $rc -eq 0 ] && [ "$(r .schema)" = rpg-factory.assetgen-spec/1 ] && ok "resolve with the game layer" || no "resolve rc=$rc" "$(cat "$TMP/err")"
 [ "$(r '.sources["purpose.qa.size.mode"]')" = "game:assetgen/purposes/icon.json" ] \
@@ -122,7 +735,7 @@ echo '{"extends": "loop-a", "title": "b"}' > "$BAD/assetgen/styles/loop-b.json"
 AG resolve --purpose icon --style loop-a --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "extends cycle" "$TMP/err" && ok "extends cycle detected" || no "cycle rc=$rc" "$(cat "$TMP/err")"
 echo '{"extends": "icon", "params": {"tint": "red"}}' > "$BAD/assetgen/purposes/icon.json"
-AG resolve --purpose icon --style pixel-art --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --template image-generate --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "param 'tint' that template 'image-generate' does not declare" "$TMP/err" && ok "purpose param not declared by the template: error" || no "undeclared purpose param rc=$rc" "$(cat "$TMP/err")"
 
 AG resolve --purpose vfx-sprite --style realistic-pbr --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
@@ -158,38 +771,41 @@ grep -q "^FAIL game:assetgen/purposes/icon.json: constraints.palette: not a tech
 got=$(AG lint "$HA/assetgen/purposes/sprite-2d.json" --authoring "$HA" 2>&1)
 grep -q "constraints.lighting must be a non-empty string" <<<"$got" && ok "lint: a constraint must be a non-empty string" || no "constraint type lint" "$got"
 
+group_end; fi
+if group_begin render-golden; then
 echo "-- render: every purpose against its golden workflow"
-RUNS="$GL/runs"
-mkrun() { # mkrun NAME PURPOSE [resolve args...]
-  local d="$RUNS/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
-  AG resolve --purpose "$p" "$@" --out "$d/spec.json" > /dev/null || return 1
-  printf 'Test prompt for %s: one subject, centered.\n' "$p" > "$d/prompt.md"
-}
 mkdir -p "$GOLD"
-for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do
-  mkrun "golden-$p-001" "$p" --style stylized-painterly || { no "resolve $p"; continue; }
-  extra=(); [ "$p" = image-edit ] && extra=(--param reference_image=ref.png)
-  out=$(AG render --run "$RUNS/golden-$p-001" "${extra[@]}" 2>&1); rc=$?
-  wf="$RUNS/golden-$p-001/workflow.json"
-  if $update_golden && [ $rc -eq 0 ]; then cp "$wf" "$GOLD/$p.json"; fi
-  if [ $rc -eq 0 ] && [ -f "$GOLD/$p.json" ] && [ "$(jq -S . "$wf")" = "$(jq -S . "$GOLD/$p.json")" ] && ! grep -q '{{' "$wf"; then
-    ok "render $p = golden (no placeholder left)"
-  else no "render $p rc=$rc" "$out
-$(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$p.json" 2>/dev/null))"; fi
-done
+# cases files (optional): tests/fixtures/assetgen/cases/<purpose>.json and cases/<purpose>--<template>.json, see its README.md
+# a variant is declared once: either in cases/<purpose>.json variants or as cases/<purpose>--<template>.json
+# One interpreter (tests/fixtures/assetgen/loops.py golden) checks the cases files, then resolves and renders every core
+# purpose and variant (mkrun + render with the cases params, the files the later groups read) and compares each workflow.json
+# with golden/<name>.json (keys sorted) and for a left-over {{ placeholder; every result line is reported here.
+if $update_golden; then golden_update=1; else golden_update=0; fi
+if python3 -B "$ROOT/tests/fixtures/assetgen/loops.py" golden "$ROOT" "$RUNS" "$GOLD" "$golden_update" "$TMP/golden-results" 2>"$TMP/err"; then
+  report_loop "$TMP/golden-results"
+else no "golden loop driver failed" "$(cat "$TMP/err")"; fi
+# Dedicated legacy renders keep node-shape checks independent of purpose defaults.
+mkrun legacy-shape-icon-001 icon --style stylized-painterly --template image-generate
+AG render --run "$RUNS/legacy-shape-icon-001" >/dev/null
+mkrun legacy-shape-edit-001 image-edit --style stylized-painterly --template image-edit
+AG render --run "$RUNS/legacy-shape-edit-001" --param reference_image=ref.png >/dev/null
+AG graph-lint --run "$RUNS/golden-icon-001" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS ' "$TMP/o" \
+  && [ "$(jq -r '[.[] | select(.class_type == "SaveImage")][0].inputs.filename_prefix' "$RUNS/golden-icon-001/workflow.json")" = assetgen/golden-icon-001-icon ] \
+  && ok "staged icon: graph-lint --run PASS and SaveImage has inline icon suffix" || no "staged icon graph-lint rc=$rc" "$(cat "$TMP/o")"
 AG review-cmd --phase prompt --run "$RUNS/golden-ref-3d-turnaround-001" --json | jq -r .stdin > "$TMP/rp.txt"
 grep -qF "lighting: $(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" "$TMP/rp.txt" \
   && ! grep -qF "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" "$TMP/rp.txt" \
   && ok "prompt review: the reviewer judges against the purpose lighting, not the overridden style lighting" || no "review hints" "$(grep -n Hints "$TMP/rp.txt")"
-w="$RUNS/golden-icon-001/workflow.json"
+w="$RUNS/legacy-shape-icon-001/workflow.json"
 [ "$(jq -r '.["3"].inputs.value' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
   && [ "$(jq -r '.["1"].inputs.background' "$w")" = transparent ] && ok "icon workflow: prompt verbatim (trimmed), link kept, transparent background" || no "icon workflow content"
-[ "$(jq -c '.["2"].inputs.reference_images' "$RUNS/golden-image-edit-001/workflow.json")/$(jq -r '.["1"].inputs.image' "$RUNS/golden-image-edit-001/workflow.json")" = '["1",0]/ref.png' ] \
+[ "$(jq -c '.["2"].inputs.reference_images' "$RUNS/legacy-shape-edit-001/workflow.json")/$(jq -r '.["1"].inputs.image' "$RUNS/legacy-shape-edit-001/workflow.json")" = '["1",0]/ref.png' ] \
   && ok "image-edit: LoadImage -> reference_images" || no "image-edit links"
-AG lint "$w" "$RUNS/golden-image-edit-001/workflow.json" > "$TMP/o" 2>&1 && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflows lint clean" || no "rendered lint" "$(cat "$TMP/o")"
-AG render --run "$RUNS/golden-icon-001" --param size=1536x1024 --param quality=low >/dev/null && [ "$(jq -r '.["1"].inputs.size + " " + .["1"].inputs.quality' "$w")" = "1536x1024 low" ] \
+AG lint "$w" "$RUNS/legacy-shape-edit-001/workflow.json" > "$TMP/o" 2>&1 && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflows lint clean" || no "rendered lint" "$(cat "$TMP/o")"
+AG render --run "$RUNS/legacy-shape-icon-001" --param size=1536x1024 --param quality=low >/dev/null && [ "$(jq -r '.["1"].inputs.size + " " + .["1"].inputs.quality' "$w")" = "1536x1024 low" ] \
   && ok "--param overrides purpose params" || no "--param override"
-d="$RUNS/golden-image-edit-001"; rm -f "$d/workflow.json"
+d="$RUNS/legacy-shape-edit-001"; rm -f "$d/workflow.json"
 out=$(AG render --run "$d" 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "param reference_image is required" <<<"$out" && [ ! -f "$d/workflow.json" ] && ok "missing required param: FAIL, nothing written" || no "missing required rc=$rc" "$out"
 out=$(AG render --run "$d" --param reference_image=r.png --param size=999x999 --param tint=red --param prompt=x --param bare 2>&1); rc=$?
@@ -198,22 +814,33 @@ out=$(AG render --run "$d" --param reference_image=r.png --param size=999x999 --
   && ok "render rejects bad enum, undeclared param, prompt override, malformed --param" || no "render errors rc=$rc" "$out"
 : > "$d/prompt.md"; out=$(AG render --run "$d" --param reference_image=r.png 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "is empty" <<<"$out" && ok "empty prompt file: error" || no "empty prompt rc=$rc" "$out"
-AG render --spec "$RUNS/golden-icon-001/spec.json" --prompt-file "$RUNS/golden-icon-001/prompt.md" --out "$TMP/wf.json" >/dev/null && [ -f "$TMP/wf.json" ] \
+AG render --spec "$RUNS/legacy-shape-icon-001/spec.json" --prompt-file "$RUNS/legacy-shape-icon-001/prompt.md" --out "$TMP/wf.json" >/dev/null && [ -f "$TMP/wf.json" ] \
   && ok "render --spec/--prompt-file/--out" || no "render explicit paths"
 printf 'Test prompt for image-edit: one subject, centered.
 ' > "$d/prompt.md"; AG render --run "$d" --param reference_image=ref.png >/dev/null
 # item 1: the prompt is a visible PrimitiveStringMultiline node linked into NineRouterImage.user_prompt
-for pw in "golden-icon-001 1 3" "golden-image-edit-001 2 4"; do
+for pw in "legacy-shape-icon-001 1 3" "legacy-shape-edit-001 2 4"; do
   set -- $pw; f="$RUNS/$1/workflow.json"
   [ "$(jq -c --arg n "$2" '.[$n].inputs.user_prompt' "$f")" = "[\"$3\",0]" ] \
     && [ "$(jq -r --arg n "$3" '.[$n].class_type + "|" + .[$n]._meta.title' "$f")" = "PrimitiveStringMultiline|Prompt (Claude, Codex review NOT_RUN)" ] \
     && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
     && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
 done
-for t in image-generate image-edit; do
-  jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
-    && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
-done
+# an API template links NineRouterImage.user_prompt; a local-only template (no NineRouterImage) links a CLIP encoder's
+# text; either way no input outside the prompt node inlines {{prompt}} (graphstyle checks the full fan-out)
+prompt_files=(); for t in $CORE_TEMPLATES; do prompt_files+=("$ROOT/templates/assetgen/workflows/$t.json"); done
+prompt_rows=0
+while IFS=$'\t' read -r t good kind; do # one jq call over every core template: id, verdict, what the prompt is linked into
+  prompt_rows=$((prompt_rows + 1))
+  [ "$good" = true ] && ok "core template $t: no inline prompt, $kind is a link" || no "template $t user_prompt"
+done < <(jq -r '(try (([.workflow[] | select(.class_type == "NineRouterImage")] | length) as $n
+    | (if $n > 0 then [.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]
+       else any(.workflow[] | select(.class_type | test("^CLIPTextEncode")) | .inputs | (.text, .text_g, .text_l); type == "array") end)
+    and ([.workflow[] | select(.class_type != "PrimitiveStringMultiline") | .inputs | .. | strings | select(contains("{{prompt}}"))] | length == 0)) catch false) as $good
+  | [(input_filename | split("/") | last | rtrimstr(".json")), ($good == true),
+     (try (if any(.workflow[]; .class_type == "NineRouterImage") then "user_prompt" else "the encoder text" end) catch "")] | @tsv' "${prompt_files[@]:-/dev/null}")
+# a template that is not JSON aborts the one jq call and drops the rows after it: every core template needs its row
+[ "$prompt_rows" -eq "${#prompt_files[@]}" ] || no "template user_prompt: $prompt_rows of ${#prompt_files[@]} core templates produced a row (a template is not JSON?)"
 python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -228,7 +855,7 @@ print("ok")
 EOF
 grep -qx ok "$TMP/o" && ok "runfiles.workflow_prompts follows the link to the prompt node (inline and other links unchanged)" || no "workflow_prompts" "$(cat "$TMP/o")"
 # the prompt node's title carries the prompt review state of this prompt (PASS, STALE when the prompt changed)
-mkrun title-icon-001 icon --style stylized-painterly; td="$RUNS/title-icon-001"
+mkrun title-icon-001 icon --style stylized-painterly --template image-generate; td="$RUNS/title-icon-001"
 bound "$td" prompt PASS codex > "$td/review-prompt.json"
 AG render --run "$td" >/dev/null && t1=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
 echo "Another prompt." > "$td/prompt.md"; AG render --run "$td" >/dev/null && t2=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
@@ -254,8 +881,8 @@ for c in "SAME_MODEL:claude PASS|Prompt (Claude, review SAME_MODEL:claude WARN)"
   [ "$t|$ul" = "$want|$want" ] && ok "prompt node title for by=${by:-none} $st: $want" || no "prompt node title by=${by:-none}: $t|$ul (want $want)"
 done
 # the image review binding covers the prompt node: another prompt value is another requirements hash
-jq '.["3"].inputs.value = "changed"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/changed-wf.json"
-python3 -B - "$ROOT" "$RUNS/golden-icon-001/spec.json" "$RUNS/golden-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
+jq '.["3"].inputs.value = "changed"' "$RUNS/legacy-shape-icon-001/workflow.json" > "$TMP/changed-wf.json"
+python3 -B - "$ROOT" "$RUNS/legacy-shape-icon-001/spec.json" "$RUNS/legacy-shape-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
 import runfiles
@@ -266,72 +893,230 @@ print("ok")
 EOF
 grep -qx ok "$TMP/o" && ok "image review requirements hash covers the prompt node value (whole rendered graph)" || no "binding covers prompt node" "$(cat "$TMP/o")"
 
+group_end; fi
+if group_begin ui-workflow; then
 echo "-- workflow.ui.json: the same graph for the ComfyUI frontend"
-# stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
-# input order, then each linked socket; the result must equal workflow.json
-cat > "$TMP/ui2api.py" <<'EOF'
-import json, sys
-known = json.load(open(sys.argv[1], encoding="utf-8"))["nodes"]
-ui = json.load(open(sys.argv[2], encoding="utf-8"))
-api = json.load(open(sys.argv[3], encoding="utf-8"))
-WIDGETS = ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO")
-by_id = {n["id"]: n for n in ui["nodes"]}
-links = {l[0]: l for l in ui["links"]}
-assert len(links) == len(ui["links"]) and ui["last_link_id"] == max(links, default=0) and ui["last_node_id"] == max(by_id)
-assert sorted(n["order"] for n in ui["nodes"]) == list(range(len(ui["nodes"])))
-graph = {}
-for node in ui["nodes"]:
-    spec = known[node["type"]]
-    assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
-    values, inputs = iter(node["widgets_values"]), {}
-    for name, decl in spec["inputs"].items():
-        if decl["type"] in WIDGETS:
-            try:
-                inputs[name] = next(values)
-            except StopIteration:
-                if decl.get("required"):
-                    raise ValueError("missing widget %s.%s" % (node["type"], name))
-    for i, socket in enumerate(node.get("inputs", [])):
-        if socket.get("link") is None:
-            continue
-        link = links[socket["link"]]
-        assert link[3] == node["id"] and link[4] == i, link
-        src = by_id[link[1]]
-        assert src["outputs"][link[2]]["type"] == link[5] and link[0] in src["outputs"][link[2]]["links"], link
-        inputs[socket["name"]] = [str(link[1]), link[2]]
-    graph[str(node["id"])] = {"class_type": node["type"], "inputs": inputs, "_meta": {"title": node["title"]}}
-for nid in api:
-    api[nid].setdefault("_meta", {"title": api[nid]["class_type"]})
-assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent=1, sort_keys=True)
-print("ok")
-EOF
-KN="$ROOT/scripts/assetgen/data/known-nodes.json"
-for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit vfx-flipbook vfx-noise-tileable vfx-trail vfx-sprite; do
-  d="$RUNS/golden-$p-001"; [ "$p" = icon ] && AG render --run "$d" >/dev/null
-  [ "$p" = image-edit ] && AG render --run "$d" --param reference_image=ref.png >/dev/null
-  out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
-  [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
-    && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
-done
-u="$RUNS/golden-image-edit-001/workflow.ui.json"
+# One interpreter (tests/fixtures/assetgen/loops.py ui) re-renders each run with the cases params only (earlier tests
+# re-rendered some runs with other params) and converts every workflow.ui.json back with the stdlib UI -> API converter.
+if python3 -B "$ROOT/tests/fixtures/assetgen/loops.py" ui "$ROOT" "$RUNS" "$TMP/ui-results" 2>"$TMP/err"; then
+  report_loop "$TMP/ui-results"
+else no "ui workflow loop driver failed" "$(cat "$TMP/err")"; fi
+u="$RUNS/legacy-shape-edit-001/workflow.ui.json"
 [ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
   && [ "$(jq -c '[.nodes[] | select(.type == "NineRouterImage") | .inputs[] | {name, link: (.link != null), widget: (.widget.name // null)}]' "$u")" = \
        '[{"name":"user_prompt","link":true,"widget":"user_prompt"},{"name":"reference_images","link":true,"widget":null}]' ] \
   && [ "$(jq -r '[.nodes[] | select(.type == "PrimitiveStringMultiline") | .title][0]' "$u")" = "Prompt (Claude, Codex review NOT_RUN)" ] \
   && ok "workflow.ui.json image-edit: LoadImage upload widget, linked prompt widget socket, prompt node title" || no "ui image-edit" "$(jq -c .nodes "$u")"
-[ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/golden-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
-  && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/golden-icon-001/workflow.ui.json")"
+[ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/legacy-shape-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
+  && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/legacy-shape-icon-001/workflow.ui.json")"
 [ -f "$TMP/wf.ui.json" ] && [ "$(jq -r '.extra.assetgen.run_id' "$TMP/wf.ui.json")" = null ] \
-  && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
+  && [ "$(python3 -B "$UI2API" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
 
+group_end; fi
+if group_begin ui-layout; then
+echo "-- workflow.ui.json: ui block groups, notes, colors"
+python3 -B - "$ROOT" >"$TMP/staged-layout-check" 2>&1 <<'EOF'
+import json, math, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts/assetgen"))
+import uiworkflow
+
+known = json.loads((root / "scripts/assetgen/data/known-nodes.json").read_text(encoding="utf-8"))["nodes"]
+def rect(node):
+    x, y = node["pos"]
+    w, h = node["size"]
+    return (x, y - 30, x + w, y + h)
+def bounds(group):
+    x, y, w, h = group["bounding"]
+    return (x, y, x + w, y + h)
+def contains(a, b):
+    return a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
+def intersects(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+templates = sorted((root / "templates/assetgen/workflows").glob("*.json"))
+assert templates, "no core workflow templates found"
+for path in templates:
+    t = json.loads(path.read_text(encoding="utf-8"))
+    block = t.get("ui") or {}  # legacy templates (image-edit, image-generate) have no ui block: no groups, no notes
+    ui = uiworkflow.to_ui(t["workflow"], known, None, t.get("ui"))
+    nodes = {n["id"]: n for n in ui["nodes"]}
+    for link in ui["links"]:
+        _, src, src_slot, dst, dst_slot, _ = link
+        source, target = nodes[src], nodes[dst]
+        a = (source["pos"][0] + source["size"][0], source["pos"][1] + 14 + 20 * src_slot)
+        b = (target["pos"][0], target["pos"][1] + 14 + 20 * dst_slot)
+        d = math.hypot(b[0] - a[0], b[1] - a[1]) * 0.25
+        controls = (a, (a[0] + d, a[1]), (b[0] - d, b[1]), b)
+        for i in range(1, 65):
+            u = i / 65
+            x, y = (sum(weight * point[axis] for weight, point in zip(
+                ((1-u)**3, 3*(1-u)**2*u, 3*(1-u)*u*u, u**3), controls)) for axis in (0, 1))
+            for nid, node in nodes.items():
+                if nid in (src, dst):
+                    continue
+                x1, y1, x2, y2 = rect(node)
+                assert not (x1 < x < x2 and y1 < y < y2), (path.name, link, nid)
+    notes = [n for n in ui["nodes"] if n["type"] == "Note"]
+    assert len(notes) == len(block.get("notes", [])), path.name
+    assert len(ui["groups"]) == len(block.get("groups", [])), path.name
+    for group, decl in zip(ui["groups"], block.get("groups", [])):
+        members = {int(n) for n in decl["nodes"]}
+        members.update(n["id"] for n, note in zip(notes, block.get("notes", [])) if note["group"] == group["title"])
+        box = bounds(group)
+        assert all(contains(box, rect(nodes[n])) for n in members), (path.name, group)
+        assert all(not intersects(box, rect(n)) for nid, n in nodes.items() if nid not in members), (path.name, group)
+    for left, right in zip(ui["groups"], ui["groups"][1:]):
+        assert bounds(left)[0] <= bounds(right)[0], (path.name, left, right)
+    if path.name == "staged-icon.json":
+        save = next(n for n in nodes.values() if n["type"] == "SaveImage")
+        for node in (n for n in nodes.values() if n["type"] in ("ImageScale", "PreviewImage")):
+            assert rect(save)[3] <= rect(node)[1] or rect(node)[3] <= rect(save)[1], (path.name, save, node)
+print("ok")
+EOF
+staged_layout_rc=$?
+[ $staged_layout_rc -eq 0 ] && ok "workflow.ui.json every core workflow template: no wire crosses an unrelated node, Save off the preview row, groups hold members and notes" \
+  || no "workflow.ui.json core templates layout rc=$staged_layout_rc" "$(cat "$TMP/staged-layout-check")"
+# Each re-laid template's ui.positions apply to its layout, and ui.positions validates: unknown node id, non-pair, non-finite number,
+# bool and a non-object each raise a ValueError naming ui positions; a position overrides the computed one.
+python3 -B - "$ROOT" > "$TMP/positions-check" 2>&1 <<'EOF'
+import copy, json, math, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts/assetgen"))
+import uiworkflow
+
+known = json.loads((root / "scripts/assetgen/data/known-nodes.json").read_text(encoding="utf-8"))["nodes"]
+RELAID = ("hybrid-character", "hybrid-environment", "hybrid-icon-ui", "local-variation")
+workflows = root / "templates/assetgen/workflows"
+for name in RELAID:
+    t = json.loads((workflows / (name + ".json")).read_text(encoding="utf-8"))
+    positions = t["ui"].get("positions")
+    assert isinstance(positions, dict) and positions and set(positions) <= set(t["workflow"]), name
+    ui = uiworkflow.to_ui(t["workflow"], known, None, t["ui"])
+    nodes = {str(n["id"]): n for n in ui["nodes"]}
+    assert all(nodes[nid]["pos"] == list(pos) for nid, pos in positions.items()), name
+
+graph = json.loads((root / "tests/fixtures/assetgen/local/hybrid-anchor-template.json").read_text(encoding="utf-8"))
+def lay(positions, groups=True):
+    ui = copy.deepcopy(graph["ui"]) if groups else {}
+    if positions is not None:
+        ui["positions"] = positions
+    return uiworkflow.to_ui(graph["workflow"], known, None, ui)
+def refuses(positions, *words):
+    try:
+        lay(positions)
+    except ValueError as exc:
+        assert "ui positions" in str(exc), (positions, str(exc))
+        assert all(w in str(exc) for w in words), (positions, str(exc))
+        return
+    raise AssertionError("accepted %r" % (positions,))
+refuses({"99": [0, 0]}, "unknown node id")
+refuses({"1": [0]}, "pair")
+refuses({"1": [0, 1, 2]}, "pair")
+refuses({"1": "0,1"}, "pair")
+refuses({"1": [0, float("nan")]}, "finite")
+refuses({"1": [float("inf"), 0]}, "finite")
+refuses({"1": [True, 0]}, "finite")
+refuses({"1": [0, "1"]}, "finite")
+refuses([["1", 0, 0]], "must be an object")
+refuses({1: [0, 0]}, "unknown node id")
+for groups in (True, False):
+    plain = {str(n["id"]): n for n in lay(None, groups)["nodes"]}
+    moved = lay({"5": [123, 456.5]}, groups)
+    nodes = {str(n["id"]): n for n in moved["nodes"]}
+    assert nodes["5"]["pos"] == [123, 456.5], (groups, nodes["5"]["pos"])
+    assert all(nodes[k]["pos"] == plain[k]["pos"] for k in plain if k != "5" and plain[k]["type"] != "Note"), groups
+# a moved member stays inside its group box: positions apply before the group bounds
+moved = lay({"5": [9000, 40000]})
+node = next(n for n in moved["nodes"] if str(n["id"]) == "5")
+group = next(g for g in moved["groups"] if g["title"] == "Generate")
+x, y, w, h = group["bounding"]
+assert x <= node["pos"][0] and node["pos"][0] + node["size"][0] <= x + w and y <= node["pos"][1] - 30 and node["pos"][1] + node["size"][1] <= y + h
+print("ok")
+EOF
+positions_rc=$?
+[ $positions_rc -eq 0 ] && grep -qx ok "$TMP/positions-check" \
+  && ok "ui.positions: unknown id, non-pair, non-finite, bool and non-object raise a ValueError naming ui positions; a position overrides the computed one and stays inside its group" \
+  || no "ui.positions validation rc=$positions_rc" "$(cat "$TMP/positions-check")"
+cp "$ROOT/tests/fixtures/assetgen/ui-layout.json" "$GL/templates/ui-layout.json"
+mkrun ui-layout-001 icon --style stylized-painterly --authoring "$AUTH" --template ui-layout
+ud="$RUNS/ui-layout-001"
+AG render --run "$ud" >"$TMP/o" 2>"$TMP/err"; rc=$?
+python3 -B - "$ud/workflow.ui.json" "$ud/workflow.json" "$ROOT/tests/fixtures/assetgen/ui-layout.json" >"$TMP/ui-layout-check" 2>&1 <<'EOF'
+import json, sys
+ui, api, fixture = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:])
+groups, nodes = ui["groups"], {n["id"]: n for n in ui["nodes"]}
+settings = fixture["ui"]
+assert [(g["id"], g["title"], g["color"], g["font_size"], g["flags"]) for g in groups] == [
+    (1, "Prompt", "#3f789e", 24, {}), (2, "Generate", "#abc", 24, {}),
+    (3, "Post-process", "#8A8", 24, {}), (4, "Output", "#a1309b", 24, {})]
+notes = [n for n in ui["nodes"] if n["type"] == "Note"]
+assert len(notes) == len(settings["notes"]) == 4
+assert [n["widgets_values"] for n in notes] == [[n["text"]] for n in settings["notes"]]
+assert [n["id"] for n in notes] == list(range(max(map(int, api)) + 1, max(map(int, api)) + 5))
+assert ui["last_node_id"] == max(nodes)
+assert (nodes[1]["color"], nodes[1]["bgcolor"]) == ("#232", "#353")
+assert (nodes[4]["color"], nodes[4]["bgcolor"]) == ("#232", "#353")
+assert nodes[4]["pos"][0] == nodes[5]["pos"][0] and nodes[5]["pos"][1] < nodes[4]["pos"][1]
+def rect(node):
+    x, y = node["pos"]
+    w, h = node["size"]
+    return (x, y - 30, x + w, y + h)
+def bounds(group):
+    x, y, w, h = group["bounding"]
+    return (x, y, x + w, y + h)
+def contains(a, b):
+    return a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
+def intersects(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+for group, decl in zip(groups, settings["groups"]):
+    members = {int(n) for n in decl["nodes"]}
+    members.update(n["id"] for n, note in zip(notes, settings["notes"]) if note["group"] == group["title"])
+    box = bounds(group)
+    assert all(contains(box, rect(nodes[n])) for n in members), group
+    assert all(not intersects(box, rect(n)) for nid, n in nodes.items() if nid not in members), group
+for left, right in zip(groups, groups[1:]):
+    assert bounds(left)[2] <= bounds(right)[0], (left, right)
+print("ok")
+EOF
+layout_rc=$?
+out=$(python3 -B "$UI2API" "$KN" "$ud/workflow.ui.json" "$ud/workflow.json" 2>&1)
+[ $rc -eq 0 ] && [ $layout_rc -eq 0 ] && [ "$out" = ok ] \
+  && ok "ui block: group bounds, notes, colors, row order and API round trip" \
+  || no "ui block render rc=$rc layout rc=$layout_rc" "$(cat "$TMP/err" "$TMP/ui-layout-check"); $out"
+cp "$ud/workflow.json" "$TMP/ui-layout-workflow.json"
+cp "$ud/spec.json" "$TMP/ui-layout-spec.json"
+jq 'del(.template.data.ui)' "$TMP/ui-layout-spec.json" > "$ud/spec.json"
+AG render --run "$ud" >"$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && cmp -s "$TMP/ui-layout-workflow.json" "$ud/workflow.json" \
+  && ok "ui block leaves workflow.json identical" || no "ui block changes workflow.json rc=$rc" "$(cat "$TMP/err")"
+for bad in unknown-node duplicate-node unknown-group; do
+  case "$bad" in
+    unknown-node) filter='.template.data.ui.groups[0].nodes += ["999"]' ;;
+    duplicate-node) filter='.template.data.ui.groups[1].nodes += ["3"]' ;;
+    unknown-group) filter='.template.data.ui.notes[0].group = "Missing"' ;;
+  esac
+  jq "$filter" "$TMP/ui-layout-spec.json" > "$ud/spec.json"
+  AG render --run "$ud" >"$TMP/o" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 1 ] && grep -q 'workflow.ui.json' "$TMP/o" "$TMP/err" \
+    && ok "ui block rejects $bad" || no "ui block $bad rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+done
+rm -f "$GL/templates/ui-layout.json"
+
+group_end; fi
+if group_begin filename-prefix; then
 echo "-- filename_prefix: one value in spec.json, workflow.json, review prompts and run.md"
 mkrun prefix-icon-001 icon --style stylized-painterly; pd="$RUNS/prefix-icon-001"; want=assetgen/prefix-icon-001
 AG render --run "$pd" >/dev/null 2>"$TMP/err" && AG manifest --run "$pd" >/dev/null 2>>"$TMP/err"
 got="$(jq -r .params.filename_prefix "$pd/spec.json")|$(jq -r '[.[] | select(.class_type == "SaveImage")][0].inputs.filename_prefix' "$pd/workflow.json")"
 got="$got|$(sed -n '/^---json$/,/^---$/p' "$pd/run.md" | sed '1d;$d' | jq -r .spec.params.filename_prefix)"
 AG review-cmd --phase prompt --run "$pd" --json | jq -r .stdin > "$TMP/rp.txt"
-[ "$got" = "$want|$want|$want" ] && grep -q "filename_prefix=$want" "$TMP/rp.txt" && ! grep -q 'assetgen/run\b' "$pd/workflow.json" "$pd/workflow.ui.json" "$pd/run.md" "$TMP/rp.txt" \
+[[ "$got" = "$want|$want|$want" || "$got" = "$want|$want-"*"|$want" ]] && grep -q "filename_prefix=$want" "$TMP/rp.txt" && ! grep -q 'assetgen/run\b' "$pd/workflow.json" "$pd/workflow.ui.json" "$pd/run.md" "$TMP/rp.txt" \
   && [ "$(jq -r .param_sources.filename_prefix "$pd/spec.json")" = "run id prefix-icon-001" ] \
   && ok "filename_prefix $want in spec.json, workflow.json, run.md and the review prompt (never assetgen/run)" || no "filename_prefix: $got" "$(cat "$TMP/err"; grep -n filename_prefix "$TMP/rp.txt")"
 mkdir -p "$RUNS/prefix-copy-001"; cp "$TMP/spec-out.json" "$RUNS/prefix-copy-001/spec.json"; cp "$pd/prompt.md" "$RUNS/prefix-copy-001/"
@@ -343,6 +1128,8 @@ out=$(AG render --run "$pd" --param filename_prefix=elsewhere 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "a run's prefix is $want" <<<"$out" && ok "render --run refuses --param filename_prefix" || no "prefix override rc=$rc" "$out"
 rm -rf "$RUNS/prefix-copy-001"
 
+group_end; fi
+if group_begin lint; then
 echo "-- lint: errors and warnings"
 LA="$TMP/lint-authoring"; mkdir -p "$LA/assetgen/templates" "$LA/assetgen/purposes"
 tmpl() { printf '{"schema": "rpg-factory.comfy-template/1", "title": "t", "output_node": "2", "params": {"prompt": {"type": "string", "required": true}%s}, "workflow": %s}\n' "$2" "$3" > "$LA/assetgen/templates/$1.json"; }
@@ -356,11 +1143,305 @@ tmpl undeclared '' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\
 tmpl unsupported-model ', "model": {"type": "string", "default": "cx/gpt-image-2.5"}' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"{{model}}\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
 scheme=https
 tmpl endpoint ", \"base_url\": {\"type\": \"string\", \"default\": \"$scheme://router.example.invalid/v1\"}" "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
-lint_of() { AG lint "$LA/assetgen/templates/$1.json" --authoring "$LA" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))'; }
+# lint_res ID: the first lint row of template ID as "STATE reason; reason" in $lint_got (no command substitution around the
+# lint call and no pipeline: a process less per call than lint_of)
+lint_res() {
+  AG lint "$LA/assetgen/templates/$1.json" --authoring "$LA" --json > "$TMP/lint-of.json" 2>&1
+  lint_got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' "$TMP/lint-of.json")
+}
+lint_of() { lint_res "$1"; printf '%s\n' "$lint_got"; }
 expect_lint() { # expect_lint ID STATE TEXT LABEL
-  local got; got=$(lint_of "$1")
+  local got; lint_res "$1"; got=$lint_got
   case "$got" in "$2 "*"$3"*) ok "lint $4" ;; *) no "lint $4" "$got" ;; esac
 }
+
+echo "-- node registry"
+NS="$ROOT/scripts/assetgen/nodesync.py"; OI="$ROOT/tests/fixtures/assetgen/object_info.json"
+local_names=(CheckpointLoaderSimple CLIPTextEncode CLIPTextEncodeSDXL EmptyLatentImage VAEEncode VAEDecode VAEDecodeTiled KSampler LoraLoader ControlNetLoader ControlNetApplyAdvanced UpscaleModelLoader ImageUpscaleWithModel)
+node_names=(ImageScale ImageSharpen ImageBlur ImageInvert ImageCrop PreviewImage SplitImageWithAlpha JoinImageWithAlpha ImageQuantize PrimitiveString "${local_names[@]}")
+node_args=(); for name in "${node_names[@]}"; do node_args+=(--node "$name"); done
+python3 -B "$NS" "$OI" "${node_args[@]}" > "$TMP/nodes.json" 2>"$TMP/err"; rc=$?
+jq -c . "$TMP/nodes.json" > "$TMP/nodes-actual" 2>/dev/null
+jq -c --slurpfile generated "$TMP/nodes.json" '.nodes as $nodes | reduce ($generated[0] | keys_unsorted[]) as $name ({}; .[$name] = $nodes[$name])' "$KN" > "$TMP/nodes-expected" 2>"$TMP/jqerr"
+[ $rc -eq 0 ] && cmp -s "$TMP/nodes-actual" "$TMP/nodes-expected" && ok "nodesync fixture entries match registry including key order" \
+  || no "nodesync fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
+python3 -B "$NS" "$OI" "${node_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "nodesync --check accepts committed entries" || no "nodesync --check rc=$rc" "$(cat "$TMP/err")"
+# pack nodes: no saved object_info from a machine with the packs existed, so object_info-packs.json is written from the
+# pack sources (known-nodes packs[].signatures names each); the registry entries must still be nodesync's output of it
+OIP="$ROOT/tests/fixtures/assetgen/object_info-packs.json"; HW="$ROOT/scripts/assetgen/data/hardware.json"
+pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor InspyrenetRembg)
+# the registry lists two more pack nodes (the annotator preprocessors) that object_info-packs.json does not carry
+registry_pack_names=(IPAdapterUnifiedLoader IPAdapterAdvanced CannyEdgePreprocessor DepthAnythingPreprocessor DWPosePreprocessor InspyrenetRembg)
+# local_model_nodes also holds KSamplerAdvanced, a core node that object_info.json does not carry; the preprocessors are pack
+# nodes, so lint and graphstyle already require the requires block for them and they stay out of local_model_nodes
+registry_local_names=("${local_names[@]}" KSamplerAdvanced)
+pack_args=(); for name in "${pack_names[@]}"; do pack_args+=(--node "$name"); done
+python3 -B "$NS" "$OIP" "${pack_args[@]}" > "$TMP/pack-nodes.json" 2>"$TMP/err"; rc=$?
+jq -c . "$TMP/pack-nodes.json" > "$TMP/pack-nodes-actual" 2>/dev/null
+jq -c --slurpfile generated "$TMP/pack-nodes.json" '.nodes as $nodes | reduce ($generated[0] | keys_unsorted[]) as $name ({}; .[$name] = $nodes[$name])' "$KN" > "$TMP/pack-nodes-expected" 2>"$TMP/jqerr"
+[ $rc -eq 0 ] && [ "$(jq 'length' "$TMP/pack-nodes.json")" = "${#pack_names[@]}" ] && cmp -s "$TMP/pack-nodes-actual" "$TMP/pack-nodes-expected" \
+  && ok "nodesync pack fixture entries match registry including key order (${#pack_names[@]} pack nodes)" \
+  || no "nodesync pack fixture entries differ rc=$rc" "$(cat "$TMP/err" "$TMP/jqerr")"
+python3 -B "$NS" "$OIP" "${pack_args[@]}" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "nodesync --check accepts committed pack entries" || no "nodesync --check packs rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+python3 -B - "$KN" "$HW" "${#registry_local_names[@]}" "${registry_local_names[@]}" "${registry_pack_names[@]}" > "$TMP/o" 2>&1 <<'EOF'
+import json, sys
+known_path, hardware_path, n_local = sys.argv[1], sys.argv[2], int(sys.argv[3])
+local_names, pack_names = sys.argv[4:4 + n_local], sys.argv[4 + n_local:]
+with open(known_path, encoding="utf-8") as f:
+    known = json.load(f)
+with open(hardware_path, encoding="utf-8") as f:
+    hardware = json.load(f)
+nodes, packs, local = known["nodes"], known["packs"], known["local_model_nodes"]
+profile_packs = [p["id"] for prof in hardware["profiles"] if prof["id"] == "local-8gb" for p in prof["packs"]]
+assert packs and profile_packs and all(pid in profile_packs for pid in packs), (list(packs), profile_packs)
+for pid, spec in packs.items():
+    assert spec["nodes"] and all(name in nodes for name in spec["nodes"]), pid
+    assert spec["provider"] and spec["signatures"], pid
+pack_nodes = [name for spec in packs.values() for name in spec["nodes"]]
+assert sorted(pack_nodes) == sorted(pack_names), pack_nodes
+assert local == local_names and all(name in nodes for name in local), local
+assert not set(local) & set(pack_nodes)
+assert "UNTESTED on RTX 5060" in known["note"]
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "known-nodes: every pack node and local_model_nodes name is a registry node, every pack id is a local-8gb pack of hardware.json, the note says UNTESTED on RTX 5060" \
+  || no "known-nodes packs / local_model_nodes" "$(cat "$TMP/o")"
+jq '.nodes.ImageScale.inputs.upscale_method.options[0] = "changed"' "$KN" > "$TMP/known-changed.json"
+python3 -B "$NS" "$OI" "${node_args[@]}" --known "$TMP/known-changed.json" --check > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qx ImageScale "$TMP/o" && ok "nodesync --check detects a changed combo option" || no "nodesync changed option rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+for name in MissingNode Note; do
+  python3 -B "$NS" "$OI" --node "$name" > "$TMP/o" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ok "nodesync rejects $name" || no "nodesync $name rc=$rc" "$(cat "$TMP/err")"
+done
+python3 -B - "$NS" "$OI" > "$TMP/o" 2>&1 <<'EOF'
+import ast, runpy, socket, sys
+path, fixture = sys.argv[1:]
+tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+        names = [alias.name.split('.')[0] for alias in node.names]
+    elif isinstance(node, ast.ImportFrom):
+        names = [(node.module or '').split('.')[0]]
+    else:
+        continue
+    assert not set(names) & {'socket', 'urllib', 'http', 'requests', 'subprocess'}, names
+def forbidden(*args, **kwargs):
+    raise AssertionError('network access attempted')
+socket.socket = forbidden
+sys.argv = [path, fixture, '--node', 'ImageScale', '--check']
+runpy.run_path(path, run_name='__main__')
+EOF
+rc=$?; [ $rc -eq 0 ] && ok "nodesync has no network imports and runs with sockets disabled" || no "nodesync offline rc=$rc" "$(cat "$TMP/o")"
+
+# Keep these templates outside lint-authoring, whose complete contents are counted later.
+lint_la=$LA; LA="$TMP/node-registry-authoring"; mkdir -p "$LA/assetgen/templates"
+graph='{"1":{"class_type":"NineRouterImage","inputs":{"user_prompt":"{{prompt}}","model":"m","size":"auto","quality":"auto","background":"auto"}},
+"2":{"class_type":"SaveImage","inputs":{"images":["10",0],"filename_prefix":["12",0]}},
+"3":{"class_type":"ImageScale","inputs":{"image":["1",0],"upscale_method":"bilinear","width":512,"height":256,"crop":"center"}},
+"4":{"class_type":"ImageSharpen","inputs":{"image":["3",0],"sharpen_radius":2,"sigma":1.5,"alpha":0.8}},
+"5":{"class_type":"ImageBlur","inputs":{"image":["4",0],"blur_radius":3,"sigma":1.2}},
+"6":{"class_type":"ImageInvert","inputs":{"image":["5",0]}},
+"7":{"class_type":"ImageCrop","inputs":{"image":["6",0],"width":128,"height":64,"x":4,"y":8}},
+"8":{"class_type":"SplitImageWithAlpha","inputs":{"image":["7",0]}},
+"9":{"class_type":"JoinImageWithAlpha","inputs":{"image":["8",0],"alpha":["8",1]}},
+"10":{"class_type":"ImageQuantize","inputs":{"image":["9",0],"colors":32,"dither":"none"}},
+"11":{"class_type":"PreviewImage","inputs":{"images":["5",0]}},
+"12":{"class_type":"PrimitiveString","inputs":{"value":"assetgen/test"}}}'
+tmpl registry-chain '' "$graph"
+expect_lint registry-chain PASS "" "core image node chain"
+python3 -B - "$ROOT" "$LA/assetgen/templates/registry-chain.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+root, template = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+import uiworkflow
+with open(template, encoding='utf-8') as f:
+    graph = json.load(f)['workflow']
+with open(os.path.join(root, 'scripts', 'assetgen', 'data', 'known-nodes.json'), encoding='utf-8') as f:
+    known = json.load(f)['nodes']
+ui = uiworkflow.to_ui(graph, known)
+nodes = {n['type']: n for n in ui['nodes']}
+assert len(ui['nodes']) == len(graph)
+assert nodes['ImageScale']['widgets_values'] == ['bilinear', 512, 256, 'center']
+assert nodes['ImageSharpen']['widgets_values'] == [2, 1.5, 0.8]
+assert nodes['ImageBlur']['widgets_values'] == [3, 1.2]
+assert nodes['ImageCrop']['widgets_values'] == [128, 64, 4, 8]
+assert nodes['ImageQuantize']['widgets_values'] == [32, 'none']
+assert len(nodes['JoinImageWithAlpha']['inputs']) == 2
+EOF
+rc=$?; [ $rc -eq 0 ] && ok "UI lays out node chain with numeric widgets in input order" || no "UI node chain rc=$rc" "$(cat "$TMP/o")"
+for name in Note MarkdownNote; do
+  jq --arg name "$name" '.workflow["13"] = {class_type: $name, inputs: {text: "note"}}' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/ui-$name.json"
+  expect_lint "ui-$name" FAIL "UI-only" "$name is UI-only"
+done
+jq '.workflow["3"].inputs.scale_by = 2' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/registry-input.json"
+expect_lint registry-input FAIL "unknown input scale_by" "unknown input on ImageScale"
+jq '.workflow["3"].class_type = "UnknownImageNode"' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/registry-unknown.json"
+expect_lint registry-unknown FAIL "unknown node type UnknownImageNode" "unknown node in image chain"
+
+# local nodes and the template requires block (UNTESTED on RTX 5060: the fixture declares, lint compares the
+# declaration with data/hardware.json; nothing here was generated or measured). File names and sizes are placeholders.
+LOCAL="$LA/assetgen/templates/local-full.json"
+cat > "$LOCAL" <<'EOF'
+{"schema": "rpg-factory.comfy-template/1", "title": "Local SDXL chain (lint fixture)",
+ "description": "UNTESTED on RTX 5060: lint fixture for the local node registry; no image was generated and no number measured.",
+ "output_node": "16",
+ "params": {"prompt": {"type": "string", "required": true}, "negative": {"type": "string", "default": "blurry"},
+  "checkpoint": {"type": "string", "default": "sdxl-checkpoint-fp16.safetensors"}, "seed": {"type": "int", "default": 1}},
+ "requires": {"profile": "local-8gb", "peak_vram_gb": 7.0, "ram_gb": 16,
+  "packs": ["comfyui_ipadapter_plus", "comfyui_controlnet_aux", "cut-out (BiRefNet or rembg)"],
+  "models": [{"kind": "checkpoints", "name": "sdxl-checkpoint-fp16.safetensors", "size_gb": 6.5},
+   {"kind": "controlnet", "name": "sdxl-controlnet-canny.safetensors", "size_gb": 2.5},
+   {"kind": "ipadapter", "name": "sdxl-ipadapter-plus.safetensors", "size_gb": 0.8},
+   {"kind": "clip_vision", "name": "clip-vision-vit-h.safetensors", "size_gb": 2.5},
+   {"kind": "upscale_models", "name": "upscaler-4x.safetensors", "size_gb": 0.1}]},
+ "workflow": {
+  "1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": "{{prompt}}", "model": "m", "size": "auto", "quality": "auto", "background": "auto"}},
+  "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{checkpoint}}"}},
+  "3": {"class_type": "IPAdapterUnifiedLoader", "inputs": {"model": ["2", 0], "preset": "PLUS (high strength)"}},
+  "4": {"class_type": "IPAdapterAdvanced", "inputs": {"model": ["3", 0], "ipadapter": ["3", 1], "image": ["1", 0], "weight": 0.8, "weight_type": "linear", "combine_embeds": "concat", "start_at": 0.0, "end_at": 1.0, "embeds_scaling": "V only"}},
+  "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["2", 1]}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative}}", "clip": ["2", 1]}},
+  "7": {"class_type": "CannyEdgePreprocessor", "inputs": {"image": ["1", 0], "low_threshold": 100, "high_threshold": 200, "resolution": 1024}},
+  "8": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "sdxl-controlnet-canny.safetensors"}},
+  "9": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["5", 0], "negative": ["6", 0], "control_net": ["8", 0], "image": ["7", 0], "strength": 0.6, "start_percent": 0.0, "end_percent": 1.0, "vae": ["2", 2]}},
+  "10": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "11": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "seed": "{{seed}}", "steps": 24, "cfg": 6.5, "sampler_name": "euler", "scheduler": "karras", "positive": ["9", 0], "negative": ["9", 1], "latent_image": ["10", 0], "denoise": 1.0}},
+  "12": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["11", 0], "vae": ["2", 2], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
+  "13": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "upscaler-4x.safetensors"}},
+  "14": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["13", 0], "image": ["12", 0]}},
+  "15": {"class_type": "InspyrenetRembg", "inputs": {"image": ["14", 0], "torchscript_jit": "default"}},
+  "16": {"class_type": "SaveImage", "inputs": {"images": ["15", 0], "filename_prefix": "assetgen/local"}}}}
+EOF
+lv() { local id=$1; shift; jq "$@" "$LOCAL" > "$LA/assetgen/templates/$id.json"; }  # lv ID JQ-ARGS: a variant of local-full
+expect_clean() { local got; lint_res "$1"; got=$lint_got; [ "$got" = "PASS " ] && ok "lint $2" || no "lint $2" "$got"; }  # PASS, no reason
+jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LOCAL" >/dev/null && expect_clean local-full "local template: a local SDXL chain with all four pack nodes and a complete requires block PASSES, no reasons" \
+  || no "local template fixture description must start with UNTESTED on RTX 5060:"
+hw_profiles=$(jq -r '[.profiles[].id] | join(", ")' "$HW")
+hw_lim() { jq -r --arg f "$1" '.profiles[] | select(.id == "local-8gb") | .requires[$f]' "$HW"; }
+vram_max=$(hw_lim min_vram_gb); ram_max=$(hw_lim min_ram_gb)
+lv local-vram-edge --argjson v "$vram_max" --argjson r "$ram_max" '.requires.peak_vram_gb = $v | .requires.ram_gb = $r'
+expect_clean local-vram-edge "requires: peak_vram_gb and ram_gb equal to the profile's values PASS"
+lv local-extra-kinds '.requires.models += [{"kind": "loras", "name": "style.safetensors", "size_gb": 0.2}, {"kind": "vae", "name": "sdxl-vae.safetensors", "size_gb": 0.3}]'
+expect_clean local-extra-kinds "requires.models: kinds loras and vae are accepted"
+jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/registry-chain.json" > "$LA/assetgen/templates/api-requires.json"
+expect_clean api-requires "requires on an API-only template: profile api-only, packs and models left out, PASS"
+# a local or pack node needs a profile with a GPU (hardware.json requires.gpu true): api-only excludes any local model
+# and stays valid for an API-only graph. local-core has core local nodes only, no pack node.
+tmpl local-core '' '{"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"sd15-checkpoint.safetensors"}},
+"2":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":"assetgen/local-core"}},
+"3":{"class_type":"CLIPTextEncode","inputs":{"text":"{{prompt}}","clip":["1",1]}},
+"4":{"class_type":"CLIPTextEncode","inputs":{"text":"blurry","clip":["1",1]}},
+"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512,"batch_size":1}},
+"6":{"class_type":"KSampler","inputs":{"model":["1",0],"seed":1,"steps":20,"cfg":7.0,"sampler_name":"euler","scheduler":"karras","positive":["3",0],"negative":["4",0],"latent_image":["5",0],"denoise":1.0}},
+"7":{"class_type":"VAEDecode","inputs":{"samples":["6",0],"vae":["1",2]}}}'
+lc() { local id=$1; shift; jq "$@" "$LA/assetgen/templates/local-core.json" > "$LA/assetgen/templates/$id.json"; }  # lc ID JQ-ARGS: a variant of local-core
+hw_gpu=$(jq -r '[.profiles[] | select(.requires.gpu == true) | .id] | join(", ")' "$HW")
+NO_GPU="runs a local model, but profile api-only has no GPU (hardware.json requires.gpu false); declare a local profile ($hw_gpu)"
+lc local-core-api '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}'
+got=$(lint_of local-core-api)
+case "$got" in "FAIL "*"node 1 (CheckpointLoaderSimple) $NO_GPU"*) : ;; *) false ;; esac \
+  && grep -qF "node 6 (KSampler) $NO_GPU" <<<"$got" && ! grep -qF "node 2 (SaveImage)" <<<"$got" && ! grep -qE "requires\.(profile|peak_vram_gb|ram_gb|packs|models)" <<<"$got" \
+  && ok "lint requires: core local nodes on profile api-only FAIL, every local node says the profile has no GPU and lists the local profiles" \
+  || no "lint requires: core local nodes on profile api-only" "$got"
+lc local-core-4gb --argjson r "$(jq -c '.profiles[] | select(.id == "local-4gb") | .requires | {profile: "local-4gb", peak_vram_gb: .min_vram_gb, ram_gb: .min_ram_gb}' "$HW")" '.requires = $r'
+expect_clean local-core-4gb "requires: the same core local nodes on profile local-4gb with fitting numbers PASS"
+tmpl api-plain '' "{\"1\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, $SAVE}"
+jq '.requires = {"profile": "api-only", "peak_vram_gb": 0, "ram_gb": 0}' "$LA/assetgen/templates/api-plain.json" > "$LA/assetgen/templates/api-plain-requires.json"
+expect_clean api-plain-requires "requires: NineRouterImage + SaveImage on profile api-only (no local or pack node) PASS"
+lv local-no-profile 'del(.requires.profile)'
+expect_lint local-no-profile FAIL "requires.profile missing" "requires without profile"
+lv local-bad-profile '.requires.profile = "local-80gb"'
+expect_lint local-bad-profile FAIL "requires.profile 'local-80gb' is not a hardware profile ($hw_profiles" "requires: unknown profile, the ids are listed"
+lv local-pack-undeclared '.requires.packs -= ["comfyui_controlnet_aux"]'
+expect_lint local-pack-undeclared FAIL "node 7 uses CannyEdgePreprocessor from pack comfyui_controlnet_aux, not declared in requires.packs" "pack node whose pack is missing from requires.packs"
+lv local-pack-foreign '.requires.profile = "api-only" | .requires.peak_vram_gb = 0 | .requires.ram_gb = 0'
+expect_lint local-pack-foreign FAIL "requires.packs: 'comfyui_ipadapter_plus' is not a pack of profile api-only (it has no packs)" "requires.packs: a pack id that is not of the profile"
+expect_lint local-pack-foreign FAIL "node 15 (InspyrenetRembg) $NO_GPU" "requires: a pack node on profile api-only says the profile has no GPU"
+lv local-pack-twice '.requires.packs += ["comfyui_controlnet_aux"]'
+expect_lint local-pack-twice FAIL "requires.packs lists 'comfyui_controlnet_aux' more than once" "requires.packs: a pack listed twice"
+lv local-pack-unused 'del(.workflow["15"]) | .workflow["16"].inputs.images = ["14", 0]'
+expect_lint local-pack-unused WARN "requires.packs declares cut-out (BiRefNet or rembg), but no workflow node comes from that pack" "requires.packs: a declared pack no node uses (warning)"
+lv local-no-requires 'del(.requires)'
+got=$(lint_of local-no-requires)
+case "$got" in "FAIL "*"node 2 (CheckpointLoaderSimple) runs a local model: the template needs a requires block (profile, peak_vram_gb, ram_gb, packs, models, offload)"*) : ;; *) false ;; esac \
+  && grep -qF "node 15 (InspyrenetRembg) runs a local model" <<<"$got" && grep -qF "node 11 (KSampler) runs a local model" <<<"$got" \
+  && ! grep -qF "node 1 (NineRouterImage)" <<<"$got" && ! grep -qF "requires.packs" <<<"$got" \
+  && ok "lint local nodes with no requires block: every local and pack node is named, API nodes are not" || no "lint local nodes with no requires block" "$got"
+lv local-requires-list '.requires = ["local-8gb"]'
+expect_lint local-requires-list FAIL "requires must be an object (profile, peak_vram_gb, ram_gb, packs, models, offload)" "requires that is not an object"
+lv local-vram-over '.requires.peak_vram_gb = 7.6'
+expect_lint local-vram-over FAIL "requires.peak_vram_gb 7.6 is above min_vram_gb $vram_max of profile local-8gb" "requires.peak_vram_gb 7.6 above profile local-8gb"
+lv local-ram-over '.requires.ram_gb = 64'
+expect_lint local-ram-over FAIL "requires.ram_gb 64 is above min_ram_gb $ram_max of profile local-8gb" "requires.ram_gb above the profile"
+lv local-vram-bool '.requires.peak_vram_gb = true'
+expect_lint local-vram-bool FAIL "requires.peak_vram_gb must be a number >= 0" "requires.peak_vram_gb true (a bool is not a number)"
+lv local-ram-missing 'del(.requires.ram_gb)'
+expect_lint local-ram-missing FAIL "requires.ram_gb missing" "requires without ram_gb"
+lv local-model-url --arg u "$scheme://models.example.invalid/sdxl-checkpoint-fp16.safetensors" '.requires.models[0].name = $u'
+MODEL_NAME="requires.models[0].name must be a model file name; source links live in docs/hardware.md, never in templates"
+expect_lint local-model-url FAIL "$MODEL_NAME" "requires.models name that is a URL: not a file name"
+expect_lint local-model-url FAIL "requires contains a URL" "requires.models name that is a URL: the reason names requires"
+lv local-model-host '.requires.models[0].name = "huggingface.co/x/y.safetensors"'
+expect_lint local-model-host FAIL "$MODEL_NAME" "requires.models name with a host and path (no scheme)"
+lv local-model-path '.requires.models[0].name = "C:\\models\\sdxl-checkpoint-fp16.safetensors"'
+expect_lint local-model-path FAIL "$MODEL_NAME" "requires.models name that is a local path"
+lv local-model-extra '.requires.models[0].source = "see docs"'
+expect_lint local-model-extra FAIL "requires.models[0] must be an object with exactly kind, name, size_gb" "requires.models entry with an extra key"
+lv local-model-size '.requires.models[1].size_gb = 0'
+expect_lint local-model-size FAIL "requires.models[1].size_gb must be a number > 0" "requires.models size_gb 0"
+lv local-model-kind '.requires.models[0].kind = "diffusers"'
+expect_lint local-model-kind FAIL "requires.models[0].kind 'diffusers' is not a model kind (" "requires.models: unknown model kind"
+lv local-credential '.requires.api_key = "placeholder"'
+expect_lint local-credential FAIL "requires contains a credential or endpoint key" "credential key inside requires"
+lv local-unknown-key '.requires.notes = "fits"'
+expect_lint local-unknown-key FAIL "requires.notes: unknown key (a requires block holds only profile, peak_vram_gb, ram_gb, packs, models, offload)" "unknown requires key"
+# requires.offload (UNTESTED on RTX 5060: a declaration the graph-style checkpoints rule reads, nothing measured)
+lv local-offload-true '.requires.offload = true'
+expect_clean local-offload-true "requires.offload true is accepted"
+lv local-offload-false '.requires.offload = false'
+expect_clean local-offload-false "requires.offload false is accepted"
+lv local-offload-string '.requires.offload = "yes"'
+expect_lint local-offload-string FAIL "requires.offload must be true or false" "requires.offload that is not a bool (\"yes\")"
+lv local-offload-number '.requires.offload = 1'
+expect_lint local-offload-number FAIL "requires.offload must be true or false" "requires.offload that is not a bool (1)"
+lv local-bad-input '.workflow["11"].inputs.cfg_scale = 7'
+expect_lint local-bad-input FAIL "node 11 (KSampler): unknown input cfg_scale" "unknown input on KSampler"
+lv local-bad-combo '.workflow["11"].inputs.scheduler = "fastest"'
+expect_lint local-bad-combo FAIL "node 11.scheduler: 'fastest' is not one of" "combo value outside KSampler's scheduler options"
+lv local-unknown-node '.workflow["12"].class_type = "VAEDecodeTurbo"'
+expect_lint local-unknown-node FAIL "unknown node type VAEDecodeTurbo" "unknown node type in a local template"
+jq -c '.workflow' "$LOCAL" | sed 's/{{[a-z]*}}/x/g' > "$TMP/local-rendered.json"
+jq -c '.["12"].class_type = "VAEDecodeTurbo"' "$TMP/local-rendered.json" > "$TMP/local-rendered-unknown.json"
+got=$(AG lint "$TMP/local-rendered.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))')
+got2=$(AG lint "$TMP/local-rendered-unknown.json" --json 2>&1 | jq -r '.results[0] | .state + " " + (.reasons | join("; "))')
+[ "$got" = "PASS " ] && case "$got2" in "FAIL "*"unknown node type VAEDecodeTurbo"*) : ;; *) false ;; esac \
+  && ok "rendered workflow lint unchanged: local nodes PASS without a requires rule, an unknown node type still FAILs" || no "rendered local workflow lint" "$got
+$got2"
+# hardware.json missing or malformed: one FAIL reason on a template with requires, never a traceback; a template
+# without requires and without local nodes does not read it
+printf 'not json\n' > "$TMP/hw-notjson.json"; echo '{"schema": "rpg-factory.assetgen-hardware/1", "profiles": [{"id": "local-8gb"}]}' > "$TMP/hw-shape.json"
+jq '.profiles[0].requires.gpu = "no"' "$HW" > "$TMP/hw-gpu.json"  # requires.gpu must be a bool
+python3 -B - "$ROOT" "$LA" "$TMP" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+root, authoring, tmp = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, "scripts", "assetgen"))
+import lint
+template = lambda name: os.path.join(authoring, "assetgen", "templates", name + ".json")
+for name in ("hw-none.json", "hw-notjson.json", "hw-shape.json", "hw-gpu.json"):
+    lint.HARDWARE = os.path.join(tmp, name)
+    row = lint.lint_file(template("local-full"), authoring)
+    assert row["state"] == "FAIL" and len(row["reasons"]) == 1, (name, row)
+    assert row["reasons"][0].startswith("data/hardware.json is missing or malformed ("), (name, row)
+    row = lint.lint_file(template("registry-chain"), authoring)
+    assert row["state"] == "PASS" and not row["reasons"], (name, row)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "lint requires: hardware.json missing, not JSON, malformed or with a non-bool requires.gpu is one FAIL reason, no traceback; a template without requires is unaffected" \
+  || no "lint requires with a bad hardware.json" "$(cat "$TMP/o")"
+LA=$lint_la
+
 expect_lint unknown-node FAIL "unknown node type FluxSampler" "unknown node type"
 expect_lint bad-input FAIL "unknown input seed" "unknown input name"
 expect_lint missing-link FAIL "link to missing node 9" "link to a missing node"
@@ -375,7 +1456,7 @@ AG lint "$LA/assetgen/templates/unsupported-model.json" --authoring "$LA" >/dev/
 AG lint "$LA/assetgen/templates/unknown-node.json" --authoring "$LA" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a FAIL exits 1" || no "fail exit code"
 echo '{"extends": "icon", "handoff_domain": "audio", "qa": {"size": {"mode": "huge"}, "alpha": "maybe"}, "prompt_rubric": []}' > "$LA/assetgen/purposes/icon.json"
 AG lint --authoring "$LA" --json > "$TMP/o" 2>&1
-lst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/o"; }
+lst() { jq -r --arg p "$1" '[.results[] | select(.path == $p and .check == "assetgen-lint") | .state] | join(",")' "$TMP/o"; }
 [ "$(lst core:templates/assetgen/purposes/icon.json)/$(lst game:assetgen/purposes/icon.json)" = "PASS/FAIL" ] \
   && [ "$(lst core:templates/assetgen/workflows/image-generate.json)" = PASS ] \
   && ok "lint blames the game file holding the bad values, not the unchanged core file it extends" \
@@ -384,7 +1465,7 @@ got=$(AG lint "$LA/assetgen/purposes/icon.json" --authoring "$LA" 2>&1)
 { grep -q "handoff_domain 'audio' is not a registry domain" <<<"$got" && grep -q "qa.size.mode must be one of" <<<"$got" \
   && grep -q "qa.alpha must be one of" <<<"$got" && grep -q "prompt_rubric must be a non-empty list" <<<"$got"; } \
   && ok "lint purpose: domain, qa modes, rubric (merged game extension)" || no "purpose lint" "$got"
-jq '.["1"].inputs.user_prompt = "{{prompt}}"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/left.json"
+jq '.["1"].inputs.user_prompt = "{{prompt}}"' "$RUNS/legacy-shape-icon-001/workflow.json" > "$TMP/left.json"
 got=$(AG lint "$TMP/left.json" 2>&1); grep -q "unfilled placeholder prompt" <<<"$got" && ok "rendered workflow with a leftover placeholder: FAIL" || no "leftover placeholder lint"
 echo '{"schema": "x"}' > "$TMP/other.json"
 got=$(AG lint "$TMP/other.json" 2>&1); grep -q "not an asset-gen" <<<"$got" && ok "unrelated JSON: FAIL" || no "unrelated JSON lint"
@@ -401,6 +1482,10 @@ mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "defa
 mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}}'
 mal mal-orient '{"extends": "icon", "qa": {"size": {"mode": "orientation", "orientation": "wide"}}}'
 mal mal-pixels '{"extends": "concept-2d", "qa": {"size": {"mode": "area", "min_pixels": 0}}}'
+mal mal-fit-forbidden '{"extends": "icon", "qa": {"alpha": "forbidden", "size": {"fit": "pad"}}}'
+mal mal-fit-any '{"extends": "icon", "qa": {"alpha": "any", "size": {"fit": "pad"}}}'
+mal mal-fit-swap '{"extends": "icon", "qa": {"size": {"allow_swap": true}}}'
+mal mal-fit-crop '{"extends": "icon", "qa": {"size": {"fit": "crop"}}}'
 mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
 mal mal-flip '{"extends": "vfx-flipbook", "qa": {"flipbook_grid": {"columns": 0, "rows": "4", "max_gutter_luminance": 300, "min_cell_stddev": -1}}}'
 mal mal-flip-obj '{"extends": "vfx-flipbook", "qa": {"flipbook_grid": 4}}'
@@ -409,12 +1494,16 @@ mal mal-blackbg '{"extends": "vfx-sprite", "qa": {"black_background": {"max_lumi
 mal mal-blackbg-obj '{"extends": "vfx-sprite", "qa": {"black_background": "black"}}'
 mal mal-axis '{"extends": "vfx-trail", "qa": {"tileable": {"max_seam_error": 0.06, "axis": "z"}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
-  local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
-  local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
+  local rc; AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json > "$TMP/mal-out.json" 2>"$TMP/err"; rc=$?
+  local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' "$TMP/mal-out.json" 2>/dev/null)
   case "$rc/$got" in "1/FAIL "*"$2"*) grep -q Traceback "$TMP/err" && no "lint $3: traceback" "$(cat "$TMP/err")" || ok "lint $3" ;;
     *) no "lint $3 rc=$rc" "$got
 $(cat "$TMP/err")" ;; esac
 }
+expect_mal mal-fit-forbidden "qa.size.fit pad needs qa.alpha required" "fit pad rejects forbidden alpha"
+expect_mal mal-fit-any "qa.size.fit pad needs qa.alpha required" "fit pad rejects any alpha"
+expect_mal mal-fit-swap "qa.size.fit pad needs qa.size.allow_swap false" "fit pad rejects allow_swap"
+expect_mal mal-fit-crop "qa.size.fit must be one of" "unknown fit value"
 expect_mal mal-size "qa.size must be an object" "malformed purpose: qa.size a list -> FAIL row, exit 1, no traceback"
 expect_mal mal-qa "qa must be an object" "malformed purpose: qa not an object -> FAIL row"
 expect_mal mal-params "params must be an object" "malformed purpose: params not an object -> FAIL row"
@@ -461,13 +1550,143 @@ expect_lint link--1 FAIL "node 1 has no output -1" "link output index -1: FAIL (
 expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAIL, no traceback"
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
-AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "21 PASS, 3 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
+# Full lint PASS count: every core data file plus the two game-layer files that pass (purposes/icon.json,
+# templates/image-generate.json). Each template also gets one assetgen-graph-style row: PASS for a template with ui
+# groups, WARN for a legacy one (no ui groups); the game image-generate extension has its core template's ui block.
+tpl_ui_init
+gs_pass=0; gs_warn=0
+for t in $CORE_TEMPLATES image-generate; do
+  if [ "${TPL_UI[$t]}" = PASS ]; then gs_pass=$((gs_pass + 1)); else gs_warn=$((gs_warn + 1)); fi
+done
+AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "$((n_core + 2 + gs_pass)) PASS, $((3 + gs_warn)) WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no usable structured style fields (palette.colors, tone, canvas, outline.edge_darkness): .*no style-\* QA row can grade" "$TMP/o" \
   && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no usable structured style fields" "$TMP/o" \
   && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without usable structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
 
+group_end; fi
+if group_begin graph-style; then
+echo "-- graph style lint: graph-lint verb and assetgen-graph-style lint rows (graphstyle.py)"
+# every rule with a passing and a failing case, template and UI form: tests/fixtures/assetgen/graphstyle_selftest.py
+python3 -B "$ROOT/tests/fixtures/assetgen/graphstyle_selftest.py" > "$TMP/cs" 2>&1; rc=$?
+n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
+[ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "graphstyle self-test: $n_ok cases passed" || no "graphstyle self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
+GS="$ROOT/tests/fixtures/assetgen/graph-style"
+AG graph-lint "$GS/clean.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS .*tests/fixtures/assetgen/graph-style/clean.json$' "$TMP/o" && grep -qx 'assetgen graph-lint: 1 PASS, 0 WARN, 0 FAIL' "$TMP/o" \
+  && ok "graph-lint: the clean fixture template PASSES, exit 0" || no "graph-lint clean rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint "$GS/clean.json" --json > "$TMP/o" 2>&1
+[ "$(jq -r '.schema + " " + .tool + " " + ([.results[].check] | unique | join(",")) + " " + (.summary | "\(.PASS)/\(.WARN)/\(.FAIL)")' "$TMP/o" 2>&1)" \
+  = "rpg-factory.validation/1 assetgen-graph-lint assetgen-graph-style 1/0/0" ] && ok "graph-lint --json: rpg-factory.validation/1, tool assetgen-graph-lint, one assetgen-graph-style row" \
+  || no "graph-lint --json" "$(cat "$TMP/o")"
+jq 'del(.workflow["4"]._meta)' "$GS/clean.json" > "$TMP/gs-untitled.json"
+jq '.workflow["3"].inputs.user_prompt = "{{prompt}}"' "$GS/clean.json" > "$TMP/gs-literal.json"
+AG graph-lint "$GS/clean.json" "$TMP/gs-untitled.json" "$TMP/gs-literal.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q '^FAIL .*gs-untitled.json: title: node 4 (ImageScale' "$TMP/o" && grep -q '^FAIL .*gs-literal.json: prompt: node 3 (NineRouterImage' "$TMP/o" \
+  && grep -qx 'assetgen graph-lint: 1 PASS, 0 WARN, 2 FAIL' "$TMP/o" && ok "graph-lint: a violating template FAILS naming the node (rule id first), exit 1" \
+  || no "graph-lint violation rc=$rc" "$(cat "$TMP/o")"
+printf 'not json\n' > "$TMP/gs-notjson.json"; echo '{"schema": "x"}' > "$TMP/gs-other.json"; mkdir -p "$TMP/gs-noui-run"
+for u in "missing path|$TMP/gs-no-such.json" "non-JSON file|$TMP/gs-notjson.json" "JSON neither template nor frontend workflow|$TMP/gs-other.json" \
+         "API-format workflow.json (not a frontend workflow)|$RUNS/golden-icon-001/workflow.json" "unknown flag|$GS/clean.json --bogus" \
+         "--run without workflow.ui.json|--run $TMP/gs-noui-run"; do
+  # shellcheck disable=SC2086 # the case's arguments are split on purpose (no path holds a space)
+  AG graph-lint ${u#*|} > "$TMP/o" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ! grep -q '^assetgen graph-lint:' "$TMP/o" && ok "graph-lint usage error exits 2: ${u%%|*}" || no "graph-lint usage ${u%%|*} rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+done
+AG graph-lint --json > "$TMP/gl.json" 2>"$TMP/err"; rc=$?
+gst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/gl.json"; }
+tpl_ui_init
+# "<template>=<state[,state]> " per core template, from one jq call over gl.json
+gs_rows=$(jq -j --arg ids "${CORE_TEMPLATES//$'\n'/ }" '. as $d | ($ids | split(" ") | map(select(. != ""))[]) as $t
+  | "\($t)=\([$d.results[] | select(.path == "core:templates/assetgen/workflows/\($t).json") | .state] | join(",")) "' "$TMP/gl.json")
+gs_want=; for t in $CORE_TEMPLATES; do gs_want+="$t=${TPL_UI[$t]} "; done
+[ $rc -eq 0 ] && [ "$gs_rows" = "$gs_want" ] && [ "$(gst core:templates/assetgen/workflows/image-generate.json)/$(gst core:templates/assetgen/workflows/image-edit.json)" = WARN/WARN ] \
+  && jq -e '.summary.FAIL == 0 and ([.results[] | select(.path | test("workflows/image-(generate|edit)\\.json$")) | .reasons[0] | startswith("legacy template without a ui block")] | length == 2 and all)' "$TMP/gl.json" >/dev/null \
+  && ok "graph-lint without a path: one row per core template; legacy image-generate and image-edit WARN (never FAIL), exit 0" \
+  || no "graph-lint core templates rc=$rc: $gs_rows (want $gs_want)" "$(cat "$TMP/err"; jq -c '.results[] | select(.state != "PASS")' "$TMP/gl.json")"
+# --profile (UNTESTED on RTX 5060: the profile rules are static checks of a template's declarations against
+# data/hardware.json; nothing is generated or measured)
+gl_rows() { jq -c '[.results[] | {path, state, reasons}]' "$1"; }
+AG graph-lint --profile api-only --json > "$TMP/gl-api.json" 2>"$TMP/err"; rc=$?
+# a core template declaring a local requires.profile (a hybrid or local template) FAILS under api-only with a profile:
+# reason naming api-only; every other core template keeps its row
+tpl_files=(); for t in $CORE_TEMPLATES; do tpl_files+=("$CORE/workflows/$t.json"); done
+local_tpls=$(jq -r 'if (.requires.profile // "api-only") != "api-only" then "core:templates/assetgen/workflows/" + (input_filename | sub(".*/"; "")) else empty end' "${tpl_files[@]:-/dev/null}")
+local_json=$(jq -nc --arg l "$local_tpls" '$l | split("\n") | map(select(. != ""))')
+gl_api_rows() { jq -c --argjson l "$local_json" '[.results[] | select(.path as $p | $l | index($p) | not) | {path, state, reasons}]' "$1"; }
+want_rc=0; [ -n "$local_tpls" ] && want_rc=1
+[ $rc -eq $want_rc ] && [ "$(gl_api_rows "$TMP/gl-api.json")" = "$(gl_api_rows "$TMP/gl.json")" ] \
+  && ok "graph-lint --profile api-only over the core templates: the same rows as without --profile for every template without a local requires.profile (API-only staged templates keep their result), exit $want_rc" \
+  || no "graph-lint --profile api-only core templates rc=$rc (want $want_rc)" "$(cat "$TMP/err"; diff <(gl_api_rows "$TMP/gl.json") <(gl_api_rows "$TMP/gl-api.json"))"
+for p in $local_tpls; do
+  jq -e --arg p "$p" '[.results[] | select(.path == $p)] | length == 1 and .[0].state == "FAIL"
+      and ([.[0].reasons[] | select(startswith("profile:") and contains("api-only"))] | length > 0)' "$TMP/gl-api.json" >/dev/null \
+    && ok "graph-lint --profile api-only: local template ${p##*/} FAILS with a profile: reason naming api-only" \
+    || no "graph-lint --profile api-only local template ${p##*/}" "$(jq -c --arg p "$p" '.results[] | select(.path == $p)' "$TMP/gl-api.json")"
+done
+AG graph-lint --profile bogus "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
+hw_ids=$(jq -r '[.profiles[].id] | join(", ")' "$ROOT/scripts/assetgen/data/hardware.json")
+[ $rc -eq 2 ] && ! grep -q '^assetgen graph-lint:' "$TMP/o" && grep -qF -- "--profile bogus: one of $hw_ids (data/hardware.json)" "$TMP/err" \
+  && ok "graph-lint --profile bogus: usage error naming the hardware profile ids, exit 2" || no "graph-lint --profile bogus rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG graph-lint --profile auto "$GS/clean.json" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && ok "graph-lint --profile auto: not a hardware profile id (auto is resolve only), exit 2" || no "graph-lint --profile auto rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG graph-lint --profile local-8gb "$GS/hybrid-clean.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q '^PASS .*tests/fixtures/assetgen/graph-style/hybrid-clean.json$' "$TMP/o" \
+  && ok "graph-lint --profile local-8gb: the clean hybrid template PASSES, exit 0" || no "graph-lint hybrid local-8gb rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint --profile api-only "$GS/hybrid-clean.json" --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && [ "$(jq -r '.results[0].state' "$TMP/o")" = FAIL ] \
+  && jq -e '[.results[0].reasons[] | select(startswith("profile:") and contains("api-only"))] | length > 0' "$TMP/o" >/dev/null \
+  && ok "graph-lint --profile api-only: the hybrid template FAILS with a profile: reason naming api-only, exit 1" \
+  || no "graph-lint hybrid api-only rc=$rc" "$(cat "$TMP/o")"
+AG lint --authoring "$AUTH" --json > "$TMP/o" 2>&1
+want_paths=$( { for t in $CORE_TEMPLATES; do echo "core:templates/assetgen/workflows/$t.json"; done
+  for f in "$GL"/templates/*.json; do echo "game:assetgen/templates/$(basename "$f")"; done; } | LC_ALL=C sort)
+got_paths=$(jq -r '.results[] | select(.check == "assetgen-graph-style") | .path' "$TMP/o" | LC_ALL=C sort)
+[ -n "$want_paths" ] && [ "$got_paths" = "$want_paths" ] \
+  && [ "$(jq -r '[.results[] | select(.check == "assetgen-graph-style" and (.path | test("image-(generate|edit)\\.json$"))) | .state] | unique | join(",")' "$TMP/o")" = WARN ] \
+  && [ "$(jq -r '[.results[] | select(.check == "assetgen-graph-style" and (.path | test("workflows/staged-(icon|ui-element)\\.json$"))) | .state] | sort | join(",")' "$TMP/o")" = PASS,PASS ] \
+  && ok "lint: one assetgen-graph-style row per core and game template, staged icon and ui-element PASS, legacy templates WARN" \
+  || no "lint graph-style rows" "got: $got_paths
+want: $want_paths
+$(jq -c '.results[] | select(.check == "assetgen-graph-style")' "$TMP/o")"
+[ "$(jq -r '[.results[] | select(.path | test("purposes/|styles/")) | .check] | unique | join(",")' "$TMP/o")" = assetgen-lint ] \
+  && ok "lint: purposes and styles get no assetgen-graph-style row" || no "graph-style rows on non-templates" "$(jq -c '.results[] | select(.check == "assetgen-graph-style")' "$TMP/o")"
+# a clean template in the game layer: lint and graph-lint PASS it; a run rendered from it passes graph-lint --run
+cp "$GS/clean.json" "$GL/templates/graph-clean.json"
+AG lint "$GL/templates/graph-clean.json" --authoring "$AUTH" --json > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '[.results[] | .check + "=" + .state] | join(" ")' "$TMP/o")" = "assetgen-lint=PASS assetgen-graph-style=PASS" ] \
+  && ok "lint of the clean game template: assetgen-lint PASS, then assetgen-graph-style PASS" || no "lint game clean template rc=$rc" "$(cat "$TMP/o")"
+AG graph-lint "$GL/templates/graph-clean.json" --authoring "$AUTH" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qx 'PASS game:assetgen/templates/graph-clean.json' "$TMP/o" && ok "graph-lint of the clean game layer template: PASS" || no "graph-lint game template rc=$rc" "$(cat "$TMP/o")"
+mkrun gs-clean-001 icon --style stylized-painterly --authoring "$AUTH" --template graph-clean; gsd="$RUNS/gs-clean-001"
+AG render --run "$gsd" --param reference_image=ref.png > "$TMP/o" 2>&1; rc=$?
+AG graph-lint --run "$gsd" --authoring "$AUTH" > "$TMP/o2" 2>&1; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q '^PASS .*gs-clean-001/workflow.ui.json$' "$TMP/o2" \
+  && [ "$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix] | join(",")' "$gsd/workflow.json")" = assetgen/gs-clean-001-final ] \
+  && ok "graph-lint --run on a run rendered from the clean template: PASS (filename_prefix assetgen/<run-id>-final), exit 0" \
+  || no "graph-lint --run rc=$rc/$rc2" "$(cat "$TMP/o" "$TMP/o2")"
+jq -c '(.nodes[] | select(.id == 4) | .pos) = [5000, 5000]' "$gsd/workflow.ui.json" > "$TMP/gs-moved.ui.json"
+AG graph-lint "$TMP/gs-moved.ui.json" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q '^FAIL .*gs-moved.ui.json: .*group: node 4 (ImageScale' "$TMP/o" \
+  && ok "graph-lint on a frontend workflow with a node outside every group: FAIL naming the node, exit 1" || no "graph-lint moved node rc=$rc" "$(cat "$TMP/o")"
+# a workflow.ui.json that lost extra.assetgen: --run still checks SaveImage suffixes against assetgen/<run dir name>;
+# a bare PATH without a run id FAILS as unchecked (the run prefix is unknown), never a silent skip
+gsx="$TMP/gs-noextra/gs-clean-001"; mkdir -p "$gsx"
+jq -c 'del(.extra.assetgen)' "$gsd/workflow.ui.json" > "$gsx/workflow.ui.json"
+AG graph-lint --run "$gsx" > "$TMP/o" 2>&1; rc=$?
+AG graph-lint "$gsx/workflow.ui.json" > "$TMP/o2" 2>&1; rc2=$?
+jq -c 'del(.extra.assetgen) | (.nodes[] | select(.id == 6) | .widgets_values) = ["assetgen/gs-clean-001"]' "$gsd/workflow.ui.json" > "$gsx/workflow.ui.json"
+AG graph-lint --run "$gsx" > "$TMP/o3" 2>&1; rc3=$?
+[ "$(jq -r '.extra.assetgen // "gone"' "$gsx/workflow.ui.json")" = gone ] && [ $rc -eq 0 ] \
+  && [ $rc2 -eq 1 ] && grep -q '^FAIL .*save-suffix: node 6 (SaveImage.*run prefix is unknown' "$TMP/o2" \
+  && [ $rc3 -eq 1 ] && grep -q '^FAIL .*gs-clean-001/workflow.ui.json: .*save-suffix: node 6 (SaveImage.*"assetgen/gs-clean-001" plus an inline suffix' "$TMP/o3" \
+  && ! grep -q 'run prefix is unknown' "$TMP/o3" \
+  && ok "graph-lint without extra.assetgen: --run checks the suffix against the run (suffixed exit 0, unsuffixed exit 1); a bare PATH FAILS as unchecked" \
+  || no "graph-lint lost extra.assetgen rc=$rc/$rc2/$rc3" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3")"
+
+group_end; fi
+if group_begin fixture-pngs; then
 echo "-- fixture PNGs"
-FX="$TMP/png"; mkdir -p "$FX"
+mkdir -p "$FX"
 cat > "$TMP/mk.py" <<'EOF'
 import math, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -488,6 +1707,7 @@ save("icon-ok.png", 512, 512, disc(512, 512, (0, 0, 0, 0)))  # 512x512: the icon
 save("icon-small.png", 256, 256, disc(256, 256, (0, 0, 0, 0)))  # under every core purpose floor
 save("icon-opaque.png", 512, 512, disc(512, 512, (30, 30, 30, 255)), alpha=False)
 save("icon-wide.png", 384, 256, disc(384, 256, (0, 0, 0, 0)))
+save("preview-64.png", 64, 64, disc(64, 64, (0, 0, 0, 0)))  # the staged icon's 64 px PreviewImage
 save("empty.png", 256, 256, lambda x, y: (0, 0, 0, 0))
 save("flat.png", 256, 256, lambda x, y: (90, 90, 90, 255), alpha=False)
 def wave(x, y):
@@ -506,6 +1726,8 @@ row16 = bytes(b for x in range(512) for b in (x % 256, 0, 255 - x % 256, 0, 60, 
 def disc_rows(w, h):
     return [bytes(c for x in range(w) for c in ((200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.3) ** 2 else (0, 0, 0, 0)))
             for y in range(h)]
+open(os.path.join(out, "svc-small.png"), "wb").write(png.encode_raw(600, 300, 8, 6, disc_rows(600, 300)))
+open(os.path.join(out, "svc-fit.png"), "wb").write(png.encode_raw(1536, 1024, 8, 6, disc_rows(1536, 1024)))  # landscape SaveImage
 open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row16] * 512))
 # e2e3: real near-square 9router size, a portrait answer to a landscape request, and a prop whose low-alpha edge pixels
@@ -558,15 +1780,16 @@ open(os.path.join(out, "not-a-png.png"), "wb").write(b"GIF89a not a png")
 EOF
 python3 -B "$TMP/mk.py" "$ROOT" "$FX" && [ -f "$FX/corrupt.png" ] && ok "fixture PNGs generated (stdlib encoder)" || no "fixture generation"
 
+group_end; fi
+if group_begin png-qa; then
 echo "-- qa"
 qarun() { # qarun NAME PURPOSE PNG...  -> rc in $rc, report in $TMP/q.json
   local name="$1" p="$2"; shift 2
-  mkrun "$name" "$p" --style stylized-painterly || return 1
+  mkrun "$name" "$p" --style stylized-painterly --template "$(if [ "$p" = image-edit ]; then echo image-edit; else echo image-generate; fi)" || return 1
   AG render --run "$RUNS/$name" >/dev/null 2>&1
   for f in "$@"; do cp "$FX/$f" "$RUNS/$name/outputs/"; done
   AG qa --run "$RUNS/$name" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
 }
-st() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/q.json"; }
 qarun qa-icon-ok-001 icon icon-ok.png
 [ $rc -eq 0 ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] && [ "$(st png-alpha)/$(st png-corners)/$(st png-not-blank)/$(st png-size)" = "PASS/PASS/PASS/PASS" ] \
   && ok "icon: transparent disc passes alpha, corners, not-blank, square aspect" || no "icon ok rc=$rc" "$(jq -c '.results' "$TMP/q.json")"
@@ -803,6 +2026,8 @@ for vp in vfx-flipbook vfx-sprite vfx-trail; do
   [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "$vp: 256x256 fails png-size (floors)" || no "$vp small rc=$rc $(st png-size)"
 done
 
+group_end; fi
+if group_begin review-cmd; then
 echo "-- review-cmd (prints only)"
 d="$RUNS/qa-icon-ok-001"
 out=$(AG review-cmd --phase prompt --run "$d" 2>&1); rc=$?
@@ -879,7 +2104,8 @@ want=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "
 jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 512x512 (requested $want)" \
   && [ -z "$(ls "$d/review" | grep -v '^composite-\(dark\|light\)\.png$')" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose (only the alpha composites)" \
   || no "pixel size line" "$(jq -r .stdin "$TMP/rc.json" | grep -n 'pixel size'; ls "$d")"
-AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin | grep -qF "outputs/big.png: 1536x1024 (requested" \
+big_stdin=$(AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin)
+grep -qF "outputs/big.png: 1536x1024 (requested" <<<"$big_stdin" \
   && ok "pixel size of a 1536x1024 output (concept-2d)" || no "concept pixel size"
 td="$RUNS/qa-tile-ok-001"
 AG review-cmd --phase image --run "$td" --json > "$TMP/rt.json" 2>"$TMP/err"; rc=$?
@@ -938,8 +2164,8 @@ AG manifest --run "$sr" >/dev/null 2>"$TMP/err"
 mp=$(sed -n '/^---json$/,/^---$/p' "$sr/run.md" | sed '1d;$d' | jq -r '.spec.params.size')
 [ "$mp" = 1024x1024 ] && [ "$(jq -r .params.size "$sr/spec.json")" = 1536x1024 ]   && [ "$mp" = "$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$sr/workflow.json")" ]   && ok "manifest after render --param size=1024x1024: run.md spec.params.size is the rendered 1024x1024, not spec.json's 1536x1024"   || no "run.md spec.params from workflow.json: $mp" "$(cat "$TMP/err")"
 mkrun review-unrendered-001 concept-2d --style stylized-painterly
-AG review-cmd --phase prompt --run "$RUNS/review-unrendered-001" --json | jq -r .stdin \
-  | grep -q "^Requested params (spec.json): .*size=1536x1024" && ok "review prompt before render: spec.json params, named as such" || no "unrendered params"
+unrendered_stdin=$(AG review-cmd --phase prompt --run "$RUNS/review-unrendered-001" --json | jq -r .stdin)
+grep -q "^Requested params (spec.json): .*size=1536x1024" <<<"$unrendered_stdin" && ok "review prompt before render: spec.json params, named as such" || no "unrendered params"
 python3 -B - "$ROOT" "$TMP/rparams" > "$TMP/o" 2>&1 <<'EOF'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -995,10 +2221,14 @@ fi
 AG embed --run "$TMP/missing/dir-001" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -qF "no run directory at $TMP/missing/dir-001 (" "$TMP/err" && ok "--run with a missing path (not a run id): exit 2 naming the path" \
   || no "missing run path rc=$rc" "$(cat "$TMP/err")"
-AG qa --help | grep -q "run id <slug>-NNN" && AG resolve --help | grep -q -- "--verbose" && ok "CLI help documents --run RUN-ID and resolve --verbose" || no "CLI help"
+# the help texts are captured first: a pipe into `grep -q` under pipefail fails with SIGPIPE when grep exits early
+qa_help=$(AG qa --help); resolve_help=$(AG resolve --help)
+grep -q "run id <slug>-NNN" <<<"$qa_help" && grep -q -- "--verbose" <<<"$resolve_help" && ok "CLI help documents --run RUN-ID and resolve --verbose" || no "CLI help" "$qa_help"$'\n'"$resolve_help"
 
+group_end; fi
+if group_begin embed; then
 echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
-ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly && AG render --run "$ed" >/dev/null
+ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly --template image-generate && AG render --run "$ed" >/dev/null
 python3 -B - "$ROOT" "$FX/icon-ok.png" "$ed/outputs/comfy.png" <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -1081,10 +2311,12 @@ AG embed --run "$RUNS/embed-noui-001" > /dev/null 2>"$TMP/err"; rc=$?
   && ok "embed without workflow.ui.json: error, outputs untouched" || no "embed no ui rc=$rc" "$(cat "$TMP/err")"
 rm -rf "$RUNS/embed-noui-001"
 
+group_end; fi
+if group_begin e2e3; then
 echo "-- e2e3: edge fringe QA, defringe, composites in the image review"
 # item 1: a prop whose low-alpha edge pixels carry a coloured speckle (barrel-prop-001) fails png-edge-fringe;
 # defringe (refused while qa.json binds the outputs, --force names what is stale) repairs it and QA passes
-fr="$RUNS/fringe-icon-001"; mkrun fringe-icon-001 icon --style stylized-painterly && AG render --run "$fr" >/dev/null
+fr="$RUNS/fringe-icon-001"; mkrun fringe-icon-001 icon --style stylized-painterly --template image-generate && AG render --run "$fr" >/dev/null
 python3 -B - "$ROOT" "$FX/fringe.png" "$fr/outputs/prop.png" <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -1177,7 +2409,7 @@ AG review-cmd --phase image --run "$fr" > /dev/null && AG review-cmd --phase ima
 # final review P3: the documented post-QA fringe repair (SKILL.md step 7) works end to end: embed, qa FAIL, both image
 # reviews bind the outputs, defringe without --force is refused, defringe --force names qa.json and both reviews stale,
 # then embed, qa PASS and both image reviews again bind the repaired outputs
-fx="$RUNS/fringe-repair-001"; mkrun fringe-repair-001 icon --style stylized-painterly && AG render --run "$fx" >/dev/null
+fx="$RUNS/fringe-repair-001"; mkrun fringe-repair-001 icon --style stylized-painterly --template image-generate && AG render --run "$fx" >/dev/null
 cp "$fr/outputs-raw/prop.png" "$fx/outputs/prop.png"; AG embed --run "$fx" > /dev/null
 AG qa --run "$fx" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
 bound "$fx" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fx/review-image.json"
@@ -1211,7 +2443,7 @@ case "$step7" in *'`assetgen.py defringe --run <run> --force [--alpha-floor N]`'
   *) no "SKILL.md step 7 fringe repair" "$step7" ;; esac
 rm -rf "$fx"
 # several outputs: composites per output with alpha (review/composite-<stem>-<bg>.png); an opaque output gets none and defringe skips it
-f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly && AG render --run "$f2" >/dev/null
+f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly --template image-generate && AG render --run "$f2" >/dev/null
 cp "$FX/fringe.png" "$f2/outputs/a.png"; cp "$FX/icon-opaque.png" "$f2/outputs/b.png"; ob=$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)
 AG defringe --run "$f2" > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 0 ] && grep -q "^skipped outputs/b.png: no transparent pixels" "$TMP/o" && grep -q "1 defringed, 1 skipped, 0 FAIL" "$TMP/o" \
@@ -1551,6 +2783,635 @@ cp "$FX/icon-ok.png" "$ar/outputs/prop.png"; AG manifest --run "$ar" > "$TMP/o" 
   && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = proposed ] \
   && ok "manifest after the approved outputs changed: proposed, names what the approval no longer binds" || no "manifest reset rc=$rc" "$(cat "$TMP/o")"
 
+group_end; fi
+if group_begin sheet-sizes; then
+echo "-- finalize: filter, fit, defringe (alpha purposes only), embed, qa in one fixed order"
+echo "-- finalize: experimental sheet mode"
+sh_case sheet-sizes
+group_end; fi
+if group_begin sheet-failures; then
+sh_case sheet-failures
+group_end; fi
+if group_begin sheet-repeat; then
+sh_case sheet-repeat
+group_end; fi
+if group_begin sheet-cli; then
+sh_case sheet-cli
+group_end; fi
+if group_begin sheet-discard; then
+sh_case sheet-discard
+group_end; fi
+if group_begin pixel-grid; then
+echo "-- finalize: pixel-grid detection, palette and opt-in QA"
+# A 128x128 pattern enlarged fourfold, with transparent corners and several opaque colours.
+python3 -B - "$ROOT" "$TMP" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+colors = [(220, 40, 30, 255), (30, 180, 70, 255), (40, 60, 220, 255),
+          (230, 190, 30, 255), (130, 40, 180, 255), (30, 190, 190, 255)]
+rgba = bytearray()
+for y in range(512):
+    for x in range(512):
+        xx, yy = x // 4, y // 4
+        rgba.extend(colors[(xx * 7 + yy * 11) % len(colors)] if 16 <= xx < 112 and 16 <= yy < 112 else (0, 0, 0, 0))
+open(os.path.join(sys.argv[2], "pg-source.png"), "wb").write(png.encode(512, 512, rgba))
+row = b"\x80\x00\x40\x00\xc0\x00" * 512
+open(os.path.join(sys.argv[2], "pg-depth.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row] * 512))
+EOF
+pg_first="$RUNS/pg-first-001"; pg_second="$RUNS/pg-second-001"
+finrun pg-first-001 icon icon-ok.png && finrun pg-second-001 icon icon-ok.png || no "pixel-grid run setup"
+cp "$pg_first/workflow.json" "$pg_second/workflow.json"
+cp "$pg_first/workflow.ui.json" "$pg_second/workflow.ui.json"
+cp "$TMP/pg-source.png" "$pg_first/outputs/prop.png"; cp "$TMP/pg-source.png" "$pg_second/outputs/prop.png"
+AG embed --run "$pg_first" > /dev/null 2>"$TMP/pg-err"
+AG embed --run "$pg_second" > /dev/null 2>>"$TMP/pg-err"
+cp "$pg_first/outputs/prop.png" "$TMP/pg-input.png"
+AG finalize --run "$pg_first" --pixel-grid --max-colors 4 --json > "$TMP/pg-first.json" 2>>"$TMP/pg-err"; pg_rc=$?
+python3 -B - "$ROOT" "$pg_first/outputs/prop.png" <<'EOF' > "$TMP/pg-pixels"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+image = png.decode(sys.argv[2])
+colors = {tuple(image.rgba[i:i+3]) for i in range(0, len(image.rgba), 4) if image.rgba[i+3]}
+print("ok" if (image.width, image.height) == (128, 128) and len(colors) <= 4 else "bad")
+EOF
+[ "$pg_rc" -eq 0 ] && grep -qx ok "$TMP/pg-pixels" \
+  && jq -e '[.steps[] | select(.step == "pixel-grid" and .state == "pixelated")] | length == 1' "$TMP/pg-first.json" >/dev/null \
+  && jq -e '.outputs[0].scale == 4 and .outputs[0].source_size == "512x512" and .outputs[0].size == "128x128"' "$pg_first/pixelgrid.json" >/dev/null \
+  && cmp -s "$TMP/pg-input.png" "$pg_first/outputs-raw/pixelgrid/prop.png" \
+  && jq -e 'any(.results[]; .check == "png-pixel-grid" and .state == "PASS") and any(.results[]; .check == "png-size" and .state == "PASS" and any(.reasons[]; contains("graded at source size 512x512")))' "$pg_first/qa.json" >/dev/null \
+  && ok "pixel-grid: scale 4, at most four colours, original preserved and QA grades source size" \
+  || no "pixel-grid first rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-first.json")"
+
+AG finalize --run "$pg_second" --pixel-grid --max-colors 4 --json > "$TMP/pg-second.json" 2>>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && cmp -s "$pg_first/outputs/prop.png" "$pg_second/outputs/prop.png" \
+  && [ "$(jq -c .outputs "$pg_first/pixelgrid.json")" = "$(jq -c .outputs "$pg_second/pixelgrid.json")" ] \
+  && ok "pixel-grid: fresh runs produce identical bytes and output records" || no "pixel-grid deterministic rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-second.json")"
+cp "$pg_first/outputs/prop.png" "$TMP/pg-result.png"
+AG finalize --run "$pg_first" --pixel-grid --max-colors 4 --json > "$TMP/pg-again.json" 2>>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && cmp -s "$TMP/pg-result.png" "$pg_first/outputs/prop.png" \
+  && jq -e 'any(.steps[]; .step == "pixel-grid" and .state == "skipped" and any(.results[]; .reason == "already pixel-gridded"))' "$TMP/pg-again.json" >/dev/null \
+  && ok "pixel-grid: repeat finalize skips already pixel-gridded output with bytes unchanged" || no "pixel-grid repeat rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-again.json")"
+
+pg_deep="$RUNS/pg-deep-001"; finrun pg-deep-001 icon icon-ok.png || no "pixel-grid depth setup"
+cp "$TMP/pg-depth.png" "$pg_deep/outputs/prop.png"
+AG embed --run "$pg_deep" > /dev/null 2>"$TMP/pg-err"
+cp "$pg_deep/outputs/prop.png" "$TMP/pg-deep-input.png"
+AG finalize --run "$pg_deep" --pixel-grid --json > "$TMP/pg-deep.json" 2>>"$TMP/pg-err"; pg_rc=$?
+cmp -s "$TMP/pg-deep-input.png" "$pg_deep/outputs/prop.png" && [ ! -e "$pg_deep/outputs-raw/pixelgrid/prop.png" ] \
+  && jq -e 'any(.outputs[]; .state == "skipped" and (.reason | contains("bit depth 16")))' "$pg_deep/pixelgrid.json" >/dev/null \
+  && ok "pixel-grid: 16-bit output skipped with reason, unchanged and no raw copy" || no "pixel-grid depth rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-deep.json")"
+
+pg_plain="$RUNS/pg-plain-001"; finrun pg-plain-001 icon icon-ok.png || no "pixel-grid opt-in setup"
+AG finalize --run "$pg_plain" --json > "$TMP/pg-plain.json" 2>"$TMP/pg-err"; pg_rc=$?
+[ "$pg_rc" -eq 0 ] && [ ! -e "$pg_plain/pixelgrid.json" ] \
+  && jq -e '[.steps[].step] == ["filter", "fit", "defringe", "embed", "qa"]' "$TMP/pg-plain.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-pixel-grid")] | length == 0' "$pg_plain/qa.json" >/dev/null \
+  && ok "finalize without pixel-grid keeps the usual steps and no pixel-grid QA row" || no "pixel-grid opt-in rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-plain.json")"
+
+pg_style="$RUNS/pg-style-001"; finrun pg-style-001 icon icon-ok.png || no "pixel-grid style setup"
+cp "$TMP/pg-source.png" "$pg_style/outputs/prop.png"
+jq '.style.data.palette = {"text":"Two colours", "colors":[{"hex":"#ff0000"},{"hex":"#0000ff"}]}' "$pg_style/spec.json" > "$TMP/pg-spec.json" && cp "$TMP/pg-spec.json" "$pg_style/spec.json"
+AG finalize --run "$pg_style" --pixel-grid --max-colors 8 --json > "$TMP/pg-style.json" 2>"$TMP/pg-err"; pg_rc=$?
+python3 -B - "$ROOT" "$pg_style/outputs/prop.png" <<'EOF' > "$TMP/pg-style-pixels"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+image = png.decode(sys.argv[2])
+colors = {tuple(image.rgba[i:i+3]) for i in range(0, len(image.rgba), 4) if image.rgba[i+3]}
+print("ok" if colors and colors <= {(255, 0, 0), (0, 0, 255)} else "bad")
+EOF
+[ "$pg_rc" -eq 0 ] && grep -qx ok "$TMP/pg-style-pixels" && jq -e '.params.palette == "style"' "$pg_style/pixelgrid.json" >/dev/null \
+  && ok "pixel-grid: structured style palette supplies output colours" || no "pixel-grid style rc=$pg_rc" "$(cat "$TMP/pg-err" "$TMP/pg-style.json")"
+AG finalize --run "$pg_plain" --max-colors 4 > "$TMP/pg-invalid" 2>&1; pg_rc=$?
+[ "$pg_rc" -eq 2 ] && ok "finalize --max-colors without --pixel-grid exits 2" || no "pixel-grid missing flag rc=$pg_rc" "$(cat "$TMP/pg-invalid")"
+
+group_end; fi
+if group_begin output-filter; then
+# Live fetch_outputs names encode the prompt and index, not the source type. Each run gets its own rendered prefix.
+filter_run() {
+  local name="$1"
+  finrun "$name" icon icon-ok.png || return 1
+  FILTER_RUN="$RUNS/$name"
+  mv "$FILTER_RUN/outputs/prop.png" "$FILTER_RUN/outputs/937cc86a_000.png"
+  cp "$FX/preview-64.png" "$FILTER_RUN/outputs/937cc86a_001.png"
+  mkdir -p "$FILTER_RUN/previews"
+  local prefix base dir
+  prefix=$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix][0]' "$FILTER_RUN/workflow.json")
+  base=${prefix##*/}; dir=${prefix%/*}
+  jq -n --arg prompt '937cc86a-b67c-4a32-ad68-2652a5ef3425' \
+    --arg save "http://127.0.0.1:8188/view?filename=${base}_00001_.png&subfolder=${dir}&type=output" \
+    --arg temp 'http://127.0.0.1:8188/view?filename=ComfyUI_temp_abcde_00001_.png&subfolder=&type=temp' \
+    '{prompt_id: $prompt, urls: [$save, $temp]}' > "$FILTER_RUN/fetch.json"
+}
+filter_count() { find "$1/outputs" "$1/previews" -type f | wc -l | tr -d ' '; }
+filter_files_intact() { [ "$(filter_count "$1")" = "$2" ]; }
+
+filter_run filter-live-icon-001 || no "filter live setup"
+fl="$FILTER_RUN"; count=$(filter_count "$fl")
+AG budget --run "$fl" --json > "$TMP/filter-budget-before.json" 2>"$TMP/err"; brc=$?
+AG finalize --run "$fl" --json > "$TMP/filter-finalize.json" 2>>"$TMP/err"; rc=$?
+AG budget --run "$fl" --json > "$TMP/filter-budget-after.json" 2>>"$TMP/err"; arc=$?
+AG manifest --run "$fl" > "$TMP/o" 2>>"$TMP/err"; mrc=$?
+sed -n '/^---json$/,/^---$/p' "$fl/run.md" | sed '1d;$d' > "$TMP/filter-manifest.json"
+[ "$brc/$rc/$arc/$mrc" = 0/0/0/0 ] \
+  && jq -e '[.outputs,.previews,.used] == [1,1,1]' "$TMP/filter-budget-before.json" >/dev/null && jq -e '[.outputs,.previews,.used] == [1,1,1]' "$TMP/filter-budget-after.json" >/dev/null \
+  && jq -e '.steps[0].step == "filter" and .steps[0].state == "moved" and ([.steps[0].results[] | select(.state == "moved") | .output] == ["outputs/937cc86a_001.png"])' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fl/outputs/937cc86a_000.png" ] && [ ! -e "$fl/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fl/previews/937cc86a_001.png" && filter_files_intact "$fl" "$count" \
+  && jq -e '([.results[].output] | unique) == ["outputs/937cc86a_000.png"] and ([.outputs[].path] == ["outputs/937cc86a_000.png"])' "$fl/qa.json" >/dev/null \
+  && jq -e '[.spec.outputs[].path] == ["outputs/937cc86a_000.png"]' "$TMP/filter-manifest.json" >/dev/null \
+  && ok "filter fetch evidence: preview moved, QA and manifest see only the deliverable; budget counts one before and after" \
+  || no "filter live rc=$brc/$rc/$arc/$mrc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+filter_run filter-job-icon-001 || no "filter job setup"
+fj="$FILTER_RUN"; count=$(filter_count "$fj")
+jq --slurpfile fetch "$fj/fetch.json" '.prompt_id = $fetch[0].prompt_id | .outputs = $fetch[0].urls' "$ROOT/tests/fixtures/assetgen/comfy-job-state.json" > "$RPG_FACTORY_COMFY_JOBS_DIR/937cc86a-b67c-4a32-ad68-2652a5ef3425.json"
+rm "$fj/fetch.json"
+AG finalize --run "$fj" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 0 ] && jq -e '.steps[0].state == "moved"' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fj/outputs/937cc86a_000.png" ] && [ ! -e "$fj/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fj/previews/937cc86a_001.png" && filter_files_intact "$fj" "$count" \
+  && ok "filter falls back to job-state URLs when fetch.json is absent" || no "filter job rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+# An empty, queued-like job has no output evidence: retain both files with actionable reasons.
+filter_run filter-unknown-icon-001 || no "filter unknown setup"
+fu="$FILTER_RUN"; count=$(filter_count "$fu")
+rm "$fu/fetch.json"
+jq '.prompt_id = "937cc86a-b67c-4a32-ad68-2652a5ef3425" | .status = "queued"' "$ROOT/tests/fixtures/assetgen/comfy-job-state.json" > "$RPG_FACTORY_COMFY_JOBS_DIR/937cc86a-b67c-4a32-ad68-2652a5ef3425.json"
+AG finalize --run "$fu" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 1 ] && jq -e '.steps[0].state == "skipped" and ([.steps[0].results[] | select(.state == "kept" and (.reason | contains("save the fetch_outputs url_only=true result as <run>/fetch.json")))] | length == 2)' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fu/outputs/937cc86a_000.png" ] && [ -f "$fu/outputs/937cc86a_001.png" ] && filter_files_intact "$fu" "$count" \
+  && ok "filter keeps unknown files and explains how to save fetch evidence" || no "filter unknown rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+rm "$RPG_FACTORY_COMFY_JOBS_DIR/937cc86a-b67c-4a32-ad68-2652a5ef3425.json"
+
+filter_run filter-collision-icon-001 || no "filter collision setup"
+fc="$FILTER_RUN"; cp "$FX/icon-ok.png" "$fc/previews/937cc86a_001.png"; count=$(filter_count "$fc")
+AG finalize --run "$fc" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 0 ] && jq -e '.steps[0].state == "moved"' "$TMP/filter-finalize.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$fc/previews/937cc86a_001.png" && cmp -s "$FX/preview-64.png" "$fc/previews/937cc86a_001.1.png" \
+  && [ ! -e "$fc/outputs/937cc86a_001.png" ] && filter_files_intact "$fc" "$count" \
+  && ok "filter preserves a collision and moves the preview to a numbered name" || no "filter collision rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+filter_run filter-allpreview-icon-001 || no "filter all preview setup"
+fp="$FILTER_RUN"; cp "$FX/preview-64.png" "$fp/outputs/937cc86a_000.png"
+jq '.urls[0] = .urls[1]' "$fp/fetch.json" > "$TMP/filter-fetch.json" && mv "$TMP/filter-fetch.json" "$fp/fetch.json"
+count=$(filter_count "$fp")
+AG finalize --run "$fp" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 1 ] && jq -e '.failed_at == "filter" and .steps[0].state == "FAIL"' "$TMP/filter-finalize.json" >/dev/null \
+  && [ -f "$fp/outputs/937cc86a_000.png" ] && [ -f "$fp/outputs/937cc86a_001.png" ] \
+  && [ ! -e "$fp/previews/937cc86a_000.png" ] && [ ! -e "$fp/previews/937cc86a_001.png" ] && filter_files_intact "$fp" "$count" \
+  && ok "filter fails before moving any file when all outputs are previews" || no "filter all preview rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+
+for malformed in invalid missing-urls; do
+  filter_run "filter-${malformed}-icon-001" || no "filter malformed setup: $malformed"
+  fmrun="$FILTER_RUN"; count=$(filter_count "$fmrun")
+  if [ "$malformed" = invalid ]; then printf 'not json\n' > "$fmrun/fetch.json"; else printf '{"prompt_id":"937cc86a-b67c-4a32-ad68-2652a5ef3425"}\n' > "$fmrun/fetch.json"; fi
+  AG finalize --run "$fmrun" --json > "$TMP/filter-finalize.json" 2>"$TMP/err"; rc=$?
+  [ "$rc" -eq 1 ] && jq -e '.steps[0].state == "skipped" and ([.steps[0].results[] | select(.state == "kept")] | length == 2)' "$TMP/filter-finalize.json" >/dev/null \
+    && [ -f "$fmrun/outputs/937cc86a_000.png" ] && [ -f "$fmrun/outputs/937cc86a_001.png" ] && filter_files_intact "$fmrun" "$count" \
+    && ok "filter ignores malformed fetch evidence ($malformed), retaining both files" || no "filter malformed $malformed rc=$rc" "$(cat "$TMP/err" "$TMP/filter-finalize.json")"
+done
+# Fetch evidence the engine keeps has no host: an older fetch.json that still has one (scheme, host and port) filters and
+# finalizes as before and is rewritten host-free; a host-free fetch.json (path and query only) filters identically.
+filter_run filter-hosted-icon-001 || no "filter hosted setup"
+fh="$FILTER_RUN"; count=$(filter_count "$fh")
+fhprefix=$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix][0]' "$fh/workflow.json")
+fhbase=${fhprefix##*/}; fhdir=${fhprefix%/*}
+cp "$fh/fetch.json" "$TMP/fetch-legacy.json"
+AG finalize --run "$fh" --json > "$TMP/filter-hosted.json" 2>"$TMP/err"; rc=$?
+hits=$(grep -rFl -e '127.0.0.1' -e ':8188' "$fh" "$TMP/filter-hosted.json" 2>/dev/null)
+[ "$rc" -eq 0 ] && jq -e 'all(.urls[]; startswith("http://127.0.0.1:8188/view?"))' "$TMP/fetch-legacy.json" >/dev/null \
+  && jq -e '.steps[0].step == "filter" and .steps[0].state == "moved" and ([.steps[0].results[] | select(.state == "moved") | .output] == ["outputs/937cc86a_001.png"])' "$TMP/filter-hosted.json" >/dev/null \
+  && [ -f "$fh/outputs/937cc86a_000.png" ] && [ ! -e "$fh/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fh/previews/937cc86a_001.png" && filter_files_intact "$fh" "$count" \
+  && jq -e '([.results[].output] | unique) == ["outputs/937cc86a_000.png"]' "$fh/qa.json" >/dev/null \
+  && jq -e --arg save "/view?filename=${fhbase}_00001_.png&subfolder=${fhdir}&type=output" \
+       '.prompt_id == "937cc86a-b67c-4a32-ad68-2652a5ef3425" and .urls == [$save, "/view?filename=ComfyUI_temp_abcde_00001_.png&subfolder=&type=temp"]' "$fh/fetch.json" >/dev/null \
+  && [ -z "$hits" ] \
+  && ok "filter: an older fetch.json with hosts still filters and finalizes as before, is rewritten host-free, and no run file or finalize output names the host" \
+  || no "filter hosted fetch.json rc=$rc" "$(cat "$TMP/err" "$TMP/filter-hosted.json"; echo "host in: $hits"; cat "$fh/fetch.json")"
+filter_run filter-hostfree-icon-001 || no "filter host-free setup"
+fn="$FILTER_RUN"; count=$(filter_count "$fn")
+jq '.urls |= map(sub("^http://[^/]+"; ""))' "$fn/fetch.json" > "$TMP/fetch-hostfree.json" && cp "$TMP/fetch-hostfree.json" "$fn/fetch.json"
+AG finalize --run "$fn" --json > "$TMP/filter-hostfree.json" 2>"$TMP/err"; rc=$?
+[ "$rc" -eq 0 ] && jq -e 'all(.urls[]; startswith("/view?filename="))' "$fn/fetch.json" >/dev/null \
+  && jq -e '.steps[0].step == "filter" and .steps[0].state == "moved" and ([.steps[0].results[] | select(.state == "moved") | .output] == ["outputs/937cc86a_001.png"])' "$TMP/filter-hostfree.json" >/dev/null \
+  && [ -f "$fn/outputs/937cc86a_000.png" ] && [ ! -e "$fn/outputs/937cc86a_001.png" ] \
+  && cmp -s "$FX/preview-64.png" "$fn/previews/937cc86a_001.png" && filter_files_intact "$fn" "$count" \
+  && cmp -s "$TMP/fetch-hostfree.json" "$fn/fetch.json" \
+  && ok "filter: a host-free fetch.json classifies the same files and stays byte-identical" \
+  || no "filter host-free fetch.json rc=$rc" "$(cat "$TMP/err" "$TMP/filter-hostfree.json")"
+# A malformed URL (an unterminated IPv6 authority) is kept as recorded by rewrite_fetch, never replaced by an empty string;
+# a well-formed hosted URL in the same entry is still rewritten host-free.
+python3 -B - "$ROOT" "$TMP/fetch-malformed" > "$TMP/fetch-malformed.out" 2>&1 <<'EOF'
+import json, os, sys
+root, work = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "scripts/assetgen"))
+import runfiles
+os.makedirs(work, exist_ok=True)
+bad = "http://[::1/view?filename=x.png"
+with open(os.path.join(work, "fetch.json"), "w", encoding="utf-8") as f:
+    json.dump({"prompt_id": "p1", "urls": [bad, "http://127.0.0.1:8188/view?filename=y.png&type=output"]}, f)
+assert runfiles.host_free_source(bad) == bad
+runfiles.rewrite_fetch(work)
+data = json.load(open(os.path.join(work, "fetch.json"), encoding="utf-8"))
+assert data["urls"] == [bad, "/view?filename=y.png&type=output"], data
+print("ok")
+EOF
+[ $? -eq 0 ] && grep -qx ok "$TMP/fetch-malformed.out" \
+  && ok "rewrite_fetch keeps a malformed fetch URL unchanged and still strips the host of a valid one" \
+  || no "rewrite_fetch malformed URL" "$(cat "$TMP/fetch-malformed.out")"
+group_end; fi
+if group_begin fit; then
+# A live-shaped staged SaveImage output is fitted before embedding and QA.
+fitlive="$RUNS/fit-live-icon-001"
+mkrun fit-live-icon-001 icon --style stylized-painterly --template staged-icon && AG render --run "$fitlive" >/dev/null 2>"$TMP/err" \
+  && cp "$FX/svc-fit.png" "$fitlive/outputs/937cc86a_000.png" || no "fit live setup" "$(cat "$TMP/err")"
+fitprefix=$(jq -r '[.[] | select(.class_type == "SaveImage") | .inputs.filename_prefix][0]' "$fitlive/workflow.json")
+fitbase=${fitprefix##*/}; fitdir=${fitprefix%/*}
+jq -n --arg save "http://127.0.0.1:8188/view?filename=${fitbase}_00001_.png&subfolder=${fitdir}&type=output" \
+  '{prompt_id: "937cc86a-b67c-4a32-ad68-2652a5ef3425", urls: [$save]}' > "$fitlive/fetch.json"
+AG finalize --run "$fitlive" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$FX/svc-fit.png" "$fitlive/outputs/937cc86a_000.png" > "$TMP/fit-pixels" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+original, fitted = map(png.decode, sys.argv[2:])
+assert (original.width, original.height) == (1536, 1024)
+assert (fitted.width, fitted.height) == (1536, 1536)
+stride = 1536 * 4
+assert fitted.rgba[256 * stride:1280 * stride] == original.rgba
+assert not any(fitted.rgba[:256 * stride][3::4])
+assert not any(fitted.rgba[1280 * stride:][3::4])
+EOF
+pixels_rc=$?
+[ $rc -eq 0 ] && [ $pixels_rc -eq 0 ] \
+  && jq -e '[.steps[] | select(.step == "fit") | select(.state == "fitted") | .results[] | select(.state == "padded" and .output == "outputs/937cc86a_000.png" and .raw == "raw/937cc86a_000.png" and .original_size == "1536x1024" and .fitted_size == "1536x1536" and .offset == [0,256])] | length == 1' "$TMP/fit.json" >/dev/null \
+  && [ "$(sha "$fitlive/raw/937cc86a_000.png")" = "$(sha "$FX/svc-fit.png")" ] \
+  && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "PASS")] | length == 1' "$fitlive/qa.json" >/dev/null \
+  && ok "fit: staged landscape icon is centered on transparent bands, original preserved and png-size PASS" \
+  || no "fit live rc=$rc pixels=$pixels_rc" "$(cat "$TMP/err" "$TMP/fit-pixels" "$TMP/fit.json")"
+fitsha=$(sha "$fitlive/outputs/937cc86a_000.png")
+AG finalize --run "$fitlive" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped")] | length == 1' "$TMP/fit.json" >/dev/null \
+  && [ "$(sha "$fitlive/outputs/937cc86a_000.png")" = "$fitsha" ] && [ "$(find "$fitlive/raw" -type f | wc -l | tr -d ' ')" = 1 ] \
+  && [ "$(sha "$fitlive/raw/937cc86a_000.png")" = "$(sha "$FX/svc-fit.png")" ] \
+  && jq -e '.fitted | length == 1 and .[0].original_size == "1536x1024" and .[0].fitted_size == "1536x1536" and .[0].raw == "raw/937cc86a_000.png"' "$fitlive/finalize.json" >/dev/null \
+  && jq -e '.fitted | length == 1' "$TMP/fit.json" >/dev/null \
+  && ok "fit: second finalize skips fitting and preserves output and raw" || no "fit repeat rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+AG manifest --run "$fitlive" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(grep -c '^- Fit:' "$fitlive/run.md")" -eq 1 ] \
+  && grep -qF -- '- Fit: orientation padding; originals in raw/ (finalize.json): outputs/937cc86a_000.png 1536x1024 -> 1536x1536' "$fitlive/run.md" \
+  && ok "manifest: the run.md Fit line names each fitted output with its original and fitted size from finalize.json" \
+  || no "manifest fit line rc=$rc" "$(cat "$TMP/err"; grep -n 'Fit' "$fitlive/run.md")"
+fitplain="$RUNS/fit-plain-001"; finrun fit-plain-001 icon icon-ok.png
+AG finalize --run "$fitplain" >/dev/null 2>&1 && AG manifest --run "$fitplain" >/dev/null 2>&1 && ! grep -q '^- Fit:' "$fitplain/run.md" \
+  && ok "manifest: a run with no fitted output has no Fit line" || no "manifest without fit line" "$(grep -n 'Fit' "$fitplain/run.md" 2>&1)"
+
+fitsmall="$RUNS/fit-small-001"; finrun fit-small-001 icon svc-small.png
+AG finalize --run "$fitsmall" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitsmall/raw" ] \
+  && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit") | .results[] | select(.state == "skipped" and (.reason | contains("fails the size floors")))] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "FAIL")] | length == 1' "$fitsmall/qa.json" >/dev/null \
+  && ok "fit: undersized output is not padded and fails QA" || no "fit small rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitlegacy="$RUNS/fit-legacy-001"; finrun fit-legacy-001 icon svc-fit.png
+AG defringe --run "$fitlegacy" > /dev/null 2>"$TMP/err"; legacysha=$(sha "$fitlegacy/outputs-raw/prop.png")
+AG finalize --run "$fitlegacy" --force --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitlegacy/raw" ] && [ "$(sha "$fitlegacy/outputs-raw/prop.png")" = "$legacysha" ] \
+  && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit") | .results[] | select(.state == "skipped" and .reason == "already defringed before fit (outputs-raw/prop.png): not padded; start a new attempt")] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && ok "fit: legacy defringed output is not padded" || no "fit legacy rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitsquare="$RUNS/fit-square-001"; finrun fit-square-001 icon icon-ok.png
+AG finalize --run "$fitsquare" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$FX/icon-ok.png" "$fitsquare/outputs/prop.png" > "$TMP/fit-pixels" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+a, b = map(png.decode, sys.argv[2:])
+assert (a.width, a.height, a.rgba) == (b.width, b.height, b.rgba)
+EOF
+pixels_rc=$?
+[ $rc -eq 0 ] && [ $pixels_rc -eq 0 ] && [ ! -e "$fitsquare/raw" ] \
+  && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped") | .results[] | select(.state == "skipped" and (.reason | contains("as expected: untouched")))] | length == 1' "$TMP/fit.json" >/dev/null \
+  && ok "fit: matching square icon pixels stay unchanged and no raw copy is made" || no "fit square rc=$rc pixels=$pixels_rc" "$(cat "$TMP/err" "$TMP/fit-pixels" "$TMP/fit.json")"
+
+fittile="$RUNS/fit-tile-001"; finrun fit-tile-001 texture-tileable big.png
+AG finalize --run "$fittile" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa" and ([.steps[] | select(.step == "fit" and .state == "skipped" and .reason == "qa.size.fit is none")] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && jq -e '[.results[] | select(.check == "png-size" and .state == "FAIL" and (any(.reasons[]; contains("landscape") and contains("square"))))] | length == 1' "$fittile/qa.json" >/dev/null \
+  && ok "fit: landscape texture stays unpadded and fails square size QA" || no "fit texture rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json" "$fittile/qa.json")"
+
+fitbound="$RUNS/fit-bound-001"; finrun fit-bound-001 icon svc-fit.png
+AG qa --run "$fitbound" >/dev/null 2>"$TMP/err"
+fitbefore=$(sha "$fitbound/outputs/prop.png"); fitqa=$(sha "$fitbound/qa.json")
+AG finalize --run "$fitbound" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "fit" and ([.steps[] | select(.step == "fit" and .state == "FAIL" and (.reason | contains("qa.json")))] | length == 1)' "$TMP/fit.json" >/dev/null \
+  && [ "$(sha "$fitbound/outputs/prop.png")" = "$fitbefore" ] && [ "$(sha "$fitbound/qa.json")" = "$fitqa" ] && [ ! -e "$fitbound/raw" ] \
+  && ok "fit: bound QA prevents padding without force and leaves files untouched" || no "fit bound rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+fitrgb="$RUNS/fit-rgb-001"; finrun fit-rgb-001 icon big.png
+AG finalize --run "$fitrgb" --json > "$TMP/fit.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$fitrgb/raw" ] \
+  && jq -e '[.steps[] | select(.step == "fit" and .state == "skipped") | .results[] | select(.state == "skipped" and (.reason | contains("no alpha channel")))] | length == 1' "$TMP/fit.json" >/dev/null \
+  && ok "fit: RGB output is not padded and QA grades the missing alpha" || no "fit RGB rc=$rc" "$(cat "$TMP/err" "$TMP/fit.json")"
+
+group_end; fi
+if group_begin finalize-core; then
+# alpha purpose: filter, fit, defringe, embed, qa in that order; the run ends embedded, defringed and graded
+fz="$RUNS/fin-icon-001"; finrun fin-icon-001 icon fringe.png
+AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] && grep -q "^defringe defringed: 1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
+  && grep -q "^embed done: 1 embedded, 0 replaced, 0 kept, 0 FAIL" "$TMP/o" && grep -qx "assetgen finalize: PASS" "$TMP/o" \
+  && [ "$(jq -r .state "$fz/qa.json")" = PASS ] && [ -f "$fz/defringe.json" ] && [ -f "$fz/outputs-raw/prop.png" ] \
+  && [ "$(sha "$fz/outputs-raw/prop.png")" = "$(sha "$FX/fringe.png")" ] && grep -qa "workflow" "$fz/outputs/prop.png" \
+  && [ "$(jq -r '.outputs[0].sha256' "$fz/qa.json")" = "$(sha "$fz/outputs/prop.png")" ] \
+  && ok "finalize on an alpha purpose: defringe, embed, qa in that order, exit 0 (original kept, workflow embedded, qa.json binds the final bytes)" \
+  || no "finalize alpha rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+# a second finalize on the unchanged run is idempotent: no defringe refusal (qa.json binds the outputs), same bytes
+b1=$(sha "$fz/outputs/prop.png"); d1=$(sha "$fz/defringe.json")
+AG finalize --run "$fz" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.schema + " " + .state + " " + (.exit | tostring) + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" \
+  = "rpg-factory.assetgen-finalize/1 PASS 0 filter:skipped,fit:skipped,defringe:skipped,embed:done,qa:PASS" ] \
+  && [ "$(jq -r '.steps[0].reason' "$TMP/f.json")" = "no preview file in outputs/" ] \
+  && jq -r '.steps[] | select(.step == "defringe") | .reason' "$TMP/f.json" | grep -q "^already defringed" && jq -r '.steps[] | select(.step == "embed") | .reason' "$TMP/f.json" | grep -q "0 embedded, 0 replaced, 1 kept" \
+  && [ "$(jq -c '[.stale, .failed_at]' "$TMP/f.json")" = '[[],null]' ] \
+  && [ "$(sha "$fz/outputs/prop.png")" = "$b1" ] && [ "$(sha "$fz/defringe.json")" = "$d1" ] && [ "$(jq -r .state "$fz/qa.json")" = PASS ] \
+  && ok "finalize again on an unchanged run: filter skipped (no preview), defringe skipped (already defringed), embed kept, qa PASS, bytes unchanged, --json object" \
+  || no "finalize idempotent rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+# a non-alpha purpose never defringes; embed changes the bytes, so the image reviews that bound them are stale; qa.json is not listed
+ft="$RUNS/fin-tile-001"; finrun fin-tile-001 texture-tileable tile-ok.png
+AG qa --run "$ft" > /dev/null 2>&1
+bound "$ft" image PASS codex > "$ft/review-image.json"; bound "$ft" image PASS claude > "$ft/review-image-claude.json"
+AG finalize --run "$ft" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] && grep -q "^defringe skipped: not an alpha purpose" "$TMP/o" \
+  && [ ! -e "$ft/defringe.json" ] && [ ! -e "$ft/outputs-raw" ] && grep -q "^embed done: 1 embedded" "$TMP/o" \
+  && grep -qx "stale now (re-run them): review-image.json, review-image-claude.json" "$TMP/o" \
+  && ok "finalize on a non-alpha purpose: defringe skipped (nothing written), embed, qa PASS; the image reviews it made stale are named, not qa.json" \
+  || no "finalize non-alpha rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+# a run qa and the image reviews already bind: defringe's refusal is a FAIL at defringe (nothing written) unless --force
+fb="$RUNS/fin-force-001"; finrun fin-force-001 icon fringe.png
+AG embed --run "$fb" > /dev/null; AG qa --run "$fb" > /dev/null 2>&1
+bound "$fb" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fb/review-image.json"
+bound "$fb" image FAIL claude '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fb/review-image-claude.json"
+fb0=$(sha "$fb/outputs/prop.png"); q0=$(sha "$fb/qa.json")
+AG finalize --run "$fb" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: .*qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
+  && grep -q "pass --force" "$TMP/o" && ! grep -q "^stale now" "$TMP/o" \
+  && [ "$(sha "$fb/outputs/prop.png")" = "$fb0" ] && [ "$(sha "$fb/qa.json")" = "$q0" ] && [ ! -e "$fb/outputs-raw" ] && [ ! -e "$fb/defringe.json" ] \
+  && ok "finalize: outputs the records bind stop at FAIL at defringe without --force (exit 1, nothing written, embed and qa not run)" \
+  || no "finalize bound rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG finalize --run "$fb" --force --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.stale | join(","))' "$TMP/f.json")" = "PASS review-image.json,review-image-claude.json" ] \
+  && [ "$(jq -r '.steps[] | select(.step == "defringe") | .step + ":" + .state' "$TMP/f.json")" = defringe:defringed ] && [ "$(sha "$fb/outputs/prop.png")" != "$fb0" ] && [ "$(sha "$fb/outputs-raw/prop.png")" = "$fb0" ] \
+  && [ "$(jq -r .state "$fb/qa.json")" = PASS ] \
+  && ok "finalize --force: defringe runs, embed and qa PASS, both image reviews listed stale (qa.json is rewritten, not listed)" \
+  || no "finalize force rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+# stops at the first FAIL, naming the step: defringe (an unreadable output of an alpha purpose), embed, qa
+fd="$RUNS/fin-fail-def-001"; finrun fin-fail-def-001 icon not-a-png.png
+AG finalize --run "$fd" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: " "$TMP/o" && [ ! -e "$fd/qa.json" ] && [ "$(sha "$fd/outputs/prop.png")" = "$(sha "$FX/not-a-png.png")" ] \
+  && ok "finalize: a FAIL at defringe stops there (exit 1, embed and qa not run, output untouched)" || no "finalize fail defringe rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+fe="$RUNS/fin-fail-emb-001"; finrun fin-fail-emb-001 texture-tileable not-a-png.png
+AG finalize --run "$fe" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(jq -r '.failed_at + " " + .state + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" = "embed FAIL filter:skipped,fit:skipped,defringe:skipped,embed:FAIL" ] && [ ! -e "$fe/qa.json" ] \
+  && ok "finalize: a FAIL at embed stops there (exit 1, qa not run, failed_at embed)" || no "finalize fail embed rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+fq="$RUNS/fin-fail-qa-001"; finrun fin-fail-qa-001 icon icon-opaque.png
+AG finalize --run "$fq" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] && grep -q "^defringe skipped: no output needs it" "$TMP/o" && grep -q "^assetgen finalize: FAIL at qa: " "$TMP/o" \
+  && [ "$(jq -r .state "$fq/qa.json")" = FAIL ] \
+  && ok "finalize: a qa FAIL is FAIL at qa, exit 1 (an opaque output needs no defringe)" || no "finalize fail qa rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+# NOT_AVAILABLE (a 16-bit output without Pillow) exits 3 like qa
+fn="$RUNS/fin-na-001"; finrun fin-na-001 image-edit deep16.png --param reference_image=ref.png
+ASSETGEN_NO_PIL=1 AG finalize --run "$fn" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 3 ] && [ "$(jq -r '.state + " " + (.exit | tostring) + " " + (.failed_at | tostring)' "$TMP/f.json")" = "NOT_AVAILABLE 3 null" ] && [ "$(jq -r .state "$fn/qa.json")" = NOT_AVAILABLE ] \
+  && ok "finalize: exit codes follow qa (0 PASS, 1 FAIL, 3 NOT_AVAILABLE)" || no "finalize not available rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+# refusals before anything is written: no spec.json, no outputs, no workflow.ui.json, an approved run
+mkdir -p "$RUNS/fin-nospec-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/fin-nospec-001/outputs/prop.png"
+AG finalize --run "$RUNS/fin-nospec-001" > "$TMP/o" 2>&1; rc1=$?
+mkrun fin-noout-001 icon --style stylized-painterly --template image-generate && AG render --run "$RUNS/fin-noout-001" > /dev/null 2>&1
+AG finalize --run "$RUNS/fin-noout-001" > "$TMP/o2" 2>&1; rc2=$?
+mkrun fin-noui-001 icon --style stylized-painterly && cp "$FX/icon-ok.png" "$RUNS/fin-noui-001/outputs/prop.png"
+AG finalize --run "$RUNS/fin-noui-001" > "$TMP/o3" 2>&1; rc3=$?
+[ $rc1 -eq 1 ] && grep -q "finalize needs .*fin-nospec-001/spec.json" "$TMP/o" && [ $rc2 -eq 1 ] && grep -q "no outputs/\*.png" "$TMP/o2" \
+  && [ $rc3 -eq 1 ] && grep -q "workflow.ui.json" "$TMP/o3" \
+  && [ "$(sha "$RUNS/fin-noui-001/outputs/prop.png")" = "$(sha "$FX/icon-ok.png")" ] && [ ! -e "$RUNS/fin-noui-001/qa.json" ] && [ ! -e "$RUNS/fin-nospec-001/qa.json" ] \
+  && ok "finalize refuses a run without spec.json, outputs or workflow.ui.json (exit 1, nothing written)" || no "finalize refusals rc=$rc1/$rc2/$rc3" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3")"
+FZA="$TMP/fin-approve"; mkdir -p "$FZA/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$FZA/assetgen/"
+cp -R "$fz" "$FZA/assetgen/runs/"; fa="$FZA/assetgen/runs/fin-icon-001"
+AG manifest --run "$fa" --prompt-author robin > /dev/null
+git init -q -b main "$FZA" && git -C "$FZA" add -A && git -C "$FZA" "${G[@]}" commit -qm "finalized run"
+AG approve-record --run "$fa" --by Dana > /dev/null 2>"$TMP/err" || no "finalize: approve-record" "$(cat "$TMP/err")"
+find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$TMP/tree0"
+AG finalize --run "$fa" > "$TMP/o" 2>&1; rc=$?
+find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$TMP/tree1"
+[ $rc -eq 1 ] && grep -q "run.md is approved: finalize would rewrite the approved outputs" "$TMP/o" && cmp -s "$TMP/tree0" "$TMP/tree1" \
+  && [ "$(sed -n '/^---json$/,/^---$/p' "$fa/run.md" | sed '1d;$d' | jq -r .status)" = approved ] \
+  && ok "finalize refuses an approved run (exit 1) and writes nothing" || no "finalize approved rc=$rc" "$(cat "$TMP/o"; diff "$TMP/tree0" "$TMP/tree1")"
+f_help=$(AG finalize --help 2>&1); grep -q -- "--force" <<<"$f_help" && grep -q "finalize --run RUN" "$ROOT/scripts/assetgen/assetgen.py" \
+  && ok "finalize is a subcommand (--run, --authoring, --force, --json) listed in the assetgen.py usage" || no "finalize usage" "$f_help"
+
+group_end; fi
+if group_begin discard; then
+echo "-- batch discard and finalize QA failures"
+batch_run() {
+  finrun "$1" icon icon-ok.png || return 1
+  local run="$RUNS/$1"
+  cp "$FX/icon-ok.png" "$run/outputs/a.png"
+  cp "$FX/icon-ok.png" "$run/outputs/b.png"
+  cp "$FX/icon-opaque.png" "$run/outputs/bad.png"
+}
+batch_front() { sed -n '/^---json$/,/^---$/p' "$1/run.md" | sed '1d;$d'; }
+batch_run batch-plain-001
+bp="$RUNS/batch-plain-001"
+AG finalize --run "$bp" --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa"' "$TMP/batch.json" >/dev/null && [ "$(find "$bp/outputs" -name '*.png' | wc -l)" -eq 4 ] \
+  && [ ! -e "$bp/outputs-rejected" ] && [ ! -e "$bp/discards.json" ] \
+  && ok "batch finalize without discard flag fails QA and moves nothing" || no "batch without flag rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+batch_run batch-discard-001
+batchd="$RUNS/batch-discard-001"
+AG embed --run "$batchd" >/dev/null 2>"$TMP/err"
+cp "$batchd/outputs/bad.png" "$TMP/batch-bad.png"
+AG finalize --run "$batchd" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+AG manifest --run "$batchd" >/dev/null 2>>"$TMP/err"; mrc=$?
+[ $rc -eq 0 ] && [ $mrc -eq 0 ] && jq -e '.stale | index("qa.json") | not' "$TMP/batch.json" >/dev/null && [ "$(find "$batchd/outputs" -name '*.png' | wc -l)" -eq 3 ] \
+  && cmp -s "$TMP/batch-bad.png" "$batchd/outputs-rejected/bad.png" \
+  && jq -e '.discards | length == 1 and .[0].by == "finalize" and .[0].output == "outputs/bad.png"' "$batchd/discards.json" >/dev/null \
+  && jq -e '(.outputs | length == 3) and ([.results[].output] | unique | length == 3) and all(.results[]; .output != "outputs/bad.png")' "$batchd/qa.json" >/dev/null \
+  && batch_front "$batchd" | jq -e '(.spec.outputs | length == 3) and (.spec.trace.discarded | length == 1 and .[0].output == "outputs/bad.png" and .[0].path == "outputs-rejected/bad.png")' >/dev/null \
+  && grep -q '^- Discarded: outputs/bad.png' "$batchd/run.md" \
+  && ok "batch finalize discards one QA failure byte-identically and manifests the three passing outputs" \
+  || no "batch discard rc=$rc manifest=$mrc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+# the budget counts generations: a discard never refunds one (no sheet)
+batch_run batch-budget-001
+bb="$RUNS/batch-budget-001"
+AG embed --run "$bb" >/dev/null 2>"$TMP/err"
+AG budget --run "$bb" --json > "$TMP/bb-before.json" 2>>"$TMP/err"; brc=$?
+AG budget --run "$bb" > "$TMP/bb-before.txt" 2>>"$TMP/err"; brc2=$?
+AG finalize --run "$bb" --discard-qa-fail --json > "$TMP/bb-finalize.json" 2>>"$TMP/err"; rc=$?
+AG budget --run "$bb" --json > "$TMP/bb-after.json" 2>>"$TMP/err"; arc=$?
+AG budget --run "$bb" > "$TMP/bb-after.txt" 2>>"$TMP/err"; arc2=$?
+[ "$brc/$brc2/$rc/$arc/$arc2" = 0/0/0/0/0 ] && [ ! -e "$bb/outputs/bad.png" ] && [ -f "$bb/outputs-rejected/bad.png" ] \
+  && jq -e '[.used, .outputs, .discarded, .state, (.failed_attempts | length)] == [4,4,0,"at-limit",0] and (has("sheet_cells") | not)' "$TMP/bb-before.json" >/dev/null \
+  && jq -e '[.used, .outputs, .discarded, .state, (.failed_attempts | length)] == [4,4,1,"at-limit",0] and (has("sheet_cells") | not)' "$TMP/bb-after.json" >/dev/null \
+  && jq -e '[.budget.used, .budget.outputs, .budget.discarded] == [4,4,1]' "$TMP/bb-finalize.json" >/dev/null \
+  && grep -q '^budget at-limit: 4 used (4 outputs + 0 failed attempts) of 4 allowed' "$TMP/bb-before.txt" \
+  && grep -q '^budget at-limit: 4 used (4 outputs, 1 discarded + 0 failed attempts) of 4 allowed' "$TMP/bb-after.txt" \
+  && ok "budget without a sheet: the used count is the same before and after a discard, and the text and --json say how many counted outputs are discarded" \
+  || no "budget discard refund rc=$brc/$brc2/$rc/$arc/$arc2" "$(cat "$TMP/err" "$TMP/bb-before.json" "$TMP/bb-after.json" "$TMP/bb-after.txt")"
+
+finrun batch-allfail-001 icon icon-opaque.png
+ba="$RUNS/batch-allfail-001"; cp "$FX/icon-opaque.png" "$ba/outputs/second.png"
+AG finalize --run "$ba" --discard-qa-fail --json > "$TMP/batch.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && jq -e '.failed_at == "qa" and (.discarded | length == 0)' "$TMP/batch.json" >/dev/null \
+  && [ "$(find "$ba/outputs" -name '*.png' | wc -l)" -eq 2 ] && [ ! -e "$ba/outputs-rejected" ] && [ ! -e "$ba/discards.json" ] \
+  && ok "batch finalize leaves all outputs in place when all fail QA" || no "batch all fail rc=$rc" "$(cat "$TMP/err" "$TMP/batch.json")"
+
+finrun discard-manual-001 icon icon-ok.png
+dm="$RUNS/discard-manual-001"; cp "$FX/icon-ok.png" "$dm/outputs/a.png"; cp "$FX/icon-ok.png" "$dm/outputs/z.png"
+AG qa --run "$dm" >/dev/null; bound "$dm" image PASS codex > "$dm/review-image.json"
+AG discard --run "$dm" --output 1 --reason 'first choice' --json > "$TMP/discard.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.discarded[0].output == "outputs/a.png" and (.stale | index("qa.json")) and (.stale | index("review-image.json"))' "$TMP/discard.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$dm/outputs-rejected/a.png" \
+  && ok "discard by index moves bytes and reports stale QA and image review" || no "discard index rc=$rc" "$(cat "$TMP/err" "$TMP/discard.json")"
+cp "$FX/icon-opaque.png" "$dm/outputs/a.png"
+AG discard --run "$dm" --output a.png --reason 'second choice' --json > "$TMP/discard.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.discarded[0].path == "outputs-rejected/a.1.png"' "$TMP/discard.json" >/dev/null \
+  && cmp -s "$FX/icon-ok.png" "$dm/outputs-rejected/a.png" && cmp -s "$FX/icon-opaque.png" "$dm/outputs-rejected/a.1.png" \
+  && ok "discard by name preserves an existing rejected file with a numbered collision" || no "discard name rc=$rc" "$(cat "$TMP/err" "$TMP/discard.json")"
+AG discard --run "$dm" --output z.png --reason '  ' > "$TMP/o" 2>&1; rblank=$?
+AG discard --run "$dm" --output missing.png --reason missing > "$TMP/o2" 2>&1; rmissing=$?
+AG discard --run "$dm" --output z.png --reason valid >/dev/null 2>"$TMP/err"; rmove=$?
+AG discard --run "$dm" --output 1 --reason last > "$TMP/o3" 2>&1; rlast=$?
+[ $rblank -eq 2 ] && [ $rmissing -eq 1 ] && [ $rmove -eq 0 ] && [ $rlast -eq 1 ] \
+  && [ -f "$dm/outputs/prop.png" ] && [ "$(jq '.discards | length' "$dm/discards.json")" -eq 3 ] \
+  && ok "discard refuses blank reason, unknown output and last output without moving them" || no "discard refusals rc=$rblank/$rmissing/$rmove/$rlast" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3" "$TMP/err")"
+AG discard --run "$fa" --output 1 --reason approved > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q 'run.md is approved' "$TMP/o" && [ ! -e "$fa/outputs-rejected" ] && [ -f "$fa/outputs/prop.png" ] \
+  && ok "discard refuses an approved run without moving its output" || no "discard approved rc=$rc" "$(cat "$TMP/o")"
+
+finrun discard-single-001 icon icon-ok.png
+ds="$RUNS/discard-single-001"; AG finalize --run "$ds" >/dev/null; AG manifest --run "$ds" >/dev/null
+batch_front "$ds" | jq -e '.spec.trace | has("discarded") | not' >/dev/null && ! grep -q '^- Discarded:' "$ds/run.md" \
+  && ok "single-output manifest retains its existing trace and body without discards" || no "single-output discard compatibility"
+
+group_end; fi
+if group_begin budget; then
+echo "-- budget: advisory spend guard (resolve --max-outputs, budget --run, finalize)"
+lf() { tr -d '\r' < "$1"; }
+# resolve records spec.budget.max_outputs: default 4 (--json and --out), --max-outputs N, invalid values are usage errors
+AG resolve --purpose icon --style pixel-art --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --out "$TMP/bud-spec.json" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c .budget "$TMP/r.json")" = '{"max_outputs":4}' ] && [ "$(jq -c .budget "$TMP/bud-spec.json")" = '{"max_outputs":4}' ] \
+  && lf "$TMP/o" | grep -q "^budget: at most 4 outputs" \
+  && ok "resolve: spec.budget.max_outputs defaults to 4 (--json and the --out spec.json), the summary says 'budget: at most 4 outputs'" \
+  || no "resolve default budget rc=$rc/$rc2 $(jq -c .budget "$TMP/r.json" 2>&1)" "$(cat "$TMP/err" "$TMP/o")"
+AG resolve --purpose icon --style pixel-art --max-outputs 2 --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --max-outputs 2 --out "$TMP/bud-spec2.json" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c .budget "$TMP/r.json")" = '{"max_outputs":2}' ] && [ "$(jq -c .budget "$TMP/bud-spec2.json")" = '{"max_outputs":2}' ] \
+  && lf "$TMP/o" | grep -q "^budget: at most 2 outputs" \
+  && ok "resolve --max-outputs 2 records spec.budget.max_outputs 2 (--json and --out) and prints it" \
+  || no "resolve --max-outputs 2 rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/o")"
+bad=""; i=0
+for v in 0 -1 x 1.5; do
+  i=$((i + 1)); AG resolve --purpose icon --style pixel-art --max-outputs="$v" --out "$TMP/bud-bad-$i.json" > /dev/null 2>"$TMP/err"; rc=$?
+  { [ $rc -eq 2 ] && [ ! -e "$TMP/bud-bad-$i.json" ] && grep -q -- "--max-outputs" "$TMP/err"; } || bad="$bad $v:$rc"
+done
+[ -z "$bad" ] && ok "resolve --max-outputs 0, -1, x, 1.5: usage error (exit 2) naming --max-outputs, --out writes nothing" \
+  || no "resolve invalid --max-outputs:$bad" "$(cat "$TMP/err")"
+# a series bud-icon-NNN: 001 failed (no run.md, counted), 002 finished (run.md, not counted), 003 the run (limit 3),
+# 009 a later attempt and xbud-icon-001 another slug (neither counted)
+for n in bud-icon-001 bud-icon-002 bud-icon-009 xbud-icon-001; do mkdir -p "$RUNS/$n"; done; : > "$RUNS/bud-icon-002/run.md"
+bd="$RUNS/bud-icon-003"; mkrun bud-icon-003 icon --style pixel-art --template image-generate --max-outputs 3 || no "budget: mkrun bud-icon-003"
+cp "$FX/icon-ok.png" "$bd/outputs/a.png"
+bsnap() { { find "$bd" -type f -exec sha256sum {} +; ls -a "$RUNS"; } | sort; }; bs0=$(bsnap)
+AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && [ "$(jq -c '[.schema, .run, .outputs, .failed_attempts, .used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" \
+     = '["rpg-factory.assetgen-budget/1","bud-icon-003",1,["bud-icon-001"],2,3,1,"ok",0]' ] \
+  && [ "$(jq -r '.reason | type' "$TMP/b.json")" = string ] \
+  && [ "$(jq -c 'keys' "$TMP/b.json")" = '["allowed","discarded","exit","failed_attempts","outputs","previews","reason","remaining","run","schema","state","used"]' ] \
+  && [ "$(jq -c .previews "$TMP/b.json")" = 0 ] && ! lf "$TMP/o" | grep -q "not counted" \
+  && [ "$(lf "$TMP/o" | wc -l)" -eq 1 ] && lf "$TMP/o" | grep -q "^budget ok: .*2 used.*of 3 allowed" \
+  && ok "budget ok: used 2 = 1 output + 1 failed attempt (bud-icon-001; not the finished 002, the later 009 or another slug), allowed 3, remaining 1, exit 0" \
+  || no "budget ok rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+[ "$(bsnap)" = "$bs0" ] && ok "budget is read-only (text and --json: the run dir and the runs dir unchanged)" || no "budget wrote something" "$(diff <(echo "$bs0") <(bsnap))"
+AG budget --run bud-icon-003 --authoring "$AUTH" --json > "$TMP/b2.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -S . "$TMP/b2.json")" = "$(jq -S . "$TMP/b.json")" ] && ok "budget --run RUN-ID --authoring DIR resolves the run like the other verbs" \
+  || no "budget --run id rc=$rc" "$(cat "$TMP/err" "$TMP/b2.json")"
+cp "$FX/icon-ok.png" "$bd/outputs/b.png"
+AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c '[.used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" = '[3,3,0,"at-limit",0]' ] \
+  && lf "$TMP/o" | grep -q "^budget at-limit: .*3 used.*of 3 allowed" \
+  && ok "budget at-limit: used == allowed (3 of 3), remaining 0, exit 0" || no "budget at-limit rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+cp "$FX/icon-ok.png" "$bd/outputs/c.png"
+AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 1 ] && [ $rc2 -eq 1 ] && [ "$(jq -c '[.outputs, .failed_attempts, .used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" = '[3,["bud-icon-001"],4,3,0,"exceeded",1]' ] \
+  && lf "$TMP/o" | grep -q "^budget exceeded: .*4 used.*of 3 allowed" \
+  && ok "budget exceeded: used 4 > allowed 3, remaining 0, exit 1 (text and --json)" || no "budget exceeded rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+rm -f "$RUNS/bud-icon-002/run.md"  # the empty marker is no gen-run: the quality plugin loop below parses every runs/*/run.md
+# a spec resolved before the spend guard (no budget key) is unlimited, never a failure
+bo="$RUNS/bud-old-001"; mkrun bud-old-001 icon --style pixel-art --template image-generate || no "budget: mkrun bud-old-001"
+jq 'del(.budget)' "$bo/spec.json" > "$TMP/spec.tmp" && cp "$TMP/spec.tmp" "$bo/spec.json"; cp "$FX/icon-ok.png" "$bo/outputs/a.png"
+AG budget --run "$bo" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bo" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c '[.used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" = '[1,null,null,"unlimited",0]' ] \
+  && lf "$TMP/o" | grep -q "^budget unlimited: .*1 used" && ! lf "$TMP/o" | grep -q "allowed" \
+  && ok "budget on a spec.json without budget (resolved before the spend guard): unlimited, allowed and remaining null, exit 0" \
+  || no "budget unlimited rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+# a malformed spec.budget is invalid (exit 1): a string, 0, a boolean
+bad=""
+for v in '"4"' 0 true; do
+  jq --argjson v "$v" '.budget = {max_outputs: $v}' "$bo/spec.json" > "$TMP/spec.tmp" && cp "$TMP/spec.tmp" "$bo/spec.json"
+  AG budget --run "$bo" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+  AG budget --run "$bo" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+  { [ $rc -eq 1 ] && [ $rc2 -eq 1 ] && [ "$(jq -c '[.state, .exit]' "$TMP/b.json")" = '["invalid",1]' ] && lf "$TMP/o" | grep -q "^budget invalid: "; } \
+    || bad="$bad $v:$rc/$rc2"
+done
+[ -z "$bad" ] && ok "budget with a malformed spec.budget.max_outputs (\"4\", 0, true): invalid, exit 1" || no "budget invalid:$bad" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+mkdir -p "$RUNS/bud-nospec-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/bud-nospec-001/outputs/a.png"
+AG budget --run "$RUNS/bud-nospec-001" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "spec.json" "$TMP/o" && [ "$(find "$RUNS/bud-nospec-001" -type f | wc -l)" -eq 1 ] \
+  && ok "budget on a run without spec.json: exit 1 naming spec.json, nothing written" || no "budget no spec rc=$rc" "$(cat "$TMP/o")"
+# finalize prints the budget line right before its last line, adds .budget to --json and keeps its exit code
+bf="$RUNS/bud-tile-001"; { mkrun bud-tile-001 texture-tileable --style stylized-painterly --template image-generate && AG render --run "$bf" > /dev/null 2>&1 \
+  && cp "$FX/tile-ok.png" "$bf/outputs/a.png"; } || no "budget: finalize run bud-tile-001"
+AG finalize --run "$bf" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: .*1 used.*of 4 allowed" \
+  && [ "$(lf "$TMP/o" | grep -c "^budget ")" -eq 1 ] && [ "$(steps "$TMP/o")" = "filter fit defringe embed qa " ] \
+  && ok "finalize text: one 'budget ok' line right before the last 'assetgen finalize: PASS' line, exit 0" || no "finalize budget text rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG finalize --run "$bf" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bf" --json > "$TMP/b.json" 2>>"$TMP/err"
+[ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.exit | tostring)' "$TMP/f.json")" = "PASS 0" ] && [ "$(jq -S .budget "$TMP/f.json")" = "$(jq -S . "$TMP/b.json")" ] \
+  && [ "$(jq -r .budget.schema "$TMP/f.json")" = rpg-factory.assetgen-budget/1 ] \
+  && ok "finalize --json: key budget is the budget --json object" || no "finalize budget json rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+be="$RUNS/bud-over-001"; { mkrun bud-over-001 texture-tileable --style stylized-painterly --template image-generate --max-outputs 1 && AG render --run "$be" > /dev/null 2>&1 \
+  && cp "$FX/tile-ok.png" "$be/outputs/a.png" && cp "$FX/tile-ok.png" "$be/outputs/b.png"; } || no "budget: finalize run bud-over-001"
+AG finalize --run "$be" > "$TMP/o" 2>"$TMP/err"; rc=$?
+AG finalize --run "$be" --json > "$TMP/f.json" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] \
+  && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget exceeded: .*2 used.*of 1 allowed" \
+  && [ "$(jq -r '.state + " " + (.exit | tostring) + " " + .budget.state + " " + (.budget.exit | tostring)' "$TMP/f.json")" = "PASS 0 exceeded 1" ] \
+  && ok "finalize on a run over its budget (max 1, two outputs): still PASS exit 0, budget exceeded reported (text and --json)" \
+  || no "finalize exceeded rc=$rc/$rc2" "$(cat "$TMP/o" "$TMP/err" "$TMP/f.json")"
+bq="$RUNS/bud-qafail-001"; finrun bud-qafail-001 icon icon-opaque.png || no "budget: finalize run bud-qafail-001"
+AG finalize --run "$bq" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && lf "$TMP/o" | tail -n 1 | grep -q "^assetgen finalize: FAIL at qa: " && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: " \
+  && ok "finalize FAIL at qa: exit 1 unchanged, the budget line still comes right before the last line" || no "finalize fail budget rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+b_help=$(AG budget --help 2>&1); r_help=$(AG resolve --help 2>&1)
+grep -q -- "--run" <<<"$b_help" && grep -q -- "--json" <<<"$b_help" && grep -q -- "--max-outputs" <<<"$r_help" \
+  && ok "budget is a subcommand (--run, --json); resolve has --max-outputs" || no "budget usage" "$b_help $r_help"
+
+group_end; fi
+if group_begin publish; then
 echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
 cat > "$TMP/fake-comfy.py" <<'EOF'
 import json, os, socket, subprocess, sys, threading
@@ -1597,8 +3458,10 @@ for u in "ftp-host:8188" "file:///etc" "http://127.0.0.1:1/?x=1"; do
 done
 [ "$(snap)" = "$s0" ] && ok "refused publish calls write nothing" || no "publish wrote into the run dir"
 
+group_end; fi
+if group_begin manifest; then
 echo "-- manifest (run.md, gen-run)"
-d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art; AG render --run "$d" >/dev/null
+d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art --template image-generate; AG render --run "$d" >/dev/null
 cp "$FX/icon-ok.png" "$d/outputs/iron-sword.png"; AG qa --run "$d" >/dev/null
 bound "$d" prompt PASS codex > "$d/review-prompt.json"
 { echo "Review done."; bound "$d" image FAIL codex '[{"rubric": 2, "severity": "major", "text": "off style"}]'; } > "$d/review-image.json"
@@ -1651,8 +3514,10 @@ mkdir -p "$RUNS/Bad_Name"; cp "$d/spec.json" "$d/prompt.md" "$RUNS/Bad_Name/"
 AG manifest --run "$RUNS/Bad_Name" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <slug>-NNN" "$TMP/err" && ok "run dir name must be <slug>-NNN" || no "bad run name rc=$rc"
 
+group_end; fi
+if group_begin gen-run-plugin; then
 echo "-- quality plugin (scripts/checks/domains/assetgen.py) and artifact-lint on manifest-produced run.md"
-good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly --authoring "$AUTH"
+good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly --template image-generate --authoring "$AUTH"
 AG render --run "$good" >/dev/null && cp "$FX/icon-ok.png" "$good/outputs/qp-icon.png" && AG qa --run "$good" >/dev/null \
   || no "good run: render/qa did not PASS" "$(jq -c .results "$good/qa.json" 2>/dev/null)"
 bound "$good" prompt PASS codex > "$good/review-prompt.json"; bound "$good" image PASS codex > "$good/review-image.json"
@@ -1688,6 +3553,22 @@ variant qp-fallback-001 SAME_MODEL:claude              # explicit same-model fal
 variant qp-badmark-001 SAME_MODEL:codex                # marker on another model's review
 variant qp-tamper-001; printf 'x' >> "$RUNS/qp-tamper-001/outputs/qp-icon.png"
 variant qp-extra-001; cp "$FX/icon-ok.png" "$RUNS/qp-extra-001/outputs/second.png"
+# Copies of the manifested four-output batch isolate each rejected-file quality check.
+for name in qp-batch-001 qp-batch-extra-001 qp-rejected-extra-001 qp-rejected-sha-001 qp-reverse-001; do
+  cp -R "$batchd" "$RUNS/$name"; rm -f "$RUNS/$name/run.md"; AG manifest --run "$RUNS/$name" >/dev/null
+done
+cp "$FX/icon-ok.png" "$RUNS/qp-batch-extra-001/outputs/unrecorded.png"
+cp "$FX/icon-ok.png" "$RUNS/qp-rejected-extra-001/outputs-rejected/unrecorded.png"
+printf x >> "$RUNS/qp-rejected-sha-001/outputs-rejected/bad.png"
+reverse="$RUNS/qp-reverse-001"
+mv "$reverse/outputs-rejected/bad.png" "$reverse/outputs/bad.png"
+AG qa --run "$reverse" >/dev/null 2>"$TMP/err"; reverseqa=$?
+AG manifest --run "$reverse" >/dev/null 2>>"$TMP/err"; reversemanifest=$?
+[ $reverseqa -eq 1 ] && [ $reversemanifest -eq 0 ] && cmp -s "$TMP/batch-bad.png" "$reverse/outputs/bad.png" \
+  && batch_front "$reverse" | jq -e '(.spec.outputs | length == 4) and (.spec.trace | has("discarded") | not)' >/dev/null \
+  && ! grep -q '^- Discarded:' "$reverse/run.md" \
+  && ok "moving a discarded PNG back and rerunning QA and manifest removes its discard trace" \
+  || no "discard reversal qa=$reverseqa manifest=$reversemanifest" "$(cat "$TMP/err")"
 variant qp-qafail-001; cp "$FX/icon-opaque.png" "$RUNS/qp-qafail-001/outputs/qp-icon.png"
 AG qa --run "$RUNS/qp-qafail-001" >/dev/null; AG manifest --run "$RUNS/qp-qafail-001" >/dev/null
 variant qp-noqa-001; rm -f "$RUNS/qp-noqa-001/qa.json"; AG manifest --run "$RUNS/qp-noqa-001" >/dev/null
@@ -1760,6 +3641,9 @@ variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha25
 variant qp-prompt-001; printf 'A different prompt.\n' > "$RUNS/qp-prompt-001/prompt.md"
 variant qp-where-001; fmset "$RUNS/qp-where-001" 'obj["id"] = "AGEN-somewhere-else-001"'
 variant qp-escape-001; fmset "$RUNS/qp-escape-001" 'obj["spec"]["outputs"][0]["path"] = "outputs/../../qp-icon-001/outputs/qp-icon.png"'
+# output filter: a previews/ file beside the recorded outputs is ignored; a recorded previews/ path is never a deliverable
+variant qp-preview-001; mkdir -p "$RUNS/qp-preview-001/previews" && cp "$FX/preview-64.png" "$RUNS/qp-preview-001/previews/qp-icon_001.png"
+variant qp-precord-001; mkdir -p "$RUNS/qp-precord-001/previews" && mv "$RUNS/qp-precord-001/outputs/qp-icon.png" "$RUNS/qp-precord-001/previews/qp-icon.png"   && fmset "$RUNS/qp-precord-001" 'obj["spec"]["outputs"][0]["path"] = "previews/qp-icon.png"'
 # reviews are bound to the requirements (review finding 1): a purpose re-resolved with a stricter rubric and qa, then
 # qa and manifest re-run, keeps the old review files -> stale; a render --param size change -> stale image review
 RUBA="$TMP/rubric-authoring"; mkdir -p "$RUBA/assetgen"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$RUBA/assetgen/"
@@ -1782,7 +3666,7 @@ variant qp-tsize-001; fmset "$RUNS/qp-tsize-001" 'obj["spec"]["params"]["size"] 
 variant qp-tmodel-001; fmset "$RUNS/qp-tmodel-001" 'obj["spec"]["params"]["model"] = "invented-model"; obj["spec"]["params"]["background"] = "invented-background"'
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # image-edit: the reference image is bound by name and content (references/<name> in the run directory)
-edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --authoring "$AUTH"
+edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --template image-edit --authoring "$AUTH"
 mkdir -p "$edit/references"; cp "$FX/icon-ok.png" "$edit/references/ref-a.png"
 AG render --run "$edit" --param reference_image=ref-a.png >/dev/null && cp "$FX/icon-ok.png" "$edit/outputs/edit.png" && AG qa --run "$edit" >/dev/null   || no "image-edit run: render/qa did not PASS" "$(jq -c .results "$edit/qa.json" 2>/dev/null)"
 bound "$edit" prompt PASS codex > "$edit/review-prompt.json"; bound "$edit" image PASS codex > "$edit/review-image.json"
@@ -1793,6 +3677,32 @@ evariant qp-eswap-001; rebase qp-eswap-001 --param reference_image=ref-a.png; cp
 AG render --run "$RUNS/qp-eswap-001" --param reference_image=ref-b.png >/dev/null; AG qa --run "$RUNS/qp-eswap-001" >/dev/null; AG manifest --run "$RUNS/qp-eswap-001" >/dev/null
 evariant qp-ebytes-001; cp "$FX/icon-opaque.png" "$RUNS/qp-ebytes-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-ebytes-001" >/dev/null
 evariant qp-enoref-001; rm -f "$RUNS/qp-enoref-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-enoref-001" >/dev/null
+# review tiers (scripts/assetgen/data/review-tiers.json): a light purpose (icon) needs no Claude visual review, a present
+# file is still graded; selected style-lock anchors make any run full. The tier is computed at check time, never recorded.
+light="$RUNS/qp-light-001"; mkrun qp-light-001 icon --style stylized-painterly --template staged-icon
+AG render --run "$light" >/dev/null && cp "$FX/icon-ok.png" "$light/outputs/light.png" && AG qa --run "$light" >/dev/null \
+  || no "light run: render/qa did not PASS" "$(jq -c .results "$light/qa.json" 2>/dev/null)"
+bound "$light" prompt PASS codex > "$light/review-prompt.json"; bound "$light" image PASS codex > "$light/review-image.json"
+AG manifest --run "$light" >/dev/null
+lvariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$light" "$d"; rm -f "$d/run.md"; AG manifest --run "$d" >/dev/null; }
+lvariant qp-lightinv-001; printf 'no verdict here\n' > "$RUNS/qp-lightinv-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-lightinv-001" >/dev/null
+lvariant qp-lightstale-001; printf '{"state": "PASS", "findings": [], "by": "claude"}\n' > "$RUNS/qp-lightstale-001/review-image-claude.json"
+AG manifest --run "$RUNS/qp-lightstale-001" >/dev/null
+lvariant qp-lightanchor-001
+fmset "$RUNS/qp-lightanchor-001" 'lock = obj["spec"].get("style_lock") or {}; lock["references"] = [{"anchor_id": "a-canon", "sha256": "0" * 64}]; obj["spec"]["style_lock"] = lock'
+# gen-run-workflow-style (the quality plugin check workflow-style): only for a run whose directory holds workflow.ui.json;
+# WARN, never FAIL in this first phase (also on a proposed run), for a legacy-template render (qp-icon-001,
+# image-generate), a violating or unreadable workflow.ui.json; PASS for a render of the clean template (gs-clean-001)
+gsd="$RUNS/gs-clean-001"; cp "$FX/icon-ok.png" "$gsd/outputs/gs.png"; AG manifest --run "$gsd" >/dev/null
+gsvariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$gsd" "$d"; rm -f "$d/run.md"; }
+gsvariant gs-moved-001; jq -c '(.nodes[] | select(.id == 4) | .pos) = [5000, 5000]' "$gsd/workflow.ui.json" > "$RUNS/gs-moved-001/workflow.ui.json"
+AG manifest --run "$RUNS/gs-moved-001" >/dev/null
+gsvariant gs-badjson-001; printf 'not json\n' > "$RUNS/gs-badjson-001/workflow.ui.json"; AG manifest --run "$RUNS/gs-badjson-001" >/dev/null
+gsvariant gs-noextra-001  # lost extra.assetgen and an unsuffixed SaveImage: still checked against the run's run_id
+jq -c 'del(.extra.assetgen) | (.nodes[] | select(.id == 6) | .widgets_values) = ["assetgen/gs-clean-001"]' "$gsd/workflow.ui.json" > "$RUNS/gs-noextra-001/workflow.ui.json"
+AG manifest --run "$RUNS/gs-noextra-001" >/dev/null
+variant qp-uitwin-001                                   # the same run twice: one keeps workflow.ui.json, one has none
+variant qp-noui-001; rm -f "$RUNS/qp-noui-001/workflow.ui.json"; AG manifest --run "$RUNS/qp-noui-001" >/dev/null
 # wired through the registry (artifact-quality --domain assetgen) on a small authoring repo: artifact-quality runs
 # artifact-trace once per artifact over every artifact, so the case matrix below calls the plugin directly
 QAUTH="$TMP/qauth"; mkdir -p "$QAUTH/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$QAUTH/assetgen/"
@@ -1807,6 +3717,9 @@ want=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=PA
   || no "good run rc=$rc: $got" "$(cat "$TMP/err"; jq -c '.results[] | select(.artifact == "AGEN-qp-icon-001" and .state != "PASS")' "$TMP/aq.json")"
 [ "$(st AGEN-qp-fallback-001 gen-run-prompt-review)" = WARN ] && ok "artifact-quality: a SAME_MODEL fallback review is WARN and does not fail the check (rc 0)" \
   || no "fallback through artifact-quality: $(st AGEN-qp-fallback-001 gen-run-prompt-review)"
+[ $rc -eq 0 ] && [ "$(st AGEN-qp-icon-001 gen-run-workflow-style)" = WARN ] \
+  && ok "artifact-quality: a legacy-template render's workflow.ui.json is a gen-run-workflow-style WARN and does not fail the check (rc 0)" \
+  || no "workflow-style through artifact-quality rc=$rc: $(st AGEN-qp-icon-001 gen-run-workflow-style)" "$(why AGEN-qp-icon-001 gen-run-workflow-style)"
 python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2>"$TMP/err" <<'EOF'
 import importlib.util, json, re, sys
 from pathlib import Path
@@ -1829,11 +3742,40 @@ case_() { # case_ RUN CHECK STATE REASON-SUBSTRING LABEL
   if [ "$(st "AGEN-$1" "$2")" = "$3" ] && why "AGEN-$1" "$2" | grep -qF -- "$4"; then ok "$5"
   else no "$5: $1 $2 = $(st "AGEN-$1" "$2")" "$(why "AGEN-$1" "$2")"; fi
 }
+gs_status() { sed -n '/^---json$/,/^---$/p' "$RUNS/$1/run.md" | sed '1d;$d' | jq -r .status; }
+[ "$(gs_status qp-icon-001)/$(gs_status gs-clean-001)/$(gs_status gs-moved-001)" = proposed/proposed/proposed ] \
+  && ok "workflow-style runs are proposed (missing work FAILS there; workflow-style still never does)" \
+  || no "workflow-style run status: $(gs_status qp-icon-001)/$(gs_status gs-clean-001)/$(gs_status gs-moved-001)"
+case_ qp-icon-001 gen-run-workflow-style WARN 'group: node' "legacy-template render (image-generate, no ui groups) on a proposed run: gen-run-workflow-style WARN naming the ungrouped nodes, never FAIL"
+[ "$(st AGEN-gs-clean-001 gen-run-workflow-style)" = PASS ] && [ -z "$(why AGEN-gs-clean-001 gen-run-workflow-style)" ] \
+  && ok "render of the clean template: gen-run-workflow-style PASS without reasons" \
+  || no "clean render workflow-style: $(st AGEN-gs-clean-001 gen-run-workflow-style)" "$(why AGEN-gs-clean-001 gen-run-workflow-style)"
+[ "$(st AGEN-qp-light-001 gen-run-workflow-style)" = PASS ] && [ -z "$(why AGEN-qp-light-001 gen-run-workflow-style)" ] \
+  && ok "staged icon render: gen-run-workflow-style PASS without reasons" \
+  || no "staged icon workflow-style: $(st AGEN-qp-light-001 gen-run-workflow-style)" "$(why AGEN-qp-light-001 gen-run-workflow-style)"
+case_ gs-moved-001 gen-run-workflow-style WARN 'group: node 4 (ImageScale' "workflow.ui.json with a node moved outside every group on a proposed run: WARN naming the node, never FAIL"
+case_ gs-badjson-001 gen-run-workflow-style WARN 'workflow.ui.json is not readable JSON' "unreadable workflow.ui.json: WARN"
+case_ gs-noextra-001 gen-run-workflow-style WARN 'save-suffix: node 6 (SaveImage' "workflow.ui.json without extra.assetgen and an unsuffixed SaveImage: WARN, checked against the run's prefix"
+if why AGEN-gs-noextra-001 gen-run-workflow-style | grep -q 'run prefix is unknown'; then
+  no "gs-noextra-001: the quality check did not pass the run prefix" "$(why AGEN-gs-noextra-001 gen-run-workflow-style)"
+else ok "gen-run-workflow-style passes the run's prefix (no 'run prefix is unknown' without extra.assetgen)"; fi
+checks_of() { jq -r --arg a "AGEN-$1" '[.results[] | select(.artifact == $a) | .check + "=" + .state] | join(" ")' "$TMP/aq.json"; }
+twin=$(checks_of qp-uitwin-001); noui=$(checks_of qp-noui-001)
+[ "$(st AGEN-qp-uitwin-001 gen-run-workflow-style)" = WARN ] && [ -z "$(st AGEN-qp-noui-001 gen-run-workflow-style)" ] \
+  && [ -n "$noui" ] && [ "$noui" = "${twin/ gen-run-workflow-style=WARN/}" ] \
+  && ok "a run without workflow.ui.json gets no gen-run-workflow-style row; its other rows equal its twin's with the file" \
+  || no "no workflow.ui.json: twin [$twin] noui [$noui]"
 case_ qp-same-001 gen-run-prompt-review FAIL 'SAME_MODEL:claude-sonnet' "unmarked review by the author's model family: FAIL, names the explicit marker"
 case_ qp-fallback-001 gen-run-prompt-review WARN 'same-model fallback' "explicit SAME_MODEL:<model> fallback: WARN, never PASS"
 case_ qp-badmark-001 gen-run-prompt-review FAIL 'is not the prompt author' "SAME_MODEL marker on another model's review: FAIL"
 case_ qp-tamper-001 gen-run-outputs FAIL 'sha256 on disk differs' "output bytes changed after the record: FAIL"
 case_ qp-extra-001 gen-run-outputs FAIL 'outputs/second.png is not recorded' "unrecorded outputs/*.png: FAIL"
+batch_front "$RUNS/qp-batch-001" | jq -e '.spec.trace.discarded | length == 1' >/dev/null \
+  && ok "batch quality fixture records one discard" || no "batch quality fixture missing discard trace"
+case_ qp-batch-001 gen-run-outputs PASS '' "manifested batch with a recorded discard: gen-run-outputs PASS"
+case_ qp-batch-extra-001 gen-run-outputs FAIL 'outputs/unrecorded.png is not recorded' "batch with an unrecorded output: gen-run-outputs FAIL"
+case_ qp-rejected-extra-001 gen-run-outputs FAIL 'outputs-rejected/unrecorded.png is not recorded' "unlisted rejected PNG: gen-run-outputs FAIL"
+case_ qp-rejected-sha-001 gen-run-outputs FAIL 'sha256 on disk differs' "rejected PNG with changed bytes: gen-run-outputs FAIL"
 case_ qp-qafail-001 gen-run-qa FAIL 'QA is FAIL' "QA not PASS on a proposed run: FAIL"
 case_ qp-noqa-001 gen-run-qa FAIL 'qa.json is missing' "QA never run: FAIL"
 case_ qp-prov-001 gen-run-provenance FAIL 'provenance.model is not recorded' "provenance without model on a proposed run: FAIL"
@@ -1879,6 +3821,68 @@ case_ qp-claudefail-001 gen-run-claude-review FAIL "Claude's visual review is FA
 case_ qp-claudediff-001 gen-run-claude-review FAIL 'differs from review-image-claude.json (file: FAIL' "review-image-claude.json contradicting run.md: FAIL"
 case_ qp-claudestale-001 gen-run-claude-review WARN 'not bound to the current prompt' "unbound Claude review: WARN"
 case_ qp-claudeby-001 gen-run-claude-review WARN 'is by codex, not claude' "review-image-claude.json by another model: WARN"
+# review tiers: light (icon) without the Claude review PASS; a present file graded as in the full tier; anchors -> full
+[ "$(st AGEN-qp-light-001 gen-run-claude-review)/$(st AGEN-qp-light-001 gen-run-image-review)/$(st AGEN-qp-light-001 gen-run-prompt-review)" = PASS/PASS/PASS ] \
+  && ok "light tier (icon) without review-image-claude.json: Claude review PASS, Codex reviews PASS" \
+  || no "light run: $(st AGEN-qp-light-001 gen-run-claude-review)/$(st AGEN-qp-light-001 gen-run-image-review)/$(st AGEN-qp-light-001 gen-run-prompt-review)" \
+        "$(why AGEN-qp-light-001 gen-run-claude-review; why AGEN-qp-light-001 gen-run-image-review)"
+case_ qp-lightinv-001 gen-run-claude-review WARN 'holds no JSON verdict' "light tier: an invalid review-image-claude.json is still WARN"
+case_ qp-lightstale-001 gen-run-claude-review WARN 'not bound to the current prompt' "light tier: an unbound review-image-claude.json is still WARN"
+case_ qp-lightanchor-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "light purpose with style-lock anchors is full: missing Claude review WARN"
+tierkeys() { jq -r '[paths | .[] | strings | select(test("tier"; "i"))] | unique | join(",")'; }
+fmj() { sed -n '/^---json$/,/^---$/p' "$1/run.md" | sed '1d;$d'; }
+lk="$(fmj "$light" | tierkeys)|$(tierkeys < "$light/spec.json")|$(fmj "$RUNS/qp-noclaude-001" | tierkeys)"
+[ "$lk" = "||" ] && [ "$(fmj "$light" | jq -r .spec.purpose.id)" = icon ] && [ "$(st AGEN-qp-noclaude-001 gen-run-claude-review)" = WARN ] \
+  && ok "no tier is recorded (run.md, spec.json); a full-tier run (sprite-2d) without the Claude review keeps its WARN" \
+  || no "tier fields: $lk, noclaude $(st AGEN-qp-noclaude-001 gen-run-claude-review)"
+python3 -B - "$ROOT" > "$TMP/rt" 2>&1 <<'EOF'
+import importlib.util, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts" / "checks"))
+spec = importlib.util.spec_from_file_location("assetgen_plugin", root / "scripts" / "checks" / "domains" / "assetgen.py")
+plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+def check(cond, label, detail=""):
+    print(("ok " if cond else "no ") + label + ("" if cond else " :: " + str(detail)[:400]))
+def tier(*args):
+    try:
+        return plugin.review_tier(*args)
+    except Exception as exc:  # review_tier never raises
+        return "raised %r" % exc
+def run(pid, **extra):
+    s = {"purpose": {"id": pid}}
+    s.update(extra)
+    return s
+for pid in ("icon", "ui-element", "texture-tileable"):
+    check(tier(run(pid)) == "light", "review_tier: %s is light" % pid, tier(run(pid)))
+for pid in ("sprite-2d", "concept-2d", "no-such-purpose"):
+    check(tier(run(pid)) == "full", "review_tier: %s is full" % pid, tier(run(pid)))
+for label, s in (("no purpose", {}), ("purpose without id", {"purpose": {}}), ("purpose not an object", {"purpose": "icon"}),
+                 ("spec None", None), ("spec a list", [])):
+    check(tier(s) == "full", "review_tier: %s is full" % label, tier(s))
+anchored = run("icon", style_lock={"references": [{"anchor_id": "a", "sha256": "0" * 64}]})
+check(tier(anchored) == "full", "review_tier: icon with a selected style-lock anchor is full", tier(anchored))
+check(tier(run("icon", style_lock={"references": []})) == "light", "review_tier: icon with a style lock but no anchors stays light",
+      tier(run("icon", style_lock={"references": []})))
+for label, table in (("{}", {}), ("purposes a list", {"purposes": []}), ("unknown value", {"purposes": {"icon": "weird"}}),
+                     ("a list", []), ("a string", "light")):
+    check(tier(run("icon"), table) == "full", "review_tier: malformed table (%s) is full" % label, tier(run("icon"), table))
+check(tier(run("sprite-2d"), {"purposes": {"sprite-2d": "light"}}) == "light", "review_tier: an explicit table is used",
+      tier(run("sprite-2d"), {"purposes": {"sprite-2d": "light"}}))
+print("end")
+EOF
+while IFS= read -r line; do
+  line=${line%$'\r'}
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; end) ;; *) no "review_tier: unexpected output" "$line" ;; esac
+done < "$TMP/rt"
+tr -d '\r' < "$TMP/rt" | grep -qx end && ok "review_tier cases ran to the end" || no "review_tier cases stopped early" "$(tail -5 "$TMP/rt")"
+RTD="$ROOT/scripts/assetgen/data/review-tiers.json"
+rt_bad=$(jq -r '.purposes | to_entries[] | select(.value != "light" and .value != "full") | .key' "$RTD" 2>&1)
+rt_missing=$(for p in $(jq -r '.purposes | keys[]' "$RTD" 2>/dev/null); do [ -f "$ROOT/templates/assetgen/purposes/$p.json" ] || printf '%s ' "$p"; done)
+[ "$(jq -r '.schema + " " + .default' "$RTD" 2>/dev/null)" = "rpg-factory.assetgen-review-tiers/1 full" ] && [ -z "$rt_bad$rt_missing" ] \
+  && [ "$(jq -r '[.purposes | to_entries[] | select(.value == "light") | .key] | sort | join(",")' "$RTD")" = "icon,texture-tileable,ui-element" ] \
+  && ok "review-tiers.json: schema id, default full, light = icon, texture-tileable, ui-element, every listed purpose exists" \
+  || no "review-tiers.json: bad values '$rt_bad', unknown purposes '$rt_missing'" "$(cat "$RTD" 2>&1)"
 case_ qp-tool-001 gen-run-provenance FAIL 'provenance.tool must be comfyui' "provenance tool other than comfyui: FAIL"
 case_ qp-ref-001 gen-run-refs FAIL "style 'no-such-style' does not resolve" "unresolvable style ref: FAIL"
 case_ qp-drift-001 gen-run-refs WARN 'changed since the run' "template content changed since the run: WARN (the record keeps what was used)"
@@ -1886,6 +3890,8 @@ case_ qp-prompt-001 gen-run-refs FAIL 'prompt.md differs' "prompt.md edited afte
 [ "$(st AGEN-somewhere-else-001 gen-run-location)" = FAIL ] && why AGEN-somewhere-else-001 gen-run-location | grep -qF 'id must be AGEN-qp-where-001' \
   && ok "id that does not match the run directory: FAIL" || no "location: $(why AGEN-somewhere-else-001 gen-run-location)"
 case_ qp-escape-001 gen-run-outputs FAIL 'not a path inside the run directory' "output path escaping the run directory: FAIL"
+case_ qp-preview-001 gen-run-outputs PASS '' "a preview file under previews/ is not an unrecorded output: PASS"
+case_ qp-precord-001 gen-run-outputs FAIL 'is not under outputs/' "a recorded previews/ path is never a deliverable: FAIL"
 case_ qp-rubric-001 gen-run-prompt-review FAIL 'bound to other requirements' "purpose re-resolved with a stricter rubric after the prompt review: FAIL"
 case_ qp-rubric-001 gen-run-image-review FAIL 'bound to other requirements' "purpose re-resolved with a stricter rubric after the image review: FAIL"
 [ "$(st AGEN-qp-rubric-001 gen-run-qa)/$(st AGEN-qp-rubric-001 gen-run-outputs)" = "PASS/PASS" ] \
@@ -1936,6 +3942,764 @@ T2="$TMP/tmpl"; mkdir -p "$T2" && cp "$ROOT/templates/assetgen/gen-run.md" "$T2/
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T2" --registry "$ROOT/registry.json" | grep -q '^PASS AGEN-example-icon-001$' \
   && ok "kind template templates/assetgen/gen-run.md is a schema-valid draft" || no "gen-run template lint"
 
+group_end; fi
+if group_begin local-hybrid; then
+echo "-- local and hybrid provenance (UNTESTED on RTX 5060)"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-template.json" "$GL/templates/hybrid-provenance.json"
+cp "$ROOT/tests/fixtures/assetgen/local/literal-seed-template.json" "$GL/templates/literal-seed.json"
+python3 -B - "$ROOT" > "$TMP/local-unit" 2>&1 <<'EOF'
+import copy, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import runfiles as r
+root = sys.argv[1]
+t = json.load(open(os.path.join(root, 'tests/fixtures/assetgen/local/hybrid-template.json'), encoding='utf-8'))
+golden = json.load(open(os.path.join(root, 'tests/fixtures/assetgen/golden/icon--image-generate.json'), encoding='utf-8'))
+spec = {'params': {'seed': 123}, 'template': {'data': t}}
+def old_generation_inputs(workflow, spec, locate=None):
+    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") == "NineRouterImage"
+                                          for n in workflow.values()):
+        graph = {}
+        for nid, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = dict(node["inputs"]) if isinstance(node.get("inputs"), dict) else {}
+            graph[str(nid)] = {"class_type": node.get("class_type"), "inputs": inputs}
+        refs = {}
+        for name in r.reference_names(workflow):
+            try:
+                refs[name] = r._file_sha256(locate(os.path.basename(name)) if locate else None)
+            except (OSError, TypeError, ValueError):
+                refs[name] = None
+        out = {"graph": graph, "references": refs}
+        lock = r.style_lock_binding(spec)
+        if lock is not None:
+            out["anchors"] = [{"anchor_id": x.get("anchor_id"), "sha256": x.get("sha256")} for x in r.style_lock_references(spec)]
+        return out
+    params = spec.get("params") if isinstance(spec, dict) else None
+    return params if isinstance(params, dict) else {}
+def check(label, f):
+    try:
+        assert f()
+        print('ok ' + label)
+    except Exception as e:
+        print('no ' + label + ' | ' + repr(e))
+check('generation inputs bind local graphs and preserve legacy hashes', lambda: set(r.generation_inputs({'9': {'class_type': 'KSampler'}}, spec)) == {'graph', 'references'} and all(r.generation_inputs(g, spec) == old_generation_inputs(g, spec) and r._canonical_sha256(r.generation_inputs(g, spec)) == r._canonical_sha256(old_generation_inputs(g, spec)) for g in (golden, {'1': {'class_type': 'SaveImage'}})))
+def prompts():
+    g={'1': {'class_type':'PrimitiveString','inputs':{'value':'hello'}}, '2': {'class_type':'PrimitiveStringMultiline','inputs':{'value':'world'}}, '3': {'class_type':'CLIPTextEncode','inputs':{'text':['1',0]}}, '4': {'class_type':'CLIPTextEncodeSDXL','inputs':{'text_g':['1',0], 'text_l':['2',0]}}, '5': {'class_type':'CLIPTextEncode','inputs':{'text':'literal'}}, '6': {'class_type':'CLIPTextEncode','inputs':{'text':['2',0]}}, '7': {'class_type':'ControlNetApplyAdvanced','inputs':{'positive':['3',0], 'negative':['6',0]}}, '8': {'class_type':'KSampler','inputs':{'positive':['7',0], 'negative':['7',1]}}, '9': {'class_type':'CLIPTextEncode','inputs':{'text':['2',0]}}, '10': {'class_type':'KSampler','inputs':{'negative':['9',0]}}}
+    return r.workflow_prompts(g) == ['hello','hello','world'] and all(isinstance(r.workflow_prompts(x), list) for x in (None, [], {'x': None}, {'x': {'class_type':'KSampler','inputs':{'negative':['x',0]}}}))
+check('CLIP prompts include linked positive text and exclude literals and negative-only paths', prompts)
+def local():
+    wf=copy.deepcopy(t['workflow']); wf['9']['inputs']['seed']=123
+    a=r.local_generation(wf,spec); b=r.local_generation(wf,spec,{'checkpoints/sdxl.safetensors':'a'*64,'loras/style.safetensors':'b'*64})
+    literal=copy.deepcopy(spec); literal['template']['data']['workflow']['9']['inputs']['seed']=123
+    return (a['models'][0]['name']=='sdxl.safetensors' and not a['models'][0]['verified'] and a['loras'][0]['strength_model']==0.8 and a['loras'][0]['strength_clip']==0.7 and a['samplers'][0] == {'node':'9','class_type':'KSampler','seed':123,'seed_param':'seed','sampler_name':'dpmpp_2m','scheduler':'karras','steps':20,'cfg':5.5,'denoise':0.45} and a['requires_sha256']==r._canonical_sha256(t['requires']) and all(x['verified'] for x in b['models']+b['loras']) and r.local_generation(golden,spec) is None and r.local_generation(wf,literal)['samplers'][0]['seed_param'] is None)
+check('local record shape, cache, requires and seed provenance', local)
+def linked_seed():
+    wf = copy.deepcopy(t['workflow']); linked_spec = copy.deepcopy(spec)
+    wf['9']['inputs']['seed'] = ['12', 0]; wf['12'] = {'inputs': {'value': 123}}
+    linked_spec['template']['data']['workflow']['9']['inputs']['seed'] = ['12', 0]
+    linked_spec['template']['data']['workflow']['12'] = {'inputs': {'value': '{{seed}}'}}
+    sampler = r.local_generation(wf, linked_spec)['samplers'][0]
+    return sampler['seed'] == 123 and sampler['seed_param'] == 'seed'
+check('linked rendered seed records its value and parameter', linked_seed)
+def local_model():
+    import assetgen, tempfile
+    with tempfile.TemporaryDirectory() as run_dir:
+        with open(os.path.join(run_dir, 'workflow.json'), 'w', encoding='utf-8') as f:
+            json.dump({'10': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'second.safetensors'}},
+                       '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'first.safetensors'}},
+                       '9': {'class_type': 'KSampler', 'inputs': {}}}, f)
+        return assetgen.workflow_model(run_dir, {'params': {'model': 'fallback'}}) == 'first.safetensors'
+check('local-only workflow provenance uses the first checkpoint', local_model)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "local unit unexpected output" "$line" ;; esac
+done < "$TMP/local-unit"
+[ "$(grep -c '^ok ' "$TMP/local-unit")" -eq 5 ] || no "local unit cases stopped early" "$(cat "$TMP/local-unit")"
+
+localrun="$RUNS/local-hybrid-001"
+local_step() { # Report setup failures so a refused render or manifest cannot make a case vacuous.
+  local label="$1" out rc; shift
+  out=$("$@" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || no "$label" "$out"
+}
+mkrun local-hybrid-001 sprite-2d --style stylized-painterly --template hybrid-provenance --authoring "$AUTH"
+local_step 'local hybrid render' AG render --run "$localrun" --param seed=123
+cp "$FX/icon-ok.png" "$localrun/outputs/local.png"; local_step 'local hybrid qa' AG qa --run "$localrun"
+bound "$localrun" prompt PASS codex > "$localrun/review-prompt.json"; bound "$localrun" image PASS codex > "$localrun/review-image.json"
+bound "$localrun" image PASS claude > "$localrun/review-image-claude.json"
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local hybrid unverified manifest' AG manifest --run "$localrun"
+cp "$localrun/run.md" "$TMP/local-unverified.md"
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" local_step 'local hybrid verified manifest' AG manifest --run "$localrun"
+cp "$localrun/run.md" "$TMP/local-verified.md"
+# Preserve independent variants for each plugin check.
+for id in local-cached-001 local-prompt-001 local-cfg-001 local-missing-001 local-hash-001 local-stale-001; do
+  cp -R "$localrun" "$RUNS/$id"; rm "$RUNS/$id/run.md"
+  python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + sys.argv[2]; json.dump(s, open(p, "w"))' "$RUNS/$id/spec.json" "$id"
+  ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step "$id manifest" AG manifest --run "$RUNS/$id"
+done
+ASSETGEN_MODEL_HASHES="$ROOT/tests/fixtures/assetgen/local/model-hashes.json" local_step 'local cached manifest' AG manifest --run "$RUNS/local-cached-001"
+jq ' .["11"] = {"class_type":"PrimitiveString", "inputs":{"value":"another prompt"}} | .["6"].inputs.text = ["11",0]' "$RUNS/local-prompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/local-prompt-001/workflow.json"
+fmset "$RUNS/local-cfg-001" 'obj["spec"]["generation"]["local"]["samplers"][0]["cfg"] = 99'
+fmset "$RUNS/local-missing-001" 'del obj["spec"]["generation"]["local"]'
+fmset "$RUNS/local-hash-001" 'obj["spec"]["generation"]["local"]["models"][0]["verified"] = True'
+stale="$RUNS/local-stale-001"
+local_step 'local stale initial render' AG render --run "$stale" --param seed=123
+local_step 'local stale qa' AG qa --run "$stale"
+bound "$stale" prompt PASS codex > "$stale/review-prompt.json" || no 'local stale prompt binding'
+bound "$stale" image PASS codex > "$stale/review-image.json" || no 'local stale image binding'
+bound "$stale" image PASS claude > "$stale/review-image-claude.json" || no 'local stale Claude binding'
+local_step 'local stale changed render' AG render --run "$stale" --param seed=456
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local stale manifest' AG manifest --run "$stale"
+literal="$RUNS/local-literal-001"; mkrun local-literal-001 sprite-2d --style stylized-painterly --template literal-seed --authoring "$AUTH"
+local_step 'local literal render' AG render --run "$literal" --param seed=123
+cp "$FX/icon-ok.png" "$literal/outputs/local.png"; local_step 'local literal qa' AG qa --run "$literal"
+bound "$literal" prompt PASS codex > "$literal/review-prompt.json"; bound "$literal" image PASS codex > "$literal/review-image.json"
+ASSETGEN_MODEL_HASHES="$TMP/missing-hashes.json" local_step 'local literal manifest' AG manifest --run "$literal"
+# Engine notes: pose and depth preprocessor models (annotators kind) and the KSamplerAdvanced form of the hybrid fixture
+# get full provenance runs; both are also checked below against the unverified-hash path.
+cp "$LOCALFX/hybrid-advanced-template.json" "$GL/templates/hybrid-advanced.json"
+cp "$LOCALFX/annotator-template.json" "$GL/templates/annotator-provenance.json"
+local_run() { # local_run RUN-ID TEMPLATE-ID HASH-CACHE: a rendered, reviewed and manifested hybrid run
+  local id="$1" tmpl="$2" cache="$3" d="$RUNS/$1"
+  mkrun "$id" sprite-2d --style stylized-painterly --template "$tmpl" --authoring "$AUTH"
+  local_step "$id render" AG render --run "$d" --param seed=123
+  cp "$FX/icon-ok.png" "$d/outputs/local.png"; local_step "$id qa" AG qa --run "$d"
+  bound "$d" prompt PASS codex > "$d/review-prompt.json"; bound "$d" image PASS codex > "$d/review-image.json"
+  bound "$d" image PASS claude > "$d/review-image-claude.json"
+  ASSETGEN_MODEL_HASHES="$cache" local_step "$id manifest" AG manifest --run "$d"
+}
+local_run local-adv-001 hybrid-advanced "$LOCALFX/model-hashes.json"
+local_run local-annot-001 annotator-provenance "$LOCALFX/model-hashes-annotators.json"
+local_run local-annot-unverified-001 annotator-provenance "$TMP/missing-hashes.json"
+for id in local-adv-prompt-001 local-adv-cfg-001; do
+  cp -R "$RUNS/local-adv-001" "$RUNS/$id"; rm "$RUNS/$id/run.md"
+  python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + sys.argv[2]; json.dump(s, open(p, "w"))' "$RUNS/$id/spec.json" "$id"
+  ASSETGEN_MODEL_HASHES="$LOCALFX/model-hashes.json" local_step "$id manifest" AG manifest --run "$RUNS/$id"
+done
+jq ' .["11"] = {"class_type":"PrimitiveString", "inputs":{"value":"another prompt"}} | .["6"].inputs.text = ["11",0]' "$RUNS/local-adv-prompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/local-adv-prompt-001/workflow.json"
+fmset "$RUNS/local-adv-cfg-001" 'obj["spec"]["generation"]["local"]["samplers"][0]["cfg"] = 99'
+cp -R "$RUNS/local-annot-001" "$RUNS/local-annot-drop-001"; rm "$RUNS/local-annot-drop-001/run.md"
+python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/local-annot-drop-001"; json.dump(s, open(p, "w"))' "$RUNS/local-annot-drop-001/spec.json"
+ASSETGEN_MODEL_HASHES="$LOCALFX/model-hashes-annotators.json" local_step 'local-annot-drop-001 manifest' AG manifest --run "$RUNS/local-annot-drop-001"
+fmset "$RUNS/local-annot-drop-001" 'obj["spec"]["generation"]["local"]["models"] = [m for m in obj["spec"]["generation"]["local"]["models"] if m["kind"] != "annotators"]'
+cp "$TMP/local-unverified.md" "$localrun/run.md"
+python3 -B - "$ROOT" "$AUTH" > "$TMP/aq.json" 2> "$TMP/err" <<'EOF'
+import importlib.util, json, re, sys
+from pathlib import Path
+root, auth = Path(sys.argv[1]), Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(root / 'scripts' / 'checks'))
+from domains._api import Context
+s = importlib.util.spec_from_file_location('assetgen_plugin', root / 'scripts/checks/domains/assetgen.py')
+p = importlib.util.module_from_spec(s); s.loader.exec_module(p)
+reg = json.load(open(root / 'registry.json', encoding='utf-8')); rows = []
+for path in sorted((auth / 'assetgen/runs').glob('*/run.md')):
+    obj = json.loads(re.match(r'\A---json\s*\n(.*?)\n---', path.read_text(encoding='utf-8'), re.S).group(1))
+    ctx = Context(str(auth), reg, path.relative_to(auth).as_posix(), {}, None, {'authoring': auth})
+    rows += [{'artifact': obj['id'], 'check': x.check, 'state': x.state, 'reasons': x.reasons} for x in p.check(obj, ctx)]
+print(json.dumps({'results':rows}))
+EOF
+case_ local-stale-001 gen-run-image-review FAIL 'bound to other requirements' 'local seed change invalidates image review binding'
+case_ local-hybrid-001 gen-run-provenance WARN 'sha256 unverified' 'local unverified hashes warn'
+python3 -B - "$TMP/local-unverified.md" "$TMP/local-verified.md" <<'EOF' > "$TMP/local-record"
+import json, re, sys
+def read(p):
+    s=open(p,encoding='utf-8').read(); return json.loads(re.match(r'\A---json\s*\n(.*?)\n---',s,re.S).group(1)),s
+a, text=read(sys.argv[1]); b,_=read(sys.argv[2]); x=a['spec']['generation']['local']; y=b['spec']['generation']['local']
+assert x['models'][0]['name']=='sdxl.safetensors' and x['loras'][0]['name']=='style.safetensors' and x['samplers'][0]['seed']==123 and x['samplers'][0]['cfg']==5.5
+assert all(not v['verified'] and v['sha256'] is None for v in x['models']+x['loras'])
+assert [v['sha256'] for v in y['models']+y['loras']]==['a'*64,'b'*64] and all(v['verified'] for v in y['models']+y['loras'])
+assert 'Local stage (UNTESTED on RTX 5060)' in text
+EOF
+[ $? -eq 0 ] && ok "local manifest records models, LoRA, sampler, cache and untested body" || no "local manifest record" "$(cat "$TMP/local-record")"
+case_ local-cached-001 gen-run-provenance PASS '' 'cache verifies all model hashes and provenance passes'
+case_ local-prompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' 'CLIP prompt mismatch fails provenance'
+case_ local-cfg-001 gen-run-provenance FAIL 'spec.generation.local differs' 'tampered sampler fails provenance'
+case_ local-missing-001 gen-run-provenance FAIL 'records no spec.generation.local' 'missing local record fails provenance'
+case_ local-hash-001 gen-run-provenance FAIL 'claims a verified sha256 it does not carry' 'invalid verified hash fails provenance'
+case_ local-literal-001 gen-run-provenance FAIL 'seed is not a rendered param' 'literal seed fails provenance'
+case_ local-annot-001 gen-run-provenance PASS '' 'annotator models (pose and depth) with a cached hash pass provenance'
+case_ local-annot-unverified-001 gen-run-provenance WARN 'annotators/depth_anything_vitl14.pth sha256 unverified' 'an annotator model without a cached hash warns like the other local model kinds'
+case_ local-annot-drop-001 gen-run-provenance FAIL 'spec.generation.local differs from workflow.json in models' 'a record that omits the annotator models fails provenance'
+case_ local-adv-001 gen-run-provenance PASS '' 'KSamplerAdvanced form passes provenance with a cached hash (same as the KSampler form)'
+case_ local-adv-prompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' 'KSamplerAdvanced: CLIP prompt mismatch fails provenance like KSampler'
+case_ local-adv-cfg-001 gen-run-provenance FAIL 'spec.generation.local differs' 'KSamplerAdvanced: tampered sampler fails provenance like KSampler'
+python3 -B - "$RUNS/local-annot-001/run.md" "$RUNS/local-annot-unverified-001/run.md" "$RUNS/local-adv-001/run.md" "$RUNS/local-cached-001/run.md" > "$TMP/local-engine-record" 2>&1 <<'EOF'
+import json, re, sys
+def local(p):
+    s = open(p, encoding='utf-8').read()
+    return json.loads(re.match(r'\A---json\s*\n(.*?)\n---', s, re.S).group(1))['spec']['generation']['local']
+annot, bare, adv, plain = (local(p) for p in sys.argv[1:5])
+rows = [(m['node'], m['class_type'], m['kind'], m['name'], m['sha256'], m['verified']) for m in annot['models']]
+assert rows == [('4', 'CheckpointLoaderSimple', 'checkpoints', 'sdxl.safetensors', 'a' * 64, True),
+                ('11', 'DepthAnythingPreprocessor', 'annotators', 'depth_anything_vitl14.pth', 'c' * 64, True),
+                ('12', 'DWPosePreprocessor', 'annotators', 'yolox_l.onnx', 'd' * 64, True),
+                ('12', 'DWPosePreprocessor', 'annotators', 'dw-ll_ucoco_384.onnx', 'e' * 64, True)], rows
+assert [(m['kind'], m['verified'], m['sha256']) for m in bare['models'] if m['kind'] == 'annotators'] == [('annotators', False, None)] * 3
+assert [x['name'] for x in annot['loras']] == [x['name'] for x in bare['loras']] == ['style.safetensors'] and annot['requires_sha256'] != plain['requires_sha256']
+# the KSamplerAdvanced record equals the KSampler one except class_type and the denoise it does not have
+a, p = adv['samplers'][0], plain['samplers'][0]
+assert a['class_type'] == 'KSamplerAdvanced' and a['denoise'] is None and p['denoise'] == 0.45, (a, p)
+assert {k: v for k, v in a.items() if k not in ('class_type', 'denoise')} == {k: v for k, v in p.items() if k not in ('class_type', 'denoise')}, (a, p)
+assert a['seed'] == 123 and a['seed_param'] == 'seed'
+assert adv['models'] == plain['models'] and adv['loras'] == plain['loras']
+print('ok')
+EOF
+grep -qx ok "$TMP/local-engine-record" && ok "manifest records annotator models under kind annotators with their hashes and the KSamplerAdvanced sampler row like the KSampler row" \
+  || no "local engine record" "$(cat "$TMP/local-engine-record")"
+! grep -q '"local"\|Local stage' "$good/run.md" && [ "$(st AGEN-qp-icon-001 gen-run-provenance)" = PASS ] && ok 'old run retains provenance PASS without local record' || no 'old run changed' "$(why AGEN-qp-icon-001 gen-run-provenance)"
+python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$AUTH" --registry "$ROOT/registry.json" > "$TMP/local-lint" 2>&1
+grep -q '^PASS AGEN-local-hybrid-001$' "$TMP/local-lint" && ok 'hybrid manifest passes artifact schema lint' || no 'hybrid artifact lint' "$(grep 'AGEN-local-hybrid-001' "$TMP/local-lint")"
+
+# model-hashes (scripts/assetgen/modelhash.py): the writer of the cache the local manifest reads. Small fake model files,
+# a temp state dir, no real models; the reader flow re-runs manifest on a copy of the annotator run with the cache written.
+echo "-- model-hashes: streamed sha256 cache under the Factory state dir, size/mtime reuse, Desktop resolution, reader"
+mh="$TMP/mh"; mhroot="$mh/ComfyUI"; mhmodels="$mhroot/models"; mhstate="$TMP/mh-state"; mhcache="$mhstate/comfy/model-hashes.json"
+mhaux="$mhroot/custom_nodes/comfyui_controlnet_aux/ckpts"
+mkdir -p "$mhmodels/checkpoints" "$mhmodels/loras/sub" "$mhmodels/controlnet" "$mhaux/LiheYoung/Depth-Anything/checkpoints" \
+  "$mhaux/yzd-v/DWPose" "$mhaux/other/DWPose"
+printf 'fake sdxl bytes' > "$mhmodels/checkpoints/sdxl.safetensors"
+printf 'fake style lora' > "$mhmodels/loras/style.safetensors"
+printf 'nested lora' > "$mhmodels/loras/sub/nested.safetensors"
+printf 'not a model' > "$mhmodels/loras/readme.txt"
+printf 'fake depth' > "$mhaux/LiheYoung/Depth-Anything/checkpoints/depth_anything_vitl14.pth"
+printf 'fake yolox' > "$mhaux/yzd-v/DWPose/yolox_l.onnx"
+printf 'fake dw one' > "$mhaux/yzd-v/DWPose/dw-ll_ucoco_384.onnx"
+printf 'fake dw two' > "$mhaux/other/DWPose/dw-ll_ucoco_384.onnx"
+MH_CACHE=
+mh_ag() { ASSETGEN_MODEL_HASHES="$MH_CACHE" RPG_FACTORY_STATE_DIR="$mhstate" AG model-hashes "$@"; }
+mh_sha() { python3 -B -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
+mh_row() { jq -r --arg k "$2" --arg n "$3" '[.models[] | select(.kind == $k and .name == $n) | "\(.sha256) \(.size) \(.mtime_ns)"] | join(",")' "$1"; }
+mh_stat() { python3 -B -c 'import os, sys; st = os.stat(sys.argv[1]); print(st.st_size, st.st_mtime_ns)' "$1"; }
+mh_rewrite() { # mh_rewrite FILE TEXT [mtime-shift-ns]: new bytes; the mtime restored (shift 0) or moved
+  python3 -B -c 'import os, sys; p = sys.argv[1]; st = os.stat(p); open(p, "wb").write(sys.argv[2].encode()); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + int(sys.argv[3])))' "$1" "$2" "${3:-0}"
+}
+before_files=$(find "$mhroot" -type f | sort | tr -d '\r')
+
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 1 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 2 files, 2 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'controlnet: 0 files, 0 hashed, 0 reused' <<<"$out" && grep -qx 'upscale_models: 0 files, 0 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'annotators: 2 files, 2 hashed, 0 reused' <<<"$out" \
+  && ok 'model-hashes first write: one line per default kind, every file hashed (the duplicated annotator base name is not counted)' || no 'model-hashes first write' "rc=$rc $out"
+[ -f "$mhcache" ] && [ "$(jq -r .schema "$mhcache")" = rpg-factory.comfy-model-hashes/1 ] && [ "$(jq -r '.models | length' "$mhcache")" -eq 5 ] \
+  && ok 'model-hashes writes the cache under the state dir comfy/ (schema /1, rows for model extensions only)' || no 'model-hashes cache file' "$(cat "$mhcache" 2>/dev/null)"
+want="$(mh_sha "$mhmodels/checkpoints/sdxl.safetensors") $(mh_stat "$mhmodels/checkpoints/sdxl.safetensors")"
+[ "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" = "$want" ] && [ "$(mh_row "$mhcache" loras sub/nested.safetensors | cut -d' ' -f1)" = "$(mh_sha "$mhmodels/loras/sub/nested.safetensors")" ] \
+  && ok 'model-hashes rows carry the hashlib sha256, size and mtime_ns; a subfolder name uses /' || no 'model-hashes row values' "$(cat "$mhcache")"
+[ "$(mh_row "$mhcache" annotators depth_anything_vitl14.pth | cut -d' ' -f1)" = "$(mh_sha "$mhaux/LiheYoung/Depth-Anything/checkpoints/depth_anything_vitl14.pth")" ] \
+  && [ -z "$(mh_row "$mhcache" annotators dw-ll_ucoco_384.onnx)" ] && grep -q 'dw-ll_ucoco_384.onnx occurs 2 times' <<<"$out" \
+  && ok 'model-hashes annotators: named by base name from the controlnet_aux ckpts folder, a duplicated base name skipped with a warning' || no 'model-hashes annotators' "$out"
+[ "$(jq -r .models_dir "$mhcache" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$mhmodels" | tr 'A-Z' 'a-z')" ] \
+  && ok 'model-hashes records the resolved models_dir' || no 'model-hashes models_dir' "$(jq -r .models_dir "$mhcache") vs $mhmodels"
+[ "$before_files" = "$(find "$mhroot" -type f | sort | tr -d '\r')" ] && [ ! -e "$ROOT/model-hashes.json" ] \
+  && ok 'model-hashes writes nothing into the ComfyUI install or the repository' || no 'model-hashes wrote outside the state dir'
+
+stale_sha=$(jq -r '.models[] | select(.name == "sdxl.safetensors") | .sha256' "$mhcache")
+mh_rewrite "$mhmodels/checkpoints/sdxl.safetensors" 'FAKE SDXL BYTES'   # same size, same mtime: the cache cannot tell
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 0 hashed, 1 reused' <<<"$out" && grep -qx 'loras: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 0 files, 0 hashed, 0 reused' <<<"$out" && grep -qx 'annotators: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors | cut -d' ' -f1)" = "$stale_sha" ] \
+  && ok 'model-hashes reuses a row whose size and mtime_ns are unchanged without reading the file (the stale sha256 is kept)' || no 'model-hashes reuse' "rc=$rc $out"
+mh_rewrite "$mhmodels/checkpoints/sdxl.safetensors" 'FAKE SDXL BYTES' 5000000000   # same size, other mtime
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 1 files, 1 hashed, 0 reused' <<<"$out" \
+  && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" = "$(mh_sha "$mhmodels/checkpoints/sdxl.safetensors") $(mh_stat "$mhmodels/checkpoints/sdxl.safetensors")" ] \
+  && [ "$(mh_row "$mhcache" checkpoints sdxl.safetensors | cut -d' ' -f1)" != "$stale_sha" ] \
+  && ok 'model-hashes rehashes a file whose mtime changed' || no 'model-hashes rehash on mtime' "rc=$rc $out"
+printf 'a longer lora' > "$mhmodels/loras/style.safetensors"
+out=$(mh_ag --models-dir "$mhmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'loras: 2 files, 1 hashed, 1 reused' <<<"$out" \
+  && [ "$(mh_row "$mhcache" loras style.safetensors | cut -d' ' -f1)" = "$(mh_sha "$mhmodels/loras/style.safetensors")" ] \
+  && ok 'model-hashes rehashes a file whose size changed and reuses the rest' || no 'model-hashes rehash on size' "rc=$rc $out"
+rm "$mhmodels/loras/sub/nested.safetensors"
+out=$(mh_ag --models-dir "$mhmodels" --kind loras 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c '^[a-z_]*: ')" -eq 1 ] && [ -z "$(mh_row "$mhcache" loras sub/nested.safetensors)" ] \
+  && [ -n "$(mh_row "$mhcache" checkpoints sdxl.safetensors)" ] && [ -n "$(mh_row "$mhcache" annotators yolox_l.onnx)" ] \
+  && [ "$(jq -r '[.models[] | "\(.kind)/\(.name)"] | . == sort' "$mhcache")" = true ] \
+  && ok 'model-hashes --kind scans only that kind: a vanished file is dropped, other kinds are kept, rows stay sorted' || no 'model-hashes --kind' "rc=$rc $out"
+
+# Comfy Desktop and headless resolution
+desk="$TMP/mh-desk"; mkdir -p "$desk/a/ComfyUI/models/checkpoints" "$desk/b/ComfyUI/models/checkpoints"
+printf 'desk a' > "$desk/a/ComfyUI/models/checkpoints/only-a.safetensors"; printf 'desk b' > "$desk/b/ComfyUI/models/checkpoints/only-b.safetensors"
+python3 -B - "$desk" <<'PYEOF'
+import json, sys
+d = sys.argv[1]
+json.dump([{"id": "c1", "name": "Cloud", "sourceId": "cloud"}, {"id": "no-path", "name": "No path", "sourceId": "standalone"},
+           {"id": "i1", "name": "Local A", "sourceId": "git", "installPath": d + "/a", "lastLaunchedAt": 5},
+           {"id": "i2", "name": "Local B", "sourceId": "standalone", "installPath": d + "/b", "lastLaunchedAt": 1}],
+          open(d + "/installations.json", "w"))
+PYEOF
+MH_CACHE="$TMP/mh-desk-cache.json"
+out=$(mh_ag --desktop-dir "$desk" --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ -n "$(mh_row "$MH_CACHE" checkpoints only-b.safetensors)" ] && [ -z "$(mh_row "$MH_CACHE" checkpoints only-a.safetensors)" ] \
+  && ok 'model-hashes Desktop: skips cloud and path-less entries, a standalone instance first, ASSETGEN_MODEL_HASHES sets the cache path' || no 'model-hashes desktop pick' "rc=$rc $out"
+out=$(mh_ag --desktop-dir "$desk" --instance 'Local A' --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ -n "$(mh_row "$MH_CACHE" checkpoints only-a.safetensors)" ] && [ -z "$(mh_row "$MH_CACHE" checkpoints only-b.safetensors)" ] \
+  && ok 'model-hashes Desktop --instance picks by name (or id)' || no 'model-hashes desktop --instance' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --comfy-dir "$mhroot" --kind loras 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ -n "$(mh_row "$MH_CACHE" loras style.safetensors)" ] && ok 'model-hashes --comfy-dir uses DIR/models' || no 'model-hashes --comfy-dir' "rc=$rc $out"
+
+# refusals write nothing
+rm -f "$MH_CACHE"
+out=$(mh_ag --desktop-dir "$TMP/mh-no-desktop" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && grep -q -- '--models-dir' <<<"$out" && grep -q -- '--desktop-dir' <<<"$out" && [ ! -e "$MH_CACHE" ] \
+  && ok 'model-hashes with no models directory exits 2 with a one-line message naming the flags and writes nothing' || no 'model-hashes no directory' "rc=$rc $out"
+out=$(mh_ag --models-dir "$TMP/mh-no-models" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && grep -q 'does not exist' <<<"$out" && [ ! -e "$MH_CACHE" ] && ok 'model-hashes with a missing --models-dir exits 2 and writes nothing' || no 'model-hashes missing models dir' "rc=$rc $out"
+out=$(mh_ag --models-dir "$mhmodels" --kind ipadapter 2>&1); rc=$?
+[ "$rc" -eq 2 ] && grep -q 'one of checkpoints, loras, controlnet, upscale_models, annotators' <<<"$out" && [ ! -e "$MH_CACHE" ] \
+  && ok 'model-hashes with an unknown --kind (the preset kind included) exits 2 and writes nothing' || no 'model-hashes unknown kind' "rc=$rc $out"
+out=$(mh_ag --models-dir "$mhmodels" --comfy-dir "$mhroot" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && [ ! -e "$MH_CACHE" ] && ok 'model-hashes --models-dir and --comfy-dir together exit 2' || no 'model-hashes exclusive flags' "rc=$rc $out"
+
+# --json
+out=$(mh_ag --models-dir "$mhmodels" --kind checkpoints --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '[.schema, .kinds.checkpoints.hashed, (.rows | length), (.path | endswith("mh-desk-cache.json"))] | join(" ")' <<<"$out")" = 'rpg-factory.assetgen-model-hashes/1 1 1 true' ] \
+  && ok 'model-hashes --json prints the result object (path, models_dir, kinds, rows)' || no 'model-hashes --json' "rc=$rc $out"
+
+# extra model folders (ComfyUI's extra_model_paths.yaml): small fake yaml files and fake model files under $TMP, no real
+# models; absolute folders inside a yaml use the native path form python prints (mh_native), so this runs on Linux too.
+echo "-- model-hashes: extra_model_paths.yaml folders, Desktop instance-model-paths, is_default order, flags, malformed file"
+mh_native() { python3 -B -c 'import os, sys; print(os.path.abspath(sys.argv[1]).replace(os.sep, "/"))' "$1" | tr -d '\r'; }
+xr="$mh/x"; xcomfy="$xr/ComfyUI"; xmodels="$xcomfy/models"; xshared="$xr/shared"; xabs="$xr/abs_ckpts"; xyaml="$xcomfy/extra_model_paths.yaml"
+mkdir -p "$xmodels/checkpoints" "$xmodels/loras" "$xshared/ckpts" "$xshared/loras_a" "$xshared/up_a" "$xshared/up_b/sub" "$xshared/vae" "$xabs"
+printf 'x main ckpt' > "$xmodels/checkpoints/main.safetensors"
+printf 'x main copy' > "$xmodels/checkpoints/shared.safetensors"
+printf 'x main lora' > "$xmodels/loras/main-lora.safetensors"
+printf 'x extra a' > "$xshared/ckpts/extra-a.safetensors"
+printf 'x shadowed copy' > "$xshared/ckpts/shared.safetensors"
+printf 'x extra lora' > "$xshared/loras_a/lora-extra.safetensors"
+printf 'x up one' > "$xshared/up_a/up1.pth"
+printf 'x up two' > "$xshared/up_b/sub/up2.pth"
+printf 'x vae' > "$xshared/vae/vae.safetensors"
+printf 'x abs ckpt' > "$xabs/abs-ckpt.safetensors"
+xabs_n=$(mh_native "$xabs")
+cat > "$xyaml" <<EOF
+# extra model folders next to the ComfyUI install
+shared_models:
+    base_path: ../shared   # relative to this file
+    checkpoints: "ckpts/"
+    'loras': 'loras_a/'
+    upscale_models: |-
+        up_a/
+        up_b/
+    vae: vae/
+    is_default: false
+absolute_models:
+    checkpoints: '$xabs_n'
+EOF
+xfiles=$(find "$xr" -type f | sort | tr -d '\r')
+MH_CACHE="$TMP/mh-x-cache.json"; rm -f "$MH_CACHE"
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 2 files, 2 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 2 files, 2 hashed, 0 reused' <<<"$out" && grep -qx 'controlnet: 0 files, 0 hashed, 0 reused' <<<"$out" \
+  && ok 'model-hashes reads <comfy root>/extra_model_paths.yaml: the folders of the hashed kinds (relative base_path, a quoted key, an absolute folder, a |- block of two folders) are hashed too' || no 'model-hashes extra folders' "rc=$rc $out"
+[ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xshared/ckpts/extra-a.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints abs-ckpt.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xabs/abs-ckpt.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" loras lora-extra.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xshared/loras_a/lora-extra.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" upscale_models up1.pth | cut -d' ' -f1)" = "$(mh_sha "$xshared/up_a/up1.pth")" ] \
+  && [ "$(mh_row "$MH_CACHE" upscale_models sub/up2.pth | cut -d' ' -f1)" = "$(mh_sha "$xshared/up_b/sub/up2.pth")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors)" = "$(mh_sha "$xshared/ckpts/extra-a.safetensors") $(mh_stat "$xshared/ckpts/extra-a.safetensors")" ] \
+  && ok 'model-hashes rows of the extra folders carry the hashlib sha256, size and mtime_ns; the name is the path below the folder with /' || no 'model-hashes extra rows' "$(cat "$MH_CACHE")"
+[ -z "$(jq -r '.models[] | select(.name == "vae.safetensors") | .name' "$MH_CACHE")" ] && [ "$(jq -r '[.models[] | .kind] | unique | join(",")' "$MH_CACHE")" = 'checkpoints,loras,upscale_models' ] \
+  && ok 'model-hashes ignores a kind asset-gen does not hash (vae) and base_path/is_default keys in the yaml' || no 'model-hashes unhashed kind' "$(cat "$MH_CACHE")"
+[ "$(mh_row "$MH_CACHE" checkpoints shared.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xmodels/checkpoints/shared.safetensors")" ] \
+  && grep -q "assetgen: warning: checkpoints: shared.safetensors in .*/shared/ckpts is shadowed by an earlier folder, skipped" <<<"$out" \
+  && ok 'model-hashes keeps the first folder for a name found twice (the models folder before a non-default extra folder) and warns about the shadowed copy' || no 'model-hashes shadow' "$out"
+grep -q "^extra model paths .*/ComfyUI/extra_model_paths.yaml: 5 folders$" <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] \
+  && [ "$(grep -n '^extra model paths ' <<<"$out" | cut -d: -f1)" -lt "$(grep -n '^wrote ' <<<"$out" | cut -d: -f1)" ] \
+  && ok 'model-hashes prints one "extra model paths <file>: N folders" line per file, before the wrote line' || no 'model-hashes extra text line' "$out"
+[ "$xfiles" = "$(find "$xr" -type f | sort | tr -d '\r')" ] && ok 'model-hashes with extra folders writes nothing next to the models or the yaml' || no 'model-hashes extra wrote files' "$(find "$xr" -type f | sort)"
+
+# reuse by size and mtime_ns also covers the extra folders
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 0 hashed, 4 reused' <<<"$out" && grep -qx 'loras: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 2 files, 0 hashed, 2 reused' <<<"$out" \
+  && ok 'model-hashes second run reuses every row, extra folders included' || no 'model-hashes extra reuse' "rc=$rc $out"
+stale_sha=$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)
+mh_rewrite "$xshared/ckpts/extra-a.safetensors" 'X EXTRA B'   # same size, same mtime: reused without reading
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 0 hashed, 4 reused' <<<"$out" && [ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)" = "$stale_sha" ] \
+  && ok 'model-hashes reuses an extra-folder row whose size and mtime_ns are unchanged without reading the file' || no 'model-hashes extra reuse unchanged' "rc=$rc $out"
+mh_rewrite "$xshared/ckpts/extra-a.safetensors" 'X EXTRA B' 5000000000   # same size, other mtime
+out=$(mh_ag --models-dir "$xmodels" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 1 hashed, 3 reused' <<<"$out" && [ "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xshared/ckpts/extra-a.safetensors")" ] \
+  && ok 'model-hashes rehashes an extra-folder file whose mtime changed and reuses the rest' || no 'model-hashes extra rehash' "rc=$rc $out"
+
+# --json: the additive extra_model_paths field lists the folders per kind of each file read
+out=$(mh_ag --models-dir "$xmodels" --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | length' <<<"$out")" -eq 1 ] && [ "$(jq -r '.extra_model_paths[0].path | endswith("/ComfyUI/extra_model_paths.yaml")' <<<"$out")" = true ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders | keys | join(",")' <<<"$out")" = 'checkpoints,loras,upscale_models' ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.checkpoints | length' <<<"$out")" -eq 2 ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.upscale_models | map(split("/") | last) | join(",")' <<<"$out")" = 'up_a,up_b' ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.checkpoints[1]' <<<"$out")" = "$xabs_n" ] \
+  && ok 'model-hashes --json adds extra_model_paths: path and the folders per kind in file order, with /' || no 'model-hashes --json extra' "rc=$rc $out"
+
+# --no-extra-model-paths turns auto-discovery off; an explicit file is still read and is read once
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && grep -qx 'loras: 1 files, 1 hashed, 0 reused' <<<"$out" \
+  && grep -qx 'upscale_models: 0 files, 0 hashed, 0 reused' <<<"$out" && ! grep -q 'extra model paths' <<<"$out" && [ -z "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors)" ] \
+  && ok 'model-hashes --no-extra-model-paths hashes only the models folder and reads no extra file' || no 'model-hashes --no-extra-model-paths' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xyaml" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] \
+  && ok 'model-hashes --no-extra-model-paths still reads an explicit --extra-model-paths file' || no 'model-hashes --no-extra with an explicit file' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --extra-model-paths "$xyaml" --extra-model-paths "$xcomfy/../ComfyUI/extra_model_paths.yaml" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 4 files, 4 hashed, 0 reused' <<<"$out" && [ "$(grep -c '^extra model paths ' <<<"$out")" -eq 1 ] && ! { grep -v 'shared.safetensors in' <<<"$out" | grep -q 'shadowed by an earlier folder'; } \
+  && ok 'model-hashes reads a file given twice (explicit and auto-discovered, or repeated) once' || no 'model-hashes extra file dedupe' "rc=$rc $out"
+
+# an explicit file of its own (not next to the install): its folders are added
+xexp="$xr/explicit_ckpts"; mkdir -p "$xexp"; printf 'x explicit ckpt' > "$xexp/exp.safetensors"
+printf "other_models:\n    checkpoints: '%s'\n" "$(mh_native "$xexp")" > "$xr/explicit.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/explicit.yaml" --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 3 files, 3 hashed, 0 reused' <<<"$out" && [ "$(mh_row "$MH_CACHE" checkpoints exp.safetensors | cut -d' ' -f1)" = "$(mh_sha "$xexp/exp.safetensors")" ] \
+  && [ -z "$(mh_row "$MH_CACHE" checkpoints extra-a.safetensors)" ] \
+  && ok 'model-hashes --extra-model-paths FILE adds the folders of that file (and only that file with --no-extra-model-paths)' || no 'model-hashes explicit extra file' "rc=$rc $out"
+
+# a missing explicit file is a usage error: exit 2, one line, nothing written
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --extra-model-paths "$xr/does-not-exist.yaml" 2>&1); rc=$?
+[ "$rc" -eq 2 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && grep -q -- '--extra-model-paths .*does-not-exist.yaml: no such file' <<<"$out" && [ ! -e "$MH_CACHE" ] \
+  && ok 'model-hashes with a missing explicit --extra-model-paths file exits 2 with a one-line message and writes nothing' || no 'model-hashes missing explicit extra file' "rc=$rc $out"
+
+# a malformed file is a warning, never a crash: the file is ignored, the exit code stays 0, the other rows are still written
+printf "broken_models:\n    checkpoints: 'never closed\n" > "$xr/bad-quote.yaml"
+printf "broken_models:\n    checkpoints: [a, b]\n" > "$xr/bad-flow.yaml"
+printf "broken_models:\n\tcheckpoints: a\n" > "$xr/bad-tab.yaml"
+printf '    checkpoints: orphan/\n' > "$xr/bad-outside.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/bad-quote.yaml" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q "^assetgen: warning: extra model paths .*/bad-quote.yaml: line 2: unterminated single quote; file ignored$" <<<"$out" \
+  && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && ! grep -q '^extra model paths ' <<<"$out" && grep -q '^wrote ' <<<"$out" && [ "$(jq -r '.models | length' "$MH_CACHE")" -eq 3 ] \
+  && ok 'model-hashes with a malformed extra file (unterminated quote) warns with the line number, ignores the file, exits 0 and still writes the other rows' || no 'model-hashes malformed extra file' "rc=$rc $out"
+for pair in 'bad-flow:line 2: flow collections are not supported' 'bad-tab:line 2: tab indentation is not supported' 'bad-outside:line 1: a key outside a section'; do
+  f=${pair%%:*}; reason=${pair#*:}; rm -f "$MH_CACHE"
+  out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/$f.yaml" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && grep -q "^assetgen: warning: extra model paths .*/$f.yaml: $reason; file ignored$" <<<"$out" && [ -f "$MH_CACHE" ] \
+    && ok "model-hashes malformed extra file $f: a warning (\"$reason\"), exit 0" || no "model-hashes malformed extra file $f" "rc=$rc $out"
+done
+# a malformed file does not stop a good one, and the warning is in the JSON too
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$xmodels" --no-extra-model-paths --extra-model-paths "$xr/bad-flow.yaml" --extra-model-paths "$xr/explicit.yaml" --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.warnings | map(select(test("bad-flow.yaml: line 2: flow collections are not supported; file ignored"))) | length' <<<"$out")" -eq 1 ] \
+  && [ "$(jq -r '.extra_model_paths | length' <<<"$out")" -eq 1 ] && [ -n "$(jq -r '.rows[] | select(.name == "exp.safetensors") | .name' <<<"$out")" ] \
+  && ok 'model-hashes keeps the folders of a good extra file next to a malformed one; the warning is in the --json warnings' || no 'model-hashes malformed plus good' "rc=$rc $out"
+# an auto-discovered malformed file is ignored the same way
+xbad="$mh/xbad/ComfyUI"; mkdir -p "$xbad/models/checkpoints"; printf 'x bad root' > "$xbad/models/checkpoints/only.safetensors"
+cp "$xr/bad-tab.yaml" "$xbad/extra_model_paths.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --comfy-dir "$xbad" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q "^assetgen: warning: extra model paths .*/ComfyUI/extra_model_paths.yaml: line 2: tab indentation is not supported; file ignored$" <<<"$out" \
+  && [ -n "$(mh_row "$MH_CACHE" checkpoints only.safetensors)" ] \
+  && ok 'model-hashes with a malformed <comfy root>/extra_model_paths.yaml warns and still hashes the models folder' || no 'model-hashes malformed auto file' "rc=$rc $out"
+
+# Comfy Desktop: <data dir>/instance-model-paths/<instance id>.yaml of the picked instance; is_default puts its folders first
+dk="$TMP/mh-dk"; dkinst="$dk/inst"; dkshared="$dk/shared"
+mkdir -p "$dkinst/ComfyUI/models/checkpoints" "$dkinst/ComfyUI/models/controlnet" "$dkshared/checkpoints" "$dkshared/controlnet" "$dkshared/t2i_adapter" "$dk/instance-model-paths"
+printf 'dk main same' > "$dkinst/ComfyUI/models/checkpoints/same.safetensors"
+printf 'dk main only' > "$dkinst/ComfyUI/models/checkpoints/main-only.safetensors"
+printf 'dk shared same' > "$dkshared/checkpoints/same.safetensors"
+printf 'dk shared only' > "$dkshared/checkpoints/default-only.safetensors"
+printf 'dk cn' > "$dkshared/controlnet/cn.safetensors"
+printf 'dk t2i' > "$dkshared/t2i_adapter/t2i.safetensors"
+python3 -B - "$dk" "$dkinst" <<'PYEOF'
+import json, sys
+json.dump([{"id": "dk-1", "name": "Desk", "sourceId": "standalone", "installPath": sys.argv[2], "lastLaunchedAt": 3}],
+          open(sys.argv[1] + "/installations.json", "w"))
+PYEOF
+cat > "$dk/instance-model-paths/dk-1.yaml" <<EOF
+# Generated by Comfy Desktop
+comfy.desktop_0:
+    base_path: '$(mh_native "$dkshared")'
+    is_default: true
+    'checkpoints': 'checkpoints/'
+    'controlnet': |-
+        controlnet/
+        t2i_adapter/
+EOF
+MH_CACHE="$TMP/mh-dk-cache.json"; rm -f "$MH_CACHE"
+out=$(mh_ag --desktop-dir "$dk" --kind checkpoints --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.kinds.checkpoints | "\(.files) \(.hashed)"' <<<"$out")" = '3 3' ] && [ "$(jq -r '.kinds.controlnet | "\(.files) \(.hashed)"' <<<"$out")" = '2 2' ] \
+  && [ "$(jq -r '.extra_model_paths | length' <<<"$out")" -eq 1 ] && [ "$(jq -r '.extra_model_paths[0].path | endswith("/instance-model-paths/dk-1.yaml")' <<<"$out")" = true ] \
+  && [ "$(jq -r '.extra_model_paths[0].folders.controlnet | map(split("/") | last) | join(",")' <<<"$out")" = 'controlnet,t2i_adapter' ] \
+  && ok 'model-hashes Desktop route reads instance-model-paths/<instance id>.yaml of the picked instance (|- block with two controlnet folders)' || no 'model-hashes desktop extra' "rc=$rc $out"
+[ "$(mh_row "$MH_CACHE" controlnet t2i.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkshared/t2i_adapter/t2i.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints default-only.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkshared/checkpoints/default-only.safetensors")" ] \
+  && ok 'model-hashes Desktop extra folders are hashed (rows of both controlnet folders and the extra checkpoints folder)' || no 'model-hashes desktop extra rows' "$(cat "$MH_CACHE")"
+out=$(mh_ag --desktop-dir "$dk" --kind checkpoints 2>&1)
+[ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkshared/checkpoints/same.safetensors")" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" != "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
+  && grep -q "assetgen: warning: checkpoints: same.safetensors in .*/inst/ComfyUI/models/checkpoints is shadowed by an earlier folder, skipped" <<<"$out" \
+  && ok 'model-hashes is_default: the extra folder comes before the models folder (its row wins, the models-folder copy is the shadowed one)' || no 'model-hashes is_default order' "$out"
+# ComfyUI inserts every is_default folder at index 0, so the default folders are searched in REVERSE declaration order:
+# a |- block 'a/ then b/' searches b first, and a later default section comes before an earlier one
+dko="$dk/ord"; mkdir -p "$dko/a" "$dko/b" "$dko/c"
+printf 'ord from a' > "$dko/a/pair.safetensors"; printf 'ord from b' > "$dko/b/pair.safetensors"; printf 'ord from c' > "$dko/c/pair.safetensors"
+cat > "$dk/ord.yaml" <<EOF
+first_defaults:
+    base_path: '$(mh_native "$dko")'
+    is_default: true
+    controlnet: |-
+        a/
+        b/
+second_defaults:
+    base_path: '$(mh_native "$dko")'
+    is_default: true
+    controlnet: c/
+EOF
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$dkinst/ComfyUI/models" --no-extra-model-paths --extra-model-paths "$dk/ord.yaml" --kind controlnet 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(mh_row "$MH_CACHE" controlnet pair.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dko/c/pair.safetensors")" ] \
+  && grep -q "controlnet: pair.safetensors in .*/ord/b is shadowed by an earlier folder, skipped" <<<"$out" \
+  && grep -q "controlnet: pair.safetensors in .*/ord/a is shadowed by an earlier folder, skipped" <<<"$out" \
+  && [ "$(grep -n 'pair.safetensors in .*/ord/b ' <<<"$out" | cut -d: -f1)" -lt "$(grep -n 'pair.safetensors in .*/ord/a ' <<<"$out" | cut -d: -f1)" ] \
+  && ! { grep -v 'pair.safetensors in' <<<"$out" | grep -q 'shadowed by an earlier folder'; } \
+  && ok 'model-hashes is_default folders follow ComfyUI insert-at-front order: the last declared default folder wins, then b before a' || no 'model-hashes is_default reverse order' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --desktop-dir "$dk" --no-extra-model-paths --kind checkpoints 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -qx 'checkpoints: 2 files, 2 hashed, 0 reused' <<<"$out" && [ -z "$(mh_row "$MH_CACHE" checkpoints default-only.safetensors)" ] \
+  && [ "$(mh_row "$MH_CACHE" checkpoints same.safetensors | cut -d' ' -f1)" = "$(mh_sha "$dkinst/ComfyUI/models/checkpoints/same.safetensors")" ] \
+  && ok 'model-hashes --no-extra-model-paths skips the Desktop instance file too' || no 'model-hashes desktop --no-extra-model-paths' "rc=$rc $out"
+
+# file order follows ComfyUI's main.py: <comfy root>/extra_model_paths.yaml first, then the files of its command line.
+# A non-default folder is searched after the models folder in declaration order, so the first file's folder wins a duplicate row.
+mo="$TMP/mh-ord"; moc="$mo/ComfyUI"
+mkdir -p "$moc/models/controlnet" "$mo/root_cn" "$mo/exp1_cn" "$mo/exp2_cn"
+printf 'ord root' > "$mo/root_cn/dup.safetensors"; printf 'ord exp1' > "$mo/exp1_cn/dup.safetensors"; printf 'ord exp2' > "$mo/exp2_cn/dup.safetensors"
+printf "root_models:\n    controlnet: '%s'\n" "$(mh_native "$mo/root_cn")" > "$moc/extra_model_paths.yaml"
+printf "exp1_models:\n    controlnet: '%s'\n" "$(mh_native "$mo/exp1_cn")" > "$mo/exp1.yaml"
+printf "exp2_models:\n    controlnet: '%s'\n" "$(mh_native "$mo/exp2_cn")" > "$mo/exp2.yaml"
+MH_CACHE="$TMP/mh-ord-cache.json"; rm -f "$MH_CACHE"
+out=$(mh_ag --comfy-dir "$moc" --extra-model-paths "$mo/exp1.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | map(.path | split("/") | last) | join(",")' <<<"$out")" = 'extra_model_paths.yaml,exp1.yaml' ] \
+  && [ "$(jq -r '.rows[] | select(.name == "dup.safetensors") | .sha256' <<<"$out")" = "$(mh_sha "$mo/root_cn/dup.safetensors")" ] \
+  && [ "$(jq -r '.warnings | map(select(test("dup.safetensors in .*/exp1_cn is shadowed by an earlier folder"))) | length' <<<"$out")" -eq 1 ] \
+  && ok 'model-hashes reads the auto-discovered <comfy root>/extra_model_paths.yaml before an explicit --extra-model-paths file (ComfyUI main.py order): the root file folder wins a duplicate row' || no 'model-hashes root file before explicit' "rc=$rc $out"
+rm -f "$MH_CACHE"; out=$(mh_ag --comfy-dir "$moc" --no-extra-model-paths --extra-model-paths "$mo/exp2.yaml" --extra-model-paths "$mo/exp1.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | map(.path | split("/") | last) | join(",")' <<<"$out")" = 'exp2.yaml,exp1.yaml' ] \
+  && [ "$(jq -r '.rows[] | select(.name == "dup.safetensors") | .sha256' <<<"$out")" = "$(mh_sha "$mo/exp2_cn/dup.safetensors")" ] \
+  && ok 'model-hashes reads several explicit --extra-model-paths files in the order given (the first listed wins a duplicate row)' || no 'model-hashes explicit file order' "rc=$rc $out"
+# Comfy Desktop: its instance file is auto-discovered, so it is read before the explicit files; with both is_default the later
+# file is searched first (ComfyUI inserts at index 0), so the explicit file's copy of cn.safetensors wins over the Desktop one
+dke="$dk/exp_default"; mkdir -p "$dke"; printf 'dk explicit cn' > "$dke/cn.safetensors"
+printf "exp_defaults:\n    is_default: true\n    controlnet: '%s'\n" "$(mh_native "$dke")" > "$dk/exp-default.yaml"
+rm -f "$MH_CACHE"; out=$(mh_ag --desktop-dir "$dk" --extra-model-paths "$dk/exp-default.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(jq -r '.extra_model_paths | map(.path | split("/") | last) | join(",")' <<<"$out")" = 'dk-1.yaml,exp-default.yaml' ] \
+  && [ "$(jq -r '.rows[] | select(.name == "cn.safetensors") | .sha256' <<<"$out")" = "$(mh_sha "$dke/cn.safetensors")" ] \
+  && ok 'model-hashes reads the Comfy Desktop instance file after the root file and before the explicit files' || no 'model-hashes desktop file before explicit' "rc=$rc $out"
+
+# is_default follows Python truthiness of the yaml value (ComfyUI: yaml.safe_load): a default folder is searched before the models
+# folder, so its copy of the row wins; a non-default one is searched after it, so the models folder copy wins
+md="$TMP/mh-def"; mdm="$md/ComfyUI/models"; mkdir -p "$mdm/controlnet"
+mh_true=("'false'" '"no"' "'0'" '"off"' 'yes' 'Yes' 'on' 'ON' 'true' 'True' 'TRUE' '1' '0.5' '0x1' '0o0' 'tRue' 'nope' 'y' '.nan' '|-')
+mh_false=('false' 'False' 'no' 'No' 'off' 'OFF' '0' '-0' '0.0' '00' '0x0' '0b0' 'null' 'Null' '~' "''" '""' '')
+mdn=$(mh_native "$md"); : > "$md/defaults.yaml"
+i=0
+for v in "${mh_true[@]}" "${mh_false[@]}"; do
+  mkdir -p "$md/x$i"; printf 'extra %s' "$i" > "$md/x$i/v$i.safetensors"; printf 'models %s' "$i" > "$mdm/controlnet/v$i.safetensors"
+  if [ "$v" = '|-' ]; then
+    printf "s%s:\n    controlnet: '%s/x%s'\n    is_default: |-\n        false\n" "$i" "$mdn" "$i" >> "$md/defaults.yaml"
+  else
+    printf "s%s:\n    controlnet: '%s/x%s'\n    is_default: %s\n" "$i" "$mdn" "$i" "$v" >> "$md/defaults.yaml"
+  fi
+  i=$((i + 1))
+done
+rm -f "$MH_CACHE"; out=$(mh_ag --models-dir "$mdm" --no-extra-model-paths --extra-model-paths "$md/defaults.yaml" --kind controlnet --json 2>/dev/null); rc=$?
+bad=""; i=0
+for v in "${mh_true[@]}" "${mh_false[@]}"; do
+  got=$(jq -r --arg n "v$i.safetensors" '.rows[] | select(.name == $n) | .sha256' <<<"$out")
+  if [ "$i" -lt "${#mh_true[@]}" ]; then want=$(mh_sha "$md/x$i/v$i.safetensors"); else want=$(mh_sha "$mdm/controlnet/v$i.safetensors"); fi
+  [ "$got" = "$want" ] || bad="$bad [$v: $([ "$i" -lt "${#mh_true[@]}" ] && echo default-expected || echo models-expected)]"
+  i=$((i + 1))
+done
+[ "$rc" -eq 0 ] && [ -z "$bad" ] && [ "$(jq -r '.rows | length' <<<"$out")" -eq "$i" ] \
+  && ok 'model-hashes is_default is Python truthiness of the yaml value: a quoted '"'false'"' or "no", plain yes/on/true/1, a plain word and a block scalar are defaults; plain false/no/off/0/0.0/0x0/null/~ and an empty quoted string are not' || no 'model-hashes is_default values' "rc=$rc bad:$bad"
+MH_CACHE=
+
+# the reader: the local manifest of a run, read through the default cache path, records the written sha256 as verified
+rd="$mh/reader/ComfyUI"; rda="$rd/custom_nodes/comfyui_controlnet_aux/ckpts/x"
+mkdir -p "$rd/models/checkpoints" "$rd/models/loras" "$rda"
+printf 'reader sdxl' > "$rd/models/checkpoints/sdxl.safetensors"; printf 'reader style' > "$rd/models/loras/style.safetensors"
+printf 'reader depth' > "$rda/depth_anything_vitl14.pth"; printf 'reader yolox' > "$rda/yolox_l.onnx"; printf 'reader dw' > "$rda/dw-ll_ucoco_384.onnx"
+rm -rf "$mhstate"; out=$(mh_ag --comfy-dir "$rd" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && [ -f "$mhcache" ]; } && ok 'model-hashes reader setup: the fake install is hashed into the default cache' || no 'model-hashes reader setup' "rc=$rc $out"
+wr="$RUNS/local-writer-001"; cp -R "$RUNS/local-annot-001" "$wr"; rm "$wr/run.md"
+python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/local-writer-001"; json.dump(s, open(p, "w"))' "$wr/spec.json"
+ASSETGEN_MODEL_HASHES= RPG_FACTORY_STATE_DIR="$mhstate" local_step 'local writer manifest' AG manifest --run "$wr"
+python3 -B - "$wr/run.md" "$rd" > "$TMP/mh-reader" 2>&1 <<'PYEOF'
+import hashlib, json, re, sys
+s = open(sys.argv[1], encoding='utf-8').read()
+local = json.loads(re.match(r'\A---json\s*\n(.*?)\n---', s, re.S).group(1))['spec']['generation']['local']
+root = sys.argv[2] + '/'
+sha = lambda p: hashlib.sha256(open(root + p, 'rb').read()).hexdigest()
+ck = 'custom_nodes/comfyui_controlnet_aux/ckpts/x/'
+want = {('checkpoints', 'sdxl.safetensors'): sha('models/checkpoints/sdxl.safetensors'),
+        ('annotators', 'depth_anything_vitl14.pth'): sha(ck + 'depth_anything_vitl14.pth'),
+        ('annotators', 'yolox_l.onnx'): sha(ck + 'yolox_l.onnx'), ('annotators', 'dw-ll_ucoco_384.onnx'): sha(ck + 'dw-ll_ucoco_384.onnx')}
+got = {(m['kind'], m['name']): (m['sha256'], m['verified']) for m in local['models']}
+assert got == {k: (v, True) for k, v in want.items()}, got
+assert [(x['name'], x['sha256'], x['verified']) for x in local['loras']] == [('style.safetensors', sha('models/loras/style.safetensors'), True)], local['loras']
+print('ok')
+PYEOF
+grep -qx ok "$TMP/mh-reader" && ok 'the manifest records the sha256 model-hashes wrote (models, annotators and the LoRA) as verified' || no 'model-hashes then manifest' "$(cat "$TMP/mh-reader")"
+python3 -B - "$ROOT/scripts/assetgen" > "$TMP/mh-unit" 2>&1 <<'PYEOF'
+import json, os, sys, tempfile
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import assetgen, runfiles
+sha = 'a' * 64
+wf = {'1': {'class_type': 'LoraLoader', 'inputs': {'lora_name': 'sub\\style.safetensors', 'strength_model': 1, 'strength_clip': 1}}}
+rec = runfiles.local_generation(wf, {}, {'loras/sub/style.safetensors': sha})['loras'][0]
+assert rec['sha256'] == sha and rec['verified'], rec
+with tempfile.TemporaryDirectory() as d:
+    path = os.path.join(d, 'h.json')
+    json.dump({'schema': 'rpg-factory.comfy-model-hashes/1', 'models': [{'kind': 'loras', 'name': 'sub\\style.safetensors', 'sha256': sha}]}, open(path, 'w'))
+    os.environ['ASSETGEN_MODEL_HASHES'] = path
+    assert assetgen.model_hashes() == {'loras/sub/style.safetensors': sha}
+print('ok')
+PYEOF
+grep -qx ok "$TMP/mh-unit" && ok 'the cache key and the manifest lookup fold a backslash in a model name to /' || no 'model-hashes separator' "$(cat "$TMP/mh-unit")"
+
+group_end; fi
+if group_begin engine-notes; then
+echo "-- engine notes: annotator model kind, KSamplerAdvanced like KSampler, lint reads known-nodes once (UNTESTED on RTX 5060)"
+python3 -B - "$ROOT" > "$TMP/engine-notes-unit" 2>&1 <<'EOF'
+import copy, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import runfiles as r
+root = sys.argv[1]
+def load(name):
+    return json.load(open(os.path.join(root, 'tests/fixtures/assetgen/local', name), encoding='utf-8'))
+def check(label, f):
+    try:
+        assert f()
+        print('ok ' + label)
+    except Exception as e:
+        print('no ' + label + ' | ' + repr(e))
+hybrid, adv, annot = load('hybrid-template.json'), load('hybrid-advanced-template.json'), load('annotator-template.json')
+def rendered(t, seed=123):
+    wf = copy.deepcopy(t['workflow'])
+    for n in wf.values():
+        for k, v in n['inputs'].items():
+            if v == '{{seed}}':
+                n['inputs'][k] = seed
+    return wf, {'params': {'seed': seed}, 'template': {'data': t}}
+def annotators():
+    wf, spec = rendered(annot)
+    rows = r.local_generation(wf, spec, {'annotators/yolox_l.onnx': 'd' * 64})['models']
+    got = [(m['node'], m['class_type'], m['kind'], m['name'], m['verified']) for m in rows]
+    assert got == [('4', 'CheckpointLoaderSimple', 'checkpoints', 'sdxl.safetensors', False),
+                   ('11', 'DepthAnythingPreprocessor', 'annotators', 'depth_anything_vitl14.pth', False),
+                   ('12', 'DWPosePreprocessor', 'annotators', 'yolox_l.onnx', True),
+                   ('12', 'DWPosePreprocessor', 'annotators', 'dw-ll_ucoco_384.onnx', False)], got
+    assert r.local_record_key(rows[1]) == 'annotators/depth_anything_vitl14.pth'
+    # a disabled DWPose model input (None) is not a model
+    wf['12']['inputs']['bbox_detector'] = 'None'; wf['12']['inputs']['pose_estimator'] = 'none'
+    assert [m['name'] for m in r.local_generation(wf, spec)['models'] if m['kind'] == 'annotators'] == ['depth_anything_vitl14.pth']
+    # a preprocessor graph is a local graph even without a sampler
+    only = {'11': copy.deepcopy(annot['workflow']['11'])}
+    return r.local_generation(only, spec) is not None
+check('annotator preprocessors are recorded under the annotators kind with node order, hashes and None skipped', annotators)
+def sampler_rows():
+    wk, sk = rendered(hybrid); wa, sa = rendered(adv)
+    a = r.local_generation(wa, sa)['samplers'][0]; k = r.local_generation(wk, sk)['samplers'][0]
+    strip = lambda row: {x: y for x, y in row.items() if x not in ('class_type', 'denoise')}
+    assert (a['class_type'], a['denoise'], k['class_type'], k['denoise']) == ('KSamplerAdvanced', None, 'KSampler', 0.45)
+    assert strip(a) == strip(k) and a['seed'] == 123 and a['seed_param'] == 'seed'
+    # a linked noise_seed resolves to the rendered value and parameter, like seed on KSampler
+    wl, sl = copy.deepcopy(wa), copy.deepcopy(sa)
+    wl['9']['inputs']['noise_seed'] = ['12', 0]; wl['12'] = {'inputs': {'value': 123}}
+    sl['template']['data']['workflow']['9']['inputs']['noise_seed'] = ['12', 0]
+    sl['template']['data']['workflow']['12'] = {'inputs': {'value': '{{seed}}'}}
+    linked = r.local_generation(wl, sl)['samplers'][0]
+    assert linked['seed'] == 123 and linked['seed_param'] == 'seed', linked
+    # a literal noise_seed has no seed_param, like a literal seed
+    wf = copy.deepcopy(wa); wf['9']['inputs']['noise_seed'] = 123
+    spec = copy.deepcopy(sa); spec['template']['data']['workflow']['9']['inputs']['noise_seed'] = 123
+    return r.local_generation(wf, spec)['samplers'][0]['seed_param'] is None
+check('KSamplerAdvanced sampler row equals the KSampler row (seed from noise_seed, linked and literal)', sampler_rows)
+def prompts():
+    g = {'1': {'class_type': 'PrimitiveString', 'inputs': {'value': 'hello'}}, '2': {'class_type': 'PrimitiveStringMultiline', 'inputs': {'value': 'world'}}, '3': {'class_type': 'CLIPTextEncode', 'inputs': {'text': ['1', 0]}}, '4': {'class_type': 'CLIPTextEncodeSDXL', 'inputs': {'text_g': ['1', 0], 'text_l': ['2', 0]}}, '5': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'literal'}}, '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': ['2', 0]}}, '7': {'class_type': 'ControlNetApplyAdvanced', 'inputs': {'positive': ['3', 0], 'negative': ['6', 0]}}, '8': {'class_type': 'KSampler', 'inputs': {'positive': ['7', 0], 'negative': ['7', 1]}}, '9': {'class_type': 'CLIPTextEncode', 'inputs': {'text': ['2', 0]}}, '10': {'class_type': 'KSampler', 'inputs': {'negative': ['9', 0]}}}
+    h = copy.deepcopy(g)
+    for n in h.values():
+        if n['class_type'] == 'KSampler':
+            n['class_type'] = 'KSamplerAdvanced'
+    assert r.workflow_prompts(g) == ['hello', 'hello', 'world']
+    # same linked positive texts, same literal and negative-only exclusions
+    assert r.workflow_prompts(h) == r.workflow_prompts(g)
+    only_advanced = {k: v for k, v in h.items() if k in ('1', '2', '3', '5', '6', '8')}
+    only_advanced['8'] = {'class_type': 'KSamplerAdvanced', 'inputs': {'positive': ['3', 0], 'negative': ['6', 0]}}
+    out = r.workflow_prompts(only_advanced)
+    assert out == ['hello'] and 'literal' not in out, out
+    return all(isinstance(r.workflow_prompts(x), list) for x in ({'x': {'class_type': 'KSamplerAdvanced', 'inputs': {'negative': ['x', 0]}}},))
+check('CLIP prompts follow KSamplerAdvanced positive and negative like KSampler (literals and negative-only excluded)', prompts)
+def generation():
+    wf, spec = rendered(adv)
+    gi = r.generation_inputs({'9': {'class_type': 'KSamplerAdvanced'}}, spec)
+    assert set(gi) == {'graph', 'references'}, gi
+    size = {'1': {'class_type': 'EmptyLatentImage', 'inputs': {'width': 1024, 'height': 1536}},
+            '9': {'class_type': 'KSamplerAdvanced', 'inputs': {'latent_image': ['1', 0]}}}
+    sized = {'params': {}, 'template': {'data': {'primary_node': '9'}}}  # the primary node is the sampler
+    assert r.requested_size(size, sized) == '1024x1536', r.requested_size(size, sized)
+    return r.local_generation({'9': {'class_type': 'KSamplerAdvanced', 'inputs': {}}}, spec) is not None
+check('KSamplerAdvanced counts as a generation node: inputs bound, requested size read, local record made', generation)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "engine notes unit unexpected output" "$line" ;; esac
+done < "$TMP/engine-notes-unit"
+[ "$(grep -c '^ok ' "$TMP/engine-notes-unit")" -eq 4 ] || no "engine notes unit cases stopped early" "$(cat "$TMP/engine-notes-unit")"
+# profile lint of an annotator template: the requires block accepts the annotators kind and the pack; an unknown
+# preprocessor model kind, an unknown preprocessor node and an undeclared pack still FAIL
+an_lint() { AG lint "$1" --json 2>&1; }
+an_lint "$LOCALFX/annotator-template.json" > "$TMP/an-lint.json"
+jq -e '([.results[] | select(.check == "assetgen-lint") | .state] == ["PASS"]) and ([.results[] | select(.state == "FAIL")] | length == 0) and ([.results[].reasons[] | select(test("unknown|not a model kind|not declared|requires"))] | length == 0)' "$TMP/an-lint.json" >/dev/null \
+  && jq -e '[.requires.models[] | select(.kind == "annotators")] | length == 3' "$LOCALFX/annotator-template.json" >/dev/null \
+  && ok "lint: a template with pose and depth preprocessor models (kind annotators, pack comfyui_controlnet_aux) passes the requires and profile rules" \
+  || no "lint annotator template" "$(cat "$TMP/an-lint.json")"
+for c in "kind|.requires.models[2].kind = \"preprocessors\"|requires.models[2].kind 'preprocessors' is not a model kind" \
+         "node|.workflow[\"11\"].class_type = \"OpenposePreprocessor\"|node 11: unknown node type OpenposePreprocessor" \
+         "pack|.requires.packs = []|node 11 uses DepthAnythingPreprocessor from pack comfyui_controlnet_aux, not declared in requires.packs"; do
+  IFS='|' read -r label filter want <<< "$c"
+  jq "$filter" "$LOCALFX/annotator-template.json" > "$TMP/an-$label.json"
+  an_lint "$TMP/an-$label.json" > "$TMP/an-$label.out"; rc=$?
+  [ "$rc" -eq 1 ] && jq -e --arg w "$want" '([.results[] | select(.check == "assetgen-lint") | .state] == ["FAIL"]) and ([.results[] | select(.check == "assetgen-lint") | .reasons[] | select(contains($w))] | length == 1)' "$TMP/an-$label.out" >/dev/null \
+    && ok "lint FAILs an unknown preprocessor model ($label): $want" || no "lint annotator $label rc=$rc" "$(cat "$TMP/an-$label.out")"
+done
+# KSamplerAdvanced gets the same lint and graph-style result as its KSampler form (only the node name differs)
+an_lint "$LOCALFX/hybrid-template.json" | jq -c '[.results[] | [.check, .state, (.reasons | map(sub("KSamplerAdvanced"; "KSampler")))]]' > "$TMP/adv-lint-plain.json"
+an_lint "$LOCALFX/hybrid-advanced-template.json" | jq -c '[.results[] | [.check, .state, (.reasons | map(sub("KSamplerAdvanced"; "KSampler")))]]' > "$TMP/adv-lint-adv.json"
+[ -s "$TMP/adv-lint-plain.json" ] && cmp -s "$TMP/adv-lint-plain.json" "$TMP/adv-lint-adv.json" \
+  && jq -e 'length == 2 and (map(.[1]) | all(. != "FAIL")) and ([.[1][2][] | select(startswith("tiled-vae:"))] | length == 1)' "$TMP/adv-lint-adv.json" >/dev/null \
+  && ok "lint and graph-style rows of the KSamplerAdvanced hybrid fixture equal the KSampler form's (the tiled-VAE walk passes through KSamplerAdvanced)" \
+  || no "KSamplerAdvanced lint parity" "$(cat "$TMP/adv-lint-plain.json" "$TMP/adv-lint-adv.json")"
+# lint over several templates reads data/known-nodes.json once per invocation (lint._load_known_registry, process-wide
+# cache) and the rows equal those of one fresh process per template
+python3 -B - "$ROOT" > "$TMP/lint-once" 2>&1 <<'EOF'
+import copy, json, os, subprocess, sys
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+os.chdir(root)
+import lint
+lint._load_known_registry.cache_clear()
+paths = ['templates/assetgen/workflows/image-edit.json', 'templates/assetgen/workflows/image-generate.json',
+         'templates/assetgen/workflows/hybrid-character.json', 'templates/assetgen/workflows/local-variation.json',
+         'tests/fixtures/assetgen/local/annotator-template.json', 'tests/fixtures/assetgen/local/hybrid-advanced-template.json']
+rows = [lint.lint_rows(path) for path in paths]
+assert len(rows) == len(paths) and all(len(result) == 2 for result in rows), rows
+info = lint._load_known_registry.cache_info()
+assert info.misses == 1 and info.hits > 0, info
+# the copies are defensive: changing one never changes what the next call sees
+first = lint.known_registry()
+first['nodes'].clear(); first['packs'].clear()
+assert lint.known_registry()['nodes'] and lint.known_registry()['packs'] and lint.known_nodes()
+assert lint._load_known_registry.cache_info().misses == 1
+fresh = []
+for path in paths:
+    out = subprocess.run([sys.executable, '-B', 'scripts/assetgen/assetgen.py', 'lint', path, '--json'], capture_output=True, text=True)
+    assert out.returncode in (0, 1), out.stderr
+    fresh.append(json.loads(out.stdout)['results'])
+assert [[dict(row) for row in result] for result in rows] == fresh, (rows, fresh)
+print('ok')
+EOF
+grep -qx ok "$TMP/lint-once" && ok "lint over six templates loads known-nodes.json once (cache misses 1) with the same rows as one process per template" \
+  || no "lint reads known-nodes once" "$(cat "$TMP/lint-once")"
+
+group_end; fi
+if group_begin style-lock; then
 echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
 SL="$TMP/stylelock-authoring"
 python3 -B - "$ROOT" "$SL" > "$TMP/sl" 2>&1 <<'EOF'
@@ -2133,12 +4897,14 @@ old_ref = {"style_id": "rpg-base", "version": 1, "sha256": "1" * 64}
 check([p["anchor_id"] for p in stylelock.select_references(valid, old_ref, "props", dims, 3)] == ["v-old"], "an older style version selects only its own anchors")
 check(stylelock.max_references({"max_references": 3}, {"max_references": 2}) == 2 and stylelock.max_references({}, {}) == 3
       and stylelock.max_references({"max_references": 1}, None) == 1, "max_references: the smaller of purpose and template, default 3")
-core_p = {p: layers.load("purpose", p)["data"] for p in ("icon", "sprite-2d", "concept-2d", "ui-element", "texture-tileable", "ref-3d-turnaround", "image-edit")}
+CORE = os.path.join(sys.argv[1], "templates", "assetgen")
+core_ids = lambda kind: sorted(f[:-5] for f in os.listdir(os.path.join(CORE, kind)) if f.endswith(".json"))
+core_p = {p: layers.load("purpose", p)["data"] for p in core_ids("purposes")}
 check(all(isinstance(d.get("dimensions"), list) and d.get("max_references") == 3 for d in core_p.values())
       and core_p["icon"]["default_family"] == "props" and core_p["sprite-2d"]["default_family"] == "characters"
       and "default_family" not in core_p["image-edit"], "core purposes declare dimensions, max_references and default_family (none for image-edit)")
 check(all(layers.load("style", s)["data"].get("version") == 1 and layers.load("style", s)["data"].get("status") == "active"
-          for s in ("anime-cel", "flat-ui", "low-poly", "pixel-art", "realistic-pbr", "stylized-painterly")), "core styles are version 1, active")
+          for s in core_ids("styles")), "core styles are version 1, active")
 
 # rejections: relevance by style, family and version
 def rej(rid, **kw):
@@ -2179,6 +4945,8 @@ while IFS= read -r line; do
 done < "$TMP/sl"
 grep -qE '^(ok|no) drift' "$TMP/sl" && ok "style lock cases ran to the end" || no "style lock cases stopped early" "$(tail -5 "$TMP/sl")"
 
+group_end; fi
+if group_begin style-cli; then
 echo "-- style lock through the CLI: resolve --family/--style-override, render wiring, promote-anchor, reject, drift"
 SC="$TMP/stylelock-cli"; SG="$SC/assetgen"; SR="$SG/runs"
 mkdir -p "$SG/styles" "$SG/purposes" "$SR"
@@ -2237,7 +5005,7 @@ slrun() { # slrun NAME PURPOSE [resolve args...]: resolve into a run of the styl
 lk() { jq -r "$1" "$SR/$2/spec.json"; }
 
 # resolve: project style, family, selection with reasons, relevant rejections
-slrun sl-icon-001 icon || no "resolve icon in the style lock repo" "$(cat "$TMP/err")"
+slrun sl-icon-001 icon --template image-generate || no "resolve icon in the style lock repo" "$(cat "$TMP/err")"
 [ "$(lk '.style.id + "|" + .style_lock.style.style_id + "|" + (.style_lock.style.version | tostring) + "|" + .style_lock.family + "|" + .style_lock.family_source + "|" + .style_lock.project.path + "|" + (.style_lock.override | tostring)' sl-icon-001)" \
   = "rpg-base|rpg-base|2|props|purpose|assetgen/project.json|null" ] && [ "$(lk '.style_lock.style.sha256 == .style.sha256' sl-icon-001)" = true ] \
   && ok "resolve: project style rpg-base v2, purpose family props, project recorded, no override" || no "resolve style_lock" "$(lk .style_lock sl-icon-001)"
@@ -2285,9 +5053,10 @@ cmp -s <(AG resolve --purpose icon --authoring "$SC" --json) <(AG resolve --purp
   && ok "resolve: short summary by default (params, hints, style lock, references, rejections, warnings, no field sources); --verbose lists the sources; --json unchanged by --verbose" \
   || no "resolve summary rc=$rc same=$same" "$(cat "$TMP/err" "$TMP/short.out")"
 AG resolve --purpose icon --authoring "$SC" --style anime-cel --style-override "one-off key art" > "$TMP/short.out" 2>"$TMP/err"
+proj_warn=$(AG resolve --purpose icon --style pixel-art --authoring "$AUTH"); proj_core=$(AG resolve --purpose icon --style pixel-art)
 grep -q "^warning: style override: one-off key art$" "$TMP/short.out" && ! grep -q "no assetgen/project.json" "$TMP/short.out" \
-  && AG resolve --purpose icon --style pixel-art --authoring "$AUTH" | grep -q "^warning: no assetgen/project.json" \
-  && ! AG resolve --purpose icon --style pixel-art | grep -q "project.json" \
+  && grep -q "^warning: no assetgen/project.json" <<<"$proj_warn" \
+  && ! grep -q "project.json" <<<"$proj_core" \
   && ok "resolve summary warnings: style override, a game layer without project.json (none for the core only)" || no "resolve warnings" "$(cat "$TMP/err" "$TMP/short.out")"
 slrun sl-icon-002 icon && [ "$(jq -S .style_lock "$SR/sl-icon-001/spec.json")" = "$(jq -S .style_lock "$SR/sl-icon-002/spec.json")" ] \
   && ok "resolve: same inputs -> same style lock and selection" || no "resolve determinism"
@@ -2296,10 +5065,10 @@ slrun sl-chars-001 icon --family characters
   && ok "resolve --family characters: families sub-style rpg-chars (its own anchors: none)" || no "resolve --family" "$(lk .style_lock sl-chars-001)"
 AG resolve --purpose icon --authoring "$SC" --family Props! >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -q "must be a lowercase id" "$TMP/err" && ok "resolve --family: not a lowercase id, usage error" || no "bad --family rc=$rc" "$(cat "$TMP/err")"
-slrun sl-one-001 icon-one && [ "$(lk '[.style_lock.max_references, (.style_lock.references | length)] | join(",")' sl-one-001)" = "1,1" ] \
+slrun sl-one-001 icon-one --template image-generate && [ "$(lk '[.style_lock.max_references, (.style_lock.references | length)] | join(",")' sl-one-001)" = "1,1" ] \
   && [ "$(lk '.style_lock.references[0].anchor_id' sl-one-001)" = b-strong ] && ok "resolve: purpose max_references 1 caps the selection" \
   || no "resolve cap" "$(lk .style_lock sl-one-001)"
-slrun sl-pixel-001 icon --style pixel-art && [ "$(lk '.style.id + "|" + (.style_lock.references | length | tostring) + "|" + (.style_lock.override | tostring)' sl-pixel-001)" = "pixel-art|0|null" ] \
+slrun sl-pixel-001 icon --style pixel-art --template image-generate && [ "$(lk '.style.id + "|" + (.style_lock.references | length | tostring) + "|" + (.style_lock.override | tostring)' sl-pixel-001)" = "pixel-art|0|null" ] \
   && ok "resolve --style in allowed_styles: accepted, no anchors of that style" || no "resolve allowed style" "$(cat "$TMP/err")"
 AG resolve --purpose icon --authoring "$SC" --style anime-cel >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "is not allowed by assetgen/project.json" "$TMP/err" && grep -q "style-override REASON" "$TMP/err" \
@@ -2336,7 +5105,7 @@ same=true; for a in b-strong a-canon c-supp; do
   cmp -s "$d/references/anchor-$a.png" "$SG/styles/rpg-base/anchors/$a.png" || same=false; done
 $same && [ "$(ls "$d/references" | wc -l | tr -d ' ')" = 3 ] && ok "render --run copies each selected anchor to references/anchor-<id>.png" \
   || no "anchor copies" "$(ls -la "$d/references" 2>&1)"
-out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+out=$(python3 -B "$UI2API" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
 [ "$out" = ok ] && [ "$(jq -r '[.nodes[] | select(.type == "ImageBatch")] | length' "$d/workflow.ui.json")" = 2 ] \
   && ok "workflow.ui.json with anchors: ImageBatch nodes, converts back to workflow.json" || no "ui with anchors" "$out"
 AG lint "$d/workflow.json" > "$TMP/o" 2>&1 && grep -q "1 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflow with anchors lints clean (ImageBatch is a known node)" || no "lint anchors" "$(cat "$TMP/o")"
@@ -2347,7 +5116,7 @@ d1="$SR/sl-one-001"; AG render --run "$d1" >/dev/null 2>&1
 d0="$SR/sl-pixel-001"; AG render --run "$d0" >/dev/null 2>&1
 [ "$(wiring "$d0/workflow.json")" = none ] && [ "$(jq 'length' "$d0/workflow.json")" = 3 ] && [ ! -d "$d0/references" ] \
   && ok "render 0 anchors: the template graph unchanged, no references/" || no "render wiring 0" "$(jq -c . "$d0/workflow.json")"
-slrun sl-edit-001 image-edit && AG render --run "$SR/sl-edit-001" --param reference_image=ref.png >/dev/null 2>"$TMP/err"
+slrun sl-edit-001 image-edit --template image-edit && AG render --run "$SR/sl-edit-001" --param reference_image=ref.png >/dev/null 2>"$TMP/err"
 de="$SR/sl-edit-001"
 [ "$(wiring "$de/workflow.json")" = "ref.png>anchor-a-canon.png>anchor-d-chars.png>anchor-b-strong.png" ] \
   && [ "$(jq -c '[.["8"].inputs.image1, .["2"].inputs.reference_images]' "$de/workflow.json")" = '[["1",0],["10",0]]' ] \
@@ -2356,6 +5125,38 @@ de="$SR/sl-edit-001"
 AG render --spec "$d/spec.json" --prompt-file "$d/prompt.md" --out "$TMP/sl-wf.json" >/dev/null 2>&1
 [ "$(wiring "$TMP/sl-wf.json")" = "anchor-b-strong.png>anchor-a-canon.png>anchor-c-supp.png" ] && [ -f "$TMP/sl-wf.ui.json" ] \
   && ok "render --spec wires the same anchors (no copy outside a run)" || no "render --spec wiring" "$(jq -c . "$TMP/sl-wf.json")"
+# a grouped (graph style) template: render lays the style-lock nodes into its References group; workflow.json is the
+# same API graph (the ui block never leaks into it) and graph-lint --run PASSES with no exemption for anchors
+mkdir -p "$SG/templates" && cp "$ROOT/tests/fixtures/assetgen/graph-style/clean.json" "$SG/templates/graph-clean.json"
+dg="$SR/sl-gs-001"
+slrun sl-gs-001 icon --template graph-clean && AG render --run "$dg" --param reference_image=ref.png > "$TMP/o" 2>&1; rc=$?
+AG graph-lint --run "$dg" > "$TMP/o2" 2>&1; rc2=$?
+AG render --spec "$dg/spec.json" --prompt-file "$dg/prompt.md" --param reference_image=ref.png --out "$TMP/sl-gs.json" >/dev/null 2>&1
+out=$(python3 -B "$UI2API" "$KN" "$dg/workflow.ui.json" "$dg/workflow.json" 2>&1)
+refs=$(python3 -B - "$dg/workflow.ui.json" "$dg/workflow.json" "$ROOT/tests/fixtures/assetgen/graph-style/clean.json" <<'EOF'
+import json, sys
+ui, wf, tmpl = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:4])
+added = sorted((n for n in wf if n not in tmpl["workflow"]), key=int)
+box = {g["title"]: g["bounding"] for g in ui["groups"]}
+def inside(n, b):
+    x, y = n["pos"]; w, h = n["size"]
+    return x >= b[0] and y - 30 >= b[1] and x + w <= b[0] + b[2] and y + h <= b[1] + b[3]
+nodes = {str(n["id"]): n for n in ui["nodes"]}
+homes = {nid: [t for t, b in box.items() if inside(nodes[nid], b)] for nid in ["2"] + added}
+print(" ".join([t for t, _ in sorted(box.items(), key=lambda kv: kv[1][0])])
+      + " | " + ",".join(sorted({wf[n]["class_type"] for n in added})) + " " + str(len(added))
+      + " | " + ("References" if all(h == ["References"] for h in homes.values()) else repr(homes)))
+EOF
+)
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q '^PASS .*sl-gs-001/workflow.ui.json$' "$TMP/o2" && [ "$out" = ok ] \
+  && [ "$(wiring "$dg/workflow.json")" = "ref.png>anchor-b-strong.png>anchor-a-canon.png>anchor-c-supp.png" ] \
+  && [ "$refs" = "Prompt References Generate Post-process Output | ImageBatch,LoadImage 6 | References" ] \
+  && [ "$(jq -S . "$dg/workflow.json")" = "$(jq -S . "$TMP/sl-gs.json")" ] \
+  && [ "$(jq -r '[.[] | select(.class_type == "Note" or .class_type == "MarkdownNote")] | length' "$dg/workflow.json")" = 0 ] \
+  && [ "$(jq length "$dg/workflow.json")" = 12 ] \
+  && ok "render of a grouped template with 3 anchors: anchor LoadImage/ImageBatch nodes in its References group, workflow.json unchanged API graph, graph-lint --run PASS" \
+  || no "graph style render with anchors rc=$rc/$rc2 ui2api=$out refs=$refs" "$(cat "$TMP/o" "$TMP/o2")"
+rm -rf "$dg" "$SG/templates/graph-clean.json"; rmdir "$SG/templates" 2>/dev/null || true
 cp -R "$d" "$SR/sl-changed-001"; dc="$SR/sl-changed-001"; rm -rf "$dc/references" "$dc/workflow.json"
 jq '.params.filename_prefix = "assetgen/sl-changed-001"' "$dc/spec.json" > "$TMP/s" && mv "$TMP/s" "$dc/spec.json"
 printf 'x' >> "$SG/styles/rpg-base/anchors/a-canon.png"
@@ -2450,6 +5251,89 @@ mkdir -p "$TMP/sl-wf-run-001"; AG promote-anchor --run "$TMP/sl-wf-run-001" --ou
 [ $rc -eq 1 ] && grep -q "must be <authoring>/assetgen/runs/<slug>-NNN" "$TMP/err" && ok "promote-anchor: a run outside <authoring>/assetgen/runs refused" || no "run layout rc=$rc" "$(cat "$TMP/err")"
 grep -rq '"status": "active"' "$pa.json" && no "promote-anchor wrote an active anchor" || ok "promote-anchor never writes status active"
 
+# External art is copied into the authoring repo without recording its original path.
+mkdir -p "$TMP/outside"; cp "$FX/icon-ok.png" "$TMP/outside/art.png"
+ext="$SG/styles/rpg-base/anchors/ext-1"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible v2 p.14' --rights-note 'studio-owned' --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong --json > "$TMP/ext.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.status == "proposed" and .approved_by == null and .approved_on == null and .external_source.attested_by == null and .external_source.attested_on == null and (has("source_run") | not) and .external_source.origin == "art bible v2 p.14" and .external_source.rights_note == "studio-owned" and .external_source.sha256 == .image_sha256' "$ext.json" >/dev/null \
+  && [ "$(jq -r .image_sha256 "$ext.json")" = "$(sha256sum "$ext.png" | cut -d' ' -f1)" ] && cmp -s "$ext.png" "$TMP/outside/art.png" \
+  && ! grep -Fq "$TMP/outside" "$ext.json" && ! grep -Fq 'outside' "$ext.json" \
+  && ok "external promote: proposed record, copied bytes and digest, no source path" || no "external promote rc=$rc" "$(cat "$TMP/err")"
+AG lint "$ext.json" --authoring "$SC" > "$TMP/o" 2>&1 && ok "external promote: proposed anchor lints clean" || no "external anchor lint" "$(cat "$TMP/o")"
+! grep -q '"status": "active"' "$ext.json" && ok "external promote: never writes an active anchor" || no "external promote wrote active status"
+AG promote-anchor --external "$TMP/outside/art.png" --run "$dp" --origin art --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && ok "external promote: --run conflicts with --external" || no "external with run rc=$rc" "$(cat "$TMP/err")"
+for missing in origin rights-note id; do
+  args=(--external "$TMP/outside/art.png" --authoring "$SC" --family props --dimensions palette --strength strong)
+  [ "$missing" = origin ] || args+=(--origin art)
+  [ "$missing" = rights-note ] || args+=(--rights-note owned)
+  [ "$missing" = id ] || args+=(--id ext-bad)
+  AG promote-anchor "${args[@]}" >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && ok "external promote: missing $missing is a usage error" || no "external missing $missing rc=$rc" "$(cat "$TMP/err")"
+done
+printf 'not a png' > "$TMP/outside/not-png"
+AG promote-anchor --external "$TMP/outside/not-png" --origin art --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: non-PNG refused without writes" || no "external non-PNG rc=$rc" "$(cat "$TMP/err")"
+for origin in 'C:/art/x.png' '/home/me/art.png'; do
+  AG promote-anchor --external "$TMP/outside/art.png" --origin "$origin" --rights-note owned --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: absolute origin $origin refused without writes" || no "external absolute origin rc=$rc" "$(cat "$TMP/err")"
+done
+for uri_env in 'file:///C:/art/a.png' 'file:/art/a.png' 'FILE://host/share/a.png' '$HOME/art/a.png' '$HOME/a.png' '$HOME/' '${HOME}/art/a.png' '$HOME\art\a.png' '${HOME}' '%USERPROFILE%\art\a.png' '%USERPROFILE%/art/a.png'; do
+  for ext_field in origin rights-note; do
+    ext_origin=art; ext_rights=owned
+    [ "$ext_field" = origin ] && ext_origin="$uri_env" || ext_rights="$uri_env"
+    AG promote-anchor --external "$TMP/outside/art.png" --origin "$ext_origin" --rights-note "$ext_rights" --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+    [ $rc -eq 1 ] && grep -Fq 'must not contain an absolute path or credential' "$TMP/err" && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] \
+      && ok "external promote: $uri_env in $ext_field refused without writes" || no "external uri/env $uri_env in $ext_field rc=$rc" "$(cat "$TMP/err")"
+  done
+done
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'priced in $USD' --rights-note 'priced in $USD' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ -e "$SG/styles/rpg-base/anchors/ext-prose.json" ] && ok "external promote: prose with a dollar word ('priced in \$USD') accepted" || no "external dollar prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$SG/styles/rpg-base/anchors/ext-prose.json" "$SG/styles/rpg-base/anchors/ext-prose.png"
+for prose in 'costs $USD/month' '$USD/month.'; do
+  AG promote-anchor --external "$TMP/outside/art.png" --origin "$prose" --rights-note "$prose" --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 0 ] && [ -e "$SG/styles/rpg-base/anchors/ext-prose.json" ] && ok "external promote: prose with a dollar word before a slash ('$prose') accepted" || no "external dollar slash prose '$prose' rc=$rc" "$(cat "$TMP/err")"
+  rm -f "$SG/styles/rpg-base/anchors/ext-prose.json" "$SG/styles/rpg-base/anchors/ext-prose.png"
+done
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note 'token=abc123' --authoring "$SC" --id ext-bad --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.json" ] && [ ! -e "$SG/styles/rpg-base/anchors/ext-bad.png" ] && ok "external promote: credential refused without writes" || no "external credential rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'already exists' "$TMP/err" && ok "external promote: existing id refused" || no "external existing id rc=$rc" "$(cat "$TMP/err")"
+jq '.status = "active" | .approved_by = "Ana Silva" | .approved_on = "2026-11-01" | .external_source.attested_by = "Ana Silva" | .external_source.attested_on = "2026-11-01"' "$ext.json" > "$TMP/ext-active.json" && cp "$TMP/ext-active.json" "$ext.json"
+python3 -B - "$ROOT" "$SC" "$ext.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import stylelock
+data = json.load(open(sys.argv[3], encoding="utf-8"))
+assert not stylelock.anchor_errors(data, "rpg-base", "ext-1")
+assert any(a["data"]["id"] == "ext-1" for a in stylelock.valid_anchors(sys.argv[2], "rpg-base"))
+EOF
+[ $? -eq 0 ] && ok "external anchor: human activation is valid and selectable" || no "external active validity" "$(cat "$TMP/o")"
+rm -f "$ext.json" "$ext.png"
+
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --id ext-family --family characters --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_family="$SG/styles/rpg-chars/anchors/ext-family"
+[ $rc -eq 0 ] && [ -f "$ext_family.png" ] && jq -e '.style.style_id == "rpg-chars" and .family == "characters"' "$ext_family.json" >/dev/null \
+  && ok "external promote: mapped family uses its style and anchor directory" || no "external family rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_family.json" "$ext_family.png"
+before_external=$(find "$SG" -type f | sort)
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note owned --authoring "$SC" --style unlisted-style --id ext-disallowed --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q 'not allowed' "$TMP/err" && [ "$before_external" = "$(find "$SG" -type f | sort)" ] \
+  && ok "external promote: disallowed explicit style refused without writes" || no "external disallowed style rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'art bible / page 4' --rights-note 'monkey: yes' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+ext_prose="$SG/styles/rpg-base/anchors/ext-prose"
+[ $rc -eq 0 ] && jq -e '.external_source.origin == "art bible / page 4" and .external_source.rights_note == "monkey: yes"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: ordinary prose accepted" || no "external prose rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+AG promote-anchor --external "$TMP/outside/art.png" --origin 'https://example.com/a.png' --rights-note 'bought for $5' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.external_source.origin == "https://example.com/a.png" and .external_source.rights_note == "bought for $5"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: https URL and a price accepted" || no "external url/price rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+AG promote-anchor --external "$TMP/outside/art.png" --origin art --rights-note '100% original work' --authoring "$SC" --id ext-prose --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.external_source.rights_note == "100% original work"' "$ext_prose.json" >/dev/null \
+  && ok "external promote: a percentage accepted" || no "external percentage rc=$rc" "$(cat "$TMP/err")"
+rm -f "$ext_prose.json" "$ext_prose.png"
+
 # reject: validation, deterministic ids, asset rejections bound to a recorded output
 AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --family props >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "text is required" "$TMP/err" && ok "reject direction without text refused" || no "reject no text rc=$rc" "$(cat "$TMP/err")"
@@ -2477,6 +5361,295 @@ AG lint --authoring "$SC" "$SG/styles/rpg-base/rejections/too-detailed-001.json"
 slrun sl-icon-004 icon && [ "$(lk '[.style_lock.rejections[].id] | join(",")' sl-icon-004)" = "palette-off-001,r-props,too-detailed-001,too-detailed-002" ] \
   && ok "resolve records the new relevant rejections (family props, any version)" || no "rejections after reject" "$(lk .style_lock.rejections sl-icon-004)"
 
+group_end; fi
+if group_begin anchor-target; then
+echo "-- anchor_target: anchors into NineRouterImage or IPAdapterAdvanced (UNTESTED on RTX 5060)"
+mkdir -p "$SG/templates"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$SG/templates/hybrid-anchor.json"
+echo '{"extends": "icon", "title": "Icon, two references", "max_references": 2}' > "$SG/purposes/icon-two.json"
+dh="$SR/hybrid-anchor-001"
+slrun hybrid-anchor-001 icon-two --template hybrid-anchor && AG render --run "$dh" > "$TMP/anchor-out" 2>&1; rc=$?
+python3 -B - "$dh/workflow.json" "$dh/workflow.ui.json" "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" > "$TMP/anchor-check" 2>&1 <<'EOF'
+import json, sys
+wf, ui, tmpl = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:])
+def walk(link):
+    node = wf[link[0]]
+    if node['class_type'] == 'ImageBatch':
+        return walk(node['inputs']['image1']) + walk(node['inputs']['image2'])
+    if node['class_type'] == 'NineRouterImage':
+        return ['base:' + link[0]]
+    return [node['inputs']['image']]
+assert walk(wf['12']['inputs']['image']) == ['base:1', 'anchor-b-strong.png', 'anchor-a-canon.png']
+assert 'reference_images' not in wf['1']['inputs']
+added = set(wf) - set(tmpl['workflow'])
+assert len(added) == 4
+box = next(g['bounding'] for g in ui['groups'] if g['title'] == 'References')
+nodes = {str(n['id']): n for n in ui['nodes']}
+def inside(n):
+    x, y = n['pos']; w, h = n['size']
+    return x >= box[0] and y - 30 >= box[1] and x + w <= box[0] + box[2] and y + h <= box[1] + box[3]
+assert all(inside(nodes[n]) for n in added)
+assert any(n['type'] == 'Note' and n['widgets_values'][0] == 'Style-lock anchors added by render: references/anchor-<id>.png, batched into IPAdapterAdvanced.image.' and inside(n) for n in ui['nodes'])
+print('ok')
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/anchor-check" && ok "hybrid render: base and two anchors into IPAdapterAdvanced, References group and target note" \
+  || no "hybrid anchor wiring rc=$rc" "$(cat "$TMP/anchor-out" "$TMP/anchor-check")"
+cp "$dh/workflow.json" "$TMP/hybrid-first.json"; cp "$dh/workflow.ui.json" "$TMP/hybrid-first.ui.json"
+AG render --run "$dh" > "$TMP/anchor-out" 2>&1; rc=$?
+[ $rc -eq 0 ] && cmp -s "$TMP/hybrid-first.json" "$dh/workflow.json" && cmp -s "$TMP/hybrid-first.ui.json" "$dh/workflow.ui.json" \
+  && ok "hybrid render --run: both workflow files byte-identical on repeat" || no "hybrid render determinism rc=$rc" "$(cat "$TMP/anchor-out")"
+slrun anchor-api-001 icon-two --template image-generate && AG render --run "$SR/anchor-api-001" > "$TMP/anchor-out" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(wiring "$SR/anchor-api-001/workflow.json")" = 'anchor-b-strong.png>anchor-a-canon.png' ] \
+  && ok "API-only template keeps NineRouterImage reference_images wiring" || no "API-only anchor wiring rc=$rc" "$(cat "$TMP/anchor-out")"
+
+# Mutate a resolved spec, so render validates even without selected anchors and never writes a workflow on failure.
+anchor_bad() { # label jq-filter expected-message
+  local label="$1" filter="$2" expected="$3" dir="$SR/anchor-bad-$1"
+  mkdir -p "$dir"; jq --arg p "assetgen/anchor-bad-$label" "$filter | .style_lock.references = [] | .params.filename_prefix = \$p" "$dh/spec.json" > "$dir/spec.json"
+  cp "$dh/prompt.md" "$dir/prompt.md"; rm -f "$dir/workflow.json" "$dir/workflow.ui.json"
+  AG render --run "$dir" > "$TMP/anchor-bad" 2>&1; local status=$?
+  [ "$status" -ne 0 ] && grep -Fq "$expected" "$TMP/anchor-bad" && [ ! -e "$dir/workflow.json" ] && [ ! -e "$dir/workflow.ui.json" ] \
+    && ok "render rejects $label before writing workflows" || no "render $label rc=$status" "$(cat "$TMP/anchor-bad")"
+}
+anchor_bad missing-node '.template.data.anchor_target.node = "missing"' "FAIL anchor_target.node 'missing' is not a node of the workflow"
+anchor_bad missing-input '.template.data.anchor_target.input = "images"' "FAIL anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)"
+anchor_bad disallowed '.template.data.anchor_target = {"node":"9","input":"latent_image"}' 'FAIL anchor_target KSampler.latent_image cannot take anchors'
+anchor_bad primary-missing '.template.data.primary_node = "missing"' "FAIL primary_node 'missing' is not a node of the workflow"
+anchor_bad primary-class '.template.data.primary_node = "4"' 'FAIL primary_node 4 (CheckpointLoaderSimple) is not a generation node'
+anchor_bad primary-ambiguous 'del(.template.data.primary_node) | .template.data.workflow["13"] = .template.data.workflow["1"]' 'FAIL the template has 2 NineRouterImage nodes: declare primary_node'
+# lint runs the same check on the template's own workflow: a bad anchor_target or primary_node FAILs lint, not only render
+LF="$ROOT/tests/fixtures/assetgen/local"
+# lint_target prints the result count, then check|state|reasons of every entry of .results (lint and graph-style rows):
+# a wrong state or reason in any entry, or a changed count, fails the case, not only results[0]
+lint_target() { AG lint "$LF/$1.json" --json 2>&1 | jq -r '"results=\(.results | length)", (.results[] | "\(.check)|\(.state)|\(.reasons | join("; "))")'; }
+got=$(lint_target hybrid-anchor-template)
+[ "$got" = "$(printf 'results=2\nassetgen-lint|PASS|\nassetgen-graph-style|PASS|')" ] \
+  && ok "lint: the hybrid anchor template (anchor_target 12.image, primary_node 1) PASSES every result row" || no "lint hybrid anchor template" "$got"
+# the fixture decodes with VAEDecodeTiled, which the local-8gb profile wants for a base image above 1024 px
+# (data/hardware.json, data/template-profiles.json): the graph-style row has no tiled-vae reason, and the plain decode has
+jq -e '.workflow["10"].class_type == "VAEDecodeTiled" and (.requires.profile == "local-8gb")' "$LF/hybrid-anchor-template.json" >/dev/null \
+  && ! printf '%s\n' "$got" | grep -q 'tiled-vae' \
+  && jq '.workflow["10"] |= (.class_type = "VAEDecode" | .inputs |= {samples, vae})' "$LF/hybrid-anchor-template.json" > "$TMP/anchor-untiled.json" \
+  && { AG lint "$TMP/anchor-untiled.json" --json > "$TMP/anchor-untiled.out" 2>&1; true; } \
+  && jq -e '[.results[] | select(.check == "assetgen-graph-style" and .state == "FAIL") | .reasons[] | select(startswith("tiled-vae:") and contains("VAEDecodeTiled"))] | length == 1' "$TMP/anchor-untiled.out" >/dev/null \
+  && ok "hybrid anchor fixture decodes with VAEDecodeTiled: no tiled-vae reason under local-8gb (the plain VAEDecode form is reported)" \
+  || no "hybrid anchor fixture tiled decode" "$got"
+for c in "target-anchor-missing-node|anchor_target.node '99' is not a node of the workflow" \
+         "target-anchor-missing-input|anchor_target.input 'images' is not an input of node 12 (IPAdapterAdvanced)" \
+         "target-anchor-disallowed|anchor_target KSampler.latent_image cannot take anchors" \
+         "target-primary-missing|primary_node '99' is not a node of the workflow" \
+         "target-primary-not-generation|primary_node 4 (CheckpointLoaderSimple) is not a generation node"; do
+  f=${c%%|*}; got=$(lint_target "$f")
+  jq -e '.description | startswith("UNTESTED on RTX 5060:")' "$LF/$f.json" >/dev/null \
+    && case "$got" in "results=2"$'\n'"assetgen-lint|FAIL|${c#*|}"*$'\n'"assetgen-graph-style|PASS|") : ;; *) false ;; esac \
+    && ok "lint FAILs $f: ${c#*|} (two results, graph-style PASS)" || no "lint $f" "$got"
+done
+# every core template that declares anchor_target, rendered in the style lock repo for the purpose its cases file
+# names (the first cases/<purpose>--<template>.json), family props: its anchors reach anchor_target after the template's
+# own link, graph-lint --run passes (anchor nodes laid into References) and render --run is byte-identical on repeat.
+# Discovery finds nothing while no core template declares anchor_target. UNTESTED on RTX 5060: nothing is generated.
+cat > "$TMP/anchor-core.py" <<'EOF'
+import json, sys
+wf, spec, tmpl = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:4])
+target = tmpl['anchor_target']
+def walk(link):
+    node = wf[link[0]]
+    if link[0] not in tmpl['workflow'] and node['class_type'] == 'ImageBatch':
+        return walk(node['inputs']['image1']) + walk(node['inputs']['image2'])
+    if link[0] not in tmpl['workflow'] and node['class_type'] == 'LoadImage':
+        return [node['inputs']['image']]
+    return ['node:' + link[0]]
+want = ['anchor-%s.png' % r['anchor_id'] for r in spec['style_lock']['references']]
+assert want, 'the purpose selected no anchor in the style lock repo'
+own = tmpl['workflow'][target['node']]['inputs'].get(target['input'])
+head = ['node:' + own[0]] if isinstance(own, list) else []
+got = walk(wf[target['node']]['inputs'][target['input']])
+assert got == head + want, (got, head + want)
+print('ok %d' % len(want))
+EOF
+for t in $CORE_TEMPLATES; do
+  jq -e 'has("anchor_target")' "$CORE/workflows/$t.json" >/dev/null 2>&1 || continue
+  p=""; for v in "$CASES"/*--"$t".json; do [ -f "$v" ] && { p=$(basename "$v" .json); p=${p%--"$t"}; break; }; done
+  [ -n "$p" ] || { no "anchor_target $t: no cases/<purpose>--$t.json names a purpose to render it with"; continue; }
+  da="$SR/anchor-core-$t-001"; mapfile -t args < <(case_params "$p" "$t")
+  # family props: the fixture's anchors are props anchors of rpg-base (a purpose's own family may select none)
+  if slrun "anchor-core-$t-001" "$p" --template "$t" --family props; then
+    AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  else rc=1; { echo "resolve failed:"; cat "$TMP/err"; } > "$TMP/anchor-out"; fi
+  out=$(python3 -B "$TMP/anchor-core.py" "$da/workflow.json" "$da/spec.json" "$CORE/workflows/$t.json" 2>&1)
+  AG graph-lint --run "$da" > "$TMP/anchor-gl" 2>&1; rc2=$?
+  [ $rc -eq 0 ] && [ "${out%% *}" = ok ] && [ $rc2 -eq 0 ] \
+    && ok "anchor_target $t ($p): ${out#ok } style-lock anchors reach $(jq -r '.anchor_target | .node + "." + .input' "$CORE/workflows/$t.json") after the template's own link; graph-lint --run PASS" \
+    || no "anchor_target $t ($p) rc=$rc graph-lint rc=$rc2" "$(cat "$TMP/anchor-out" "$TMP/anchor-gl"; echo "$out")"
+  cp "$da/workflow.json" "$TMP/anchor-core-first.json"; cp "$da/workflow.ui.json" "$TMP/anchor-core-first.ui.json"
+  AG render --run "$da" "${args[@]}" > "$TMP/anchor-out" 2>&1; rc=$?
+  [ $rc -eq 0 ] && cmp -s "$TMP/anchor-core-first.json" "$da/workflow.json" && cmp -s "$TMP/anchor-core-first.ui.json" "$da/workflow.ui.json" \
+    && ok "anchor_target $t: render --run byte-identical on repeat (workflow.json and workflow.ui.json)" || no "anchor_target $t determinism rc=$rc" "$(cat "$TMP/anchor-out")"
+done
+
+python3 -B - "$ROOT" > "$TMP/anchor-size" 2>&1 <<'EOF'
+import glob, json, os, sys
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, 'scripts', 'assetgen'))
+import runfiles
+def nine(size): return {'class_type': 'NineRouterImage', 'inputs': {'size': size}}
+workflow = {'10': nine('ten'), '2': nine('two')}
+spec = {'template': {'data': {'primary_node': '10'}}, 'params': {'size': 'fallback'}}
+assert runfiles.requested_size(workflow, spec) == 'ten'
+assert runfiles.requested_size(workflow, {}) == 'two'
+local = {'1': {'class_type': 'KSampler', 'inputs': {'latent_image': ['2', 0]}},
+         '2': {'class_type': 'EmptyLatentImage', 'inputs': {'width': 832, 'height': 1216}}}
+assert runfiles.requested_size(local, {'template': {'data': {'primary_node': '1'}}}) == '832x1216'
+for bad in (None, [], {'template': None}, {'template': {'data': []}}, {'template': {'data': {'primary_node': []}}}, {'params': []}):
+    assert runfiles.requested_size({}, bad) == 'auto'
+for path in glob.glob(os.path.join(root, 'tests', 'fixtures', 'assetgen', 'golden', '*.json')):
+    graph = json.load(open(path, encoding='utf-8'))
+    nodes = [n for n in graph.values() if isinstance(n, dict) and n.get('class_type') == 'NineRouterImage']
+    if len(nodes) == 1:
+        assert runfiles.requested_size(graph, {}) == nodes[0].get('inputs', {}).get('size', 'auto'), path
+print('ok')
+EOF
+grep -qx ok "$TMP/anchor-size" && ok "requested_size: declared primary, numeric fallback, latent dimensions, malformed specs and golden graphs" \
+  || no "requested_size cases" "$(cat "$TMP/anchor-size")"
+rm -f "$SG/templates/hybrid-anchor.json" "$SG/purposes/icon-two.json"
+
+group_end; fi
+if group_begin profile-routing; then
+echo "-- profile routing: resolve --profile (UNTESTED on RTX 5060)"
+# Nothing here generates or measures anything: routing picks a template id and refuses one above the chosen profile.
+PR="$TMP/profile-authoring"; PF="$TMP/profile-fallback"; PB="$TMP/profile-badroutes"
+mkdir -p "$PR/assetgen/templates" "$PR/assetgen/runs" "$PF/assetgen" "$PB/assetgen"
+cp "$ROOT/tests/fixtures/assetgen/local/hybrid-anchor-template.json" "$PR/assetgen/templates/hybrid-icon-ui.json"
+echo '{"schema": "rpg-factory.assetgen-template-profiles/1", "routes": {"icon": {"local-8gb": "no-such-template"}}}' > "$PF/assetgen/template-profiles.json"
+echo '{"schema": "rpg-factory.assetgen-template-profiles/1", "routes": {"icon": {"gpu-99": "x"}}}' > "$PB/assetgen/template-profiles.json"
+# AGS STATE-DIR ARGS...: assetgen with its own state dir (auto cases never read or write the suite's $TMP/state)
+AGS() { local s="$1"; shift; RPG_FACTORY_STATE_DIR="$s" python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+pq() { jq -r "$1" "$TMP/prof.json"; }
+
+# 1. the data file
+python3 -B - "$ROOT" > "$TMP/prof-data" 2>&1 <<'EOF'
+import json, os, sys
+root = sys.argv[1]
+data = json.load(open(os.path.join(root, 'scripts', 'assetgen', 'data', 'template-profiles.json'), encoding='utf-8'))
+hw = json.load(open(os.path.join(root, 'scripts', 'assetgen', 'data', 'hardware.json'), encoding='utf-8'))
+ids = {p['id'] for p in hw['profiles']}
+assert data['schema'] == 'rpg-factory.assetgen-template-profiles/1', data.get('schema')
+assert data['description'].startswith('UNTESTED on RTX 5060:'), data.get('description')
+assert isinstance(data['routes'], dict) and data['routes']
+for purpose, routes in data['routes'].items():
+    assert os.path.isfile(os.path.join(root, 'templates', 'assetgen', 'purposes', purpose + '.json')), purpose
+    for profile, template in routes.items():
+        assert profile in ids, (purpose, profile)
+        assert isinstance(template, str) and template, (purpose, profile)
+print('ok')
+EOF
+grep -qx ok "$TMP/prof-data" && ok "template-profiles.json: schema, UNTESTED description, core purposes, hardware profile ids" \
+  || no "template-profiles.json data file" "$(cat "$TMP/prof-data")"
+
+# 2. local-8gb on icon picks the hybrid template
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+cp "$TMP/prof.json" "$TMP/prof-8gb.json"
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = hybrid-icon-ui ] && [ "$(pq .profile.id)" = local-8gb ] && [ "$(pq .profile.source)" = --profile ] \
+  && [ "$(pq .profile.requires)" = local-8gb ] && jq -e '.profile.template_from | endswith("routes.icon.local-8gb")' "$TMP/prof.json" >/dev/null \
+  && ok "resolve --profile local-8gb on icon picks hybrid-icon-ui from routes.icon.local-8gb" \
+  || no "profile local-8gb rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 3. api-only keeps the staged API template
+AG resolve --purpose icon --style pixel-art --profile api-only --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+cp "$TMP/prof.json" "$TMP/prof-api.json"
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.template_from)" = "purpose default_template" ] \
+  && [ "$(pq .profile.requires)" = api-only ] && ok "resolve --profile api-only on icon keeps staged-icon (purpose default_template)" \
+  || no "profile api-only rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 4. a 4 GB machine is never handed the local-8gb template
+AG resolve --purpose icon --style pixel-art --profile local-4gb --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.id)" = local-4gb ] \
+  && ok "resolve --profile local-4gb on icon falls back to staged-icon, never the local-8gb template" \
+  || no "profile local-4gb rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 5. --template above the chosen profile is refused with the VRAM reason
+AG resolve --purpose icon --style pixel-art --profile local-4gb --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF VRAM "$TMP/err" && grep -qF "requires profile local-8gb" "$TMP/err" && grep -qF "chosen profile local-4gb" "$TMP/err" \
+  && ok "--profile local-4gb --template hybrid-icon-ui: refused with the VRAM reason (exit 1)" || no "local-4gb refusal rc=$rc" "$(cat "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --profile api-only --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF "chosen profile api-only" "$TMP/err" \
+  && ok "--profile api-only --template hybrid-icon-ui: refused (exit 1)" || no "api-only refusal rc=$rc" "$(cat "$TMP/err")"
+
+# 6. without --profile nothing changes
+AG resolve --purpose icon --style pixel-art --authoring "$PR" --json > "$TMP/prof-none.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && jq -e 'has("profile") | not' "$TMP/prof-none.json" >/dev/null && [ "$(jq -r .template.id "$TMP/prof-none.json")" = staged-icon ] \
+  && diff <(jq -S . "$TMP/prof-none.json") <(jq -S 'del(.profile)' "$TMP/prof-api.json") > "$TMP/prof-diff" 2>&1 \
+  && ok "without --profile: no profile key, staged-icon, equal to the --profile api-only spec minus .profile" \
+  || no "no --profile spec rc=$rc" "$(cat "$TMP/err" "$TMP/prof-diff" 2>&1)"
+AG resolve --purpose icon --style pixel-art --authoring "$PR" > "$TMP/prof-none.txt" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ! grep -q '^profile ' "$TMP/prof-none.txt" && ok "without --profile: no profile line in the text output" \
+  || no "no --profile text rc=$rc" "$(cat "$TMP/prof-none.txt" "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --template hybrid-icon-ui --authoring "$PR" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "without --profile: --template hybrid-icon-ui still resolves (today's behaviour)" || no "no --profile --template rc=$rc" "$(cat "$TMP/err")"
+
+# 7. purpose files unchanged: the same purpose hash with and without --profile
+[ -n "$(jq -r .purpose.sha256 "$TMP/prof-none.json")" ] && [ "$(jq -r .purpose.sha256 "$TMP/prof-8gb.json")" = "$(jq -r .purpose.sha256 "$TMP/prof-none.json")" ] \
+  && ok "--profile local-8gb keeps the purpose sha256 (no purpose file change)" \
+  || no "purpose sha256 $(jq -r .purpose.sha256 "$TMP/prof-8gb.json") vs $(jq -r .purpose.sha256 "$TMP/prof-none.json")"
+
+# 8. --template still overrides the route
+AG resolve --purpose icon --style pixel-art --profile local-8gb --template staged-icon --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] && [ "$(pq .profile.template_from)" = --template ] \
+  && ok "--profile local-8gb --template staged-icon: --template overrides the route" || no "template override rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+
+# 9. a route naming a template no layer has falls back with a warning
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PF" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = staged-icon ] \
+  && jq -e 'any(.warnings[]; contains("no-such-template") and contains("falling back"))' "$TMP/prof.json" >/dev/null \
+  && ok "route to a missing template falls back to staged-icon with a warning" || no "fallback rc=$rc" "$(cat "$TMP/err"; jq -c .warnings "$TMP/prof.json" 2>&1)"
+
+# 10. auto: no recorded file, a recorded local-8gb, a recorded unknown profile (each with its own state dir)
+AGS "$TMP/pstate-10a" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .profile.id)" = api-only ] && [ "$(pq .profile.requested)" = auto ] \
+  && jq -e '.profile.source | startswith("auto: no recorded profile")' "$TMP/prof.json" >/dev/null \
+  && ok "auto without a recorded profile: api-only (requested auto)" || no "auto no file rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+mkdir -p "$TMP/pstate-10b/assetgen" "$TMP/pstate-10c/assetgen"
+echo '{"profile": {"id": "local-8gb"}}' > "$TMP/pstate-10b/assetgen/hardware-profile.json"
+echo '{"profile": {"id": "gpu-99"}}' > "$TMP/pstate-10c/assetgen/hardware-profile.json"
+AGS "$TMP/pstate-10b" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .template.id)" = hybrid-icon-ui ] && [ "$(pq .profile.id)" = local-8gb ] \
+  && jq -e '.profile.source | startswith("recorded ")' "$TMP/prof.json" >/dev/null \
+  && ok "auto with a recorded local-8gb profile picks hybrid-icon-ui" || no "auto recorded rc=$rc" "$(cat "$TMP/err"; jq -c .profile "$TMP/prof.json" 2>&1)"
+AGS "$TMP/pstate-10c" resolve --purpose icon --style pixel-art --profile auto --authoring "$PR" --json > "$TMP/prof.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(pq .profile.id)" = api-only ] && jq -e 'any(.warnings[]; contains("gpu-99"))' "$TMP/prof.json" >/dev/null \
+  && ok "auto with a recorded unknown profile: api-only and a warning" || no "auto unknown rc=$rc" "$(cat "$TMP/err"; jq -c '.profile, .warnings' "$TMP/prof.json" 2>&1)"
+[ ! -e "$TMP/state/assetgen/hardware-profile.json" ] && ok "auto cases leave the suite's state dir untouched" \
+  || no "suite state dir has assetgen/hardware-profile.json"
+
+# 11. an unknown profile value
+AG resolve --purpose icon --style pixel-art --profile bogus >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "api-only, local-4gb, local-8gb, auto" "$TMP/err" && ok "--profile bogus: exit 2 naming the profiles" \
+  || no "--profile bogus rc=$rc" "$(cat "$TMP/err")"
+
+# 12. a malformed game routes file is blamed on the game file
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PB" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -qF "game:assetgen/template-profiles.json" "$TMP/err" && grep -qF gpu-99 "$TMP/err" \
+  && ok "malformed game template-profiles.json: exit 1 naming the file and the bad profile" || no "bad routes rc=$rc" "$(cat "$TMP/err")"
+
+# 13. --out keeps spec.profile
+mkdir -p "$PR/assetgen/runs/prof-001"
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" --out "$PR/assetgen/runs/prof-001/spec.json" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .profile.id "$PR/assetgen/runs/prof-001/spec.json")" = local-8gb ] \
+  && [ "$(jq -r .profile.template "$PR/assetgen/runs/prof-001/spec.json")" = hybrid-icon-ui ] \
+  && ok "resolve --out writes spec.profile (local-8gb, hybrid-icon-ui)" || no "--out profile rc=$rc" "$(cat "$TMP/err")"
+
+# 14. the text output names the profile; local profiles are marked UNTESTED
+AG resolve --purpose icon --style pixel-art --profile local-8gb --authoring "$PR" > "$TMP/prof.txt" 2>"$TMP/err"; rc=$?
+line=$(awk 'index($0, "profile local-8gb [--profile], template hybrid-icon-ui") == 1' "$TMP/prof.txt")
+[ $rc -eq 0 ] && [ -n "$line" ] && printf '%s\n' "$line" | grep -qF "UNTESTED on RTX 5060" \
+  && ok "text output: profile local-8gb line marked UNTESTED on RTX 5060" || no "local-8gb text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
+AG resolve --purpose icon --style pixel-art --profile api-only --authoring "$PR" > "$TMP/prof.txt" 2>"$TMP/err"; rc=$?
+line=$(grep '^profile api-only ' "$TMP/prof.txt")
+[ $rc -eq 0 ] && [ -n "$line" ] && ! printf '%s\n' "$line" | grep -qF UNTESTED \
+  && ok "text output: profile api-only line without UNTESTED" || no "api-only text rc=$rc" "$(cat "$TMP/prof.txt" "$TMP/err")"
+
+group_end; fi
+if group_begin style-qa; then
 echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
 # fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc
 python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
@@ -2689,6 +5862,8 @@ AG drift --authoring "$SC" > "$TMP/dr.txt" 2>"$TMP/err"; rc=$?
   && ok "drift text: same version, changed style data -> hash-changed" || no "drift hash-changed rc=$rc" "$(cat "$TMP/err" "$TMP/dr.txt")"
 git -C "$SC" checkout -q -- .
 
+group_end; fi
+if group_begin gen-run-style; then
 echo "-- gen-run-style (quality plugin): style lock refs, anchor approval, image bytes, source runs, override"
 python3 -B - "$ROOT" "$TMP/style-plugin" "$FX/icon-ok.png" > "$TMP/gs" 2>&1 <<'EOF'
 import hashlib, importlib.util, json, os, sys
@@ -2764,6 +5939,26 @@ def case(rid, want, needles, label, **kw):
 
 
 case("u-good-001", "PASS", [], "gen-run-style: a human-approved active anchor (approved source run, signed approval, bytes match) PASS", refs=["a-good"])
+# A recorded reference exercises the same quality path even when malformed attestation prevents new selection.
+ext_sha = anchor("a-external", ref2, by="Ana Silva", n=12)
+ext_path = os.path.join(G, "styles", "rpg-base", "anchors", "a-external.json")
+ext_data = json.load(open(ext_path, encoding="utf-8"))
+del ext_data["source_run"]
+ext_data["external_source"] = {"origin": "art bible v2 p.14", "rights_note": "studio-owned", "sha256": ext_sha,
+                               "attested_by": "Ana Silva", "attested_on": "2026-11-01"}
+shas["a-external"] = ext_sha
+for attester, label in (("claude", "claude"), ("codex", "codex"), ("gpt-5", "gpt-5"),
+                        ("SAME_MODEL:claude-opus", "SAME_MODEL:claude-opus"), (None, "null"), ("Other Person", "another person"),
+                        ("Ana Silva", "approving person")):
+    ext_data["external_source"]["attested_by"] = attester
+    with open(ext_path, "w", encoding="utf-8") as f:
+        json.dump(ext_data, f)
+    case("u-external-001", "PASS" if attester == "Ana Silva" else "FAIL",
+         [] if attester == "Ana Silva" else ["external_source.attested_by"],
+         "gen-run-style: external anchor attested by %s %s" % (label, "PASS" if attester == "Ana Silva" else "FAIL"),
+         refs=["a-external"])
+os.remove(ext_path)
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "a-external.png"))
 case("u-agent-001", "FAIL", ["is an agent or model"], "gen-run-style: an active anchor approved_by an agent/model name FAIL", refs=["a-agent"])
 case("u-old-001", "WARN", ["changed since the run"], "gen-run-style: an anchor of an older style version stays valid (style drift WARN only)", refs=["a-old"], ref=ref1)
 case("u-gone-001", "FAIL", ["a-gone is not in assetgen/styles/rpg-base/anchors/"], "gen-run-style: a recorded anchor without its JSON FAIL", refs=["a-gone"])
@@ -2820,18 +6015,950 @@ SP="$TMP/style-plugin"; rm -rf "$SP/assetgen/runs/seed-001"
 [ $rc -eq 1 ] && grep -q "a-good.json: .*seed-001 is missing" "$TMP/o" \
   && ok "assetgen-lint (registry command, in the authoring repo): an active anchor whose source run.md is gone FAILS" || no "assetgen-lint rc=$rc" "$(grep -v '^PASS' "$TMP/o")"
 
+group_end; fi
+if group_begin style-init; then
+echo "-- style init: draft game style, family stub and project.json skeleton (style_cmd.py)"
+SI="$TMP/style-init"; mkdir -p "$SI"
+tpl_hash() { find "$ROOT/templates/assetgen" -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1; }
+tpl0=$(tpl_hash)
+AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+SS="$SI/assetgen/styles"; SPJ="$SI/assetgen/project.json"
+grep -Fq 'WARN: the new style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness)' "$TMP/si.out" \
+  && grep -q 'no style-\* QA row can grade an output until one is added' "$TMP/si.out" \
+  && grep -q 'Lint WARNs once the style is active; add fields by hand or use style derive --apply once valid active anchors exist' "$TMP/si.out" \
+  && ok "style init text warns about missing structured fields and how to add them" || no "style init warning" "$(cat "$TMP/si.out")"
+[ $rc -eq 0 ] && [ -f "$SS/demo-game.json" ] && [ -f "$SS/demo-game-characters.json" ] && [ -f "$SPJ" ] \
+  && ok "style init exits 0 and writes the style, the family stub and project.json" || no "style init rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+[ "$(jq -c '[.extends, .version, .status]' "$SS/demo-game.json")" = '["pixel-art",1,"draft"]' ] \
+  && ok "style init: the main style extends pixel-art, version 1, status draft" || no "style init main style" "$(cat "$SS/demo-game.json")"
+[ "$(jq -c '[.extends, .status]' "$SS/demo-game-characters.json")" = '["demo-game","draft"]' ] \
+  && ok "style init: the family stub extends the main style and is draft" || no "style init family stub" "$(cat "$SS/demo-game-characters.json")"
+[ "$(jq -c '[.schema, .style, .families, .allowed_styles]' "$SPJ")" \
+  = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"},["demo-game","demo-game-characters"]]' ] \
+  && ok "style init: project.json has the schema, style {id, 1}, families and allowed_styles" || no "style init project.json" "$(cat "$SPJ")"
+AG lint --authoring "$SI" --json > "$TMP/si-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/si-lint.json")
+nwarn=$(jq '[.results[] | select(.state == "WARN" and (.path | test("project[.]json|assetgen/styles/")))] | length' "$TMP/si-lint.json")
+npass=$(jq '[.results[] | select(.state == "PASS" and (.path == "game:assetgen/project.json" or (.path | test("^game:assetgen/styles/demo-game"))))] | length' "$TMP/si-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$nwarn" = 0 ] && [ "$npass" = 3 ] \
+  && ok "lint after style init: 0 FAIL, project.json and both draft styles PASS with no WARN" || no "lint after init rc=$rc fail=$nfail warn=$nwarn pass=$npass" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/si-lint.json")"
+jq '.status = "active"' "$SS/demo-game.json" > "$TMP/si-active.json" && cp "$TMP/si-active.json" "$SS/demo-game.json"
+AG lint --authoring "$SI" --json > "$TMP/si-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/si-lint.json")
+siw=$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json" and .state == "WARN") | .reasons[]] | join(" ")' "$TMP/si-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && grep -q "active game style has no usable structured style fields" <<<"$siw" \
+  && ok "an active style from init WARNs 'no usable structured style fields' (0 FAIL)" || no "active style lint rc=$rc fail=$nfail" "$siw"
+AG resolve --purpose icon --authoring "$SI" --out "$TMP/si-spec.json" > /dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.style_lock.style.style_id' "$TMP/si-spec.json")" = demo-game ] \
+  && ok "resolve --authoring locks the new project style (spec.style_lock.style.style_id)" || no "resolve after init rc=$rc" "$(jq -c .style_lock "$TMP/si-spec.json" 2>&1)"
+h_style=$(sha256sum "$SS/demo-game.json" | cut -d' ' -f1); h_proj=$(sha256sum "$SPJ" | cut -d' ' -f1); n_files=$(find "$SI/assetgen" -type f | wc -l | tr -d ' ')
+AG style init --id demo-game --extends pixel-art --authoring "$SI" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/si.err" && [ "$(sha256sum "$SS/demo-game.json" | cut -d' ' -f1)" = "$h_style" ] \
+  && [ "$(sha256sum "$SPJ" | cut -d' ' -f1)" = "$h_proj" ] && [ "$(find "$SI/assetgen" -type f | wc -l | tr -d ' ')" = "$n_files" ] \
+  && ok "a second style init exits 1 with a message and leaves the files byte-identical" || no "second init rc=$rc" "$(cat "$TMP/si.err")"
+SJ="$TMP/style-init-proj"; mkdir -p "$SJ/assetgen"; echo '{"keep": true}' > "$SJ/assetgen/project.json"; h_keep=$(sha256sum "$SJ/assetgen/project.json" | cut -d' ' -f1)
+AG style init --id other-game --extends pixel-art --authoring "$SJ" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "project.json already exists" "$TMP/si.err" && [ ! -e "$SJ/assetgen/styles/other-game.json" ] \
+  && [ "$(sha256sum "$SJ/assetgen/project.json" | cut -d' ' -f1)" = "$h_keep" ] \
+  && ok "an existing project.json alone exits 1: no style file is written, project.json untouched" || no "existing project.json rc=$rc" "$(cat "$TMP/si.err")"
+SU="$TMP/style-init-usage"; mkdir -p "$SU"
+AG style init --id bad-game --extends no-such-core-style --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "not a core style" "$TMP/si.err" && [ ! -e "$SU/assetgen" ] \
+  && ok "--extends naming a non-core style exits 2 and writes nothing" || no "non-core extends rc=$rc" "$(cat "$TMP/si.err")"
+AG style init --id demo-game --extends demo-game --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$SU/assetgen" ] && ok "--extends naming a game style exits 2 (core styles only)" || no "game extends rc=$rc" "$(cat "$TMP/si.err")"
+for badfam in "characters" "Characters=x" "characters=" "=x"; do
+  AG style init --id bad-game --extends pixel-art --family "$badfam" --authoring "$SU" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "must be FAM=STYLE" "$TMP/si.err" && [ ! -e "$SU/assetgen" ] \
+    && ok "malformed --family '$badfam' exits 2 and writes nothing" || no "malformed --family '$badfam' rc=$rc" "$(cat "$TMP/si.err")"
+done
+SF="$TMP/style-init-family"; mkdir -p "$SF"
+AG style init --id demo-game --extends pixel-art --family characters=pixel-art --authoring "$SF" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "is a core style" "$TMP/si.err" && [ ! -e "$SF/assetgen" ] \
+  && ok "--family naming a core style exits 1 and writes nothing" || no "core family style rc=$rc" "$(cat "$TMP/si.err"; find "$SF" -type f)"
+SG="$TMP/style-init-gamefam"; mkdir -p "$SG/assetgen/styles"
+echo '{"schema":"rpg-factory.assetgen-style/1","title":"other","extends":"pixel-art","version":1,"status":"draft"}' > "$SG/assetgen/styles/other-fam.json"
+h_fam=$(sha256sum "$SG/assetgen/styles/other-fam.json" | cut -d' ' -f1)
+AG style init --id demo-game --extends pixel-art --family characters=other-fam --authoring "$SG" > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "must extend the project style" "$TMP/si.err" && [ ! -e "$SG/assetgen/styles/demo-game.json" ] && [ ! -e "$SG/assetgen/project.json" ] \
+  && [ "$(sha256sum "$SG/assetgen/styles/other-fam.json" | cut -d' ' -f1)" = "$h_fam" ] && [ "$(find "$SG/assetgen" -type f | wc -l | tr -d ' ')" = 1 ] \
+  && ok "an existing game family style that does not extend the new id exits 1 and writes nothing" || no "foreign family style rc=$rc" "$(cat "$TMP/si.err"; find "$SG" -type f)"
+SK="$TMP/style-init-json"; mkdir -p "$SK"
+AG style init --id demo-game --extends pixel-art --family characters=demo-game-characters --authoring "$SK" --json > "$TMP/si.out" 2> "$TMP/si.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/si.out")" = "rpg-factory.assetgen-style-init/1" ] \
+  && [ "$(jq -c '.files | sort' "$TMP/si.out")" = '["assetgen/project.json","assetgen/styles/demo-game-characters.json","assetgen/styles/demo-game.json"]' ] \
+  && [ "$(jq -c '.project | [.schema, .style, .families]' "$TMP/si.out")" = '["rpg-factory.assetgen-project/1",{"id":"demo-game","version":1},{"characters":"demo-game-characters"}]' ] \
+  && [ "$(jq -cS '.project' "$TMP/si.out")" = "$(jq -cS . "$SK/assetgen/project.json")" ] \
+  && ok "style init --json prints schema rpg-factory.assetgen-style-init/1 with files and project" || no "style init --json rc=$rc" "$(cat "$TMP/si.err" "$TMP/si.out")"
+jq -e '.warnings | length == 1 and (.[0] | contains("WARN:") and contains("palette.colors, tone, canvas, outline.edge_darkness") and contains("no style-* QA row can grade an output until one is added") and contains("Lint WARNs once the style is active") and contains("by hand") and contains("style derive --apply") and contains("valid active anchors"))' "$TMP/si.out" >/dev/null \
+  && ok "style init JSON includes the structured fields warning" || no "style init JSON warning" "$(cat "$TMP/si.out")"
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style init changed nothing under templates/assetgen" || no "templates/assetgen changed" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+group_end; fi
+if group_begin style-derive; then
+echo "-- style derive: palette, tone and canvas proposed from the anchors, --apply into a draft only (style_derive.py)"
+SD="$TMP/style-derive"; mkdir -p "$SD"
+AG style init --id demo-game --extends pixel-art --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err" || no "style derive setup: style init" "$(cat "$TMP/sd.err")"
+# valid active anchors for the draft style: two props (256x256) and one characters (256x384) with distinct colours,
+# PNGs encoded here, an approved source gen-run, the style ref of the merged style at version 1
+python3 -B - "$ROOT" "$SD" > "$TMP/sd.setup" 2>&1 <<'EOF'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, png, stylelock
+A = sys.argv[2]
+G = os.path.join(A, "assetgen")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+os.makedirs(os.path.join(G, "runs", "derive-001"), exist_ok=True)
+with open(os.path.join(G, "runs", "derive-001", "run.md"), "w", encoding="utf-8") as f:
+    f.write("---json\n%s\n---\n# run\n" % json.dumps({"id": "AGEN-derive-001", "status": "approved"}))
+d = os.path.join(G, "styles", "demo-game", "anchors")
+os.makedirs(d, exist_ok=True)
+for aid, family, w, h, a, b in (("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40)),
+                                ("props-a", "props", 256, 256, (200, 40, 40), (40, 160, 60)),
+                                ("props-b", "props", 256, 256, (200, 40, 40), (40, 160, 60))):
+    data = disc(w, h, a, b)
+    with open(os.path.join(d, aid + ".png"), "wb") as f:
+        f.write(data)
+    with open(os.path.join(d, aid + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": "active", "style": ref, "family": family,
+                   "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+                   "image_sha256": hashlib.sha256(data).hexdigest(),
+                   "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+                   "approved_by": "Dana", "approved_on": "2026-11-01"}, f)
+print("ok")
+EOF
+grep -qx ok "$TMP/sd.setup" || no "style derive setup: anchors" "$(cat "$TMP/sd.setup")"
+SDS="$SD/assetgen/styles/demo-game.json"
+h_sd=$(sha256sum "$SDS" | cut -d' ' -f1)
+cp -r "$SD" "$TMP/style-derive-pre"   # the draft style as init wrote it, anchors included (QA and min_side cases below)
+AG style derive --style demo-game --authoring "$SD" --json > "$TMP/sd1.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sd1.json")" = "rpg-factory.assetgen-style-derive/1" ] && [ "$(jq -r .applied "$TMP/sd1.json")" = false ] \
+  && [ "$(jq -c '[.anchors[].id]' "$TMP/sd1.json")" = '["chars-a","props-a","props-b"]' ] && [ "$(jq -c .skipped "$TMP/sd1.json")" = '[]' ] \
+  && ok "style derive --json exits 0: a proposal from the 3 valid active anchors, nothing skipped, not applied" || no "style derive --json rc=$rc" "$(cat "$TMP/sd.err" "$TMP/sd1.json")"
+[ "$(jq -c '[.proposal.palette.colors[].hex] | sort' "$TMP/sd1.json")" = '["#283cc8","#28a03c","#c82828","#dcc828"]' ] \
+  && [ -n "$(jq -r '.proposal.palette.text // empty' "$TMP/sd1.json")" ] && [ "$(jq -r '.proposal.tone.tolerance' "$TMP/sd1.json")" = 0.05 ] \
+  && ok "style derive proposes palette.colors (the four anchor colours as hex, with text) and tone.tolerance 0.05" || no "style derive palette/tone" "$(jq -c .proposal "$TMP/sd1.json")"
+[ "$(jq -c '.proposal.canvas' "$TMP/sd1.json")" = '{"characters":{"aspect":"2:3","tolerance":0.02},"props":{"aspect":"1:1","tolerance":0.02}}' ] \
+  && ok "style derive proposes a canvas per family: props 1:1, characters 2:3" || no "style derive canvas" "$(jq -c .proposal.canvas "$TMP/sd1.json")"
+AG style derive --style demo-game --authoring "$SD" --json > "$TMP/sd2.json" 2> "$TMP/sd.err"
+cmp -s "$TMP/sd1.json" "$TMP/sd2.json" && ok "two style derive --json runs on the same anchors are byte-identical" || no "style derive output differs between runs" "$(diff "$TMP/sd1.json" "$TMP/sd2.json")"
+AG style derive --style demo-game --authoring "$SD" > "$TMP/sd1.txt" 2> "$TMP/sd.err"; rc=$?
+AG style derive --style demo-game --authoring "$SD" > "$TMP/sd2.txt" 2> "$TMP/sd.err"
+[ $rc -eq 0 ] && cmp -s "$TMP/sd1.txt" "$TMP/sd2.txt" && grep -q "chars-a" "$TMP/sd1.txt" && grep -q "props-a" "$TMP/sd1.txt" && grep -q "props-b" "$TMP/sd1.txt" \
+  && grep -q "canvas.props: aspect 1:1" "$TMP/sd1.txt" && grep -q "not applied" "$TMP/sd1.txt" \
+  && ok "style derive text output is byte-identical, names the anchors and the canvas, and says not applied" || no "style derive text rc=$rc" "$(cat "$TMP/sd1.txt")"
+AG style derive --style demo-game --authoring "$SD" --family props --json > "$TMP/sdp.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '.proposal.canvas | keys' "$TMP/sdp.json")" = '["props"]' ] && [ "$(jq -c '[.anchors[].id]' "$TMP/sdp.json")" = '["props-a","props-b"]' ] \
+  && [ "$(jq -c '[.proposal.palette.colors[].hex] | sort' "$TMP/sdp.json")" = '["#28a03c","#c82828"]' ] && [ "$(jq -r .family "$TMP/sdp.json")" = props ] \
+  && ok "style derive --family props restricts the anchors, the palette and the canvas to props" || no "style derive --family props rc=$rc" "$(cat "$TMP/sd.err"; jq -c .proposal "$TMP/sdp.json")"
+AG style derive --style demo-game --authoring "$SD" --family characters --json > "$TMP/sdc.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.proposal.tone.tolerance' "$TMP/sdc.json")" = 0.1 ] && [ "$(jq -c '.proposal.canvas | keys' "$TMP/sdc.json")" = '["characters"]' ] \
+  && ok "style derive --family characters (one anchor): tone.tolerance 0.1, canvas characters only" || no "style derive --family characters rc=$rc" "$(cat "$TMP/sd.err"; jq -c .proposal "$TMP/sdc.json")"
+[ "$(sha256sum "$SDS" | cut -d' ' -f1)" = "$h_sd" ] && ok "a derive without --apply leaves the style file byte-identical" || no "plain derive changed the style file" "$(cat "$SDS")"
+AG style derive --style no-such-game --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "has no game file" "$TMP/sd.err" && ok "style derive for a style without a game file exits 1 with a message" || no "missing style rc=$rc" "$(cat "$TMP/sd.err")"
+AG style derive --style demo-game --family "Bad Family" --authoring "$SD" > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 2 ] && ok "style derive with a malformed --family exits 2" || no "malformed --family rc=$rc" "$(cat "$TMP/sd.err")"
+
+# an anchor whose PNG bytes no longer match image_sha256 is skipped (and reported), never sampled
+SDT="$TMP/style-derive-tamper"; cp -r "$SD" "$SDT"
+printf 'x' >> "$SDT/assetgen/styles/demo-game/anchors/props-b.png"
+AG style derive --style demo-game --authoring "$SDT" --json > "$TMP/sdt.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '[.anchors[].id]' "$TMP/sdt.json")" = '["chars-a","props-a"]' ] && [ "$(jq -r '.skipped | map(.id) | join(",")' "$TMP/sdt.json")" = props-b ] \
+  && jq -r '.skipped[0].reason' "$TMP/sdt.json" | grep -q "does not match image_sha256" \
+  && ok "an anchor whose PNG no longer matches image_sha256 is skipped and reported" || no "tampered anchor rc=$rc" "$(cat "$TMP/sd.err"; jq -c '[.anchors, .skipped]' "$TMP/sdt.json")"
+AG style derive --style demo-game --authoring "$SDT" > "$TMP/sdt.txt" 2> "$TMP/sd.err"
+grep -q "anchor skipped: props-b" "$TMP/sdt.txt" && ok "the text output reports the skipped anchor" || no "skipped anchor not in the text output" "$(cat "$TMP/sdt.txt")"
+
+# refusals: a style without valid anchors, an active style, a style without status (= active): exit 1, file byte-identical
+SDN="$TMP/style-derive-noanchor"; mkdir -p "$SDN"
+AG style init --id demo-game --extends pixel-art --authoring "$SDN" > /dev/null 2>&1
+h_n=$(sha256sum "$SDN/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+for flags in "" "--apply"; do
+  AG style derive --style demo-game --authoring "$SDN" $flags > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+  [ $rc -eq 1 ] && grep -q "no usable anchor" "$TMP/sd.err" && [ "$(sha256sum "$SDN/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_n" ] \
+    && ok "style derive ${flags:-(plain)} on a style without anchors exits 1 and leaves the file byte-identical" || no "no-anchor derive $flags rc=$rc" "$(cat "$TMP/sd.err")"
+done
+SDU="$TMP/style-derive-unusable"; cp -r "$SD" "$SDU"
+for f in "$SDU"/assetgen/styles/demo-game/anchors/*.png; do printf 'x' >> "$f"; done
+h_u=$(sha256sum "$SDU/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SDU" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "no usable anchor" "$TMP/sd.err" && [ "$(sha256sum "$SDU/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_u" ] \
+  && ok "style derive --apply where every anchor PNG is tampered exits 1 and leaves the file byte-identical" || no "all-tampered apply rc=$rc" "$(cat "$TMP/sd.err")"
+SDA="$TMP/style-derive-active"; cp -r "$SD" "$SDA"
+jq '.status = "active"' "$SDS" > "$TMP/sd-active.json" && cp "$TMP/sd-active.json" "$SDA/assetgen/styles/demo-game.json"
+h_a=$(sha256sum "$SDA/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SDA" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only merges into a draft" "$TMP/sd.err" && [ "$(sha256sum "$SDA/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_a" ] \
+  && ok "style derive --apply on an active style exits 1 and leaves the file byte-identical" || no "active apply rc=$rc" "$(cat "$TMP/sd.err")"
+AG style derive --style demo-game --authoring "$SDA" --json > "$TMP/sda.json" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .applied "$TMP/sda.json")" = false ] && [ "$(jq -r .style.status "$TMP/sda.json")" = active ] \
+  && [ "$(sha256sum "$SDA/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_a" ] \
+  && ok "a plain derive on an active style still proposes (exit 0) and writes nothing" || no "active plain derive rc=$rc" "$(cat "$TMP/sd.err")"
+SDM="$TMP/style-derive-nostatus"; cp -r "$SD" "$SDM"
+jq 'del(.status)' "$SDS" > "$TMP/sd-nostatus.json" && cp "$TMP/sd-nostatus.json" "$SDM/assetgen/styles/demo-game.json"
+h_m=$(sha256sum "$SDM/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SDM" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only merges into a draft" "$TMP/sd.err" && [ "$(sha256sum "$SDM/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_m" ] \
+  && ok "style derive --apply on a style without status (active) exits 1 and leaves the file byte-identical" || no "no-status apply rc=$rc" "$(cat "$TMP/sd.err")"
+
+# QA availability: dqa AUTHORING NAME resolves an icon run (family props), renders it (the anchor copies) and runs qa
+dqa() {
+  local d="$1/assetgen/runs/dq-$2-001"; rm -rf "$d"; mkdir -p "$d/outputs"
+  AG resolve --purpose icon --authoring "$1" --out "$d/spec.json" > /dev/null 2> "$TMP/err" || return 1
+  printf 'Derive prompt.\n' > "$d/prompt.md"
+  AG render --run "$d" > /dev/null 2>> "$TMP/err" || return 1
+  cp "$FX/icon-ok.png" "$d/outputs/out.png"
+  AG qa --run "$d" --json > "$TMP/dq-$2.json" 2>> "$TMP/err"   # exit 1 is fine: only the style rows matter here
+  rm -rf "$d"
+  [ -s "$TMP/dq-$2.json" ]
+}
+dst() { jq -r --arg c "$2" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/dq-$1.json"; }
+dqa "$TMP/style-derive-pre" before || no "style derive QA setup (before apply)" "$(cat "$TMP/err")"
+[ "$(dst before style-palette)" = NOT_AVAILABLE ] && [ "$(dst before style-tone)" = NOT_AVAILABLE ] && [ "$(dst before style-canvas)" = NOT_AVAILABLE ] \
+  && ok "before --apply the draft style's style-palette, style-tone and style-canvas QA rows are NOT_AVAILABLE" \
+  || no "QA rows before apply: $(dst before style-palette) $(dst before style-tone) $(dst before style-canvas)" "$(jq -c '[.results[] | select(.check | startswith("style-"))]' "$TMP/dq-before.json")"
+
+# --apply on the draft style with anchors
+AG style derive --style demo-game --authoring "$SD" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "wrote assetgen/styles/demo-game.json" "$TMP/sd.out" \
+  && [ "$(jq -c '[.status, .extends, .version, .tone.tolerance]' "$SDS")" = '["draft","pixel-art",1,0.05]' ] \
+  && [ "$(jq -c '[.palette.colors[].hex] | sort' "$SDS")" = '["#283cc8","#28a03c","#c82828","#dcc828"]' ] && [ -n "$(jq -r '.palette.text // empty' "$SDS")" ] \
+  && [ "$(jq -c '.canvas' "$SDS")" = '{"characters":{"aspect":"2:3","tolerance":0.02},"props":{"aspect":"1:1","tolerance":0.02}}' ] \
+  && ok "style derive --apply on the draft style exits 0 and writes palette, tone and canvas (status, extends, version kept)" || no "draft apply rc=$rc" "$(cat "$TMP/sd.err" "$TMP/sd.out"; cat "$SDS")"
+[ "$(jq -cS '.proposal' "$TMP/sd1.json")" = "$(jq -cS '{palette: .palette, tone: .tone, canvas: .canvas}' "$SDS")" ]   && ok "the written fields equal the proposal" || no "written fields differ from the proposal" "$(cat "$SDS")"
+h_after=$(sha256sum "$SDS" | cut -d' ' -f1)
+AG style derive --style demo-game --authoring "$SD" --apply > "$TMP/sd.out" 2> "$TMP/sd.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(sha256sum "$SDS" | cut -d' ' -f1)" = "$h_after" ] && ok "a second --apply on the same anchors rewrites the same bytes" || no "second apply rc=$rc" "$(cat "$TMP/sd.err")"
+AG lint --authoring "$SD" --json > "$TMP/sd-lint.json" 2>&1; rc=$?
+nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/sd-lint.json")
+[ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json") | .state] | join(",")' "$TMP/sd-lint.json")" = PASS ] \
+  && ok "lint after style derive --apply: 0 FAIL, the derived style PASSes" || no "lint after derive rc=$rc fail=$nfail" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/sd-lint.json")"
+python3 -B - "$ROOT" "$SD" 2>&1 <<'EOF' | tr -d '\r' > "$TMP/sd.fs"
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, layers
+st = consistency.field_states(layers.load("style", "demo-game", sys.argv[2])["data"])
+for row in ("style-palette", "style-tone", "style-canvas"):
+    print(row, st[row][0])
+EOF
+[ "$(cat "$TMP/sd.fs")" = "$(printf 'style-palette ok\nstyle-tone ok\nstyle-canvas ok')" ] \
+  && ok "consistency.field_states of the derived style: style-palette, style-tone, style-canvas are ok" || no "field_states after derive" "$(cat "$TMP/sd.fs")"
+dqa "$SD" after || no "style derive QA setup (after apply)" "$(cat "$TMP/err")"
+s_pal=$(dst after style-palette); s_tone=$(dst after style-tone); s_can=$(dst after style-canvas)
+all_rows="$s_pal$s_tone$s_can"
+[ -n "$s_pal" ] && [ -n "$s_tone" ] && [ -n "$s_can" ] && [ "$all_rows" = "${all_rows//NOT_AVAILABLE/}" ] \
+  && ok "after --apply the style-palette ($s_pal), style-tone ($s_tone) and style-canvas ($s_can) QA rows are available, not NOT_AVAILABLE" \
+  || no "QA rows after apply: palette=$s_pal tone=$s_tone canvas=$s_can" "$(jq -c '[.results[] | select(.check | startswith("style-"))]' "$TMP/dq-after.json")"
+
+# a canvas entry with only min_side: lint accepts it (it was FAIL while stylelock.style_errors wanted an aspect) and QA can grade it
+for st_ in draft active; do
+  SDX="$TMP/style-derive-minside-$st_"; cp -r "$TMP/style-derive-pre" "$SDX"
+  jq --arg s "$st_" '.status = $s | .canvas = {"props": {"min_side": 128}}' "$TMP/style-derive-pre/assetgen/styles/demo-game.json" > "$SDX/assetgen/styles/demo-game.json"
+  AG lint --authoring "$SDX" --json > "$TMP/sd-lint.json" 2>&1; rc=$?
+  nfail=$(jq '[.results[] | select(.state == "FAIL")] | length' "$TMP/sd-lint.json")
+  srow=$(jq -r '[.results[] | select(.path == "game:assetgen/styles/demo-game.json") | .state] | join(",")' "$TMP/sd-lint.json")
+  [ $rc -eq 0 ] && [ "$nfail" = 0 ] && [ "$srow" = PASS ] \
+    && ok "lint accepts a $st_ style whose canvas entry has only min_side (0 FAIL, the style PASSes)" || no "min_side-only canvas ($st_) lint rc=$rc fail=$nfail style=$srow" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/sd-lint.json")"
+done
+python3 -B - "$ROOT" "$TMP/style-derive-minside-draft" > "$TMP/sd.fs" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, layers, stylelock
+d = layers.load("style", "demo-game", sys.argv[2])["data"]
+print(consistency.field_states(d)["style-canvas"][0], stylelock.style_errors(d))
+EOF
+[ "$(cat "$TMP/sd.fs")" = "ok []" ] && ok "a min_side-only canvas: field_states style-canvas ok and stylelock.style_errors empty" || no "min_side-only canvas states" "$(cat "$TMP/sd.fs")"
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style derive changed nothing under templates/assetgen" || no "templates/assetgen changed by derive" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+group_end; fi
+if group_begin style-bump; then
+echo "-- style bump: draft version N+1, proposed anchor copies and the re-approval report (style_cmd.py)"
+# fixture: an ACTIVE game style at version 1 (init, anchors, derive --apply into the draft, then activated), anchors
+# chars-a and props-a-v1 (active), props-p (proposed), props-old (retired), a run of the style at version 1, and the
+# rejections rej-v1 (version 1) and rej-any (version null); built once in SB0, every case works on a copy
+SB0="$TMP/style-bump-base"; mkdir -p "$SB0"; git init -q -b main "$SB0"
+AG style init --id demo-game --extends pixel-art --authoring "$SB0" > "$TMP/sb.out" 2> "$TMP/sb.err" || no "style bump setup: style init" "$(cat "$TMP/sb.err")"
+sb_setup() {   # sb_setup MODE: anchors (draft ref, before derive) | final (every record and the run carry the active style ref)
+python3 -B - "$ROOT" "$SB0" "$1" 2>&1 <<'EOF' | tr -d '\r'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, png, stylelock
+A, mode = sys.argv[2], sys.argv[3]
+G = os.path.join(A, "assetgen")
+D = os.path.join(G, "styles", "demo-game")
+AD, RD = os.path.join(D, "anchors"), os.path.join(D, "rejections")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def jdump(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+def front(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(os.path.join(sys.argv[1], "templates", "assetgen", "gen-run.md"), encoding="utf-8") as f:
+        envelope = json.loads(f.read().split("---", 2)[1].removeprefix("json\n"))
+    envelope.update(obj)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("---json\n%s\n---\n# run\n" % json.dumps(envelope))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+if mode == "anchors":
+    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved", "spec": {}})
+    for aid, family, w, h, a, b, status in (
+            ("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40), "active"),
+            ("props-a-v1", "props", 256, 256, (200, 40, 40), (40, 160, 60), "active"),
+            ("props-p", "props", 256, 256, (180, 40, 40), (40, 160, 60), "proposed"),
+            ("props-old", "props", 256, 256, (200, 40, 40), (60, 160, 40), "retired")):
+        data = disc(w, h, a, b)
+        os.makedirs(AD, exist_ok=True)
+        with open(os.path.join(AD, aid + ".png"), "wb") as f:
+            f.write(data)
+        person = status != "proposed"
+        jdump(os.path.join(AD, aid + ".json"),
+              {"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": status, "style": ref, "family": family,
+               "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+               "image_sha256": hashlib.sha256(data).hexdigest(),
+               "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+               "approved_by": "Dana" if person else None, "approved_on": "2026-11-01" if person else None})
+else:
+    for name in sorted(os.listdir(AD)):
+        if name.endswith(".json"):
+            p = os.path.join(AD, name)
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+            data["style"] = ref
+            jdump(p, data)
+    jdump(os.path.join(RD, "rej-v1.json"),
+          {"schema": "rpg-factory.assetgen-rejection/1", "id": "rej-v1", "type": "direction", "style": ref,
+           "family": None, "reason": "other", "text": "no neon glow on version 1 props"})
+    jdump(os.path.join(RD, "rej-any.json"),
+          {"schema": "rpg-factory.assetgen-rejection/1", "id": "rej-any", "type": "direction",
+           "style": {"style_id": "demo-game", "version": None, "sha256": "0" * 64},
+           "family": None, "reason": "other", "text": "no text or logos on any version"})
+    front(os.path.join(G, "runs", "bump-run-001", "run.md"),
+          {"id": "AGEN-bump-001", "status": "approved",
+           "spec": {"style": {"id": "demo-game", "sha256": ref["sha256"]}, "style_lock": {"style": ref}}})
+print("ok")
+EOF
+}
+sb_setup anchors > "$TMP/sb.setup"; grep -qx ok "$TMP/sb.setup" || no "style bump setup: anchors" "$(cat "$TMP/sb.setup")"
+AG style derive --style demo-game --authoring "$SB0" --apply > "$TMP/sb.out" 2> "$TMP/sb.err" || no "style bump setup: style derive --apply" "$(cat "$TMP/sb.err")"
+jq '.status = "active"' "$SB0/assetgen/styles/demo-game.json" > "$TMP/sb-active.json" && cp "$TMP/sb-active.json" "$SB0/assetgen/styles/demo-game.json"
+sb_setup final > "$TMP/sb.setup"; grep -qx ok "$TMP/sb.setup" || no "style bump setup: records" "$(cat "$TMP/sb.setup")"
+# tsig DIR: one hash over every file below DIR but .git; sb_files DIR: the sorted file list; sb_changed PRE POST: files of PRE that differ or vanished
+tsig() { (cd "$1" && find . -type f -not -path './.git/*' -exec sha256sum {} + | LC_ALL=C sort | sha256sum | cut -d' ' -f1); }
+sb_files() { (cd "$1" && find . -type f -not -path './.git/*' | LC_ALL=C sort); }
+sb_changed() { local f; sb_files "$1" | while read -r f; do cmp -s "$1/$f" "$2/$f" || echo "$f"; done; }
+sb_copy() { rm -rf "$1"; cp -r "$SB0" "$1"; }
+
+SBX="$TMP/style-bump-external"; sb_copy "$SBX"
+SBXA="$SBX/assetgen/styles/demo-game/anchors"
+cp "$SBXA/props-a-v1.png" "$SBXA/external-v1.png"
+jq --slurpfile base "$SBXA/props-a-v1.json" '.id = "external-v1" | .image = "external-v1.png" | .style = $base[0].style | .image_sha256 = $base[0].image_sha256 | .external_source.sha256 = $base[0].image_sha256' "$TMP/ext-active.json" > "$SBXA/external-v1.json"
+cp "$SBXA/external-v1.json" "$TMP/sb-external-before.json"
+AG style bump --id demo-game --authoring "$SBX" --json > "$TMP/sbx.json" 2> "$TMP/sb.err"; rc=$?
+AG lint "$SBXA/external-v2.json" --authoring "$SBX" > "$TMP/sbx-lint" 2>&1; lint_rc=$?
+[ $rc -eq 0 ] && [ $lint_rc -eq 0 ] && cmp -s "$TMP/sb-external-before.json" "$SBXA/external-v1.json" \
+  && jq -e '.status == "proposed" and .style.version == 2 and .approved_by == null and .approved_on == null and .external_source.attested_by == null and .external_source.attested_on == null' "$SBXA/external-v2.json" >/dev/null \
+  && jq -e '.anchors[] | select(.id == "external-v1" and .action == "carried" and .new_id == "external-v2")' "$TMP/sbx.json" >/dev/null \
+  && ok "style bump carries an external anchor as an unattested proposed record and preserves the original" \
+  || no "external anchor bump rc=$rc lint=$lint_rc" "$(cat "$TMP/sb.err" "$TMP/sbx-lint" "$TMP/sbx.json")"
+
+SBP="$TMP/style-bump-pre"; sb_copy "$SBP"          # the authoring repo as it was before the bump
+SB="$TMP/style-bump"; sb_copy "$SB"; SBS="$SB/assetgen/styles"; SBD="$SBS/demo-game/versions/2.json"
+AG style bump --id demo-game --authoring "$SB" --json > "$TMP/sb1.json" 2> "$TMP/sb.err"; rc=$?
+# (1) the draft is a copy at version 2, nothing that existed changed
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sb1.json")" = "rpg-factory.assetgen-style-bump/1" ] && [ "$(jq -r .draft.written "$TMP/sb1.json")" = true ] \
+  && [ "$(jq -r .draft.path "$TMP/sb1.json")" = "assetgen/styles/demo-game/versions/2.json" ] && [ -f "$SBD" ] \
+  && [ "$(jq -c '[.version, .status]' "$SBD")" = '[2,"draft"]' ] \
+  && [ "$(jq -cS 'del(.version, .status)' "$SBD")" = "$(jq -cS 'del(.version, .status)' "$SBS/demo-game.json")" ] \
+  && ok "style bump --json exits 0 and writes versions/2.json: version 2, status draft, every other key of the active file" || no "style bump rc=$rc" "$(cat "$TMP/sb.err"; cat "$SBD" 2>&1)"
+[ "$(jq -c '[.version, .status]' "$SBS/demo-game.json")" = '[1,"active"]' ] && [ -z "$(sb_changed "$SBP" "$SB")" ] \
+  && ok "the active style file, project.json and every pre-existing anchor, rejection and run file are byte-identical after the bump" \
+  || no "a pre-existing file changed" "$(sb_changed "$SBP" "$SB")"
+sb_files "$SBP" > "$TMP/sb.before"; sb_files "$SB" > "$TMP/sb.after"
+[ "$(LC_ALL=C comm -13 "$TMP/sb.before" "$TMP/sb.after" | tr '\n' ' ')" = "./assetgen/styles/demo-game/anchors/chars-a-v2.json ./assetgen/styles/demo-game/anchors/chars-a-v2.png ./assetgen/styles/demo-game/anchors/props-a-v2.json ./assetgen/styles/demo-game/anchors/props-a-v2.png ./assetgen/styles/demo-game/versions/2.json " ] \
+  && ok "the bump added exactly the draft and two carried anchors (json + png each), no file was removed" || no "files added by the bump" "$(LC_ALL=C comm -3 "$TMP/sb.before" "$TMP/sb.after")"
+# (2) carried anchors are proposed copies for version 2
+AGD="$SBS/demo-game/anchors"; carried_ok=true; carried_why=""
+for pair in "chars-a chars-a-v2" "props-a-v1 props-a-v2"; do
+  read -r old new <<<"$pair"
+  [ "$(jq -c '[.status, .approved_by, .approved_on, .style.version, .style.sha256, .id, .image]' "$AGD/$new.json")" \
+    = "[\"proposed\",null,null,2,\"$(jq -r .draft.style.sha256 "$TMP/sb1.json")\",\"$new\",\"$new.png\"]" ] \
+    && [ "$(jq -r .image_sha256 "$AGD/$new.json")" = "$(jq -r .image_sha256 "$AGD/$old.json")" ] && cmp -s "$AGD/$old.png" "$AGD/$new.png" \
+    || { carried_ok=false; carried_why="$carried_why $new: $(cat "$AGD/$new.json" 2>&1 | head -c 400)"; }
+done
+$carried_ok && [ ! -e "$AGD/props-a-v1-v2.json" ] && [ ! -e "$AGD/props-a-v1-v2.png" ] \
+  && ok "carried anchors chars-a-v2 and props-a-v2 are proposed, approved_by null, style.version 2, same image sha256 and bytes (the -v1 suffix is replaced: no props-a-v1-v2)" \
+  || no "carried anchors" "$carried_why"
+[ "$(jq -r 'select(.status == "active") | .id' "$AGD"/*.json | LC_ALL=C sort | tr '\n' ' ')" = "chars-a props-a-v1 " ] \
+  && ok "no anchor is written active: only the two pre-existing active anchors have status active" || no "anchor statuses" "$(jq -c '[.id, .status]' "$AGD"/*.json)"
+# (3) the report names what needs re-approval
+[ "$(jq -c '.needs_reapproval | [.anchors, .runs, .rejections]' "$TMP/sb1.json")" = '[["chars-a","props-a-v1","props-p"],["AGEN-bump-001"],["rej-v1"]]' ] \
+  && ok "needs_reapproval lists the carried and proposed anchors, the version 1 run and the version 1 rejection" \
+  || no "needs_reapproval" "$(jq -c .needs_reapproval "$TMP/sb1.json")"
+[ "$(jq -r '[.anchors[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "chars-a=carried,props-a-v1=carried,props-old=none,props-p=reapprove" ] \
+  && [ "$(jq -r '[.anchors[] | select(.new_id != null) | "\(.id)>\(.new_id)"] | join(",")' "$TMP/sb1.json")" = "chars-a>chars-a-v2,props-a-v1>props-a-v2" ] \
+  && [ "$(jq -r '[.rejections[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "rej-any=applies,rej-v1=rerecord" ] \
+  && [ "$(jq -r '[.runs[] | "\(.id)=\(.action)"] | join(",")' "$TMP/sb1.json")" = "AGEN-bump-001=reapprove" ] \
+  && ok "report rows: anchors carried/reapprove/none with new_id on carried rows, the version null rejection applies, the retired anchor is none" \
+  || no "report rows" "$(jq -c '[.anchors, .runs, .rejections]' "$TMP/sb1.json")"
+SBT="$TMP/style-bump-text"; sb_copy "$SBT"
+AG style bump --id demo-game --authoring "$SBT" > "$TMP/sb1.txt" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "^anchor props-p " "$TMP/sb1.txt" && grep -q "^anchor chars-a " "$TMP/sb1.txt" && grep -q "^anchor props-a-v1 " "$TMP/sb1.txt" \
+  && grep -q "^run AGEN-bump-001 " "$TMP/sb1.txt" && grep -q "^rejection rej-v1 .*rerecord" "$TMP/sb1.txt" && grep -q "^rejection rej-any .*applies" "$TMP/sb1.txt" \
+  && grep -q "nothing active was edited" "$TMP/sb1.txt" && ! grep -q "limited to listing" "$TMP/sb1.txt" \
+  && ok "the text report names every anchor, run and rejection and says nothing active was edited" || no "text report rc=$rc" "$(cat "$TMP/sb1.txt" "$TMP/sb.err")"
+# (4) quality: the bump's own check passes, and artifact-quality shows no FAIL that was not there before
+aq_fails() { python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$1" --registry "$ROOT/registry.json" --domain assetgen --json > "$2" 2>> "$TMP/err"
+  jq -r '.results[] | select(.state == "FAIL") | "\(.artifact)|\(.check)"' "$2" | LC_ALL=C sort -u; }
+aq_fails "$SBP" "$TMP/sb-aq-before.json" > "$TMP/sb-fails-before"; aq_fails "$SB" "$TMP/sb-aq-after.json" > "$TMP/sb-fails-after"
+[ "$(jq -r .quality.state "$TMP/sb1.json")" = PASS ] && [ "$(jq -c .quality.new_fails "$TMP/sb1.json")" = '[]' ] \
+  && jq -e '([.results[] | select(.check == "parse" and .state == "FAIL")] | length) == 0 and (["AGEN-derive-001", "AGEN-bump-001"] | all(. as $id | any($rows[]; .artifact == $id and (.check | startswith("gen-run-")))))' --argjson rows "$(jq '.results' "$TMP/sb-aq-before.json")" "$TMP/sb-aq-before.json" >/dev/null \
+  && jq -e '([.results[] | select(.check == "parse" and .state == "FAIL")] | length) == 0 and (["AGEN-derive-001", "AGEN-bump-001"] | all(. as $id | any($rows[]; .artifact == $id and (.check | startswith("gen-run-")))))' --argjson rows "$(jq '.results' "$TMP/sb-aq-after.json")" "$TMP/sb-aq-after.json" >/dev/null \
+  && [ -z "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after")" ] \
+  && ok "quality.state PASS, and artifact-quality --domain assetgen shows no FAIL on the bumped authoring that was not there before ($(wc -l < "$TMP/sb-fails-before" | tr -d ' ') FAIL before, $(wc -l < "$TMP/sb-fails-after" | tr -d ' ') after)" \
+  || no "quality after the bump: $(jq -r .quality.state "$TMP/sb1.json")" "$(LC_ALL=C comm -13 "$TMP/sb-fails-before" "$TMP/sb-fails-after"; jq -c .quality "$TMP/sb1.json")"
+# (5) a second bump of the same style: the draft exists, nothing is written
+h_sb=$(tsig "$SB")
+AG style bump --id demo-game --authoring "$SB" > "$TMP/sb2.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/sb.err" && [ "$(tsig "$SB")" = "$h_sb" ] \
+  && ok "a second style bump exits 1 (the draft exists) and writes nothing" || no "second bump rc=$rc" "$(cat "$TMP/sb.err")"
+# (6) --list-only writes nothing and still lists
+SBL="$TMP/style-bump-list"; sb_copy "$SBL"; h_sbl=$(tsig "$SBL"); g_sbl=$(git -C "$SBL" status --porcelain)
+AG style bump --id demo-game --authoring "$SBL" --list-only --json > "$TMP/sbl.json" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(tsig "$SBL")" = "$h_sbl" ] && [ "$(git -C "$SBL" status --porcelain)" = "$g_sbl" ] && [ ! -e "$SBL/assetgen/styles/demo-game/versions" ] \
+  && [ "$(jq -r .draft.written "$TMP/sbl.json")" = false ] && [ "$(jq -r .list_only "$TMP/sbl.json")" = true ] && [ "$(jq -r .quality.state "$TMP/sbl.json")" = SKIPPED ] \
+  && [ "$(jq -c .needs_reapproval "$TMP/sbl.json")" = "$(jq -c .needs_reapproval "$TMP/sb1.json")" ] \
+  && ok "style bump --list-only writes nothing (tree and git status unchanged), skips the quality check and lists the same re-approvals" \
+  || no "list-only rc=$rc" "$(cat "$TMP/sb.err"; jq -c '[.draft, .quality, .needs_reapproval]' "$TMP/sbl.json")"
+AG style bump --id demo-game --authoring "$SBL" --list-only > "$TMP/sbl.txt" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 0 ] && grep -q "nothing written" "$TMP/sbl.txt" && grep -q "^anchor props-p " "$TMP/sbl.txt" && [ "$(tsig "$SBL")" = "$h_sbl" ] \
+  && ok "the --list-only text says nothing was written and still names the anchors" || no "list-only text rc=$rc" "$(cat "$TMP/sbl.txt" "$TMP/sb.err")"
+# (7) refusals
+SBDR="$TMP/style-bump-draft"; rm -rf "$SBDR"; mkdir -p "$SBDR"
+AG style init --id demo-game --extends pixel-art --authoring "$SBDR" > /dev/null 2>&1; h_dr=$(tsig "$SBDR")
+AG style bump --id demo-game --authoring "$SBDR" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "only works on an active style" "$TMP/sb.err" && [ "$(tsig "$SBDR")" = "$h_dr" ] \
+  && ok "style bump of a draft style exits 1 and writes nothing" || no "draft bump rc=$rc" "$(cat "$TMP/sb.err")"
+SBC="$TMP/style-bump-core"; sb_copy "$SBC"; h_c=$(tsig "$SBC")
+AG style bump --id pixel-art --authoring "$SBC" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "has no game file" "$TMP/sb.err" && [ "$(tsig "$SBC")" = "$h_c" ] \
+  && ok "style bump of a core-only style id exits 1 and writes nothing" || no "core-only bump rc=$rc" "$(cat "$TMP/sb.err")"
+AG style bump --id "Bad_Id" --authoring "$SBC" > "$TMP/sb.out" 2> "$TMP/sb.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "must be a lowercase id" "$TMP/sb.err" && [ "$(tsig "$SBC")" = "$h_c" ] \
+  && ok "style bump with a malformed --id exits 2 and writes nothing" || no "malformed --id rc=$rc" "$(cat "$TMP/sb.err")"
+# (8) the quality plugin rejects the carried anchors (a stub FAILs once any *-v2.json anchor exists) or cannot run (non-JSON)
+cat > "$TMP/sb-quality-stub.py" <<'EOF'
+import glob, json, os, sys
+fail = glob.glob(os.path.join(sys.argv[1], "assetgen", "styles", "*", "anchors", "*-v2.json"))
+print(json.dumps({"results": [{"artifact": "AGEN-stub", "check": "gen-run-style", "state": "FAIL" if fail else "PASS",
+                               "reasons": ["a carried anchor broke the stub"] if fail else []}]}))
+EOF
+printf 'print("this is not json")\n' > "$TMP/sb-quality-garbage.py"
+for kind in "stub REJECTED" "garbage NOT_RUN"; do
+  read -r k want <<<"$kind"
+  SBQ="$TMP/style-bump-q-$k"; sb_copy "$SBQ"; sb_files "$SBQ" > "$TMP/sb.before"
+  ( export RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT="$TMP/sb-quality-$k.py"; AG style bump --id demo-game --authoring "$SBQ" --json > "$TMP/sbq.json" 2> "$TMP/sb.err" ); rc=$?
+  sb_files "$SBQ" > "$TMP/sb.after"
+  [ $rc -eq 0 ] && [ "$(jq -r .quality.state "$TMP/sbq.json")" = "$want" ] && [ -f "$SBQ/assetgen/styles/demo-game/versions/2.json" ] && [ "$(jq -r .draft.written "$TMP/sbq.json")" = true ] \
+    && [ -z "$(find "$SBQ/assetgen/styles/demo-game/anchors" -name '*-v2.*')" ] \
+    && [ "$(LC_ALL=C comm -13 "$TMP/sb.before" "$TMP/sb.after")" = "./assetgen/styles/demo-game/versions/2.json" ] && [ -z "$(sb_changed "$SBP" "$SBQ")" ] \
+    && [ "$(jq '[.anchors[] | select(.action == "carried" or .new_id != null)] | length' "$TMP/sbq.json")" = 0 ] \
+    && [ "$(jq -c '.needs_reapproval.anchors' "$TMP/sbq.json")" = '["chars-a","props-a-v1","props-p"]' ] \
+    && ok "quality $want ($k stub): exit 0, the draft stays, no carried anchor file remains, every anchor is still listed for re-approval" \
+    || no "quality $want ($k) rc=$rc" "$(cat "$TMP/sb.err"; jq -c '[.quality, .anchors]' "$TMP/sbq.json"; find "$SBQ/assetgen/styles/demo-game" -type f)"
+  [ "$want" != REJECTED ] || { [ "$(jq -c '[.quality.new_fails[] | [.artifact, .check]]' "$TMP/sbq.json")" = '[["AGEN-stub","gen-run-style"]]' ] \
+    && ok "a quality rejection names the new FAIL (artifact and check)" || no "new_fails" "$(jq -c .quality "$TMP/sbq.json")"; }
+  sb_copy "$SBQ"
+  ( export RPG_FACTORY_ASSETGEN_QUALITY_SCRIPT="$TMP/sb-quality-$k.py"; AG style bump --id demo-game --authoring "$SBQ" > "$TMP/sbq.txt" 2> "$TMP/sb.err" ); rc=$?
+  [ $rc -eq 0 ] && grep -q "^quality: $want" "$TMP/sbq.txt" && grep -q "the verb was limited to listing" "$TMP/sbq.txt" && grep -q "nothing active was edited" "$TMP/sbq.txt" \
+    && ! grep -q "^wrote assetgen/styles/demo-game/anchors/" "$TMP/sbq.txt" \
+    && ok "quality $want ($k stub): the text output says the verb was limited to listing" || no "limited-to-listing text ($k) rc=$rc" "$(cat "$TMP/sbq.txt" "$TMP/sb.err")"
+done
+# (9) style derive keeps passing its own cases above (unchanged); (10) core data untouched
+[ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style bump changed nothing under templates/assetgen" || no "templates/assetgen changed by bump" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+group_end; fi
+if group_begin style-report; then
+echo "-- style report: spreads, QA rates, rejections and suggested thresholds, read-only (style_report.py)"
+# fixture: a draft game style at version 1 (init, anchors chars-a / props-a / props-b, derive --apply: palette of 4 colours,
+# tone.tolerance 0.05, palette.max_distance 48 and min_share 0.6 by default), then runs, qa.json files and rejections:
+#   r-props-1 approved props   outputs ok (d_needed 0), near (40), bad.png (garbage), clear.png (transparent)
+#                              qa palette PASS, tone PASS, edges NOT_AVAILABLE (+ a non-style row)
+#   r-props-2 approved props   output far (d_needed 80)               qa palette FAIL, tone WARN, edges PASS
+#   r-props-3 rejected props   no outputs                             qa palette WARN, tone WARN, edges PASS
+#   r-chars-1 approved characters output chars (d_needed 40)          qa palette PASS, tone FAIL
+#   r-ui-1    rejected ui      no outputs                             qa.json is not JSON
+#   r-none    approved, no family, no outputs directory
+#   r-other   a run of another style; r-broken: run.md without front matter; derive-001: the anchors' source run
+# rejections: two props palette_off, one characters anatomy (asset), one family-less other, one malformed props record
+SR="$TMP/style-report"; mkdir -p "$SR"
+AG style init --id demo-game --extends pixel-art --authoring "$SR" > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report setup: style init" "$(cat "$TMP/sr.err")"
+sr_setup() {   # sr_setup MODE: anchors (before derive) | records (runs, qa, rejections; writes $TMP/sr.expect)
+python3 -B - "$ROOT" "$SR" "$1" "$TMP/sr.expect" 2>&1 <<'EOF' | tr -d '\r'
+import hashlib, json, math, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, layers, png, stylelock
+A, mode, expect = sys.argv[2], sys.argv[3], sys.argv[4]
+G = os.path.join(A, "assetgen")
+D = os.path.join(G, "styles", "demo-game")
+AD, RD = os.path.join(D, "anchors"), os.path.join(D, "rejections")
+ref = stylelock.style_ref(layers.load("style", "demo-game", A))
+def jdump(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+def front(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("---json\n%s\n---\n# run\n" % json.dumps(obj))
+def disc(w, h, a, b):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            px += bytes((a if x < w // 2 else b) + (255,)) if d < min(w, h) * 0.3 else bytes((0, 0, 0, 0))
+    return png.encode(w, h, bytes(px))
+def put(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+if mode == "anchors":
+    front(os.path.join(G, "runs", "derive-001", "run.md"), {"id": "AGEN-derive-001", "status": "approved"})
+    for aid, family, w, h, a, b in (("chars-a", "characters", 256, 384, (40, 60, 200), (220, 200, 40)),
+                                    ("props-a", "props", 256, 256, (200, 40, 40), (40, 160, 60)),
+                                    ("props-b", "props", 256, 256, (200, 40, 40), (40, 160, 60))):
+        data = disc(w, h, a, b)
+        put(os.path.join(AD, aid + ".png"), data)
+        jdump(os.path.join(AD, aid + ".json"),
+              {"schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": "active", "style": ref, "family": family,
+               "dimensions": ["palette", "shape"], "strength": "strong", "image": aid + ".png",
+               "image_sha256": hashlib.sha256(data).hexdigest(),
+               "source_run": {"run_id": "derive-001", "output": "outputs/a.png", "sha256": "0" * 64},
+               "approved_by": "Dana", "approved_on": "2026-11-01"})
+else:
+    def run(rid, status, family, outputs, qa=None, style=ref, raw_qa=None):
+        lock = {"style": style}
+        ids = {"props": ["props-a", "props-b"], "characters": ["chars-a"]}.get(family, []) if status == "approved" and style == ref else []
+        lock["references"] = [{"anchor_id": aid, "image": "references/anchor-" + aid + ".png"} for aid in ids]
+        for aid in ids:
+            put(os.path.join(G, "runs", rid, "references", "anchor-" + aid + ".png"), open(os.path.join(AD, aid + ".png"), "rb").read())
+        if family:
+            lock["family"] = family
+        front(os.path.join(G, "runs", rid, "run.md"), {"id": "AGEN-" + rid, "status": status, "spec": {"style_lock": lock}})
+        for name, data in outputs.items():
+            put(os.path.join(G, "runs", rid, "outputs", name), data)
+        if qa is not None:
+            jdump(os.path.join(G, "runs", rid, "qa.json"), {"results": [{"check": c, "state": s} for c, s in qa]})
+        if raw_qa is not None:
+            put(os.path.join(G, "runs", rid, "qa.json"), raw_qa)
+    red, green = (200, 40, 40), (40, 160, 60)
+    props = {"ok.png": disc(256, 256, red, green), "near.png": disc(256, 256, red, (40, 160, 100)),
+             "bad.png": b"this is not a png", "clear.png": png.encode(64, 64, bytes(64 * 64 * 4))}
+    run("r-props-1", "approved", "props", props,
+        [("style-palette", "PASS"), ("style-tone", "PASS"), ("style-edges", "NOT_AVAILABLE"), ("artifact-quality", "FAIL")])
+    run("r-props-2", "approved", "props", {"far.png": disc(256, 256, red, (40, 160, 140))},
+        [("style-palette", "FAIL"), ("style-tone", "WARN"), ("style-edges", "PASS")])
+    run("r-props-3", "rejected", "props", {}, [("style-palette", "WARN"), ("style-tone", "WARN"), ("style-edges", "PASS")])
+    run("r-chars-1", "approved", "characters", {"chars.png": disc(128, 192, (40, 60, 200), (220, 200, 80))},
+        [("style-palette", "PASS"), ("style-tone", "FAIL")])
+    run("r-ui-1", "rejected", "ui", {}, raw_qa=b"{ not json")
+    run("r-none", "approved", None, {"unanchored.png": disc(256, 256, red, green)})
+    run("r-other", "approved", "props", {}, [("style-palette", "FAIL")], style={"style_id": "other-game", "version": 1, "sha256": "1" * 64})
+    os.makedirs(os.path.join(G, "runs", "r-broken"), exist_ok=True)
+    with open(os.path.join(G, "runs", "r-broken", "run.md"), "w", encoding="utf-8") as f:
+        f.write("no front matter\n")
+    def rej(rid, rtype, family, reason, text=None, run_ref=None):
+        obj = {"schema": "rpg-factory.assetgen-rejection/1", "id": rid, "type": rtype, "style": ref, "family": family,
+               "reason": reason, "text": text}
+        if run_ref:
+            obj["run"] = run_ref
+        jdump(os.path.join(RD, rid + ".json"), obj)
+        errs = stylelock.rejection_errors(json.load(open(os.path.join(RD, rid + ".json"), encoding="utf-8")), "demo-game", rid)
+        return errs
+    errs = {}
+    errs["rej-1"] = rej("rej-1", "direction", "props", "palette_off", "too saturated")
+    errs["rej-2"] = rej("rej-2", "direction", "props", "palette_off", "off palette again")
+    errs["rej-3"] = rej("rej-3", "asset", "characters", "anatomy", None, {"run_id": "r-chars-1", "output": "outputs/chars.png", "sha256": "2" * 64})
+    errs["rej-4"] = rej("rej-4", "direction", None, "other", "no text on any family")
+    rej("rej-bad", "direction", "props", "bogus", "malformed on purpose")
+    bad = [k for k, v in errs.items() if v]
+    if bad or not stylelock.rejection_errors(json.load(open(os.path.join(RD, "rej-bad.json"), encoding="utf-8")), "demo-game", "rej-bad"):
+        print("fixture rejections invalid:", bad, errs)
+        sys.exit(0)
+    # expected tone numbers, from the PNGs and anchors on disk, independent of the report's grouping code
+    def tone(path):
+        return consistency.tone_stats(png.decode(path))
+    def need(anchors, outs):
+        n = 0.0
+        for k in (0, 1):
+            lo, hi = min(a[k] for a in anchors), max(a[k] for a in anchors)
+            n = max(n, max(max(0.0, lo - o[k], o[k] - hi) for o in outs))
+        return n
+    def inside(anchors, outs, tol):
+        return sum(1 for o in outs if all(min(a[k] for a in anchors) - tol <= o[k] <= max(a[k] for a in anchors) + tol for k in (0, 1)))
+    out = lambda rid, name: tone(os.path.join(G, "runs", rid, "outputs", name))
+    anc = lambda aid: tone(os.path.join(AD, aid + ".png"))
+    p_out = [out("r-props-1", "ok.png"), out("r-props-1", "near.png"), out("r-props-2", "far.png")]
+    c_out = [out("r-chars-1", "chars.png")]
+    p_anc, c_anc = [anc("props-a"), anc("props-b")], [anc("chars-a")]
+    exp = {"props_need": need(p_anc, p_out), "props_inside": inside(p_anc, p_out, 0.05),
+           "chars_need": need(c_anc, c_out), "chars_inside": inside(c_anc, c_out, 0.05),
+           "total_need": max(need(p_anc, p_out), need(c_anc, c_out)), "total_inside": inside(p_anc, p_out, 0.05) + inside(c_anc, c_out, 0.05),
+           "props_lum": [round(min(o[0] for o in p_out), 3), round(max(o[0] for o in p_out), 3)],
+           "props_sat": [round(min(o[1] for o in p_out), 3), round(max(o[1] for o in p_out), 3)]}
+    jdump(expect, exp)
+print("ok")
+EOF
+}
+sr_setup anchors > "$TMP/sr.setup"; grep -qx ok "$TMP/sr.setup" || no "style report setup: anchors" "$(cat "$TMP/sr.setup")"
+AG style derive --style demo-game --authoring "$SR" --apply > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report setup: style derive --apply" "$(cat "$TMP/sr.err")"
+sr_setup records > "$TMP/sr.setup"; grep -qx ok "$TMP/sr.setup" || no "style report setup: records" "$(cat "$TMP/sr.setup")"
+sr_sig() { (cd "$1" && { find . -not -path './.git/*' | LC_ALL=C sort; find . -type f -not -path './.git/*' -exec sha256sum {} + | LC_ALL=C sort; } | sha256sum | cut -d' ' -f1); }
+SRJ() { jq -c "($1) | walk(if type == \"number\" then . + 0 else . end)" "$TMP/sr1.json"; }   # a query over the full report, numbers canonical
+DG='.styles[] | select(.style_id == "demo-game")'
+sig_sr=$(sr_sig "$SR"); h_srs=$(sha256sum "$SR/assetgen/styles/demo-game.json" | cut -d' ' -f1)
+AG style report --authoring "$SR" --json > "$TMP/sr1.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .schema "$TMP/sr1.json")" = "rpg-factory.assetgen-style-report/1" ] && [ "$(SRJ '[.styles[].style_id]')" = '["demo-game","other-game"]' ] \
+  && [ "$(SRJ '.style_filter')" = null ] && [ "$(SRJ "$DG | [.version, .status, .game_file]")" = '[1,"draft",true]' ] \
+  && ok "style report --json exits 0: schema rpg-factory.assetgen-style-report/1, the game style and the style only a run names" || no "style report --json rc=$rc" "$(cat "$TMP/sr.err"; head -c 600 "$TMP/sr1.json")"
+AG style report --authoring "$SR" > "$TMP/sr1.txt" 2> "$TMP/sr.err"; rc2=$?
+[ $rc2 -eq 0 ] && grep -q "^style demo-game version 1 status draft" "$TMP/sr1.txt" && grep -q "^  family props:" "$TMP/sr1.txt" && grep -q "^  all families:" "$TMP/sr1.txt" \
+  && ok "style report (text) exits 0 and prints the style, each family and the all-families total" || no "style report text rc=$rc2" "$(cat "$TMP/sr.err" "$TMP/sr1.txt")"
+# read-only: the authoring dir (files, directories, content) is exactly as before, so is core data
+[ "$(sr_sig "$SR")" = "$sig_sr" ] && [ "$(sha256sum "$SR/assetgen/styles/demo-game.json" | cut -d' ' -f1)" = "$h_srs" ] \
+  && [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style report writes nothing: the authoring dir (files, directories, content), the style file and templates/assetgen are unchanged" || no "style report changed files" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+AG style report --authoring "$SR" --json > "$TMP/sr2.json" 2> "$TMP/sr.err"; AG style report --authoring "$SR" > "$TMP/sr2.txt" 2>> "$TMP/sr.err"
+cmp -s "$TMP/sr1.json" "$TMP/sr2.json" && cmp -s "$TMP/sr1.txt" "$TMP/sr2.txt" && [ -s "$TMP/sr1.txt" ] \
+  && ok "two style report runs give byte-identical --json and text output" || no "style report output differs between runs" "$(diff "$TMP/sr1.json" "$TMP/sr2.json" | head -20)"
+# --style restricts to one style, and its entry is the same as in the full report
+AG style report --authoring "$SR" --style demo-game --json > "$TMP/sr-s.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '[.style_filter, (.styles | map(.style_id))]' "$TMP/sr-s.json")" = '["demo-game",["demo-game"]]' ] \
+  && [ "$(jq -cS '.styles[0]' "$TMP/sr-s.json")" = "$(jq -cS "$DG" "$TMP/sr1.json")" ] \
+  && ok "style report --style demo-game restricts to that style (same data as in the full report)" || no "--style restriction rc=$rc" "$(cat "$TMP/sr.err"; jq -c '[.style_filter, (.styles | map(.style_id))]' "$TMP/sr-s.json")"
+AG style report --authoring "$SR" --style other-game --json > "$TMP/sr-o.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '.styles | map(.style_id)' "$TMP/sr-o.json")" = '["other-game"]' ] && [ "$(jq -c '.styles[0] | [.game_file, .total.runs.total, (.error != null)]' "$TMP/sr-o.json")" = '[false,1,true]' ] \
+  && ok "style report --style of a style only a run names: exit 0, no game file, its one run counted, the load error reported" || no "other-game report rc=$rc" "$(cat "$TMP/sr.err"; head -c 500 "$TMP/sr-o.json")"
+# per-family grouping and the runs by status
+[ "$(SRJ "$DG | .families | keys")" = '["(none)","characters","props","ui"]' ] \
+  && [ "$(SRJ "$DG | .families | map_values(.runs)")" = '{"(none)":{"by_status":{"approved":1},"total":1},"characters":{"by_status":{"approved":1},"total":1},"props":{"by_status":{"approved":2,"rejected":1},"total":3},"ui":{"by_status":{"rejected":1},"total":1}}' ] \
+  && [ "$(SRJ "$DG | .total.runs")" = '{"by_status":{"approved":4,"rejected":2},"total":6}' ] \
+  && ok "style report groups per family (a run without a family is (none)); the total counts the style's 6 runs by status, not other-game's or the unstyled ones" \
+  || no "family grouping" "$(SRJ "$DG | [.families | map_values(.runs), .total.runs]")"
+[ "$(SRJ "$DG | .families | map_values(.approved_outputs)")" = '{"(none)":1,"characters":1,"props":3,"ui":0}' ] && [ "$(SRJ "$DG | .total.approved_outputs")" = 5 ] \
+  && ok "style report counts five approved outputs across the families" || no "approved outputs" "$(SRJ "$DG | [.families | map_values(.approved_outputs), .total.approved_outputs]")"
+# QA: the WARN and FAIL rate of every style-* row equals the fixture counts; non-style rows are not counted
+[ "$(SRJ "$DG | .families.props.qa")" = '{"style-edges":{"FAIL":0,"NOT_AVAILABLE":1,"PASS":2,"WARN":0,"fail_rate":0,"rows":3,"warn_rate":0},"style-palette":{"FAIL":1,"NOT_AVAILABLE":0,"PASS":1,"WARN":1,"fail_rate":0.333,"rows":3,"warn_rate":0.333},"style-tone":{"FAIL":0,"NOT_AVAILABLE":0,"PASS":1,"WARN":2,"fail_rate":0,"rows":3,"warn_rate":0.667}}' ] \
+  && ok "style report QA rates (props): style-palette warn/fail 0.333/0.333, style-tone 0.667/0, style-edges 0/0 with its NOT_AVAILABLE counted; artifact-quality not a style row" \
+  || no "props QA rates" "$(SRJ "$DG | .families.props.qa")"
+[ "$(SRJ "$DG | .families.characters.qa | map_values([.rows, .warn_rate, .fail_rate])")" = '{"style-palette":[1,0,0],"style-tone":[1,0,1]}' ] \
+  && [ "$(SRJ "$DG | .total.qa | map_values([.rows, .PASS, .WARN, .FAIL, .NOT_AVAILABLE, .warn_rate, .fail_rate])")" = '{"style-edges":[3,2,0,0,1,0,0],"style-palette":[4,2,1,1,0,0.25,0.25],"style-tone":[4,1,2,1,0,0.5,0.25]}' ] \
+  && [ "$(SRJ "$DG | (.families.ui.qa, .families.\"(none)\".qa)")" = '{}
+{}' ] \
+  && ok "style report QA rates (characters, total): style-palette 0.25/0.25 over 4 rows, style-tone 0.5/0.25, a family without rows has none" \
+  || no "total QA rates" "$(SRJ "$DG | [.families.characters.qa, .total.qa]")"
+[ "$(SRJ "$DG | [.qa_runs, .qa_unreadable]")" = '[4,["r-ui-1"]]' ] && [ "$(SRJ '.runs_unreadable')" = '["r-broken"]' ] \
+  && grep -q "qa.json read from 4 run(s); unreadable: r-ui-1" "$TMP/sr1.txt" && grep -q "runs with unreadable run.md: r-broken" "$TMP/sr1.txt" \
+  && ok "style report: a qa.json that is not JSON and a run.md without front matter are listed, not a crash" || no "unreadable qa/run" "$(SRJ "$DG | [.qa_runs, .qa_unreadable]") $(SRJ '.runs_unreadable')"
+# rejections by reason
+[ "$(SRJ "$DG | .total.rejections")" = '{"by_reason":{"anatomy":1,"malformed":1,"other":1,"palette_off":2},"total":5}' ] \
+  && [ "$(SRJ "$DG | .families.props.rejections")" = '{"by_reason":{"malformed":1,"palette_off":2},"total":3}' ] \
+  && [ "$(SRJ "$DG | .families.characters.rejections")" = '{"by_reason":{"anatomy":1},"total":1}' ] \
+  && [ "$(SRJ "$DG | .families.\"(none)\".rejections")" = '{"by_reason":{"other":1},"total":1}' ] && [ "$(SRJ "$DG | .families.ui.rejections.total")" = 0 ] \
+  && grep -q "rejections: 5 (anatomy 1, malformed 1, other 1, palette_off 2)" "$TMP/sr1.txt" \
+  && ok "style report counts the rejections by reason, per family and in total (a malformed record under malformed)" || no "rejections" "$(SRJ "$DG | [.total.rejections, (.families | map_values(.rejections))]")"
+# tone spread and the skipped outputs
+exp() { jq -c "($1) | walk(if type == \"number\" then . + 0 else . end)" "$TMP/sr.expect"; }
+[ "$(SRJ "$DG | .families.props.tone | [.luminance.min, .luminance.max]")" = "$(exp .props_lum)" ] && [ "$(SRJ "$DG | .families.props.tone | [.saturation.min, .saturation.max]")" = "$(exp .props_sat)" ] \
+  && [ "$(SRJ "$DG | .families.ui.tone")" = '{"luminance":null,"saturation":null}' ] \
+  && ok "style report tone spread over the approved props outputs: min and max luminance and saturation match the PNGs; a group without outputs has none" || no "tone spread" "$(SRJ "$DG | .families.props.tone") $(cat "$TMP/sr.expect")"
+[ "$(jq -c '.styles[] | select(.style_id == "demo-game") | [.skipped.outputs[] | [.run, .output, (.reason | split(" (")[0])]]' "$TMP/sr1.json")" = '[["r-props-1","outputs/bad.png","not readable"],["r-props-1","outputs/clear.png","no opaque pixels"]]' ] \
+  && grep -q "output skipped: r-props-1 outputs/bad.png: not readable" "$TMP/sr1.txt" \
+  && ok "style report skips an unreadable and a fully transparent approved output (listed with a reason), the other outputs still count" || no "skipped outputs" "$(SRJ "$DG | .skipped")"
+# suggestions: palette.max_distance with its data
+[ "$(SRJ "$DG | .families.props.suggestions.\"palette.max_distance\"")" = '{"applied":false,"data":{"current":48,"d_needed":{"max":80,"median":40,"min":0},"min_share":0.6,"outputs":3,"pass_at_current":2},"reason":null,"value":80}' ] \
+  && [ "$(SRJ "$DG | .families.characters.suggestions.\"palette.max_distance\" | [.value, .data.current, .data.outputs, .data.pass_at_current]")" = '[40,48,1,1]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"palette.max_distance\" | [.value, .data.outputs, .data.d_needed.median, .data.pass_at_current]")" = '[80,5,40,4]' ] \
+  && ok "suggested palette.max_distance = the largest d_needed (props 80, characters 40, total 80), with current 48, min_share 0.6, the d_needed spread and how many pass at current" || no "palette suggestion" "$(SRJ "$DG | .total.suggestions")"
+# suggestions: tone.tolerance with its data (value is the smallest 2-decimal tolerance that keeps every approved output inside the anchor range)
+sr_tone_qa() {
+python3 -B - "$ROOT" "$SR" "$TMP/sr1.json" "$1" <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, qa, re
+root, report, group = sys.argv[2:]
+style = next(s for s in json.load(open(report, encoding="utf-8"))["styles"] if s["style_id"] == "demo-game")
+selection = style["total"] if group == "total" else style["families"][{"props": "props", "chars": "characters"}[group]]
+tol = selection["suggestions"]["tone.tolerance"]["value"]
+outputs = {"props": [("r-props-1", "ok.png"), ("r-props-1", "near.png"), ("r-props-2", "far.png")],
+           "chars": [("r-chars-1", "chars.png")]}
+chosen = outputs["props"] + outputs["chars"] if group == "total" else outputs[group]
+def passes(t):
+    states = []
+    for rid, name in chosen:
+        run = os.path.join(root, "assetgen", "runs", rid)
+        front = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", open(os.path.join(run, "run.md"), encoding="utf-8").read(), re.S).group(1))
+        anchors = qa.style_anchors(run, front["spec"])
+        img = png.decode(os.path.join(run, "outputs", name))
+        states.append(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchors)[0] == "PASS")
+    return all(states)
+assert passes(tol)
+if tol > 0:
+    assert not passes(round(tol - 0.01, 2))
+EOF
+}
+for g in props:props chars:characters total:total; do
+  k=${g%%:*}; sel=".families.${g#*:}"; [ "${g#*:}" = total ] && sel=".total"
+  [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\" | [.applied, .reason, .data.current, (.data | has(\"selected_anchor_range\") and has(\"output_range\"))]")" = '[false,null,0.05,true]' ] \
+    && [ "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\".data.inside_at_current")" = "$(exp .${k}_inside)" ] \
+    && sr_tone_qa "$k" > "$TMP/sr-tone-qa" 2>&1 \
+    && ok "style report tone.tolerance suggestion ($k): the smallest two-decimal value that passes QA for all outputs" \
+    || no "tone suggestion ($k)" "$(SRJ "$DG | $sel.suggestions.\"tone.tolerance\"") $(cat "$TMP/sr-tone-qa")"
+done
+[ "$(SRJ "$DG | .families.props.suggestions.\"tone.tolerance\".data | [.anchors, .anchor_copies, .outputs]")" = '[2,4,3]' ] && [ "$(SRJ "$DG | .families.characters.suggestions.\"tone.tolerance\".data | [.anchors, .anchor_copies, .outputs]")" = '[1,1,1]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data | [.anchors, .anchor_copies, .outputs]")" = '[3,5,5]' ] \
+  && [ "$(SRJ "$DG | .total.suggestions.\"tone.tolerance\".data.outputs_without_anchors")" = 1 ] \
+  && [ "$(SRJ "$DG | .families.\"(none)\".suggestions.\"tone.tolerance\" | [.value, .data.outputs_without_anchors, (.reason | type)]")" = '[null,1,"string"]' ] \
+  && ok "style report counts distinct anchors and selected copies separately and excludes outputs without usable anchors" || no "tone scope" "$(SRJ "$DG | .total.suggestions")"
+# One anchor selected by two runs is one anchor and two selected copies (the label and the JSON count agree).
+SRD="$TMP/sr-dup-anchor"
+cp -R "$SR" "$SRD"
+python3 -B - "$SRD" > "$TMP/sr-dup.setup" 2>&1 <<'EOF'
+import json, os, re, sys
+for rid in ("r-props-1", "r-props-2"):
+    path = os.path.join(sys.argv[1], "assetgen", "runs", rid, "run.md")
+    text = open(path, encoding="utf-8", newline="").read()
+    match = re.match(r"\A---json\n(.*?)\n---\n", text, re.S)
+    front = json.loads(match.group(1))
+    refs = front["spec"]["style_lock"]["references"]
+    front["spec"]["style_lock"]["references"] = [r for r in refs if r["anchor_id"] == "props-a"]
+    assert len(front["spec"]["style_lock"]["references"]) == 1, refs
+    open(path, "w", encoding="utf-8", newline="").write("---json\n" + json.dumps(front) + "\n---\n" + text[match.end():])
+EOF
+sr_dup_rc=$?
+AG style report --authoring "$SRD" --style demo-game --json > "$TMP/sr-dup.json" 2> "$TMP/sr-dup.err"; rc=$?
+AG style report --authoring "$SRD" --style demo-game > "$TMP/sr-dup.txt" 2>> "$TMP/sr-dup.err"; rc2=$?
+[ "$sr_dup_rc" -eq 0 ] && [ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && [ "$(jq -c '.styles[0].families.props.suggestions["tone.tolerance"].data | [.anchors, .anchor_copies, .outputs]' "$TMP/sr-dup.json")" = '[1,2,3]' ] \
+  && [ "$(jq -c '.styles[0].total.suggestions["tone.tolerance"].data | [.anchors, .anchor_copies]' "$TMP/sr-dup.json")" = '[2,3]' ] \
+  && grep -qF "1 selected anchor(s) (distinct); 2 selected anchor copy/copies; 3 approved output(s)" "$TMP/sr-dup.txt" \
+  && ok "style report: one anchor selected by two runs is 1 distinct anchor and 2 selected copies (text and --json)" \
+  || no "style report anchor copies rc=$sr_dup_rc/$rc/$rc2" "$(cat "$TMP/sr-dup.setup" "$TMP/sr-dup.err"; jq -c '.styles[0].families.props.suggestions["tone.tolerance"].data' "$TMP/sr-dup.json" 2>&1; grep 'tone.tolerance' "$TMP/sr-dup.txt")"
+# The selected black and white anchors must not be pooled across families.
+SR_REPRO="$TMP/sr-selected"
+cp -R "$SR" "$SR_REPRO"
+python3 -B - "$ROOT" "$SR_REPRO" > "$TMP/sr-selected.setup" 2>&1 <<'EOF'
+import hashlib, json, os, shutil, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+root = os.path.join(sys.argv[2], "assetgen")
+runs = os.path.join(root, "runs")
+ref = json.loads(open(os.path.join(runs, "r-props-1", "run.md"), encoding="utf-8").read().split("---")[1][4:])["spec"]["style_lock"]["style"]
+shutil.rmtree(runs)
+for family, anchor, output in (("props", 0, 128), ("characters", 255, 255)):
+    run = os.path.join(runs, family)
+    for sub in ("references", "outputs"):
+        os.makedirs(os.path.join(run, sub))
+    def write(path, value):
+        open(path, "wb").write(png.encode(1, 1, bytes((value, value, value, 255))))
+    write(os.path.join(run, "references", "anchor.png"), anchor)
+    write(os.path.join(run, "outputs", "output.png"), output)
+    aid = "props-a" if family == "props" else "chars-a"
+    ad = os.path.join(root, "styles", "demo-game", "anchors")
+    write(os.path.join(ad, aid + ".png"), anchor)
+    metadata = os.path.join(ad, aid + ".json")
+    data = json.load(open(metadata, encoding="utf-8"))
+    data["image_sha256"] = hashlib.sha256(open(os.path.join(ad, aid + ".png"), "rb").read()).hexdigest()
+    json.dump(data, open(metadata, "w", encoding="utf-8"))
+    front = {"status": "approved", "spec": {"style_lock": {"style": ref, "family": family,
+             "references": [{"anchor_id": family, "image": "references/anchor.png"}]}}}
+    open(os.path.join(run, "run.md"), "w", encoding="utf-8").write("---json\n" + json.dumps(front) + "\n---\n")
+EOF
+sr_setup_rc=$?
+[ "$sr_setup_rc" -eq 0 ] || no "selected-anchor regression: setup script failed rc=$sr_setup_rc" "$(cat "$TMP/sr-selected.setup")"
+AG style report --authoring "$SR_REPRO" --style demo-game --json > "$TMP/sr-selected.json" 2> "$TMP/sr-selected.err"
+python3 -B - "$ROOT" "$SR_REPRO" "$TMP/sr-selected.json" >> "$TMP/sr-selected.err" 2>&1 <<'EOF'
+import json, os, re, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, qa
+style = json.load(open(sys.argv[3], encoding="utf-8"))["styles"][0]
+for group, families in ((style["families"]["props"], ["props"]), (style["families"]["characters"], ["characters"]), (style["total"], ["props", "characters"])):
+    tol = group["suggestions"]["tone.tolerance"]["value"]
+    if len(families) == 2:
+        assert tol == 0.51, tol
+    def passes(t):
+        results = []
+        for family in families:
+            run = os.path.join(sys.argv[2], "assetgen", "runs", family)
+            front = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", open(os.path.join(run, "run.md"), encoding="utf-8").read(), re.S).group(1))
+            results.append(consistency.check_tone(png.decode(os.path.join(run, "outputs", "output.png")),
+                           {"tone": {"tolerance": t}}, qa.style_anchors(run, front["spec"]))[0] == "PASS")
+        return all(results)
+    assert passes(tol)
+    assert tol == 0 or not passes(round(tol - 0.01, 2))
+EOF
+sr_verify_rc=$?
+[ "$sr_setup_rc" -eq 0 ] && [ "$sr_verify_rc" -eq 0 ] && ok "tone suggestions pass QA against each run's selected black or white anchor" \
+  || no "selected-anchor tone regression (setup rc=$sr_setup_rc, check rc=$sr_verify_rc)" "$(cat "$TMP/sr-selected.setup" "$TMP/sr-selected.err")"
+# the text prints each suggestion with its numbers and says not applied
+grep -q "^    palette.max_distance = 80 (suggestion only, not applied): current 48; min_share 0.6; 3 approved output(s); d_needed min 0 median 40 max 80; 2 pass at current" "$TMP/sr1.txt" \
+  && grep -Eq "^    tone.tolerance = 0\.[0-9]+ \(suggestion only, not applied\): current 0.05; 2 selected anchor\(s\) \(distinct\); 4 selected anchor copy/copies; 3 approved output\(s\); 0 output\(s\) without anchors; luminance selected anchors \[.*\] outputs \[.*\]; saturation selected anchors \[.*\] outputs \[.*\]; [0-9] inside at current" "$TMP/sr1.txt" \
+  && grep -q "^read-only report: nothing was written; every suggestion is for a person to apply" "$TMP/sr1.txt" \
+  && ok "style report text: each suggestion carries 'not applied' and its supporting numbers (current, d_needed, ranges), and the report says nothing was written" || no "suggestion text" "$(grep -n 'suggestion only' "$TMP/sr1.txt")"
+[ "$(grep -c 'suggestion only, not applied' "$TMP/sr1.txt")" -eq "$(grep -cE '^ +(palette\.max_distance|tone\.tolerance)' "$TMP/sr1.txt")" ] && [ "$(jq '[.. | objects | select(has("applied")) | .applied] | all(. == false)' "$TMP/sr1.json")" = true ] \
+  && ok "style report prints every suggestion as not applied (text) and applied false (--json)" || no "applied flags" "$(grep -n 'suggestion' "$TMP/sr1.txt" | head)"
+# a group without approved outputs: null suggestions with a reason
+[ "$(SRJ "$DG | [.families.ui] | map(.suggestions | map_values([.value, (.reason | type), .applied]))")" = '[{"palette.max_distance":[null,"string",false],"tone.tolerance":[null,"string",false]}]' ] \
+  && [ "$(SRJ "$DG | .families.ui.suggestions | map(.reason) | unique")" = '["no approved output with opaque pixels"]' ] \
+  && grep -q "^    palette.max_distance: no suggestion (no approved output with opaque pixels) (suggestion only, not applied): current 48; min_share 0.6; 0 approved output(s)" "$TMP/sr1.txt" \
+  && ok "style report: a family without approved outputs (ui) gets null suggestions with the reason, printed as 'no suggestion'" || no "null suggestions" "$(SRJ "$DG | .families.ui.suggestions")"
+# White against a black-only palette requires distance 442, outside the permitted range.
+SRX="$TMP/style-report-extreme"; cp -r "$SR" "$SRX"
+jq '.palette.colors = [{"hex":"#000000"}] | .palette.min_share = 1' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
+python3 -B - "$ROOT" "$SRX/assetgen/runs/r-props-1/outputs/ok.png" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+with open(sys.argv[2], "wb") as f:
+    f.write(png.encode(1, 1, bytes((255, 255, 255, 255))))
+EOF
+AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx.json" 2> "$TMP/sr.err"; rc=$?
+AG style report --authoring "$SRX" --style demo-game > "$TMP/srx.txt" 2>> "$TMP/sr.err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == null and .data.d_needed.max == 442 and (.reason | contains("no permitted max_distance (0..441) makes every approved output pass") and contains("442"))' "$TMP/srx.json" >/dev/null \
+  && grep -Fq 'palette.max_distance: no suggestion (no permitted max_distance (0..441) makes every approved output pass; largest needed distance is 442)' "$TMP/srx.txt" \
+  && ok "style report refuses an impossible palette threshold in JSON and text" || no "extreme palette report rc=$rc/$rc2" "$(cat "$TMP/sr.err" "$TMP/srx.json")"
+jq '.palette.min_share = 0' "$SRX/assetgen/styles/demo-game.json" > "$TMP/srx-style.json" && cp "$TMP/srx-style.json" "$SRX/assetgen/styles/demo-game.json"
+AG style report --authoring "$SRX" --style demo-game --json > "$TMP/srx-zero.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && jq -e '.styles[0].total.suggestions["palette.max_distance"] | .value == 0 and .data.d_needed.max == 0 and .reason == null' "$TMP/srx-zero.json" >/dev/null \
+  && ok "style report suggests distance zero when min_share is zero" || no "zero min_share rc=$rc" "$(cat "$TMP/sr.err" "$TMP/srx-zero.json")"
+
+# Seven of ten pixels meet min_share 0.7 at distance 6; floating-point multiplication must not select the eighth.
+python3 -B - "$ROOT" > "$TMP/sr-float" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png, style_report
+pixels = bytes(channel for red in range(10) for channel in (red, 0, 0, 255))
+img = png.Image(10, 1, pixels, True, "fixture")
+record = style_report._output_record(img, ({}, [(0, 0, 0)], 0, 0.7))
+assert record["d_needed"] == 6, record
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report selects the seventh pixel for min_share 0.7 of ten" \
+  || no "style report floating-point rank rc=$rc" "$(cat "$TMP/sr-float")"
+
+python3 -B - "$ROOT" > "$TMP/sr-qa-regressions" 2>&1 <<'EOF'
+import os, random, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import consistency, png, style_report
+
+def image(colors):
+    return png.Image(len(colors), 1, bytes(c for rgb in colors for c in (*rgb, 255)), True, "fixture")
+
+def palette_case(img, colors, share):
+    style = {"palette": {"colors": [{"hex": "#%02x%02x%02x" % rgb} for rgb in colors],
+                         "max_distance": 0, "min_share": share}}
+    config = consistency.palette_config(style)[1]
+    record = style_report._output_record(img, config)
+    suggestion = style_report._suggest_palette([record], config, None)
+    d = record["d_needed"]
+    if d <= 441:
+        assert suggestion["value"] == d
+        style["palette"]["max_distance"] = d
+        assert consistency.check_palette(img, style)[0] == "PASS", (d, share)
+        if d:
+            style["palette"]["max_distance"] = d - 1
+            assert consistency.check_palette(img, style)[0] != "PASS", (d, share)
+    else:
+        assert suggestion["value"] is None and "no permitted max_distance" in suggestion["reason"]
+    return d
+
+def tone_case(cases):
+    def record(img):
+        lum, sat = consistency.tone_stats(img)
+        return {"luminance": lum, "saturation": sat}
+    suggestion = style_report._suggest_tone([dict(record(img), run=str(n), selected_anchors=[consistency.tone_stats(a) for a in anchors]) for n, (anchors, img) in enumerate(cases)], 0.05)
+    tol = suggestion["value"]
+    assert tol is not None, suggestion
+    def passes(t):
+        return all(consistency.check_tone(img, {"tone": {"tolerance": t}}, anchors)[0] == "PASS" for anchors, img in cases)
+    assert passes(tol), tol
+    assert tol == 0 or not passes(round(tol - 0.01, 2)), tol
+    return tol
+
+assert palette_case(image([(r, 0, 0) for r in range(10)]), [(0, 0, 0)], 0.70000000001) == 7
+assert tone_case([([image([(39, 39, 39)])], image([(90, 90, 90)]))]) == 0.21
+rng = random.Random(7941)
+shares = [0, 0.1, 0.3, 0.7, 0.70000000001, 1 / 3, 1]
+def color():
+    return tuple(rng.randrange(256) for _ in range(3))
+for i in range(200):
+    palette_case(image([color() for _ in range(rng.randint(1, 20))]),
+                 [color() for _ in range(rng.randint(1, 4))], shares[i % len(shares)])
+    tone_case([([image([color() for _ in range(rng.randint(1, 5))]) for _ in range(rng.randint(1, 3))],
+                image([color() for _ in range(rng.randint(1, 5))])) for _ in range(rng.randint(1, 3))])
+EOF
+rc=$?
+[ $rc -eq 0 ] && ok "style report suggestions pass palette and tone QA at the smallest permitted thresholds in 202 regression cases" \
+  || no "style report QA threshold regressions rc=$rc" "$(cat "$TMP/sr-qa-regressions")"
+
+# a draft style with no palette, no anchors and no runs: still exit 0, suggestions null with reasons, nothing written
+SRN="$TMP/style-report-bare"; mkdir -p "$SRN"
+AG style init --id demo-game --extends pixel-art --authoring "$SRN" > "$TMP/sr.out" 2> "$TMP/sr.err" || no "style report bare setup: style init" "$(cat "$TMP/sr.err")"
+sig_n=$(sr_sig "$SRN")
+AG style report --authoring "$SRN" --style demo-game --json > "$TMP/srn.json" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '.styles[0].total.suggestions | map_values([.value, .reason != null])' "$TMP/srn.json")" = '{"palette.max_distance":[null,true],"tone.tolerance":[null,true]}' ] \
+  && [ "$(jq -c '.styles[0].total | [.runs.total, .approved_outputs, .rejections.total, .qa]' "$TMP/srn.json")" = '[0,0,0,{}]' ] && [ "$(sr_sig "$SRN")" = "$sig_n" ] \
+  && ok "style report of a fresh draft style (no palette, no anchors, no runs) exits 0 with null suggestions and a reason, and writes nothing" || no "bare style report rc=$rc" "$(cat "$TMP/sr.err"; jq -c '.styles[0].total.suggestions' "$TMP/srn.json")"
+# an authoring dir with nothing to report: exit 0 and still nothing written
+SRE="$TMP/style-report-empty"; mkdir -p "$SRE"; sig_e=$(sr_sig "$SRE")
+AG style report --authoring "$SRE" > "$TMP/sre.txt" 2> "$TMP/sr.err"; rc=$?; AG style report --authoring "$SRE" --json > "$TMP/sre.json" 2>> "$TMP/sr.err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q "no style data to report" "$TMP/sre.txt" && [ "$(jq -c '.styles' "$TMP/sre.json")" = '[]' ] && [ "$(sr_sig "$SRE")" = "$sig_e" ] \
+  && ok "style report of an authoring dir with no style data exits 0 (also --json) and creates nothing" || no "empty authoring rc=$rc/$rc2" "$(cat "$TMP/sr.err" "$TMP/sre.txt")"
+# exit codes: a malformed --style is usage (2), a style no data knows is a refusal (1); neither writes
+AG style report --authoring "$SR" --style "Bad_Id" > "$TMP/sr.out" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 2 ] && grep -q "lowercase id" "$TMP/sr.err" && ok "style report with a malformed --style exits 2" || no "malformed --style rc=$rc" "$(cat "$TMP/sr.err")"
+AG style report --authoring "$SR" --style no-such-style > "$TMP/sr.out" 2> "$TMP/sr.err"; rc=$?
+[ $rc -eq 1 ] && grep -q "no game style file" "$TMP/sr.err" && [ ! -s "$TMP/sr.out" ] && [ "$(sr_sig "$SR")" = "$sig_sr" ] \
+  && ok "style report of an unknown style exits 1 with a message and prints no report" || no "unknown style rc=$rc" "$(cat "$TMP/sr.err" "$TMP/sr.out")"
+[ "$(sr_sig "$SR")" = "$sig_sr" ] && [ "$(tpl_hash)" = "$tpl0" ] && [ -z "$(git -C "$ROOT" status --porcelain -- templates/assetgen)" ] \
+  && ok "style report left the authoring fixture and templates/assetgen unchanged after every case" || no "fixture or templates/assetgen changed by report" "$(git -C "$ROOT" status --porcelain -- templates/assetgen)"
+
+group_end; fi
+if group_begin selftests; then
 echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
 n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
 [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "consistency self-test: $n_ok cases passed" || no "consistency self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 
-for st_ in imaging_selftest style_selftest; do
+for st_ in imaging_selftest style_selftest pixelgrid_selftest slicer_selftest; do
   echo "-- $st_ (tests/fixtures/assetgen/$st_.py)"
   python3 -B "$ROOT/tests/fixtures/assetgen/$st_.py" > "$TMP/cs" 2>&1; rc=$?
   n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
   [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "$st_: $n_ok cases passed" || no "$st_ rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 done
 
+group_end; fi
+if group_begin hygiene; then
 echo "-- no endpoints or credentials in core data or engine"
 hits=$(grep -rnIE '://|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost:[0-9]|Bearer [A-Za-z0-9]|sk-[A-Za-z0-9]{12}|"(api[_-]?key|authorization|base_url)" *:' \
   "$ROOT/templates/assetgen" "$ROOT/scripts/assetgen" 2>/dev/null)
@@ -2842,5 +6969,6 @@ done
 ok "every data file carries a versioned schema id"
 [ -z "$(find "$ROOT/scripts/assetgen" -name '__pycache__')" ] && ok "no __pycache__ left by -B runs" || no "__pycache__ in scripts/assetgen"
 
+group_end; fi
 echo "assetgen: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

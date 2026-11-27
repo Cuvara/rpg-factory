@@ -18,8 +18,10 @@ never crashes a session (any error = no opinion).
           - secrets (.env, kubeconfig.local; case-insensitive)
   warn  a Read of secrets (.env, kubeconfig.local; case-insensitive)
   warn  rule english-only: a write whose text (Write content, Edit new_string, each MultiEdit new_string, NotebookEdit
-        new_source) is not English (lib/english.py) and whose target is inside a registered repo, the plugin checkout,
-        a docs/plans/ directory or a harness .claude/plans or .claude/projects/<x>/memory directory. Paths matching the
+        new_source) is not English (lib/english.py) and whose target is inside a registered repo or its worktree,
+        any rpg-factory checkout (the installed plugin root, any clone or linked worktree, wherever located), a
+        docs/plans/ directory or a harness .claude/plans or .claude/projects/<x>/memory directory. Unrelated paths
+        get no opinion. Paths matching the
         registry workspace.language_allow (fallback: skills/delivery/pipeline-defaults.json) and the plugin's
         english-only allowlist are skipped. A Read never triggers it.
   warn  a Read of a registered skill's SKILL.md: load it with the Skill tool instead
@@ -187,19 +189,6 @@ def written_text(payload):
     return "\n".join(p for p in parts if isinstance(p, str))
 
 
-def plugin_checkout(path):
-    """The plugin checkout (directory with .claude-plugin/plugin.json) holding path, else None: a stat walk upward."""
-    d = os.path.dirname(path)
-    for _ in range(16):
-        if os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json")):
-            return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            return None
-        d = parent
-    return None
-
-
 def language_allow_globs(registry):
     globs = (registry.get("workspace") or {}).get("language_allow")
     if globs is None:  # no registry setting: the plugin's workspace defaults
@@ -227,7 +216,7 @@ def language_advisory(payload, registry, path):
     low = norm.lower()
     if any(fnmatch.fnmatch(low, g.lower()) for g in language_allow_globs(registry)):
         return None
-    root = plugin_checkout(path)
+    root = workspace.plugin_checkout(os.path.dirname(path))
     segs = [s.lower() for s in norm.split("/")]
     harness = any(segs[i:i + 2] == [".claude", "plans"] or (segs[i] == ".claude" and segs[i + 1:i + 2] == ["projects"] and "memory" in segs[i + 3:i + 4])
                   for i in range(len(segs) - 1)) or any(segs[i:i + 2] == ["docs", "plans"] for i in range(len(segs) - 1))
@@ -242,13 +231,33 @@ def language_advisory(payload, registry, path):
             governed = bool(ws2 and within(main, ws2) and repo_of(path, ws2, registry)[0])
     if not governed:
         return None
-    if root:  # the plugin's own allowlist: path:* entries (a line number does not map onto an Edit fragment)
+    offset = 0 if payload.get("tool_name") == "Write" else None
+    allowed = {}
+    rel = None
+    if root:  # only the plugin's own allowlist applies
         try:
             rel = os.path.relpath(path, root).replace("\\", "/")
-            if f"{rel}:*" in english.allowlist(pathlib.Path(root, "tests", "fixtures", "english-allow.txt")):
+            allowed = english.allowlist(pathlib.Path(root, "tests", "fixtures", "english-allow.txt"))
+            if f"{rel}:*" in allowed:
                 return None
         except (OSError, ValueError):
             pass
+        ti = payload.get("tool_input") or {}
+        old = ti.get("old_string")
+        if payload.get("tool_name") == "Edit" and allowed and isinstance(old, str) and old and not ti.get("replace_all"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    current = f.read()
+                pos = current.find(old)
+                if pos >= 0:
+                    offset = current.count("\n", 0, pos)
+            except (OSError, UnicodeError):
+                pass
+    hit = next(((number + offset if offset is not None else number, line)
+                for number, line in enumerate(text.splitlines(), 1)
+                if english.classify(line) and (offset is None or f"{rel}:{number + offset}" not in allowed)), None)
+    if not hit:
+        return None
     number, line = hit
     shown = line.strip()
     shown = shown[:117] + "..." if len(shown) > 120 else shown

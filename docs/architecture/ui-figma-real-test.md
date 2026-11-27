@@ -150,10 +150,11 @@ Store everything under `$SCRATCH/evidence/` and list the paths in the Evidence t
 
 ## Evidence
 
-Provenance (the run host, not committed): evidence files are in `C:/tmp/rpgf-ui/evidence/run2/` unless the path is `images/`.
-Transcripts: `C:/tmp/rpgf-ui/real/session-import.jsonl` (run 1) and `session-import2.jsonl` (run 2). Both runs used
-the lab `C:/tmp/rpgf-ui-lab`, not the paths in section 3, and the prompt `/rpg-factory:ui-figma Import the Game Settings
-screen from <frame link> into the Unity project C:/tmp/rpgf-ui-lab and integrate it ...`.
+Provenance (the run host, not committed): evidence files are in the run-host scratch directory `<scratch>/rpgf-ui/evidence/run2/`
+unless the path is `images/`. Transcripts: `<scratch>/rpgf-ui/real/session-import.jsonl` (run 1) and `session-import2.jsonl`
+(run 2). Both runs used the lab Unity project `<lab>` (a scratch copy on the run host), not the paths in section 3, and the
+prompt `/rpg-factory:ui-figma Import the Game Settings screen from <frame link> into the Unity project <lab> and integrate it ...`,
+where `<lab>` stood for the lab project path.
 
 | Item | Value |
 |---|---|

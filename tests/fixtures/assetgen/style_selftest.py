@@ -524,6 +524,7 @@ FIELD_CASES = (
                    "outline": {"text": "dark lines", "edge_darkness": {}}}, True),
     ("canvas-aspect", {"canvas": {"props": {"aspect": "1:1"}}}, False),
     ("canvas-min-side", {"canvas": {"props": {"aspect": "1:1", "min_side": 64}}}, False),
+    ("canvas-min-side-only", {"canvas": {"props": {"min_side": 64}}}, False),
     ("canvas-one-of-two", {"canvas": {"props": {}, "ui": {"aspect": "2:1"}}}, False),
     ("tone-tolerance", {"tone": {"tolerance": 0.1}}, False),
     ("tone-severity", {"tone": {"severity": "fail"}}, False),
@@ -553,6 +554,28 @@ def _():
             res = lint.lint_file(write(os.path.join(g, "%s-%s.json" % (name, status)),
                                        dict(BARE, status=status, **extra)), a)
             assert not warns_no_style_qa(res), (name, status, res)
+
+
+@case("canvas entry with only min_side: no style_errors entry and no lint FAIL; a malformed aspect is still an error")
+def _():
+    a = repo("lint-canvas-min-side")
+    g = os.path.join(a, "assetgen", "styles")
+
+    def canvas_errors(entry):
+        return [e for e in stylelock.style_errors(dict(BARE, canvas={"props": entry})) if e.startswith("canvas")]
+    assert canvas_errors({"min_side": 64}) == [], canvas_errors({"min_side": 64})
+    assert canvas_errors({"aspect": "1:1"}) == [] and canvas_errors({"aspect": "1:1", "min_side": 64}) == []
+    for bad in ("1x1", "0:1", 1, None):
+        assert canvas_errors({"aspect": bad}) == ["canvas.props.aspect must be W:H"], (bad, canvas_errors({"aspect": bad}))
+    assert canvas_errors({"min_side": 0}) == ["canvas.props.min_side must be an integer >= 1"]
+    assert canvas_errors({"min_side": 64, "width": 64}), "an unknown key is still an error"
+    res = lint.lint_file(write(os.path.join(g, "min-side-only.json"), dict(BARE, canvas={"props": {"min_side": 64}})), a)
+    assert res["state"] == "PASS" and not warns_no_style_qa(res), res
+    res = lint.lint_file(write(os.path.join(g, "bad-aspect.json"), dict(BARE, canvas={"props": {"aspect": "1x1"}})), a)
+    assert res["state"] == "FAIL" and any("canvas.props.aspect must be W:H" in r for r in res["reasons"]), res
+    # an empty entry is still absent, not an error: only the active-style WARN
+    res = lint.lint_file(write(os.path.join(g, "empty-entry.json"), dict(BARE, canvas={"props": {}})), a)
+    assert res["state"] == "WARN" and warns_no_style_qa(res), res
 
 
 @case("lint WARN iff consistency.check_all grades no style row of a test image (one rule, consistency.py)")

@@ -6,12 +6,30 @@ The caller surfaces path_reason when workspace discovery fails.
 
 On Windows Python an absolute path or a workspace root written in the Git Bash (`/c/ws`) or WSL (`/mnt/c/ws`)
 spelling is converted with workspace.native_abs first, which also undoes the rewrite Git Bash applies to a WSL
-argument or environment value before Windows Python sees it (`/mnt/c/ws` arrives as `C:/Program Files/Git/mnt/c/ws`);
+argument or environment value before Windows Python sees it (`/mnt/c/ws` arrives as `C:/Program Files/Git/mnt/c/ws`;
+native_abs applies that rewrite only under a Git for Windows install root, a directory holding usr/bin/bash.exe or
+git-bash.exe, so `C:/proj/mnt/d/new` is kept);
 elsewhere nothing changes (native_abs would turn `C:/...` into `/mnt/c/...` on POSIX, so it is gated on Windows).
 """
 import os
+import re
 
 from workspace import find_workspace, native_abs  # scripts/lib is on sys.path (factory-pipeline.py)
+
+
+MACHINE_PATH = re.compile(
+    r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/'
+    r'|/mnt/[A-Za-z](?=\W|$)|(?<![\w/:.-])/(?:Users|home)/|AppData'
+    # a file: URL with a home path: the lookbehind above rejects the '/' that ends 'file://', so name it here. A host
+    # part (any one segment: localhost, host, server.example.com) is read only after exactly two slashes, so the
+    # first segment of 'file:///docs/home/x' is a path, not a host
+    r'|\bfile:(?://[^/\s]+/|/+)(?:[A-Za-z]:/)?(?:Users|home)/', re.I | re.M)
+
+
+def machine_path_hit(text):
+    """Return the first machine-specific path match, or None."""
+    match = MACHINE_PATH.search(text)
+    return match.group(0) if match else None
 
 
 def _is_nt():
@@ -19,7 +37,8 @@ def _is_nt():
 
 
 def _native(p):
-    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere."""
+    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere (native_abs owns the
+    Git install-root guard of the MSYS rewrite)."""
     return native_abs(p) if p and _is_nt() else p
 
 
