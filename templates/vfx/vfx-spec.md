@@ -23,6 +23,7 @@
   ],
   "trace": [],
   "spec": {
+    "style": "VFX-style-001",
     "purpose": "TBD: effect purpose",
     "triggers": [
       "TBD: event id"

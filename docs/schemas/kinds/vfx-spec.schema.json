@@ -233,6 +233,11 @@
         },
         "additionalProperties": false
       }
+    },
+    "style": {
+      "type": "string",
+      "minLength": 1,
+      "description": "id of the vfx-style profile artifact the effect is graded against (for example VFX-style-001)"
     }
   },
   "additionalProperties": false

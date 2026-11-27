@@ -26,9 +26,11 @@
     "purpose": "TBD: effect purpose",
     "visual_language": "TBD: describe visual treatment",
     "palette": [
-      "TBD"
+      "TBD: element colours of the vfx-style profile"
     ],
-    "reference_ids": [],
+    "reference_ids": [
+      "VFX-style-001"
+    ],
     "constraints": []
   }
 }

@@ -86,6 +86,46 @@
       "docs": []
     },
     {
+      "id": "authoring.vfx-style",
+      "repo": "authoring",
+      "paths": [
+        "vfx/style/"
+      ],
+      "responsibility": "VFX style profiles (vfx-style): the measurable look and budget bands that specs and assets are linted against.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
+    },
+    {
       "id": "authoring.vfx-direction",
       "repo": "authoring",
       "paths": [
@@ -141,6 +181,10 @@
         {
           "repo": "client",
           "path": "Assets/"
+        },
+        {
+          "repo": "unityvfx",
+          "path": "Effects/"
         }
       ],
       "driver": "vfx",
@@ -167,7 +211,9 @@
         "artifact-trace",
         "asset-manifest"
       ],
-      "human_gates": [],
+      "human_gates": [
+        "vfx-visual-review"
+      ],
       "handoffs": [
         "assetgen-to-vfx",
         "gameplay-event-to-vfx",
@@ -178,7 +224,14 @@
       "may_own_feature_state": false,
       "approvers": [],
       "quality_plugin": "scripts/checks/domains/vfx.py",
-      "engineering_event_ids": [],
+      "engineering_event_ids": [
+        "vfx.showcase.chain-lightning",
+        "vfx.showcase.ground-slam"
+      ],
+      "engineering_event_descriptions": {
+        "vfx.showcase.chain-lightning": "Showcase trigger of the UnityVFX Samples~/Showcase scene for the chain lightning effect; not a gameplay binding.",
+        "vfx.showcase.ground-slam": "Showcase trigger of the UnityVFX Samples~/Showcase scene for the ground slam effect; not a gameplay binding."
+      },
       "reviewers": []
     }
   },
