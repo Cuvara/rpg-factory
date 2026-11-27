@@ -371,6 +371,18 @@ check warn "$CLIENT" "Unity.exe -batchmode -executeMethod PlayClientBuilder.Buil
 check warn "$CLIENT" "Unity.exe -batchmode -executeMethod SampleBuilder.Build"
 check warn "$CLIENT" "Unity.exe -batchmode -projectPath . -runTests -testPlatform EditMode -testResults r.xml"
 check allow "$CLIENT" "grep -rn runTests unity-build-workflows/.github/workflows"       # mentioning the flag is not a run
+# vfx-style-kind reworded unity-batch / unity-asset-edit (the UnityVFX Sandbox~ exemption is policy text, not a regex):
+# unity-batch keeps its exact regex, unity-asset-edit stays without one, and the advisories fire as before
+check warn "$CLIENT" "Unity.exe -batchmode -executeMethod SampleImporter.Import"
+check warn "$CLIENT" "Unity.exe -batchmode -executeMethod StrippingProbeBuilder.Run"
+check warn "$CLIENT" "Unity.exe -batchmode -executeMethod AddressableBuilder.Build"
+check warn "$CLIENT" "Unity.exe -batchmode -quit -runTests -testPlatform PlayMode"
+check allow "$CLIENT" "Unity.exe -batchmode -quit -executeMethod Cuvara.VFX.Editor.VfxCli.Run"   # not a gated method
+jq -e --arg re '-executeMethod\s+(PlayerBuilder|PlayClientBuilder|SampleBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\.|(^|\s)-runTests\b' \
+  '[.human_gates[] | select(.id == "unity-batch") | .match == $re and (.rule | test("Sandbox~"))] == [true]
+   and [.human_gates[] | select(.id == "unity-asset-edit") | .match == null and (.rule | test("Sandbox~"))] == [true]' \
+  "$ROOT/registry.json" >/dev/null \
+  && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL unity-batch/unity-asset-edit: regex changed or Sandbox~ exemption missing"; }
 check warn "$SERVER" "psql -c 'DELETE FROM schema_migrations'"
 check allow "$SERVER" "cat backend/deploy/.env.example"
 # 1.0.2: a read_only_exempt gate never asks for read-only inspection of the gated script; running it still asks

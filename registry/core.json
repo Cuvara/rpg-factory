@@ -1060,7 +1060,7 @@
     {
       "id": "unity-batch",
       "read_only_exempt": true,
-      "rule": "Unity batch-mode runs open the user's project and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them.",
+      "rule": "Unity batch-mode runs open one of the user's Unity projects and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them. Exempt: the agent-owned UnityVFX Sandbox~ project (module unityvfx.sandbox), which agents open, run and test without asking.",
       "match": "-executeMethod\\s+(PlayerBuilder|PlayClientBuilder|SampleBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\.|(^|\\s)-runTests\\b"
     },
     {
@@ -1071,7 +1071,7 @@
     },
     {
       "id": "unity-asset-edit",
-      "rule": "Scene/prefab/asset edits through Unity MCP tools need an explicit yes (the Editor state is the user's)."
+      "rule": "Scene/prefab/asset edits through Unity MCP tools in one of the user's Unity projects need an explicit yes (the Editor state is the user's). Exempt: the agent-owned UnityVFX Sandbox~ project (module unityvfx.sandbox), where agents edit scenes, prefabs and assets without asking."
     },
     {
       "id": "sgl-release",
@@ -1086,6 +1086,10 @@
     {
       "id": "art3d-visual-review",
       "rule": "3D visual acceptance, rights and final production review are human decisions."
+    },
+    {
+      "id": "vfx-visual-review",
+      "rule": "A person judges the look, readability, overdraw and frame time of an effect in Play mode before it is accepted; agents never record this review, and those four criteria stay HUMAN_REQUIRED in every check."
     },
     {
       "id": "assetgen-approval",

@@ -1188,6 +1188,20 @@
             "$ref": "#/$defs/domain_approver"
           }
         },
+        "engineering_event_ids": {
+          "type": "array",
+          "description": "Engineering event ids a domain artifact may cite as a trigger besides design artifacts (vfx-spec triggers).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "engineering_event_descriptions": {
+          "type": "object",
+          "description": "Optional note per engineering_event_ids entry, keyed by event id (for example: a showcase trigger, not a gameplay binding).",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "revoked_keys": {
           "type": "array",
           "items": {
