@@ -20,7 +20,7 @@ for f in "$ROOT"/commands/*.md; do
   pat=$(sed -n 's/^allowed-tools: Bash(\(.*\):\*)$/\1/p' "$f"); line=$(sed -n 's/^!`\(.*\)`$/\1/p' "$f")
   [ -n "$pat" ] && [ "${line#"$pat"}" != "$line" ] && ok "commands/$n.md ! line matches its allowed-tools prefix" || no "commands/$n.md: '$line' does not start with allowed '$pat'"
 done
-[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 13 ] && ok "exactly 13 commands (status, route, check, doctor, domain, workflow, pipeline, ui, ui-figma, ui-components, ui-screen, ui-review, assetgen)" || no "command count"
+[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 15 ] && ok "exactly 15 commands (status, route, check, doctor, domain, workflow, pipeline, ui, ui-figma, ui-components, ui-screen, ui-review, assetgen, vfx-plan, vfx-lint)" || no "command count"
 # the usage text documents every command's verb
 python3 -B "$CMD" --help 2>"$TMP/usage"
 for f in "$ROOT"/commands/*.md; do
@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json" \n         "vfx-plan" "vfx-plan --effect" "vfx-plan --bogus x" "vfx-lint" "vfx-lint --style x.md" "vfx-lint --recipe r.json" "vfx-lint --style x.md --recipe r.json --out o.json" "vfx-lint --style x.md --recipe r.json --output=o.json" "vfx-lint --style x.md --recipe r.json --wr o.json" "vfx-lint --style x.md --recipe r.json --bogus"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -41,7 +41,7 @@ out=$(python3 -B "$CMD" help); rc=$?
 [ $rc -eq 0 ] && grep -q '^- domain \[<id>\] \[--json\]' <<<"$out" && grep -q 'e.g. /rpg-factory:domain design  |  python3 -B .*/scripts/factory-cmd.py domain design' <<<"$out" \
   && ok "help: text lists verbs with Claude and Codex forms (exit 0)" || no "help text rc=$rc: $(head -c 300 <<<"$out")"
 python3 -B "$CMD" help --json >"$TMP/help.json"; rc=$?
-[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.commands/1" and (.commands | length) == 14
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.commands/1" and (.commands | length) == 16
   and all(.commands[]; .verb as $v | (.args | type) == "string" and (.read_only | type) == "boolean" and (.example | startswith($v))
           and (.codex | test("^python3 -B .*/scripts/factory-cmd.py " + $v + "$")))
   and ([.commands[] | select(.read_only | not) | .verb] == ["check", "pipeline"])
@@ -225,5 +225,44 @@ python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen")
   && ! grep -qE "publish|embed|promote-anchor|reject" "$ROOT/commands/assetgen.md" && grep -q "|drift " "$ROOT/commands/assetgen.md" \
   && ok "help and /rpg-factory:assetgen list assetgen as read-only with drift, without publish, embed, promote-anchor or reject" \
   || no "help or commands/assetgen.md names a writing verb or lacks drift"
+# -- vfx-plan and vfx-lint: read-only VFX verbs (help with an example, --json, vfx-lint refuses every writing option)
+VL="$ROOT/tests/fixtures/vfx/lint"; VP="$ROOT/tests/fixtures/vfx/style/profile.json"
+python3 -B "$CMD" help --json | jq -e '[.commands[] | select(.verb == "vfx-plan" or .verb == "vfx-lint")] as $v | ($v | length) == 2
+  and all($v[]; .read_only and (.example | startswith(.verb)) and (.claude == "/rpg-factory:" + .verb) and (.args | test("--json")))' >/dev/null \
+  && ok "help lists vfx-plan and vfx-lint as read-only with an example and their slash commands" || no "help lacks vfx-plan or vfx-lint"
+out=$(python3 -B "$CMD" help); grep -q '^- vfx-plan ' <<<"$out" && grep -q '^- vfx-lint ' <<<"$out" && grep -q 'e.g. /rpg-factory:vfx-lint --style ' <<<"$out" \
+  && ok "help text: vfx-plan and vfx-lint with an e.g. line" || no "help text lacks the vfx verbs"
+out=$(python3 -B "$CMD" vfx-plan --json Create a VFX for the fire burst); rc=$?
+[ $rc -eq 3 ] && jq -e '.schema == "rpg-factory.vfx-plan/1" and .status == "NEEDS_CONTEXT" and (.missing | length) > 0' >/dev/null <<<"$out" \
+  && ok "vfx-plan --json: rpg-factory.vfx-plan/1, NEEDS_CONTEXT keeps exit 3" || no "vfx-plan --json rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" vfx-plan "--json --effect fire-burst"); rc=$?
+[ $rc -eq 3 ] && grep -q "fire-burst" <<<"$out" && jq -e '.schema == "rpg-factory.vfx-plan/1"' >/dev/null <<<"$out" \
+  && ok "vfx-plan (one quoted string): --effect is passed through" || no "vfx-plan --effect rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" vfx-plan "Create a VFX for the fire burst"); rc=$?
+[ $rc -eq 3 ] && grep -qi "missing" <<<"$out" && ok "vfx-plan: Markdown plan without --json (exit 3, Missing listed)" || no "vfx-plan text rc=$rc: $(head -c 300 <<<"$out")"
+python3 -B "$CMD" vfx-plan --json Fix the failing unit test | jq -e '.status == "NOT_VFX"' >/dev/null \
+  && ok "vfx-plan: a request that is not VFX is NOT_VFX" || no "vfx-plan NOT_VFX"
+out=$(python3 -B "$CMD" vfx-lint --json --style "$VP" --recipe "$VL/good.vfxrecipe.json"); rc=$?
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.vfx-lint/1" and .status != "FAIL" and (.inputs.recipe.sha256 | length) == 64' >/dev/null <<<"$out" \
+  && ok "vfx-lint --json: rpg-factory.vfx-lint/1 of a good recipe (exit 0)" || no "vfx-lint good rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" vfx-lint "--style $VP --recipe $VL/good.vfxrecipe.json"); rc=$?
+[ $rc -eq 0 ] && grep -qE "^vfx-lint: (PASS|WARN) - [0-9]+ PASS, [0-9]+ WARN, 0 FAIL, [0-9]+ NOT_AVAILABLE" <<<"$out" \
+  && ok "vfx-lint (one quoted string): short summary with counts, exit 0" || no "vfx-lint summary rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" vfx-lint --style "$VP" --recipe "$VL/bad-palette.vfxrecipe.json"); rc=$?
+[ $rc -eq 1 ] && grep -q "^vfx-lint: FAIL" <<<"$out" && grep -q "^FAIL palette" <<<"$out" \
+  && ok "vfx-lint: a FAIL keeps exit 1 and prints the FAIL row" || no "vfx-lint bad recipe rc=$rc: $(head -c 300 <<<"$out")"
+python3 -B "$CMD" vfx-lint --style "$VP" --recipe "$TMP/no-such.vfxrecipe.json" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 3 ] && ok "vfx-lint: a missing recipe keeps vfx_style exit 3" || no "vfx-lint missing recipe rc=$rc: $(head -c 200 "$TMP/err")"
+# a relative --style that does not exist from the current directory resolves under the workspace authoring repo
+mkdir -p "$A/vfx/styles"; cp "$VP" "$A/vfx/styles/house.json"
+out=$(cd "$TMP" && python3 -B "$CMD" vfx-lint --json --style vfx/styles/house.json --recipe "$VL/good.vfxrecipe.json"); rc=$?
+[ $rc -eq 0 ] && jq -e '.style.path | test("game-authoring.vfx.styles.house.json$")' >/dev/null <<<"$out" \
+  && ok "vfx-lint: a relative --style resolves under the authoring repo" || no "vfx-lint authoring resolve rc=$rc: $(head -c 300 <<<"$out")"
+for w in "--out $TMP/lint.json" "--out=$TMP/lint.json" "--o $TMP/lint.json" "--ou=$TMP/lint.json" "--output $TMP/lint.json" "--output=$TMP/lint.json" "--outp $TMP/lint.json" "--write $TMP/lint.json" "--wr=$TMP/lint.json"; do
+  python3 -B "$CMD" vfx-lint --style "$VP" --recipe "$VL/good.vfxrecipe.json" $w >/dev/null 2>"$TMP/err"; rc1=$?
+  python3 -B "$CMD" vfx-lint "--style $VP --recipe $VL/good.vfxrecipe.json $w" >/dev/null 2>>"$TMP/err"; rc2=$?
+  [ $rc1 -eq 2 ] && [ $rc2 -eq 2 ] && [ ! -e "$TMP/lint.json" ] && grep -q "the vfx verbs are read-only" "$TMP/err" \
+    && ok "vfx-lint ${w%% *} refused (exit 2, read-only message, nothing written)" || no "vfx-lint $w rc=$rc1/$rc2: $(head -2 "$TMP/err")"
+done
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
