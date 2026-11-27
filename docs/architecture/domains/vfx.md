@@ -38,7 +38,7 @@ The look, readability, overdraw and frame time of an effect always stay `HUMAN_R
 
 ## Handoffs
 
-- Design supplies gameplay event IDs and approved timing intent through `design-event-to-vfx`.
+- Design supplies gameplay event IDs and approved timing intent through `gameplay-event-to-vfx`.
 - Art3D supplies mesh/asset references through `art3d-asset-to-vfx`.
 - UI and VFX resolve cue synchronization references through `ui-vfx-sync`.
 - VFX sends approved specs and delivery records to Engineering through `vfx-spec-to-impl`, with destination resolved by path routing: client `Assets/` or the UnityVFX package's `Effects/` (module `unityvfx.effects`, one folder per effect with its recipe, built `.vfx`, prefab and textures; `unityvfx.library` holds shared pieces and `unityvfx.samples` the Showcase).
